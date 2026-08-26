@@ -216,3 +216,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Remote-only runtime and training artifacts
+outputs/
+checkpoints/
+log/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.npy
+*.npz
+*.pkl
+*.safetensors

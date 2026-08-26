@@ -368,6 +368,51 @@ git pull --ff-only origin main
 之后每轮代码同步都遵循“本地 `commit` → 本地 `push` → 远程 `pull --ff-only`”。远程默认只拉取代码，
 不从远程反向 push，避免把服务器上的临时改动混入 GitHub。
 
+#### 12.2 当前首个 SmolLM2 推理 smoke
+
+当前首个 smoke 只验证远程已经准备好的原始 SmolLM2-135M，不涉及 Stepwise 转换、递归模型、音频模型、数据集或
+ms-swift 注册。它必须作为一个 GPU 作业提交，不能直接在登录节点运行 Python 模型加载或推理。
+
+代码结构为：
+
+```text
+code/RSmol/
+  run_smoke_smollm2_inference_5090.sh       # 仅调用 vc submit
+  scripts/
+    smoke_smollm2_inference.sh              # 作业内 runtime wrapper
+    smoke_smollm2_inference.py              # 模型加载、forward、generation 和报告
+```
+
+当前 smoke 的固定远程配置为：
+
+```text
+conda environment: rsmol
+queue:             pdgpu-5090
+container:         docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1
+resource:          -c 8 -m 32G -g 1
+model:             /hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2
+```
+
+远程拉取当前 Git commit 后，在仓库中执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only origin main
+cd code/RSmol
+bash run_smoke_smollm2_inference_5090.sh
+```
+
+可通过环境变量覆盖 prompt、生成长度或报告路径；这些变量会由提交 wrapper 安全传递给作业内 runtime：
+
+```bash
+RSMOL_SMOKE_PROMPT='Gravity is' \
+RSMOL_SMOKE_MAX_NEW_TOKENS=32 \
+bash run_smoke_smollm2_inference_5090.sh
+```
+
+成功证据至少包括提交作业日志中的 `[result] status=OK`、生成文本，以及 `outputs/RSmol/` 下的 JSON 报告。
+失败时保留完整 traceback。该 smoke 不保存模型权重，不读取文本数据集，也不修改远程模型目录。
+
 本地标准流程：
 
 ```text
@@ -430,7 +475,8 @@ submit wrapper 应把用户需要覆盖的路径和实验参数通过环境变�
 - 单卡通常不超过 `-c 8 -m 32G -g 1`；
 - 8 卡通常不超过 `-c 32 -m 256G -g 8`；
 - 必须检查实际 `vc submit` 参数，不能只根据脚本文件名中的 `_5090` 或 `_4090` 判断资源池；
-- 新项目实际使用的 queue、container、conda environment、GPU 型号和资源请求仍需用户确认后写入本 README。
+- 当前首个 SmolLM2 推理 smoke 已确认使用 `pdgpu-5090`、`rsmol`、上述 container 和单卡 `-c 8 -m 32G -g 1`；
+- 后续正式训练的 queue、container、GPU 型号和资源请求仍需按具体任务单独确认。
 
 每个新远程任务提交前，先确认：
 
@@ -488,6 +534,8 @@ README 既是项目说明，也是后续 Codex 的实验记忆。以后新增内
 - 远程 Git checkout 路径为 `/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM`；
 - 远程模型路径为 `/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2`；
 - 远程文本数据路径为 `/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset`；
+- 远程 conda environment 为 `/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3/envs/rsmol`；
+- 首个原始 SmolLM2 推理 smoke 使用 `pdgpu-5090` 单卡提交脚本；
 - 研究主线是 SmolLM2-135M 的 Stepwise 半层递归化、文本 up training 和 Mellow 风格音频推理训练；
 - 文本 up training 数据集为 `EleutherAI/SmolLM2-135M-10B`；
 - 递归目标暂按 15 个唯一层循环两次记录；
@@ -496,7 +544,6 @@ README 既是项目说明，也是后续 Codex 的实验记忆。以后新增内
 待用户后续补充或确认：
 
 - conda environment、container、queue、GPU 型号和资源申请；
-- 实际代码目录和 runtime/submit 脚本目录；
 - Stepwise 层映射的最终算法和转换 checkpoint 命名；
 - 是否首先实现严格 Recursive baseline，何时加入 Relaxed layer-wise LoRA；
 - relaxed LoRA 的作用模块、rank、SVD 初始化策略和 trainability；
