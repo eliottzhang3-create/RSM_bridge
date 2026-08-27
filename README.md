@@ -8,6 +8,37 @@
 其中“已验证”表示有实际日志、报告或检查结果支持；“计划”表示当前研究路线；“待确认”表示不能自行猜测，
 需要由用户提供远程信息或实验结果。
 
+## 快速开始与当前结论
+
+这是一个“本地写代码、GitHub 中转、远程 HPC 提交运行”的代码同步仓库。任何新 Codex 窗口开始工作前，必须先阅读
+本 README；涉及远程 GPU、模型、数据、训练、评估或审计的操作，必须通过已提交到仓库的 `vc submit` wrapper 执行。
+不能在登录节点直接运行模型加载或推理，也不能把远程权重、数据、checkpoint、日志和 outputs 提交到 GitHub。
+
+截至 2026-08-26，原始 SmolLM2-135M 的 `pdgpu-5090` 推理 smoke 已成功通过。当前项目仍处于“原始模型基线完成，
+Stepwise 层转换尚未开始”的阶段；尚不存在可用于后续 up training 的递归 checkpoint。
+
+当前最重要的路径和入口：
+
+```text
+本地 Windows checkout：
+C:\Xlance\GZ_bridge\Recursive_SALM\RSM_bridge
+
+远程 Linux checkout：
+/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+
+首个远程 smoke 提交入口：
+code/RSmol/run_smoke_smollm2_inference_5090.sh
+```
+
+远程后续运行的固定顺序：
+
+```text
+本地修改 → 本地检查 → git commit → git push
+→ 远程 git pull --ff-only
+→ 通过对应的 vc submit wrapper 提交
+→ 用户带回作业日志、报告和 traceback
+```
+
 ## 第一部分：背景原理与不可违反的工程规则
 
 ### 1. 项目目标
@@ -56,6 +87,10 @@ Stepwise 层压缩：唯一层数缩减为一半
 
 上述信息是设计起点。真正运行时必须读取远程实际 checkpoint 的 `config.json` 并审计，不能只依赖 README 或模型名。
 如果实际配置与这里不同，实际 checkpoint 配置和通过脚本记录的配置优先。
+
+2026-08-26 的已提交推理 smoke 已读取并验证远程实际配置：上述 30 层、hidden size、attention heads、词表、最大位置
+长度和 BF16 均与 checkpoint 一致；实际加载类为 `transformers.models.llama.modeling_llama.LlamaForCausalLM`，
+参数量为 `134,515,008`。
 
 ### 3. Stepwise 递归压缩
 
@@ -157,6 +192,19 @@ h = W_shared x + ΔW_loop x
 - 它从 SmolLM2 语料中抽样，包含 FineMath、Stack-Edu、InfiMM-WebMath、Cosmopedia V2、FineWeb-Edu 和 DCLM-Edu
   等来源的组合；
 - 数据集名称中的“10B”是数据规模提示，不应替代远程实际 tokenizer 统计得到的 token 数。
+
+当前远程数据落盘形式已经确认：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/
+  data/train-00000-of-00085.parquet
+  ...
+  data/train-00084-of-00085.parquet
+```
+
+该目录当前约占 24G。它位于 Git checkout 外部，只能作为远程输入使用；当前 smoke 不读取它。Parquet 的完整字段、总行数、
+tokenizer 后的长度分布和训练切分策略，必须在后续数据准备/训练任务中通过独立的 `vc submit` 作业确认，不能根据文件名
+或数据集名称猜测。
 
 up training 的目的不是重新预训练一个新模型，而是让由原始 SmolLM2 权重转换得到的递归模型适应新的参数共享结构，
 尽量恢复原始模型的语言建模能力。训练和比较时至少要保留以下基线：
@@ -296,6 +344,24 @@ https://github.com/eliottzhang3-create/RSM_bridge
 `.git/config` 和 `origin` URL 决定，不依赖本地目录名。模型目录中目前已准备 SmolLM2 checkpoint 和 tokenizer
 文件；数据目录中目前已准备 `data/` 及其 README。模型权重、数据集和后续生成的 checkpoint 不进入本仓库。
 
+当前本地项目初步结构为：
+
+```text
+C:\Xlance\GZ_bridge\Recursive_SALM\RSM_bridge\
+  .gitignore
+  README.md
+  code\
+    RSmol\
+      log\
+      plugins\
+      scripts\
+  data\                  # 远程数据不放入此处
+  models\                # 远程权重不放入此处
+  outputs\               # 运行产物，已被 .gitignore 忽略
+```
+
+Git 不记录空目录；目录只有在其中出现未被忽略的代码或配置文件后，才会随提交同步到 GitHub。
+
 ### 10. 本地与远程的职责划分
 
 本地 Windows 侧：
@@ -318,25 +384,30 @@ Codex 默认只能操作本地 checkout，不能假设自己能登录或控制�
 远程日志、命令输出或已同步的远程文件内容。
 
 Windows 路径和 Linux 路径不可混写。例如，README 中必须明确区分本地的
-`C:\Xlance\GZ_bridge\Recursive_SALM\RSM_bridge` 与未来确认的远程 Linux 根目录；脚本中也必须根据运行平台使用对应路径。
+`C:\Xlance\GZ_bridge\Recursive_SALM\RSM_bridge` 与远程的 `/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM`；脚本中也必须
+根据运行平台使用对应路径。
 
 ### 11. 建议的远程目录约定
 
-在远程根目录确认后，优先采用下面的逻辑分区；实际目录名可根据后续项目设计调整：
+当前远程根目录已经确认；下面的逻辑分区用于说明代码、远程输入和运行产物的边界，实际目录名可根据后续项目设计调整：
 
 ```text
-<REMOTE_REPO_ROOT>/
+/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/
   README.md                 # 与 GitHub 同步
   .gitignore                # 与 GitHub 同步
-  code/ 或 src/             # 模型、数据、训练和评估代码，同步
-  scripts/                  # 可复用运行脚本，同步
-  configs/                  # 小型配置，同步
-  tests/                    # 本地/远程审计脚本，同步
-  data/                     # 远程数据、manifest、索引或缓存，不提交大文件
-  models/                   # 远程模型快照或转换权重，不提交权重
-  outputs/                  # 训练与评估结果，不提交
-  logs/                     # 远程日志，不提交
+  code/RSmol/               # 当前项目代码和提交脚本，同步
+    run_smoke_smollm2_inference_5090.sh
+    scripts/
+      smoke_smollm2_inference.sh
+      smoke_smollm2_inference.py
+    log/                     # 远程作业日志，不提交
+  data/                      # 仅放小型可复现配置或 manifest，不放数据集
+  models/                    # 仅放代码约定，不放权重
+  outputs/                   # 远程运行产物，不提交
 ```
+
+真正的模型和文本数据位于 checkout 外部：`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2` 和
+`/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset`。不要把这两个路径复制到 Git 仓库内。
 
 如果数据或模型位于仓库外的共享存储，README 应记录其准确远程路径和只读/可写属性。公共数据目录若规定只读，
 只能在私有工作目录生成 manifest、索引和进度文件，不能改写、解包覆盖或向公共目录写入。
@@ -413,6 +484,35 @@ bash run_smoke_smollm2_inference_5090.sh
 成功证据至少包括提交作业日志中的 `[result] status=OK`、生成文本，以及 `outputs/RSmol/` 下的 JSON 报告。
 失败时保留完整 traceback。该 smoke 不保存模型权重，不读取文本数据集，也不修改远程模型目录。
 
+2026-08-26 已完成的 smoke 结果：
+
+```text
+ACTIVE_ENV             = rsmol
+Python                 = 3.10.20
+PyTorch                = 2.11.0+cu128
+CUDA                   = 12.8
+GPU                    = NVIDIA GeForce RTX 5090
+Transformers           = 4.54.1
+model class            = LlamaForCausalLM
+parameters             = 134,515,008
+parameter dtype        = bfloat16
+forward logits         = (1, 3, 49152)
+cache type             = DynamicCache
+cache length           = 3
+generated new tokens   = 32
+result                 = OK
+```
+
+该作业使用 `local_files_only=True` 和离线环境变量，确认远程本地 checkpoint 能够被 Transformers 加载并生成文本。
+这只证明原始模型基线的推理链路正常，不代表 Stepwise 转换、递归参数共享、训练或音频能力已经通过。
+
+当前 smoke 的生成报告示例路径为：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/outputs/RSmol/
+  smollm2_inference_smoke_20260826_142647.json
+```
+
 本地标准流程：
 
 ```text
@@ -446,6 +546,9 @@ git pull --ff-only origin main
 未经用户明确要求，不使用 `git reset --hard`、`git checkout --` 等会丢失用户改动的命令。
 
 ### 13. 远程任务提交规则
+
+所有涉及 GPU、模型加载、推理、训练、数据读取、评估或 checkpoint 审计的远程任务，即使只有几秒或只有一个 batch，
+也必须通过 `vc submit` 进入作业节点。登录节点只用于 Git、文件查看和提交命令，不直接运行这些计算任务。
 
 远程长任务必须由两层脚本组成：
 
@@ -499,6 +602,9 @@ python -m py_compile path/to/changed_file.py
 在 Windows PowerShell 中如有必要，也可以逐个运行 Python 文件的导入级 smoke，但不能因为本地没有 CUDA、模型或远程
 数据就宣称远程训练链路已经通过。
 
+远程 GPU smoke、模型推理和训练只能通过对应的 `run_*.sh` submit wrapper 执行。不能绕过 wrapper 直接运行 runtime
+shell 或 Python 文件；作业内验证必须保留 job log、报告和实际 Git commit。
+
 远程任务的合格记录至少应包含：
 
 - 运行的 Git commit；
@@ -527,31 +633,139 @@ README 既是项目说明，也是后续 Codex 的实验记忆。以后新增内
 
 ## 第三部分：当前项目状态（截至 2026-08-26）
 
-已确定：
+### 16. 已完成事项
 
-- 本地项目路径为 `C:\Xlance\GZ_bridge\Recursive_SALM\RSM_bridge`；
-- GitHub 中转仓库为 `eliottzhang3-create/RSM_bridge`；
-- 远程 Git checkout 路径为 `/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM`；
-- 远程模型路径为 `/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2`；
-- 远程文本数据路径为 `/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset`；
+- 本地 Windows checkout 为 `C:\Xlance\GZ_bridge\Recursive_SALM\RSM_bridge`；
+- GitHub 中转仓库为 `https://github.com/eliottzhang3-create/RSM_bridge`；
+- 远程 Git checkout 为 `/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM`；
 - 远程 conda environment 为 `/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3/envs/rsmol`；
-- 首个原始 SmolLM2 推理 smoke 使用 `pdgpu-5090` 单卡提交脚本；
-- 研究主线是 SmolLM2-135M 的 Stepwise 半层递归化、文本 up training 和 Mellow 风格音频推理训练；
-- 文本 up training 数据集为 `EleutherAI/SmolLM2-135M-10B`；
-- 递归目标暂按 15 个唯一层循环两次记录；
-- 当前 README 背景和工程规则已建立。
+- 远程模型目录为 `/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2`；
+- 远程文本数据目录为 `/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset`；
+- 已完成原始 SmolLM2-135M 的 `pdgpu-5090` 单卡推理 smoke；
+- 已确认原始模型有 30 个 Transformer 层；当前递归目标仍为 15 个唯一层循环两次；
+- 已建立 `code/RSmol/` 下的 runtime、submit wrapper 和 Python smoke 代码结构；
+- 已更新 `.gitignore`，远程 outputs、logs、checkpoint 和权重不进入 GitHub。
 
-待用户后续补充或确认：
+### 17. 已验证的远程模型与数据
 
-- conda environment、container、queue、GPU 型号和资源申请；
-- Stepwise 层映射的最终算法和转换 checkpoint 命名；
-- 是否首先实现严格 Recursive baseline，何时加入 Relaxed layer-wise LoRA；
-- relaxed LoRA 的作用模块、rank、SVD 初始化策略和 trainability；
-- 音频编码器、mapper、输入协议、音频推理数据和评估 benchmark；
-- up training 与音频训练的 batch、学习率、token budget、checkpoint retention 和 resume 方案。
+模型目录总大小约 260M，核心文件包括 `config.json`、`model.safetensors`、`tokenizer.json`、
+`tokenizer_config.json`、`vocab.json` 和 `merges.txt`。远程 smoke 读取到的配置为：
 
-在上述远程信息和训练细节确认前，任何 Codex 窗口都不应擅自补写具体 Linux 路径、环境名、checkpoint 路径、音频模型
-权重位置或正式训练超参数。
+```text
+model_type              = llama
+architectures           = LlamaForCausalLM
+num_hidden_layers       = 30
+hidden_size             = 576
+intermediate_size       = 1536
+num_attention_heads     = 9
+num_key_value_heads     = 3
+vocab_size              = 49152
+max_position_embeddings = 8192
+torch_dtype             = bfloat16
+```
+
+数据目录约占 24G，文件命名为 `data/train-xxxxx-of-00085.parquet`。当前 smoke 没有读取数据集；Parquet 的完整字段、
+总行数、tokenizer 后长度分布和实际训练采样策略仍未验证。
+
+### 18. `rsmol` 环境快照
+
+以下版本来自用户在远程 `rsmol` 环境中的静态检查，不代表所有组件都已经在训练作业中验证：
+
+| 组件 | 版本 | 当前用途 |
+|---|---:|---|
+| Python | 3.10.20 | 运行时 |
+| pip | 26.0.1 | 包管理 |
+| torch | 2.11.0+cu128 | 模型与训练核心 |
+| transformers | 4.54.1 | SmolLM2 加载与生成 |
+| tokenizers | 0.21.4 | tokenizer |
+| safetensors | 0.8.0 | checkpoint 读取 |
+| huggingface-hub | 0.36.2 | Hub 接口，当前使用本地离线文件 |
+| datasets | 3.6.0 | Parquet/数据集读取 |
+| pyarrow | 23.0.1 | Parquet 后端 |
+| accelerate | 1.13.0 | 模型加载和后续训练支持 |
+| numpy | 2.2.6 | 数值基础库 |
+| peft | 0.18.1 | 后续 relaxed/layer-wise LoRA 候选 |
+| trl | 0.18.0 | 后续训练扩展候选 |
+| tensorboard | 2.20.0 | 日志记录 |
+| ms-swift | 4.4.2 | 已安装，但当前不作为递归模型实现基础 |
+| modelscope | 1.35.3 | ms-swift 相关依赖 |
+| torchaudio | 2.11.0+cu128 | 后续音频阶段候选 |
+| librosa | 0.11.0 | 后续音频预处理候选 |
+| soundfile | 0.14.0 | 后续音频文件读取候选 |
+
+`python -m pip check` 已返回 `No broken requirements found.`。当前缺少的 `deepspeed`、`bitsandbytes`、`flash-attn`、
+`wandb`、`av`、`resampy` 和 `omegaconf` 暂不视为当前原始推理 smoke 的问题；是否安装必须由具体训练/音频任务决定，
+不能为了“凑齐依赖”盲目升级或安装。
+
+### 19. 已完成的原始推理 smoke 证据
+
+提交脚本使用：
+
+```text
+queue       = pdgpu-5090
+container   = docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1
+resource    = -c 8 -m 32G -g 1
+environment = rsmol
+```
+
+2026-08-26 作业日志显示：
+
+```text
+GPU                  = NVIDIA GeForce RTX 5090
+CUDA                 = 12.8
+model parameters     = 134,515,008
+parameter dtype      = bfloat16
+forward logits       = (1, 3, 49152)
+cache type           = DynamicCache
+cache length         = 3
+generated new tokens = 32
+result               = OK
+```
+
+该 smoke 使用 `local_files_only=True` 和离线环境变量，验证了原始本地 checkpoint 的加载、BF16 forward、KV cache 和
+确定性 generation。报告路径示例为：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/outputs/RSmol/
+  smollm2_inference_smoke_20260826_142647.json
+```
+
+这项结果只证明原始模型推理基线正常，不证明递归模型、层共享、训练、数据管线或音频模型正常。
+
+### 20. 当前代码入口与下一步
+
+当前首个 smoke 的唯一远程执行入口是：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only origin main
+cd code/RSmol
+bash run_smoke_smollm2_inference_5090.sh
+```
+
+下一阶段按以下顺序推进：
+
+1. 编写 Stepwise 转换脚本，从实际 `config.json` 读取层数并构造明确的 30→15 层映射；
+2. 保存递归模型 checkpoint 及转换元数据，审计参数形状、dtype、层映射和唯一参数量；
+3. 实现严格 Recursive baseline 的自定义 `PreTrainedModel`/forward，并通过独立的 `vc submit` smoke 验证 forward、
+   cache、generation、loss 和 reload；
+4. 使用文本数据进行 up training，保留原始模型、未训练递归模型和训练后递归模型的可比评估；
+5. 递归文本模型稳定后，再决定是否加入 Relaxed layer-wise LoRA；
+6. 最后确定音频 encoder、mapper、音频数据协议和 Mellow 风格训练流程。
+
+### 21. 尚未完成、不可提前假定的事项
+
+- Stepwise 的最终层索引选择和映射算法尚未写入代码；
+- 尚无 15 个唯一层循环两次的递归 checkpoint；
+- 尚未完成递归模型的 KV cache、loss、反向传播、checkpoint reload 和分布式包装验证；
+- 尚未开始文本 up training，也没有正式 loss、perplexity 或 benchmark 结果；
+- 尚未注册 RSM 递归模型到 ms-swift；
+- 尚未确定 relaxed LoRA 的作用模块、rank、SVD 初始化和冻结策略；
+- 尚未确定音频 encoder、mapper、音频权重、数据集和评估 benchmark；
+- 正式训练任务的 batch、学习率、token budget、保存/恢复策略和资源配置仍需逐任务确认。
+
+在上述事项确认前，任何 Codex 窗口都不得把计划写成已完成事实，不得擅自改写远程模型/数据路径、checkpoint 路径或正式
+训练超参数，也不得绕过 `vc submit` 直接运行远程 GPU 任务。
 
 ## 参考资料
 
