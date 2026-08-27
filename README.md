@@ -1,5 +1,57 @@
 # RSM_bridge
 
+## Stage 4 DDP audit and fixed-step pilot (2026-08-27)
+
+Stage 4 is implemented in `code/RSmol/scripts/train_stage4_ddp.py` and is
+intended for the external `/hpc_stor03` task output area only.  It does not
+write model parameters, checkpoints, or reports into either Git checkout.
+The five auditable gates are:
+
+* Gate A: synthetic DDP recursive-model audit (forward `0..14` twice,
+  backward second loop then first, label shift, finite/non-zero gradients,
+  optimizer update, rank checksums and exact 16 microbatches).
+* Gate B: single-process 85-Parquet footer/schema/content pre-audit; it must
+  be run without `torchrun`.
+* Gate C: real-data 8-rank short pilot (`--max-optimizer-steps 1` or `2`).
+* Gate D: fixed-step pilot, default 9,244 optimizer steps, with periodic
+  complete checkpoints.
+* Gate E: resume smoke in a new output directory; optimizer, scheduler, RNG,
+  step, manifest, and one `data_cursors_by_rank` cursor per DDP rank are
+  restored.  The iterator performs a coarse
+  epoch/shard/complete-microbatch skip from the saved cursor; because the
+  bounded in-shard shuffle buffer cannot be reconstructed exactly, reports set
+  `data_cursor_restored=false` and never claim bitwise-exact data resume.
+  Gate E rejects legacy checkpoints that contain only a single `data_cursor`.
+
+The fixed configuration is `code/RSmol/stage4_default_config.json`:
+`world_size=8`, `micro_batch_size=8`, `gradient_accumulation_steps=16`,
+`learning_rate=2e-4`, `context_length=1024`, and
+`max_optimizer_steps=9244`.  Thus each rank targets `1,183,232` samples,
+the global effective batch is `1024`, and formal global consumption is
+`9,465,856` samples.  The startup content audit fail-fast checks that every
+rank's deterministic shard assignment has at least the per-rank target and
+reports raw rows, effective rows, and remaining raw rows.
+
+Remote execution uses the `vc submit` wrapper (8 x 5090, `-c 32 -m 256G
+-g 8 -n 1`):
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+RSMOL_RECURSIVE_OUTPUT_DIR=/external/recursive-checkpoint \
+RSMOL_STAGE4_GATE=B \
+RSMOL_STAGE4_OUTPUT_DIR=/external/stage4-gate-b-YYYYMMDD \
+bash run_stage4_5090.sh
+```
+
+For Gate C/D, pass `RSMOL_STAGE4_AUDIT_REPORT` pointing to the external Gate B
+JSON; this keeps rank 0 from rescanning the full corpus during a multi-card
+training launch.  For Gate D omit `RSMOL_STAGE4_GATE` (it defaults to `D`).  Gate E uses a
+fresh `RSMOL_STAGE4_OUTPUT_DIR` and sets
+`RSMOL_STAGE4_RESUME_FROM` to the latest complete Gate D checkpoint.  Every
+gate emits JSON reports and the training runtime appends resource samples to
+`runtime_monitor_rank*.jsonl`; cache variables are redirected to task-local
+`/tmp` paths.
+
 这是 Recursive SALM（暂称 RSM）实验的代码同步仓库。仓库的主要作用是在本地 Windows 机器上由 Codex
 协助编写、检查和维护代码，再通过 GitHub 将代码同步到远程 Linux HPC 服务器执行模型转换、预训练、up training
 和音频推理训练。
