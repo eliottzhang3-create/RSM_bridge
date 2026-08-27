@@ -717,6 +717,12 @@ def _json_safe(value: Any) -> Any:
 def _restore_config_value(config: Any, name: str, value: Any) -> None:
     """Restore config values across Transformers writable/read-only variants."""
 
+    # ``use_return_dict`` is a read-only computed property in the pinned
+    # Transformers 4.54.1 config and the toy audit never mutates it. There is
+    # therefore no state to restore for this field; attempting assignment only
+    # raises ``AttributeError: can't set attribute``.
+    if name == "use_return_dict":
+        return
     try:
         setattr(config, name, value)
         return
