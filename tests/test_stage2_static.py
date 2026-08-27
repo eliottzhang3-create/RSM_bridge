@@ -71,6 +71,9 @@ class Stage2StaticContractTest(unittest.TestCase):
         self.assertIn('Non-padding tokens must remain supervised', self.source)
         self.assertNotIn('labels[attention_mask == 1] = -100', self.source)
         self.assertNotIn('input_ids[:, :-1]', self.source)
+        self.assertIn('def _ensure_padding_token', self.source)
+        self.assertIn('tokenizer.pad_token = tokenizer.eos_token', self.source)
+        self.assertIn('synthetic_pad_token', self.source)
 
     def test_audit_and_checkpoint_contracts_are_explicit(self) -> None:
         required = (

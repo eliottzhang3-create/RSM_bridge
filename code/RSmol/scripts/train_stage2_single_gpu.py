@@ -714,6 +714,31 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _ensure_padding_token(tokenizer: Any) -> bool:
+    """Ensure a pad id exists, using EOS only for newly inserted batch pads.
+
+    SmolLM2 is a decoder-only tokenizer and may intentionally omit a separate
+    padding token.  Dynamic batching still needs an id to fill the rectangular
+    tensor.  Reusing EOS is safe here because the collator marks exactly those
+    newly inserted positions as ``-100``; real document tokens are never
+    masked.  The decision is recorded on the tokenizer for the final report.
+    """
+
+    if tokenizer.pad_token_id is not None:
+        tokenizer._stage2_synthetic_pad_token = False
+        return False
+    if tokenizer.eos_token_id is None or tokenizer.eos_token is None:
+        raise ValueError(
+            "Tokenizer has neither pad_token_id nor a usable eos_token; "
+            "Stage 2 cannot construct dynamic padding safely."
+        )
+    tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.pad_token_id is None:
+        raise ValueError("Failed to install EOS as the dynamic batch padding token")
+    tokenizer._stage2_synthetic_pad_token = True
+    return True
+
+
 def _load_runtime(model_path: Path, tokenizer_path: Path | None, device: Any) -> tuple[Any, Any]:
     import torch
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -729,11 +754,7 @@ def _load_runtime(model_path: Path, tokenizer_path: Path | None, device: Any) ->
     config.use_cache = False
     load_path = tokenizer_path or model_path
     tokenizer = AutoTokenizer.from_pretrained(load_path, local_files_only=True, use_fast=True)
-    if tokenizer.pad_token_id is None:
-        raise ValueError(
-            "Tokenizer has no pad_token_id. Refusing to substitute EOS: Stage 2 must preserve "
-            "documents and only mask actual dynamic padding."
-        )
+    _ensure_padding_token(tokenizer)
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         config=config,
@@ -1134,6 +1155,8 @@ def run(config: TrainConfig) -> dict[str, Any]:
         "bf16_autocast": True,
         "use_cache": False,
         "single_gpu": True,
+        "synthetic_pad_token": bool(getattr(tokenizer, "_stage2_synthetic_pad_token", False)),
+        "padding_token_id": int(tokenizer.pad_token_id),
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(_json_safe(report), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
