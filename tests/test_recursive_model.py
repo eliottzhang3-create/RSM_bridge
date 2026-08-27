@@ -106,12 +106,12 @@ def test_shared_stack_state_dict_and_cache_slots() -> None:
     assert torch.allclose(no_cache.logits, cached.logits, atol=1e-5, rtol=1e-4)
     assert len(cached.past_key_values) >= 4
     assert all(cached.past_key_values.get_seq_length(index) == 4 for index in range(4))
-    if hasattr(cached.past_key_values, "key_cache"):
-        assert all(cached.past_key_values.key_cache[index].numel() > 0 for index in range(4))
-        assert all(cached.past_key_values.value_cache[index].numel() > 0 for index in range(4))
-    else:
+    if hasattr(cached.past_key_values, "layers"):
         assert all(cached.past_key_values.layers[index].keys.numel() > 0 for index in range(4))
         assert all(cached.past_key_values.layers[index].values.numel() > 0 for index in range(4))
+    else:
+        assert all(cached.past_key_values.key_cache[index].numel() > 0 for index in range(4))
+        assert all(cached.past_key_values.value_cache[index].numel() > 0 for index in range(4))
     class FixedCapacityCache:
         def __len__(self) -> int:
             return 2

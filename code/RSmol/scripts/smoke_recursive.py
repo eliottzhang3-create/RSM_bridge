@@ -35,6 +35,11 @@ from recursive_model import (  # noqa: E402
 
 CACHE_ATOL = 1e-5
 CACHE_RTOL = 1e-4
+BF16_INCREMENTAL_MAX_ABS = 1.0
+BF16_INCREMENTAL_MEAN_ABS = 0.125
+BF16_INCREMENTAL_MIN_COSINE = 0.999
+FP32_INCREMENTAL_ATOL = 1e-3
+FP32_INCREMENTAL_RTOL = 1e-4
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,19 +83,22 @@ def cache_slot_state(cache: Any, index: int) -> tuple[int, bool, bool]:
     length = int(cache.get_seq_length(index))
     key_state: Any = None
     value_state: Any = None
-    if hasattr(cache, "key_cache") and hasattr(cache, "value_cache"):
+    # Transformers 4.54.1 keeps key_cache/value_cache as deprecated
+    # compatibility properties. Prefer the canonical layer API so the smoke
+    # remains warning-free and compatible with 4.56+.
+    if hasattr(cache, "layers"):
+        layers = cache.layers
+        if index < len(layers):
+            layer = layers[index]
+            key_state = getattr(layer, "keys", None)
+            value_state = getattr(layer, "values", None)
+    elif hasattr(cache, "key_cache") and hasattr(cache, "value_cache"):
         key_cache = cache.key_cache
         value_cache = cache.value_cache
         if index < len(key_cache):
             key_state = key_cache[index]
         if index < len(value_cache):
             value_state = value_cache[index]
-    elif hasattr(cache, "layers"):
-        layers = cache.layers
-        if index < len(layers):
-            layer = layers[index]
-            key_state = getattr(layer, "keys", None)
-            value_state = getattr(layer, "values", None)
     else:  # pragma: no cover - defensive for a future cache class
         try:
             slot = cache[index]
@@ -240,16 +248,31 @@ def main() -> None:
                 (inputs["attention_mask"], torch.ones_like(inputs["attention_mask"][:, :1])), dim=1
             )
         extended = model(**extended_inputs)
-    incremental_max_diff = float((incremental.logits[:, -1] - extended.logits[:, -1]).abs().max().item())
-    if not torch.allclose(
-        incremental.logits[:, -1],
-        extended.logits[:, -1],
-        atol=CACHE_ATOL,
-        rtol=CACHE_RTOL,
+    incremental_logits = incremental.logits[:, -1].float()
+    extended_logits = extended.logits[:, -1].float()
+    incremental_abs_diff = (incremental_logits - extended_logits).abs()
+    incremental_max_diff = float(incremental_abs_diff.max().item())
+    incremental_mean_diff = float(incremental_abs_diff.mean().item())
+    incremental_cosine = float(
+        torch.nn.functional.cosine_similarity(incremental_logits, extended_logits, dim=-1)
+        .min()
+        .item()
+    )
+    incremental_argmax_equal = bool(
+        torch.equal(incremental_logits.argmax(dim=-1), extended_logits.argmax(dim=-1))
+    )
+    if (
+        incremental_max_diff > BF16_INCREMENTAL_MAX_ABS
+        or incremental_mean_diff > BF16_INCREMENTAL_MEAN_ABS
+        or incremental_cosine < BF16_INCREMENTAL_MIN_COSINE
+        or not incremental_argmax_equal
     ):
         raise RuntimeError(
-            "Incremental logits disagree with independent full-sequence logits: "
-            f"max_diff={incremental_max_diff} atol={CACHE_ATOL} rtol={CACHE_RTOL}"
+            "BF16 incremental logits disagree semantically with independent full-sequence logits: "
+            f"max_diff={incremental_max_diff} mean_diff={incremental_mean_diff} "
+            f"cosine={incremental_cosine} argmax_equal={incremental_argmax_equal} "
+            f"limits=(max={BF16_INCREMENTAL_MAX_ABS}, mean={BF16_INCREMENTAL_MEAN_ABS}, "
+            f"cosine>={BF16_INCREMENTAL_MIN_COSINE})"
         )
     incremental_slots = []
     for index in range(expected_slots):
@@ -258,13 +281,24 @@ def main() -> None:
         if slot[0] != inputs["input_ids"].shape[1] + 1 or not slot[1] or not slot[2]:
             raise RuntimeError(f"Invalid incremental cache slot {index}: {slot}")
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
-    started = time.perf_counter()
+    generation_started = time.perf_counter()
     with torch.inference_mode():
         generated = model.generate(
             **inputs,
             max_new_tokens=args.max_new_tokens,
             do_sample=False,
             use_cache=True,
+            pad_token_id=pad_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+    torch.cuda.synchronize(device_index)
+    generation_seconds = time.perf_counter() - generation_started
+    with torch.inference_mode():
+        generated_no_cache = model.generate(
+            **inputs,
+            max_new_tokens=args.max_new_tokens,
+            do_sample=False,
+            use_cache=False,
             pad_token_id=pad_id,
             eos_token_id=tokenizer.eos_token_id,
         )
@@ -284,11 +318,15 @@ def main() -> None:
             pad_token_id=pad_id,
             eos_token_id=tokenizer.eos_token_id,
         )
-    torch.cuda.synchronize(device_index)
     if generated.ndim != 2 or generated.shape[0] != inputs["input_ids"].shape[0]:
         raise RuntimeError(f"Unexpected generation shape: {tuple(generated.shape)}")
     if generated.shape[1] <= inputs["input_ids"].shape[1]:
         raise RuntimeError("Generation produced no new token")
+    if not torch.equal(generated, generated_no_cache):
+        raise RuntimeError(
+            "Greedy generation differs between use_cache=True and use_cache=False: "
+            f"cached={generated.tolist()} no_cache={generated_no_cache.tolist()}"
+        )
     expected_precreated_length = inputs["input_ids"].shape[1]
     if (
         generated_with_precreated_cache.ndim != 2
@@ -316,6 +354,48 @@ def main() -> None:
         )
         if slot[0] != expected_precreated_length or not slot[1] or not slot[2]:
             raise RuntimeError(f"Invalid precreated generation cache slot {index}: {slot}")
+
+    # BF16 cached single-token attention and a full-sequence recomputation use
+    # different GEMM/SDPA shapes, so bitwise or FP32-scale allclose thresholds
+    # are not a valid correctness criterion. Re-run the decisive incremental
+    # comparison in FP32 after the BF16 inference/generation checks. A cache
+    # routing or position error remains large in FP32; normal kernel-ordering
+    # noise does not.
+    model.float()
+    fp32_next_input: dict[str, Any] = {
+        "input_ids": inputs["input_ids"][:, -1:],
+        "use_cache": True,
+    }
+    if "attention_mask" in inputs:
+        fp32_next_input["attention_mask"] = next_input["attention_mask"]
+    previous_allow_tf32 = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        with torch.inference_mode():
+            fp32_prefill = model(**inputs, use_cache=True)
+            fp32_next_input["past_key_values"] = fp32_prefill.past_key_values
+            fp32_incremental = model(**fp32_next_input)
+            fp32_extended = model(**extended_inputs)
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = previous_allow_tf32
+    finite("FP32 incremental logits", fp32_incremental.logits)
+    finite("FP32 full-sequence logits", fp32_extended.logits)
+    fp32_incremental_logits = fp32_incremental.logits[:, -1]
+    fp32_extended_logits = fp32_extended.logits[:, -1]
+    fp32_incremental_max_diff = float(
+        (fp32_incremental_logits - fp32_extended_logits).abs().max().item()
+    )
+    if not torch.allclose(
+        fp32_incremental_logits,
+        fp32_extended_logits,
+        atol=FP32_INCREMENTAL_ATOL,
+        rtol=FP32_INCREMENTAL_RTOL,
+    ):
+        raise RuntimeError(
+            "FP32 incremental logits disagree with independent full-sequence logits: "
+            f"max_diff={fp32_incremental_max_diff} "
+            f"atol={FP32_INCREMENTAL_ATOL} rtol={FP32_INCREMENTAL_RTOL}"
+        )
     report = {
         "status": "ok",
         "model_path": str(model_path),
@@ -363,10 +443,23 @@ def main() -> None:
             "logits_shape": list(incremental.logits.shape),
             "full_sequence_logits_shape": list(extended.logits.shape),
             "max_diff": incremental_max_diff,
-            "atol": CACHE_ATOL,
-            "rtol": CACHE_RTOL,
+            "mean_diff": incremental_mean_diff,
+            "cosine": incremental_cosine,
+            "argmax_equal": incremental_argmax_equal,
+            "max_abs_limit": BF16_INCREMENTAL_MAX_ABS,
+            "mean_abs_limit": BF16_INCREMENTAL_MEAN_ABS,
+            "min_cosine": BF16_INCREMENTAL_MIN_COSINE,
         },
-        "generation": {"output_shape": list(generated.shape), "seconds": time.perf_counter() - started},
+        "incremental_fp32_audit": {
+            "max_diff": fp32_incremental_max_diff,
+            "atol": FP32_INCREMENTAL_ATOL,
+            "rtol": FP32_INCREMENTAL_RTOL,
+        },
+        "generation": {
+            "output_shape": list(generated.shape),
+            "cache_no_cache_tokens_equal": True,
+            "cached_generation_seconds": generation_seconds,
+        },
         "generation_precreated_cache": {
             "cache_type": type(precreated_cache).__name__,
             "initial_cache_slots": precreated_cache_initial_slots,
