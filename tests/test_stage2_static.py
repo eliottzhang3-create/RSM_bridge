@@ -88,6 +88,7 @@ class Stage2StaticContractTest(unittest.TestCase):
             'torch_random_state',
             'audit_model_training_state_restored',
             'audit_config_state_restored',
+            '_restore_config_value',
             'audit_rng_state_restored',
             'optimizer_matches_model_exactly_once',
             'optimizer_step_exactly_once_per_window',

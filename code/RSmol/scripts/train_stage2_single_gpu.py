@@ -668,7 +668,7 @@ def strict_toy_batch_audit(model: Any, *, device: Any, learning_rate: float = 2e
         for module in model.modules():
             module.training = model_training_states[id(module)]
         for name, value in config_state.items():
-            setattr(model.config, name, value)
+            _restore_config_value(model.config, name, value)
         random.setstate(python_random_state)
         torch.set_rng_state(torch_random_state)
         if cuda_random_state_all is not None and torch.cuda.is_available():
@@ -712,6 +712,24 @@ def _json_safe(value: Any) -> Any:
         except Exception:
             pass
     return value
+
+
+def _restore_config_value(config: Any, name: str, value: Any) -> None:
+    """Restore config values across Transformers writable/read-only variants."""
+
+    try:
+        setattr(config, name, value)
+        return
+    except AttributeError:
+        # Transformers 4.54.x exposes ``use_return_dict`` as a read-only
+        # property backed by ``_use_return_dict``. Other config fields remain
+        # directly writable, so only fall back when public assignment is
+        # explicitly rejected.
+        backing_name = f"_{name}"
+        if hasattr(config, backing_name):
+            setattr(config, backing_name, value)
+            return
+        raise
 
 
 def _ensure_padding_token(tokenizer: Any) -> bool:
