@@ -110,7 +110,11 @@ fi
 
 if [[ "$GATE" == "B" ]]; then
   # Gate B is deliberately a single-process pre-audit; no torchrun.
-  python -u code/RSmol/scripts/train_stage4_ddp.py "${ARGS[@]}"
+  # vc/slurm may export stale distributed variables even for a plain Python
+  # process.  Remove them so downstream libraries cannot infer DDP here.
+  env -u RANK -u WORLD_SIZE -u LOCAL_RANK -u MASTER_ADDR -u MASTER_PORT \
+    -u TORCHELASTIC_RUN_ID -u GROUP_RANK -u ROLE_RANK \
+    python -u code/RSmol/scripts/train_stage4_ddp.py "${ARGS[@]}"
 else
   torchrun --standalone --nproc_per_node="$WORLD_SIZE" \
     code/RSmol/scripts/train_stage4_ddp.py "${ARGS[@]}"

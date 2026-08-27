@@ -1130,10 +1130,18 @@ def _prepare_distributed(config: Stage4Config) -> tuple[int, int, Any, bool]:
     import torch
     import torch.distributed as dist
 
-    rank = int(os.environ.get("RANK", "0"))
-    configured_world_size = 1 if config.gate == "B" else config.world_size
-    world_size = int(os.environ.get("WORLD_SIZE", str(configured_world_size)))
-    local_rank = int(os.environ.get("LOCAL_RANK", str(config.local_rank if config.local_rank >= 0 else rank)))
+    # Gate B is intentionally a standalone single-process audit.  Cluster
+    # launchers may leave WORLD_SIZE/RANK/LOCAL_RANK inherited in the
+    # environment even when no torchrun process group was started; never let
+    # those stale variables turn Gate B into a false distributed launch.
+    if config.gate == "B":
+        rank = 0
+        world_size = 1
+        local_rank = 0
+    else:
+        rank = int(os.environ.get("RANK", "0"))
+        world_size = int(os.environ.get("WORLD_SIZE", str(config.world_size)))
+        local_rank = int(os.environ.get("LOCAL_RANK", str(config.local_rank if config.local_rank >= 0 else rank)))
     config.world_size = world_size
     config.local_rank = local_rank
     use_cuda = torch.cuda.is_available()
@@ -2117,8 +2125,6 @@ def run(config: Stage4Config) -> dict[str, Any]:
         _write_json(report_path, report)
         return report
 
-    if config.gate == "B" and int(os.environ.get("WORLD_SIZE", "1").strip() or "1") > 1:
-        raise RuntimeError("Gate B is single-process only and must not be launched with torchrun")
     rank, world_size, device, use_cuda = _prepare_distributed(config)
     _set_seed(config.seed, rank=rank)
     process_group = __import__("torch.distributed", fromlist=["distributed"])
