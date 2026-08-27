@@ -27,6 +27,7 @@ from recursive_model import (  # noqa: E402
     PROJECT_SOURCE_LAYERS,
     RecursiveLlamaForCausalLM,
     build_stepwise_mapping,
+    make_dynamic_cache,
     parameter_audit,
     register_auto_class,
 )
@@ -267,12 +268,12 @@ def main() -> None:
             pad_token_id=pad_id,
             eos_token_id=tokenizer.eos_token_id,
         )
-    precreated_cache = DynamicCache(config=model.config)
-    if len(precreated_cache) < expected_slots:
-        raise RuntimeError(
-            "DynamicCache(config=model.config) did not pre-create the logical namespace: "
-            f"capacity={len(precreated_cache)} expected={expected_slots}"
-        )
+    # Transformers 4.54.1 cannot construct DynamicCache from this Llama
+    # config: its config path forwards max_cache_len to CacheLayerMixin, which
+    # rejects that keyword.  The empty form is the supported lazy cache and
+    # expands through all logical slots during the prefill below.
+    precreated_cache = make_dynamic_cache()
+    precreated_cache_initial_slots = len(precreated_cache)
     with torch.inference_mode():
         generated_with_precreated_cache = model.generate(
             **inputs,
@@ -288,6 +289,33 @@ def main() -> None:
         raise RuntimeError(f"Unexpected generation shape: {tuple(generated.shape)}")
     if generated.shape[1] <= inputs["input_ids"].shape[1]:
         raise RuntimeError("Generation produced no new token")
+    expected_precreated_length = inputs["input_ids"].shape[1]
+    if (
+        generated_with_precreated_cache.ndim != 2
+        or generated_with_precreated_cache.shape[0] != inputs["input_ids"].shape[0]
+    ):
+        raise RuntimeError(
+            "Unexpected precreated-cache generation shape: "
+            f"{tuple(generated_with_precreated_cache.shape)}"
+        )
+    if generated_with_precreated_cache.shape[1] <= expected_precreated_length:
+        raise RuntimeError("Precreated-cache generation produced no new token")
+    if len(precreated_cache) < expected_slots:
+        raise RuntimeError(
+            "Lazy precreated cache did not expand through the recursive logical namespace: "
+            f"capacity={len(precreated_cache)} expected_slots={expected_slots}"
+        )
+    # With max_new_tokens=1, GenerationMixin uses the prompt prefill to select
+    # the only new token and does not perform another decoder forward.  Thus
+    # each cache slot must contain exactly the prompt length, not prompt + 1.
+    precreated_generation_slots = []
+    for index in range(expected_slots):
+        slot = cache_slot_state(precreated_cache, index)
+        precreated_generation_slots.append(
+            {"index": index, "length": slot[0], "key_nonempty": slot[1], "value_nonempty": slot[2]}
+        )
+        if slot[0] != expected_precreated_length or not slot[1] or not slot[2]:
+            raise RuntimeError(f"Invalid precreated generation cache slot {index}: {slot}")
     report = {
         "status": "ok",
         "model_path": str(model_path),
@@ -341,7 +369,12 @@ def main() -> None:
         "generation": {"output_shape": list(generated.shape), "seconds": time.perf_counter() - started},
         "generation_precreated_cache": {
             "cache_type": type(precreated_cache).__name__,
-            "cache_slots": len(precreated_cache),
+            "initial_cache_slots": precreated_cache_initial_slots,
+            "cache_slots_after_generation": len(precreated_cache),
+            "expected_slots": expected_slots,
+            "expected_prefill_length": expected_precreated_length,
+            "slots_after_generation": precreated_generation_slots,
+            "construction": "DynamicCache() lazy; config construction is incompatible with transformers 4.54.1",
             "output_shape": list(generated_with_precreated_cache.shape),
         },
     }

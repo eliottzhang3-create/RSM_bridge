@@ -13,7 +13,9 @@ transformers = pytest.importorskip("transformers")
 from code.RSmol.recursive_model import (  # noqa: E402
     MAPPING_POLICY,
     RecursiveLlamaForCausalLM,
+    _validate_cache_capacity,
     build_stepwise_mapping,
+    make_dynamic_cache,
     parameter_audit,
     register_auto_class,
 )
@@ -110,13 +112,22 @@ def test_shared_stack_state_dict_and_cache_slots() -> None:
     else:
         assert all(cached.past_key_values.layers[index].keys.numel() > 0 for index in range(4))
         assert all(cached.past_key_values.layers[index].values.numel() > 0 for index in range(4))
-    from transformers.cache_utils import DynamicCache
+    class FixedCapacityCache:
+        def __len__(self) -> int:
+            return 2
 
-    old_depth_config = model.config.to_dict()
-    old_depth_config["num_hidden_layers"] = 2
-    old_depth_cache = DynamicCache(config=transformers.LlamaConfig(**old_depth_config))
+        def update(self, *args, **kwargs):
+            raise AssertionError("capacity validation must fail before update")
+
+        def get_seq_length(self, *args, **kwargs) -> int:
+            return 0
+
     with pytest.raises(ValueError, match="required_slots=4"):
-        model(input_ids=input_ids, past_key_values=old_depth_cache, use_cache=True)
+        model(input_ids=input_ids, past_key_values=FixedCapacityCache(), use_cache=True)
+
+    lazy_cache = make_dynamic_cache()
+    assert len(lazy_cache) == 0
+    _validate_cache_capacity(lazy_cache, logical_layer_count=4)
 
 
 def test_prefill_incremental_labels_backward_and_update() -> None:
@@ -201,6 +212,16 @@ def test_generation_and_save_reload(tmp_path) -> None:
         pad_token_id=0,
     )
     assert generated.shape == (1, 4)
+    with pytest.raises(ValueError, match="cache_implementation='dynamic' is not supported"):
+        model.generate(
+            input_ids=input_ids,
+            max_new_tokens=1,
+            do_sample=False,
+            use_cache=True,
+            cache_implementation="dynamic",
+            eos_token_id=None,
+            pad_token_id=0,
+        )
     model.save_pretrained(tmp_path, safe_serialization=False)
     reloaded = RecursiveLlamaForCausalLM.from_pretrained(tmp_path).eval()
     assert torch.allclose(
@@ -214,11 +235,11 @@ def test_generation_and_save_reload(tmp_path) -> None:
     assert isinstance(auto_reloaded, RecursiveLlamaForCausalLM)
     assert auto_reloaded.config.num_hidden_layers == 4
     assert auto_reloaded.config.recursive_layer_count == 2
-    # GenerationMixin/Cache users may pre-create an empty cache from the
-    # logical config.  It must expose four slots and remain usable by the
-    # recursive model without any config-depth multiplication.
-    precreated_cache = DynamicCache(config=auto_reloaded.config)
-    assert len(precreated_cache) >= 4
+    # Transformers 4.54.1 requires the no-config lazy constructor here:
+    # config construction forwards unsupported max_cache_len to its cache
+    # layer class.  The cache must grow to all logical slots during generation.
+    precreated_cache = make_dynamic_cache()
+    assert len(precreated_cache) == 0
     generated_with_precreated = auto_reloaded.generate(
         input_ids=input_ids,
         max_new_tokens=1,
@@ -229,6 +250,8 @@ def test_generation_and_save_reload(tmp_path) -> None:
         pad_token_id=0,
     )
     assert generated_with_precreated.shape == (1, 3)
+    assert len(precreated_cache) >= auto_reloaded.config.num_hidden_layers
+    assert all(precreated_cache.get_seq_length(index) == input_ids.shape[1] for index in range(4))
     config = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     assert config["num_hidden_layers"] == 4
     assert config["recursive_layer_count"] == 2

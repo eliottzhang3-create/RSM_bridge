@@ -55,6 +55,17 @@ class StepwiseStaticContractTest(unittest.TestCase):
         self.assertIn('"target_logical_layers": int(target_config.num_hidden_layers)', self.converter_text)
         self.assertIn('"target_physical_unique_layers": len(mapping)', self.converter_text)
         self.assertNotIn("cache_config.num_hidden_layers = int(config.num_hidden_layers) * DEFAULT_LOOPS", self.recursive_text)
+        self.assertIn("def make_dynamic_cache()", self.recursive_text)
+        self.assertIn("return DynamicCache()", self.recursive_text)
+        self.assertNotIn("DynamicCache(config=", self.recursive_text)
+        self.assertNotIn("DynamicCache(config=", self.smoke_text)
+        self.assertIn("make_dynamic_cache()", self.smoke_text)
+        self.assertIn("def _prepare_cache_for_generation", self.recursive_text)
+        self.assertIn('model_kwargs["past_key_values"] = make_dynamic_cache()', self.recursive_text)
+        self.assertIn('cache_implementation == "dynamic"', self.recursive_text)
+        self.assertIn('cache_implementation is None', self.recursive_text)
+        self.assertIn("precreated_generation_slots", self.smoke_text)
+        self.assertIn("expected_precreated_length", self.smoke_text)
 
         source = SimpleNamespace(num_hidden_layers=4)
         target = self.converter.build_target_config(

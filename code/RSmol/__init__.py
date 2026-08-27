@@ -5,6 +5,7 @@ from .recursive_model import (
     RecursiveLlamaForCausalLM,
     RecursiveLlamaModel,
     build_stepwise_mapping,
+    make_dynamic_cache,
     parameter_audit,
     register_auto_class,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "RecursiveLlamaForCausalLM",
     "RecursiveLlamaModel",
     "build_stepwise_mapping",
+    "make_dynamic_cache",
     "parameter_audit",
     "register_auto_class",
 ]

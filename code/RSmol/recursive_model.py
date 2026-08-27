@@ -16,7 +16,6 @@ ms-swift to implement the model.
 from __future__ import annotations
 
 import inspect
-import copy
 import warnings
 from collections import defaultdict
 from typing import Any, Mapping, Sequence
@@ -186,11 +185,13 @@ def _cache_seq_length(cache: Any) -> int:
 def _validate_cache_capacity(cache: Any, logical_layer_count: int) -> None:
     """Validate an externally supplied cache without rejecting lazy caches.
 
-    ``DynamicCache()`` may start with zero materialized layers and grow on the
-    first update.  A non-empty cache, however, must already expose the complete
-    logical namespace because a recursive forward addresses slots in both
-    loops (``0..L-1``).  This catches a cache pre-created from the old K-depth
-    config before an opaque IndexError occurs in the second loop.
+    ``DynamicCache`` is a lazy cache: it may start with zero materialized
+    layers, and it may also contain only a prefix while a caller is building a
+    cache.  Its ``update`` method owns the growth of that list, so a recursive
+    forward must let it grow through logical slots ``0..L-1``.  Fixed-capacity
+    cache implementations cannot do that; reject a fixed cache that exposes
+    fewer than ``L`` slots before the second recursive loop reaches an opaque
+    indexing failure.
     """
 
     if cache is None:
@@ -200,53 +201,44 @@ def _validate_cache_capacity(cache: Any, logical_layer_count: int) -> None:
             "past_key_values must be a Transformers Cache object; legacy tuples "
             "are not accepted because recursive logical slots would be ambiguous"
         )
+    if isinstance(cache, DynamicCache):
+        # Transformers 4.54.1 DynamicCache() is deliberately empty and
+        # lazily appends CacheLayerMixin instances on update.  Do not infer a
+        # fixed capacity from its current materialized layer count.
+        return
     try:
         capacity = len(cache)
     except TypeError:
         capacity = None
-    if capacity is not None and capacity not in (0,) and capacity < logical_layer_count:
+    if capacity is not None and capacity < logical_layer_count:
         raise ValueError(
             "past_key_values does not cover the recursive logical cache namespace: "
             f"capacity={capacity}, required_slots={logical_layer_count}. "
-            "Create it with DynamicCache(config=model.config) or pass an empty lazy cache."
+            "Use a cache configured for num_hidden_layers=the logical depth, or "
+            "pass DynamicCache() so it can grow lazily."
         )
 
 
-def _make_cache(config: LlamaConfig) -> Any:
-    # DynamicCache is the native generation cache in the supported release.
-    # In 4.54.1, DynamicCache.__init__ exposes ``**kwargs`` and forwards the
-    # public ``config=`` argument to Cache.__init__; later releases expose
-    # ``config`` explicitly.  Detect both exact signatures without catching a
-    # constructor TypeError and retrying with a different call.
-    constructor_parameters = inspect.signature(DynamicCache.__init__).parameters
-    accepts_config = "config" in constructor_parameters or any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in constructor_parameters.values()
-    )
-    if accepts_config:
-        # ``config.num_hidden_layers`` is the logical depth (L), not the
-        # number of unique physical modules (K).  The converted config already
-        # advertises all 2K logical cache slots, so do not multiply it here.
-        # This also keeps a cache pre-created by GenerationMixin compatible
-        # with a cache created lazily by this model.
-        cache_config = copy.deepcopy(config)
-        cache_config.num_hidden_layers = int(config.num_hidden_layers)
-        layer_types = getattr(cache_config, "layer_types", None)
-        if isinstance(layer_types, (list, tuple)) and layer_types:
-            logical_layers = int(config.num_hidden_layers)
-            if len(layer_types) not in {logical_layers, 1}:
-                raise ValueError(
-                    "Target config layer_types must have one entry or one entry per "
-                    f"logical layer ({logical_layers}), got {len(layer_types)}"
-                )
-            cache_config.layer_types = (
-                list(layer_types) * logical_layers if len(layer_types) == 1 else list(layer_types)
-            )
-        return DynamicCache(config=cache_config)
-    # Older cache implementations use lazy layer lists and have no config
-    # argument.  This branch is explicit and inspectable, rather than a broad
-    # TypeError retry that could hide a constructor bug.
+def make_dynamic_cache() -> DynamicCache:
+    """Create the supported lazy cache without forwarding model config.
+
+    In Transformers 4.54.1, ``DynamicCache.__init__`` accepts arbitrary
+    keyword arguments but forwards cache configuration to cache-layer classes.
+    Llama's resulting ``CacheLayerMixin`` rejects ``max_cache_len``, so
+    passing a model config fails before the first attention update.  The empty
+    cache is the documented lazy form used by generation and safely grows to
+    every logical recursive slot through ``update``.
+    """
+
     return DynamicCache()
+
+
+def _make_cache(config: LlamaConfig) -> DynamicCache:
+    # ``config`` remains part of this internal factory signature so callers
+    # retain a model-config-aware construction boundary.  Do not pass it to
+    # DynamicCache: see make_dynamic_cache() and the 4.54.1 compatibility note.
+    del config
+    return make_dynamic_cache()
 
 
 def _assert_supported_llama_api(layer: nn.Module) -> None:
@@ -581,6 +573,40 @@ class RecursiveLlamaForCausalLM(LlamaForCausalLM):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.post_init()
 
+    def _prepare_cache_for_generation(
+        self,
+        generation_config: Any,
+        model_kwargs: dict[str, Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Install a lazy cache before GenerationMixin uses its config constructor.
+
+        Transformers 4.54.1's generic generation path creates a configured
+        ``DynamicCache`` when no cache is supplied.
+        That configuration path is incompatible with this runtime's Llama
+        cache-layer API (it forwards ``max_cache_len`` to CacheLayerMixin).
+        A caller-provided cache is left untouched; otherwise this override
+        installs the same empty DynamicCache used by direct ``forward`` and
+        delegates the remaining generation bookkeeping to Transformers.
+        """
+
+        cache_implementation = getattr(generation_config, "cache_implementation", None)
+        if cache_implementation == "dynamic":
+            raise ValueError(
+                "cache_implementation='dynamic' is not supported by the Stage 1 recursive "
+                "model on transformers 4.54.1 because GenerationMixin constructs a configured "
+                "DynamicCache. Omit cache_implementation to use the supported lazy DynamicCache(), "
+                "or pass a cache created by make_dynamic_cache() without cache_implementation."
+            )
+        if (
+            model_kwargs.get("past_key_values") is None
+            and bool(getattr(generation_config, "use_cache", True))
+            and cache_implementation is None
+        ):
+            model_kwargs["past_key_values"] = make_dynamic_cache()
+        return super()._prepare_cache_for_generation(generation_config, model_kwargs, *args, **kwargs)
+
     def forward(
         self,
         input_ids: torch.LongTensor | None = None,
@@ -757,6 +783,7 @@ __all__ = [
     "RecursiveLlamaModel",
     "RecursiveLlamaForCausalLM",
     "build_stepwise_mapping",
+    "make_dynamic_cache",
     "parameter_audit",
     "register_auto_class",
 ]
