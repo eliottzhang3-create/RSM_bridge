@@ -801,6 +801,8 @@ def _load_runtime_model(model_path: Path, device: Any, tokenizer_path: Path | No
 
     from code.RSmol.recursive_model import register_auto_class
 
+    model_path = _require_local_artifact_dir(model_path, kind="recursive model")
+    tokenizer_source = _require_local_artifact_dir(tokenizer_path or model_path, kind="tokenizer")
     register_auto_class()
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
@@ -810,7 +812,7 @@ def _load_runtime_model(model_path: Path, device: Any, tokenizer_path: Path | No
     # No device_map: every rank owns one local process/device and DDP performs
     # synchronization explicitly.
     tokenizer = AutoTokenizer.from_pretrained(
-        tokenizer_path or model_path,
+        tokenizer_source,
         local_files_only=True,
         use_fast=True,
     )
@@ -1875,7 +1877,44 @@ def _broadcast_object(value: Any, *, rank: int) -> Any:
 def _load_tokenizer_only(path: Path) -> Any:
     from transformers import AutoTokenizer
 
+    path = _require_local_artifact_dir(path, kind="tokenizer")
     return AutoTokenizer.from_pretrained(path, local_files_only=True, use_fast=True)
+
+
+def _require_local_artifact_dir(path: Path, *, kind: str) -> Path:
+    """Return a canonical local directory before Transformers can parse it.
+
+    Without this guard, a missing HPC mount/path is passed to
+    ``from_pretrained`` and Hugging Face interprets the absolute path as a
+    repo id, producing a misleading ``HFValidationError``.  Stage 4 is
+    strictly offline, so fail with the actual path and expected artifacts.
+    """
+
+    candidate = Path(path).expanduser().resolve()
+    if not candidate.is_dir():
+        raise FileNotFoundError(
+            f"Stage 4 {kind} path is not an existing local directory: {candidate}. "
+            "Check the external checkpoint mount/path or pass "
+            "RSMOL_STAGE4_TOKENIZER_PATH explicitly."
+        )
+    if kind == "recursive model":
+        if not (candidate / "config.json").is_file():
+            raise FileNotFoundError(
+                f"Stage 4 recursive model directory is missing config.json: {candidate}"
+            )
+        required_any = ("model.safetensors", "pytorch_model.bin")
+    else:
+        required_any = (
+            "tokenizer.json", "tokenizer.model", "vocab.json", "spiece.model",
+            "tokenizer_config.json",
+        )
+    present = [name for name in required_any if (candidate / name).is_file()]
+    if not present:
+        raise FileNotFoundError(
+            f"Stage 4 {kind} directory has no recognized local artifacts: {candidate}; "
+            f"expected one of {required_any}."
+        )
+    return candidate
 
 
 def _dataset_preaudit(

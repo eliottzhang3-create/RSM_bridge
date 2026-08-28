@@ -133,6 +133,11 @@ class Stage4StaticContractTest(unittest.TestCase):
         self.assertIn('if config.gate != "B" and world_size != DEFAULT_WORLD_SIZE', self.source)
         self.assertIn('world_size = 1', self.source)
 
+    def test_local_pretrained_paths_are_validated_before_hf_loading(self) -> None:
+        self.assertIn("_require_local_artifact_dir", self.source)
+        self.assertIn("is not an existing local directory", self.source)
+        self.assertIn("HFValidationError", self.source)
+
     def test_final_cursor_gather_is_outside_rank0_branch(self) -> None:
         tree = ast.parse(self.source)
         run_training = next(
