@@ -1,6 +1,151 @@
 # RSM_bridge
 
+## Stage 3 offline benchmark evaluation (2026-08-28)
+
+Stage 3 is the current evaluation gate for the original SmolLM2-135M and the
+untrained recursive SmolLM2-15R checkpoint.  It evaluates the two external
+models on the official lm-evaluation-harness tasks `hellaswag`, `mmlu`,
+`gsm8k`, `arc_easy`, and `arc_challenge`.  Stage 4 training is paused while
+these pre-up-training baselines are collected; this section does not claim a
+remote evaluation has passed.
+
+The implementation is:
+
+```text
+code/RSmol/run_stage3_eval_5090.sh       # vc submit wrapper; one pdgpu-5090 GPU
+code/RSmol/scripts/evaluate_stage3.sh   # submitted-job runtime layer
+code/RSmol/scripts/evaluate_stage3.py   # validation, local overlays, lm_eval API, audit
+tests/test_stage3_static.py              # dependency-light Windows contract tests
+```
+
+The only supported remote entry point is:
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only origin main
+cd code/RSmol
+RSMOL_STAGE3_MODEL=both bash run_stage3_eval_5090.sh
+```
+
+Use the same wrapper for the three supported modes:
+
+```bash
+RSMOL_STAGE3_MODEL=both RSMOL_STAGE3_VALIDATION_ONLY=1 bash run_stage3_eval_5090.sh  # preflight only
+RSMOL_STAGE3_MODEL=both RSMOL_STAGE3_SMOKE=1 bash run_stage3_eval_5090.sh             # two docs/task
+RSMOL_STAGE3_MODEL=both bash run_stage3_eval_5090.sh                                  # formal run
+```
+
+The wrapper requests `pdgpu-5090`, container
+`docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1`, `-c 8 -m 32G -g 1
+-n 1`, and environment `rsmol`.  It does not submit a job from this
+checkout.  `RSMOL_STAGE3_MODEL` may be `original`, `recursive`, or `both`.
+The external model defaults are the supplied paths
+`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2` and
+`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-15R`; override them with
+`RSMOL_STAGE3_ORIGINAL_MODEL` and `RSMOL_STAGE3_RECURSIVE_MODEL` when running
+another external checkpoint.
+`RSMOL_STAGE3_TASKS` is a comma-separated subset of the five official task
+names.  `RSMOL_STAGE3_SMOKE=1` limits each task to two documents; set
+`RSMOL_STAGE3_VALIDATION_ONLY=1` to validate paths, parquet fields, checksums,
+installed task YAMLs, and protocol without loading a model.  The fixed seed
+default is `0`, batch size is `1`, dtype is `bfloat16`, and device is
+`cuda:0`.  Use `RSMOL_STAGE3_OUTPUT_DIR` (or the alias
+`RSMOL_STAGE3_OUTPUT_ROOT`) for an explicit fresh output root.  No global
+`--num_fewshot` is passed: native task defaults are retained.
+
+The read-only benchmark snapshot must exist at
+`/hpc_stor03/sjtu_home/jinwei.zhang/data/eval_datasets` with this exact
+source mapping:
+
+```text
+Rowan_hellaswag/data/{train,validation,test}-00000-of-00001.parquet
+cais_mmlu/{57 subject dirs}/{dev,test,validation}-00000-of-00001.parquet
+openai_gsm8k/main/{train,test}-00000-of-00001.parquet
+allenai_ai2_arc/ARC-Easy/{train,validation,test}-00000-of-00001.parquet
+allenai_ai2_arc/ARC-Challenge/{train,validation,test}-00000-of-00001.parquet
+```
+
+The 57 MMLU directory names expected by the preflight are:
+`abstract_algebra`, `anatomy`, `astronomy`, `business_ethics`,
+`clinical_knowledge`, `college_biology`, `college_chemistry`,
+`college_computer_science`, `college_mathematics`, `college_medicine`,
+`college_physics`, `computer_security`, `conceptual_physics`, `econometrics`,
+`electrical_engineering`, `elementary_mathematics`, `formal_logic`,
+`global_facts`, `high_school_biology`, `high_school_chemistry`,
+`high_school_computer_science`, `high_school_european_history`,
+`high_school_geography`, `high_school_government_and_politics`,
+`high_school_macroeconomics`, `high_school_mathematics`,
+`high_school_microeconomics`, `high_school_physics`, `high_school_psychology`,
+`high_school_statistics`, `high_school_us_history`, `high_school_world_history`,
+`human_aging`, `human_sexuality`, `international_law`, `jurisprudence`,
+`logical_fallacies`, `machine_learning`, `management`, `marketing`,
+`medical_genetics`, `miscellaneous`, `moral_disputes`, `moral_scenarios`,
+`nutrition`, `philosophy`, `prehistory`, `professional_accounting`,
+`professional_law`, `professional_medicine`, `professional_psychology`,
+`public_relations`, `security_studies`, `sociology`, `us_foreign_policy`,
+`virology`, and `world_religions`. The helper directories `all/` and
+`auxiliary_train/` are not used.
+
+The local overlay sets only `dataset_path: parquet` and
+`dataset_kwargs.data_files`.  Official task YAML prompt formatting,
+`doc_to_text`, choices, targets, `process_docs`, few-shot behavior, answer
+extraction, and metrics remain unchanged.  HellaSwag uses validation;
+MMLU uses the original 57-subject `mmlu` group, `dev` few-shot and `test`.
+The pinned 0.4.12 MMLU template omits its `num_fewshot` field, so the runtime
+records that incompatibility and applies a task-scoped `num_fewshot=5` API
+override only for the MMLU group (never a global override);
+GSM8K uses `openai_gsm8k/main` train/test with deterministic generation
+(`do_sample=false`, `temperature=0`); and ARC Easy/Challenge are reported as
+separate test `acc`/`acc_norm` tasks.  `auxiliary_train` and GSM8K `socratic`
+are never selected.
+
+The remote runtime pins `lm-eval==0.4.12`, `transformers==4.54.1`, and
+`datasets==3.6.0`; `pyarrow` must also be importable for the parquet schema
+preflight.  It fails before inference if these versions or the installed task
+configs differ.  `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`,
+and `HF_DATASETS_OFFLINE=1` are set before importing the evaluation stack;
+`local_files_only=True` is passed to Transformers.  The recursive model
+imports and calls `register_auto_class()` before lm_eval's HF backend creates
+the model.  Its audit requires logical depth 30, physical depth 15, loops 2,
+unique parameter storage, and a forward hook trace `0..14` twice.  No
+`device_map` is used.
+
+Each model has its own fresh external output directory, and each task has a
+fresh child directory.  A non-empty output is rejected.  A formal run writes
+`lm_eval_results.json`, optional `log_samples.json`, `task_protocol.json`,
+`summary.json`, `summary.csv`, `run_config.json`, `audit_report.json`, and
+preserved task `stderr.log` files.  The audit records package versions, git
+identity, model/tokenizer paths, the complete parquet manifest and SHA-256
+checksums, protocol/config details, sample/failure counts, timestamps, and GPU
+information.  Model/checkpoint artifacts and benchmark data remain outside
+the Git checkout.  The vc submit log defaults to the external
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage3-submit-logs`; set
+`RSMOL_STAGE3_SUBMIT_LOG_ROOT` to choose another external log directory.
+
+Local checks (which do not require CUDA, lm_eval, or benchmark data) are:
+
+```powershell
+python -m py_compile code/RSmol/scripts/evaluate_stage3.py
+python -m unittest tests.test_stage3_static
+python -m unittest discover -s tests
+git diff --check
+```
+
+Only these local/static checks can be reported from a Windows checkout.  The
+actual validation and benchmark results remain pending remote execution on
+the supplied GPU/data environment.
+
+Historical planning notes below contain earlier statements about Stage 3
+up-training and the absence of a recursive checkpoint.  They predate the
+current Stage 3 implementation and must not be read as the present protocol;
+the current status is the offline benchmark gate above, with Stage 4 paused.
+
 ## Stage 4 DDP audit and fixed-step pilot (2026-08-27)
+
+Stage 4 is paused as of 2026-08-28 pending completion and review of the
+Stage 3 benchmark baselines above.  The existing DDP code and gate notes are
+historical implementation context; no Stage 4 job is part of the Stage 3
+evaluation protocol.
 
 Stage 4 is implemented in `code/RSmol/scripts/train_stage4_ddp.py` and is
 intended for the external `/hpc_stor03` task output area only.  It does not
@@ -332,8 +477,8 @@ position id 和 label mask 都必须在模型接口和数据 collator 中有明�
 Stage 0  原始 SmolLM2 加载、tokenizer 和文本基线
 Stage 1  Stepwise 层映射与严格递归模型构造
 Stage 2  递归模型无训练 forward / generation / loss / reload 审计
-Stage 3  使用 SmolLM2-135M-10B 的文本 up training
-Stage 4  递归文本模型 benchmark 与 checkpoint 验证
+Stage 3  原始与未训练递归模型的离线 benchmark evaluation（当前）
+Stage 4  递归文本训练与 checkpoint 验证（paused，待 Stage 3 基线完成）
 Stage 5  音频编码器、mapper 和音频输入协议接入
 Stage 6  Mellow 风格音频推理训练与评估
 ```
