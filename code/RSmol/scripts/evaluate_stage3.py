@@ -39,6 +39,7 @@ from typing import Any, Mapping, Sequence
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SCRIPT_ROOT.parents[1]
 REMOTE_CHECKOUT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM")
+DEFAULT_LOG_ROOT = SCRIPT_ROOT / "log"
 
 DEFAULT_ORIGINAL_MODEL = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2")
 DEFAULT_RECURSIVE_MODEL = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-15R")
@@ -226,6 +227,7 @@ class EvaluationConfig:
     smoke: bool = False
     cache_dir: Path | None = None
     reference_model_path: Path | None = None
+    log_root: Path | None = None
 
 
 def package_version(name: str) -> str:
@@ -298,6 +300,49 @@ def ensure_external_path(path: Path, *, label: str = "path") -> Path:
             "Use an external model/data/output directory."
         )
     return candidate
+
+
+def ensure_log_root(path: Path | None = None) -> Path:
+    """Create the diagnostic log root, allowing the requested checkout log.
+
+    The benchmark outputs, model paths, and caches remain external.  The
+    checkout's ``code/RSmol/log`` directory is an explicit user-requested
+    exception for vc/task/runtime logs; arbitrary other checkout paths remain
+    rejected.
+    """
+
+    candidate = (path or DEFAULT_LOG_ROOT).expanduser().resolve()
+    permitted_checkout_log = DEFAULT_LOG_ROOT.resolve()
+    if _path_is_within(candidate, REPO_ROOT) and not _path_is_within(
+        candidate, permitted_checkout_log
+    ):
+        raise ValueError(
+            "Stage 3 log root may be external, or under the explicit checkout "
+            f"log exception {permitted_checkout_log}; got {candidate}"
+        )
+    candidate.mkdir(parents=True, exist_ok=True)
+    return candidate
+
+
+def _safe_log_component(value: str) -> str:
+    component = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
+    return component or "stage3"
+
+
+def _task_log_path(log_root: Path, config: EvaluationConfig, task: str) -> Path:
+    model_component = _safe_log_component(config.output_dir.name or config.model_path.name)
+    return log_root / model_component / f"{_safe_log_component(task)}.stderr.log"
+
+
+def _runtime_log_path(log_root: Path, config: EvaluationConfig) -> Path:
+    model_component = _safe_log_component(config.output_dir.name or config.model_path.name)
+    return log_root / model_component / "runtime.log"
+
+
+def _append_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(content)
 
 
 def ensure_external_output(path: Path) -> Path:
@@ -1281,6 +1326,7 @@ def _run_single_task(
     task: str,
     task_dir: Path,
     overlay_dir: Path,
+    stderr_log_path: Path,
     *,
     register_recursive: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1298,6 +1344,11 @@ def _run_single_task(
     started = time.time()
     captured_stderr = io.StringIO()
     result: Mapping[str, Any] | None = None
+    print(
+        f"[stage3][task={task}] starting lm_eval; overlay={overlay_dir} "
+        f"stderr_log={stderr_log_path}",
+        flush=True,
+    )
     # num_fewshot is intentionally omitted: official YAML native defaults are
     # required (MMLU/GSM8K 5-shot, HellaSwag/ARC zero-shot).
     try:
@@ -1339,7 +1390,16 @@ def _run_single_task(
                 )
     finally:
         stderr_text = captured_stderr.getvalue()
-        (task_dir / "stderr.log").write_text(stderr_text, encoding="utf-8")
+        try:
+            stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
+            stderr_log_path.write_text(stderr_text, encoding="utf-8")
+        except Exception as log_error:
+            print(
+                f"[stage3][task={task}][WARN] could not write stderr log "
+                f"{stderr_log_path}: {log_error!r}",
+                file=sys.stderr,
+                flush=True,
+            )
         if stderr_text:
             print(stderr_text, file=sys.stderr, end="", flush=True)
     if result is None:
@@ -1349,6 +1409,7 @@ def _run_single_task(
         "started_at": datetime.fromtimestamp(started, timezone.utc).isoformat(),
         "finished_at": utc_now(),
         "task_config": str(overlay_dir),
+        "stderr_log": str(stderr_log_path),
         "raw_lm_eval": result,
     }
     write_json(task_dir / "lm_eval_results.json", result_payload)
@@ -1360,6 +1421,7 @@ def _run_single_task(
 def run_evaluation(config: EvaluationConfig) -> dict[str, Any]:
     started_at = utc_now()
     output_dir = ensure_external_output(config.output_dir)
+    log_root = ensure_log_root(config.log_root)
     set_offline_environment(config.cache_dir or (output_dir / ".hf-cache"))
     output_dir.mkdir(parents=True, exist_ok=True)
     model_info = inspect_model_artifacts(config.model_path)
@@ -1399,13 +1461,28 @@ def run_evaluation(config: EvaluationConfig) -> dict[str, Any]:
     task_results: dict[str, Any] = {}
     rows: list[dict[str, Any]] = []
     failures: dict[str, str] = {}
+    task_log_paths = {
+        task: str(_task_log_path(log_root, config, task)) for task in config.tasks
+    }
+    print(
+        f"[stage3] model={config.model_path} output={output_dir} "
+        f"log_root={log_root} tasks={','.join(config.tasks)}",
+        flush=True,
+    )
     if not config.validation_only:
         for task in config.tasks:
-            task_dir = ensure_external_output(output_dir / task)
-            task_dir.mkdir(parents=True, exist_ok=True)
+            task_dir = output_dir / task
+            stderr_log_path = _task_log_path(log_root, config, task)
             overlay_dir = task_dir / "lm_eval_include"
-            overlay_dir.mkdir(parents=True, exist_ok=True)
+            print(
+                f"[stage3][task={task}] preparing overlay={overlay_dir} "
+                f"stderr_log={stderr_log_path}",
+                flush=True,
+            )
             try:
+                task_dir = ensure_external_output(task_dir)
+                task_dir.mkdir(parents=True, exist_ok=True)
+                overlay_dir.mkdir(parents=True, exist_ok=True)
                 task_protocol = prepare_local_task_overlays(
                     config.benchmark_root, overlay_dir, (task,)
                 )
@@ -1415,14 +1492,38 @@ def run_evaluation(config: EvaluationConfig) -> dict[str, Any]:
                     task,
                     task_dir,
                     overlay_dir,
+                    stderr_log_path,
                     register_recursive=model_info["recursive_audit"]["is_recursive"],
                 )
                 task_results[task] = payload
                 rows.extend(task_rows)
             except Exception:
-                failures[task] = traceback.format_exc()
-                with (task_dir / "stderr.log").open("a", encoding="utf-8") as handle:
-                    handle.write(failures[task])
+                failure_text = traceback.format_exc()
+                failures[task] = failure_text
+                diagnostic = (
+                    f"\n=== Stage 3 task failure: {task} ===\n"
+                    f"model={config.model_path}\n"
+                    f"output={output_dir / task}\n"
+                    f"overlay={overlay_dir}\n"
+                    f"stderr_log={stderr_log_path}\n"
+                    f"{failure_text}"
+                )
+                try:
+                    _append_text(stderr_log_path, diagnostic)
+                except Exception as log_error:
+                    print(
+                        f"[stage3][task={task}][WARN] failed to append diagnostic log "
+                        f"{stderr_log_path}: {log_error!r}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                print(
+                    f"[stage3][task={task}][FAIL] detailed traceback follows; "
+                    f"log={stderr_log_path}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print(diagnostic, file=sys.stderr, end="", flush=True)
     _write_summary(output_dir, rows)
     skipped_count = len(config.tasks) if config.validation_only else 0
     audit = {
@@ -1442,6 +1543,8 @@ def run_evaluation(config: EvaluationConfig) -> dict[str, Any]:
         "benchmark_manifest": benchmark,
         "protocol": protocol,
         "configuration": asdict(config),
+        "log_root": str(log_root),
+        "task_log_paths": task_log_paths,
         "offline_environment": {name: os.environ.get(name) for name in OFFLINE_ENVIRONMENT},
         "gpu": _gpu_info(config.device),
         "recursive_runtime_audit": recursive_runtime_audit,
@@ -1464,7 +1567,17 @@ def run_evaluation(config: EvaluationConfig) -> dict[str, Any]:
     # from being mistaken for a benchmark result directory.
     write_json(output_dir / "run_config.json", {"configuration": asdict(config), "protocol": protocol})
     if failures:
-        raise RuntimeError(f"Stage 3 task failures: {sorted(failures)}")
+        failure_summaries = {
+            task: next(
+                (line.strip() for line in reversed(trace.splitlines()) if line.strip()),
+                "unknown failure",
+            )
+            for task, trace in failures.items()
+        }
+        raise RuntimeError(
+            "Stage 3 task failures: "
+            f"{failure_summaries}; detailed tracebacks were printed above and saved under {log_root}"
+        )
     return audit
 
 
@@ -1484,6 +1597,12 @@ def parse_args(argv: Sequence[str] | None = None) -> EvaluationConfig:
     parser.add_argument("--no-log-samples", action="store_true")
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--reference-model-path", type=Path, default=None)
+    parser.add_argument(
+        "--log-root",
+        type=Path,
+        default=None,
+        help="Diagnostic log root; defaults to code/RSmol/log (explicit checkout exception).",
+    )
     args = parser.parse_args(argv)
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be positive")
@@ -1506,6 +1625,7 @@ def parse_args(argv: Sequence[str] | None = None) -> EvaluationConfig:
         smoke=args.smoke,
         cache_dir=args.cache_dir,
         reference_model_path=args.reference_model_path,
+        log_root=args.log_root,
     )
 
 
@@ -1530,8 +1650,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[result] status={audit['status']} output={config.output_dir}", flush=True)
         return 0
     except Exception:
+        failure_text = traceback.format_exc()
         print("[result] status=FAIL", file=sys.stderr, flush=True)
-        traceback.print_exc()
+        print(failure_text, file=sys.stderr, end="", flush=True)
+        if config is not None:
+            try:
+                log_root = ensure_log_root(config.log_root)
+                runtime_log = _runtime_log_path(log_root, config)
+                _append_text(
+                    runtime_log,
+                    "\n=== Stage 3 process failure ===\n"
+                    f"model={config.model_path}\n"
+                    f"output={config.output_dir}\n"
+                    f"{failure_text}",
+                )
+                print(
+                    f"[stage3][process][FAIL] detailed traceback saved to {runtime_log}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            except Exception as log_error:
+                print(
+                    f"[stage3][process][WARN] could not write process log: {log_error!r}",
+                    file=sys.stderr,
+                    flush=True,
+                )
         # A failed preflight should still leave a machine-readable reason when
         # the requested external output path can be safely created.  Never
         # overwrite an existing audit or any non-empty caller-owned directory.
@@ -1550,7 +1693,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "finished_at": utc_now(),
                             "command": sys.argv,
                             "configuration": asdict(config),
-                            "failure": traceback.format_exc(),
+                            "failure": failure_text,
                             "formal_eval_executed": False,
                             "stage4_status": "paused",
                         },

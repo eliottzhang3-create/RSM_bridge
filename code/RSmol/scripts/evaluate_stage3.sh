@@ -25,6 +25,28 @@ BATCH_SIZE="${RSMOL_STAGE3_BATCH_SIZE:-1}"
 SEED="${RSMOL_STAGE3_SEED:-0}"
 TASKS="${RSMOL_STAGE3_TASKS:-hellaswag,mmlu,gsm8k,arc_easy,arc_challenge}"
 CACHE_ROOT="${RSMOL_STAGE3_CACHE_ROOT:-/tmp/rsmol-stage3-cache-$$}"
+# ``SCRIPT_DIR`` is code/RSmol/scripts; the established project log directory
+# is its parent (code/RSmol/log), not scripts/log.
+LOG_ROOT="${RSMOL_STAGE3_LOG_ROOT:-${RSMOL_STAGE3_SUBMIT_LOG_ROOT:-$REPO_ROOT/code/RSmol/log}}"
+
+# The requested checkout log directory is an explicit exception for vc/task/
+# runtime diagnostics only.  Model checkpoints, benchmark data, caches, and
+# result directories remain subject to the external-path guards below.
+case "$LOG_ROOT" in
+  /*) ;;
+  *)
+    echo "RSMOL_STAGE3_LOG_ROOT must be an absolute path: $LOG_ROOT" >&2
+    exit 2
+    ;;
+esac
+case "$LOG_ROOT" in
+  "$SCRIPT_DIR/log"|"$SCRIPT_DIR/log/"*|"$SCRIPT_DIR/../log"|"$SCRIPT_DIR/../log/"*|"$REPO_ROOT/code/RSmol/log"|"$REPO_ROOT/code/RSmol/log/"*) ;;
+  "$REPO_ROOT"|"$REPO_ROOT"/*|/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM|/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/*)
+    echo "RSMOL_STAGE3_LOG_ROOT inside the checkout must be under $SCRIPT_DIR/../log: $LOG_ROOT" >&2
+    exit 2
+    ;;
+esac
+mkdir -p "$LOG_ROOT"
 
 case "$OUTPUT_ROOT" in
   /*) ;;
@@ -97,7 +119,9 @@ run_model() {
   echo "BENCHMARK_ROOT=$BENCHMARK_ROOT"
   echo "OUTPUT_DIR=$model_output"
   echo "TASKS=$TASKS"
-  echo "SEED=$SEED DEVICE=$DEVICE BATCH_SIZE=$BATCH_SIZE"
+  echo "SEED=$SEED DEVICE=$DEVICE BATCH_SIZE=$BATCH_SIZE LOG_ROOT=$LOG_ROOT"
+  local runtime_log="$LOG_ROOT/$model_name/runtime.log"
+  mkdir -p "$(dirname "$runtime_log")"
   local mode_args=()
   local reference_args=()
   if [[ "$model_name" == "recursive" ]]; then
@@ -123,9 +147,10 @@ run_model() {
     --batch-size "$BATCH_SIZE" \
     --seed "$SEED" \
     --cache-dir "$model_cache" \
+    --log-root "$LOG_ROOT" \
     "${task_args[@]}" \
     "${reference_args[@]}" \
-    "${mode_args[@]}"
+    "${mode_args[@]}" 2>&1 | tee -a "$runtime_log"
 }
 
 case "$MODEL_SELECTOR" in

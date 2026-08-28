@@ -113,14 +113,19 @@ unique parameter storage, and a forward hook trace `0..14` twice.  No
 Each model has its own fresh external output directory, and each task has a
 fresh child directory.  A non-empty output is rejected.  A formal run writes
 `lm_eval_results.json`, optional `log_samples.json`, `task_protocol.json`,
-`summary.json`, `summary.csv`, `run_config.json`, `audit_report.json`, and
-preserved task `stderr.log` files.  The audit records package versions, git
+`summary.json`, `summary.csv`, `run_config.json`, and `audit_report.json`.
+Task/process stderr and runtime logs are preserved under the diagnostic log
+root, while the audit records package versions, git
 identity, model/tokenizer paths, the complete parquet manifest and SHA-256
 checksums, protocol/config details, sample/failure counts, timestamps, and GPU
 information.  Model/checkpoint artifacts and benchmark data remain outside
-the Git checkout.  The vc submit log defaults to the external
-`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage3-submit-logs`; set
-`RSMOL_STAGE3_SUBMIT_LOG_ROOT` to choose another external log directory.
+the Git checkout.  Diagnostic/runtime and vc-submit logs default to the
+established checkout directory
+`/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol/log`; set
+`RSMOL_STAGE3_LOG_ROOT` (or the legacy alias
+`RSMOL_STAGE3_SUBMIT_LOG_ROOT`) to choose another allowed log directory.
+The `log_samples.json` files under each external output task directory are
+benchmark sample artifacts, not runtime logs.
 
 Local checks (which do not require CUDA, lm_eval, or benchmark data) are:
 

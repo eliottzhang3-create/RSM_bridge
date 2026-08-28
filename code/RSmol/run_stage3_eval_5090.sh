@@ -3,9 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
-# vc's per-job log path must stay outside the Git checkout.  The submitted
-# runtime also writes all task logs under RSMOL_STAGE3_OUTPUT_DIR.
-SUBMIT_LOG_ROOT="${RSMOL_STAGE3_SUBMIT_LOG_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage3-submit-logs}"
+# The user-requested checkout log directory is an explicit exception for
+# vc/task/runtime diagnostics. Models, datasets, caches, and result outputs
+# remain external to both checkouts.
+SUBMIT_LOG_ROOT="${RSMOL_STAGE3_LOG_ROOT:-${RSMOL_STAGE3_SUBMIT_LOG_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol/log}}"
 case "$SUBMIT_LOG_ROOT" in
   /*) ;;
   *)
@@ -14,8 +15,13 @@ case "$SUBMIT_LOG_ROOT" in
     ;;
 esac
 case "$SUBMIT_LOG_ROOT" in
-  "$SCRIPT_DIR"|"$SCRIPT_DIR"/*|"$SCRIPT_DIR/.."|"$SCRIPT_DIR/../"*|"$SCRIPT_DIR/../.."|"$SCRIPT_DIR/../../"*|/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM|/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/*)
-    echo "RSMOL_STAGE3_SUBMIT_LOG_ROOT must be outside the Git checkout: $SUBMIT_LOG_ROOT" >&2
+  "$SCRIPT_DIR/log"|"$SCRIPT_DIR/log/"*|"$SCRIPT_DIR/../log"|"$SCRIPT_DIR/../log/"*) ;;
+  "$SCRIPT_DIR"|"$SCRIPT_DIR/"*|"$SCRIPT_DIR/.."|"$SCRIPT_DIR/../"*|"$SCRIPT_DIR/../.."|"$SCRIPT_DIR/../../"*)
+    echo "RSMOL_STAGE3_LOG_ROOT inside the checkout must be under $SCRIPT_DIR/../log: $SUBMIT_LOG_ROOT" >&2
+    exit 2
+    ;;
+  /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM|/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/*)
+    echo "RSMOL_STAGE3_LOG_ROOT inside the checkout must be under $SCRIPT_DIR/log: $SUBMIT_LOG_ROOT" >&2
     exit 2
     ;;
 esac
@@ -26,7 +32,8 @@ for name in \
   RSMOL_STAGE3_MODEL RSMOL_STAGE3_ORIGINAL_MODEL RSMOL_STAGE3_RECURSIVE_MODEL \
   RSMOL_STAGE3_BENCHMARK_ROOT RSMOL_STAGE3_OUTPUT_DIR RSMOL_STAGE3_OUTPUT_ROOT \
   RSMOL_STAGE3_DEVICE RSMOL_STAGE3_BATCH_SIZE RSMOL_STAGE3_SEED \
-  RSMOL_STAGE3_TASKS RSMOL_STAGE3_CACHE_ROOT RSMOL_STAGE3_VALIDATION_ONLY \
+  RSMOL_STAGE3_TASKS RSMOL_STAGE3_CACHE_ROOT RSMOL_STAGE3_LOG_ROOT \
+  RSMOL_STAGE3_SUBMIT_LOG_ROOT RSMOL_STAGE3_VALIDATION_ONLY \
   RSMOL_STAGE3_SMOKE RSMOL_STAGE3_NO_LOG_SAMPLES RSMOL_STAGE3_LIMIT; do
   value="${!name:-}"
   if [[ -n "$value" ]]; then
