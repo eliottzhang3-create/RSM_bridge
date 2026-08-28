@@ -11,7 +11,9 @@ entry point implements the five gates used by the remote job:
 ``C`` a short real-data pilot, ``D`` the fixed-step pilot, and ``E`` a resume
 smoke using a new output directory.  The supported Gate B command is the
 standalone CPU entry point ``audit_stage4_dataset.py``; this module's Gate B
-branch remains only for internal callers and legacy compatibility.
+branch remains only for internal callers and legacy compatibility.  The
+standalone Gate B owns its ``cache_root`` safety policy and sample-only
+content scan.
 
 Only reports/checkpoints under an explicitly external output directory are
 written.  In particular, neither the local checkout nor the remote Git
@@ -39,7 +41,7 @@ from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import quantiles
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
@@ -248,6 +250,7 @@ class _LengthStats:
 
     def __init__(self, reservoir_size: int = 10000, seed: int = 0) -> None:
         self.count = 0
+        self.total = 0
         self.minimum: int | None = None
         self.maximum: int | None = None
         self.reservoir_size = int(reservoir_size)
@@ -257,6 +260,7 @@ class _LengthStats:
     def add(self, value: int) -> None:
         value = int(value)
         self.count += 1
+        self.total += value
         self.minimum = value if self.minimum is None else min(self.minimum, value)
         self.maximum = value if self.maximum is None else max(self.maximum, value)
         if len(self.values) < self.reservoir_size:
@@ -268,7 +272,7 @@ class _LengthStats:
 
     def as_dict(self) -> dict[str, Any]:
         if not self.values:
-            return {"count": 0, "min": None, "max": None, "quantiles": {}}
+            return {"count": 0, "min": None, "max": None, "mean": None, "quantiles": {}}
         values = sorted(self.values)
         # statistics.quantiles requires at least two values; explicit order
         # statistics keep the result stable for one-row fixtures.
@@ -282,7 +286,15 @@ class _LengthStats:
                 "p95": qtiles[94],
                 "p99": qtiles[98],
             }
-        return {"count": self.count, "min": self.minimum, "max": self.maximum, "quantiles": q}
+        return {
+            "count": self.count,
+            "min": self.minimum,
+            "max": self.maximum,
+            "mean": self.total / self.count,
+            "quantiles": q,
+            "quantiles_source": "bounded_reservoir",
+            "reservoir_size": self.reservoir_size,
+        }
 
 
 def _bounded_counter_add(counter: Counter[str], key: str, *, limit: int = 10000) -> None:
@@ -312,6 +324,34 @@ def _tokenize_ids(tokenizer: Any, text: str, context_length: int) -> list[int]:
     return result
 
 
+def _token_length_for_audit(tokenizer: Any, text: str) -> int:
+    """Return the untruncated token length used by the Gate B sample audit."""
+
+    encoded = tokenizer(text, add_special_tokens=False, truncation=False)
+    ids = encoded["input_ids"] if isinstance(encoded, Mapping) else encoded.input_ids
+    if hasattr(ids, "tolist"):
+        ids = ids.tolist()
+    if isinstance(ids, (list, tuple)) and ids and isinstance(ids[0], (list, tuple)):
+        ids = ids[0]
+    return len(ids)
+
+
+def select_sample_shards(
+    files: Sequence[Path], *, sample_shards: int = 3, seed: int = 0
+) -> list[Path]:
+    """Select a deterministic, bounded sample from the sorted shard list."""
+
+    if not (0 < int(sample_shards) <= len(files)):
+        raise ValueError(
+            f"sample_shards must be in [1, {len(files)}], got {sample_shards}"
+        )
+    # ``discover_parquet_files`` is sorted, but sorting here also makes this
+    # helper deterministic when called directly by tests or other callers.
+    ordered = sorted((Path(path) for path in files), key=lambda path: path.name)
+    selected = random.Random(int(seed)).sample(ordered, int(sample_shards))
+    return sorted(selected, key=lambda path: path.name)
+
+
 def audit_parquet_shards(
     files: Sequence[Path],
     *,
@@ -319,14 +359,16 @@ def audit_parquet_shards(
     context_length: int = DEFAULT_CONTEXT_LENGTH,
     content: bool = True,
     reservoir_size: int = 10000,
+    content_paths: Sequence[Path] | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+    progress_every_rows: int = 10000,
 ) -> dict[str, Any]:
-    """Audit every footer and, optionally, every text/source record.
+    """Audit every footer and optionally stream content from selected shards.
 
     The footer section records schema, row groups, ``num_rows`` and bytes for
-    all 85 shards.  The content section streams only ``text`` and ``source``
-    columns through ``ParquetFile.iter_batches`` and records null/empty text,
-    source types/distribution, tokenizer-empty samples, and token lengths.
-    No Arrow Dataset cache is created.
+    all 85 shards.  If ``content_paths`` is supplied, the content section
+    streams only those shards through ``ParquetFile.iter_batches``; it never
+    reads or tokenizes the other shards.  No Arrow Dataset cache is created.
     """
 
     try:
@@ -335,6 +377,28 @@ def audit_parquet_shards(
         raise ImportError("Stage 4 parquet audit requires pyarrow") from exc
     if len(files) != EXPECTED_PARQUET_COUNT:
         raise ValueError(f"Stage 4 footer audit requires {EXPECTED_PARQUET_COUNT} shards, got {len(files)}")
+    if progress_every_rows <= 0:
+        raise ValueError("progress_every_rows must be positive")
+    ordered_files = [Path(path) for path in files]
+    file_keys = {path.resolve() for path in ordered_files}
+    if content_paths is None:
+        selected_paths = tuple(ordered_files) if content else tuple()
+        content_scope = "full_corpus" if content else "footer_only"
+    else:
+        if not content:
+            raise ValueError("content_paths requires content=True")
+        selected_paths = tuple(Path(path) for path in content_paths)
+        selected_keys = [path.resolve() for path in selected_paths]
+        if len(set(selected_keys)) != len(selected_keys) or not set(selected_keys) <= file_keys:
+            raise ValueError("content_paths must be unique members of files")
+        content_scope = "sampled_shards"
+    selected_key_set = {path.resolve() for path in selected_paths}
+    selected_index = {path.resolve(): index for index, path in enumerate(selected_paths, start=1)}
+
+    def emit(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(message)
+
     shards: list[dict[str, Any]] = []
     reference_signature: tuple[tuple[Any, ...], ...] | None = None
     reference_name: str | None = None
@@ -343,11 +407,16 @@ def audit_parquet_shards(
     total_null_text = 0
     total_empty_text = 0
     total_tokenizer_empty = 0
+    total_tokenized_rows = 0
     total_payload_rows = 0
     source_types: Counter[str] = Counter()
     source_distribution: Counter[str] = Counter()
+    source_missing = 0
+    source_examples: list[str] = []
     length_stats = _LengthStats(reservoir_size=reservoir_size, seed=17)
-    for path in files:
+    sampled_footer_rows = 0
+    for footer_index, path in enumerate(ordered_files, start=1):
+        emit(f"[gate-b] footer {footer_index}/{len(ordered_files)}: {path.name}")
         parquet_file = parquet.ParquetFile(path)
         signature, fields = _schema_descriptor(parquet_file, path)
         if reference_signature is None:
@@ -367,12 +436,23 @@ def audit_parquet_shards(
             "bytes": int(path.stat().st_size),
             "schema": fields,
         }
-        if content:
+        sample_this_shard = path.resolve() in selected_key_set
+        if sample_this_shard:
+            sampled_footer_rows += int(num_rows)
+            emit(
+                f"[gate-b] sample shard {selected_index[path.resolve()]}/{len(selected_paths)} "
+                f"start: {path.name} footer_rows={int(num_rows)}"
+            )
             shard_lengths = _LengthStats(reservoir_size=max(128, reservoir_size // 8), seed=19)
             shard_null_text = shard_empty_text = shard_tokenizer_empty = 0
+            shard_source_missing = 0
+            shard_over_context = 0
             shard_payload_rows = 0
+            shard_tokenized_rows = 0
             shard_source_types: Counter[str] = Counter()
             shard_source_distribution: Counter[str] = Counter()
+            shard_source_examples: list[str] = []
+            last_progress_rows = 0
             for record_batch in parquet_file.iter_batches(
                 batch_size=1024, columns=["text", "source"], use_threads=False
             ):
@@ -389,36 +469,69 @@ def audit_parquet_shards(
                         source_key = str(source_value)
                     _bounded_counter_add(source_distribution, source_key)
                     _bounded_counter_add(shard_source_distribution, source_key)
+                    if source_value is None or not str(source_value).strip():
+                        source_missing += 1
+                        shard_source_missing += 1
+                    elif source_key not in source_examples and len(source_examples) < 20:
+                        source_examples.append(source_key)
+                    if source_value is not None and str(source_value).strip():
+                        if source_key not in shard_source_examples and len(shard_source_examples) < 20:
+                            shard_source_examples.append(source_key)
                     if text_value is None:
                         total_null_text += 1
                         shard_null_text += 1
-                        continue
-                    text_string = str(text_value)
-                    if not text_string.strip():
+                    elif not str(text_value).strip():
                         total_empty_text += 1
                         shard_empty_text += 1
-                        continue
-                    if tokenizer is not None:
-                        token_ids = _tokenize_ids(tokenizer, text_string, context_length)
-                        if not token_ids:
+                    elif tokenizer is not None:
+                        token_length = _token_length_for_audit(tokenizer, str(text_value))
+                        shard_tokenized_rows += 1
+                        total_tokenized_rows += 1
+                        if not token_length:
                             total_tokenizer_empty += 1
                             shard_tokenizer_empty += 1
                         else:
-                            length_stats.add(len(token_ids))
-                            shard_lengths.add(len(token_ids))
+                            length_stats.add(token_length)
+                            shard_lengths.add(token_length)
+                            if token_length > context_length:
+                                shard_over_context += 1
+                    if shard_payload_rows - last_progress_rows >= progress_every_rows:
+                        emit(
+                            f"[gate-b] sample shard {selected_index[path.resolve()]}/{len(selected_paths)} "
+                            f"{path.name}: read_rows={shard_payload_rows}/{int(num_rows)} "
+                            f"tokenized_rows={shard_tokenized_rows}"
+                        )
+                        last_progress_rows = shard_payload_rows
+            emit(
+                f"[gate-b] sample shard {selected_index[path.resolve()]}/{len(selected_paths)} "
+                f"done: {path.name} read_rows={shard_payload_rows}/{int(num_rows)} "
+                f"tokenized_rows={shard_tokenized_rows}"
+            )
             shard["content"] = {
+                "scope": "sampled_shard" if content_scope == "sampled_shards" else "full_shard",
+                "full_corpus_values_available": content_scope == "full_corpus",
+                "audited": True,
                 "payload_rows": shard_payload_rows,
                 "payload_rows_match_footer": shard_payload_rows == shard["num_rows"],
                 "none_text": shard_null_text,
                 "empty_text": shard_empty_text,
                 "tokenizer_empty_text": shard_tokenizer_empty,
-                "valid_trainable_rows": int(shard["num_rows"] - shard_null_text - shard_empty_text - shard_tokenizer_empty),
+                "valid_trainable_rows": int(shard_payload_rows - shard_null_text - shard_empty_text - shard_tokenizer_empty),
+                "source_missing": shard_source_missing,
                 "source_types": dict(sorted(shard_source_types.items())),
                 "source_distribution": dict(sorted(shard_source_distribution.items())),
+                "source_examples": shard_source_examples,
                 "token_length": shard_lengths.as_dict() if tokenizer is not None else None,
+                "over_context_length": shard_over_context if tokenizer is not None else None,
+            }
+        elif content:
+            shard["content"] = {
+                "scope": "not_sampled",
+                "full_corpus_values_available": False,
+                "audited": False,
             }
         shards.append(shard)
-        if content:
+        if sample_this_shard:
             total_payload_rows += int(shard["content"]["payload_rows"])
         total_rows += int(num_rows)
         total_bytes += int(path.stat().st_size)
@@ -435,19 +548,58 @@ def audit_parquet_shards(
         "shards": shards,
         "footer_only": not content,
         "content_audit": bool(content),
+        "content_scope": content_scope,
+        "content_is_full_corpus": content_scope == "full_corpus",
+        "sampled_shard_count": len(selected_paths) if content_scope == "sampled_shards" else None,
+        "sampled_shards": [path.name for path in selected_paths] if content_scope == "sampled_shards" else [],
+        "sampled_footer_rows": sampled_footer_rows if content_scope == "sampled_shards" else None,
         "required_columns": ["text", "source"],
     }
     if content:
+        valid_trainable_rows = total_payload_rows - total_null_text - total_empty_text - total_tokenizer_empty
         report["content"] = {
+            "scope": content_scope,
+            "full_corpus_values_available": content_scope == "full_corpus",
+            "audited_shard_count": len(selected_paths),
             "payload_rows": total_payload_rows,
-            "payload_rows_match_footer": total_payload_rows == total_rows,
+            "payload_rows_match_footer": (
+                total_payload_rows == total_rows if content_scope == "full_corpus" else
+                total_payload_rows == sampled_footer_rows
+            ),
             "none_text": total_null_text,
             "empty_text": total_empty_text,
             "tokenizer_empty_text": total_tokenizer_empty,
-            "valid_trainable_rows": total_rows - total_null_text - total_empty_text - total_tokenizer_empty,
+            "tokenized_rows": total_tokenized_rows,
+            "valid_trainable_rows": valid_trainable_rows,
+            "source_missing": source_missing,
             "source_types": dict(sorted(source_types.items())),
             "source_distribution": dict(sorted(source_distribution.items())),
+            "source_examples": source_examples,
             "token_length": length_stats.as_dict() if tokenizer is not None else None,
+            "over_context_length": (
+                sum(
+                    int(item.get("content", {}).get("over_context_length", 0))
+                    for item in shards
+                    if item.get("content", {}).get("audited")
+                )
+                if tokenizer is not None else None
+            ),
+            "over_context_ratio": (
+                (
+                    sum(
+                        int(item.get("content", {}).get("over_context_length", 0))
+                        for item in shards
+                        if item.get("content", {}).get("audited")
+                    ) / total_tokenized_rows
+                )
+                if tokenizer is not None and total_tokenized_rows else None
+            ),
+            "over_context_ratio_denominator": "tokenized_rows",
+            "interpretation": (
+                "Exact full-corpus content statistics"
+                if content_scope == "full_corpus"
+                else "Three-shard streaming sample only; not a full-corpus estimate"
+            ),
         }
     return report
 
@@ -1966,25 +2118,47 @@ def _dataset_preaudit(
         if int(manifest.get("world_size", world_size)) != world_size:
             files = discover_parquet_files(config.data_dir)
             manifest = assign_shards(files, world_size=world_size, seed=config.seed)
-        rank_valid: dict[str, int] = {}
+        by_name = {item["name"]: item for item in audit["shards"]}
+        full_content = bool(
+            audit.get(
+                "content_is_full_corpus",
+                audit.get("content_audit") and not audit.get("footer_only"),
+            )
+        )
+        rank_valid: dict[str, int | None] = {}
         for rank_key, shard_paths in manifest["rank_shards"].items():
-            by_name = {item["name"]: item for item in audit["shards"]}
-            rank_valid[rank_key] = sum(
-                int(by_name[Path(path).name].get("content", {}).get("valid_trainable_rows", 0))
-                for path in shard_paths
+            rank_valid[rank_key] = (
+                sum(
+                    int(by_name[Path(path).name].get("content", {}).get("valid_trainable_rows", 0))
+                    for path in shard_paths
+                )
+                if full_content
+                else None
             )
         manifest["rank_raw_rows"] = {
             rank_key: sum(int(by_name[Path(path).name]["num_rows"]) for path in shard_paths)
             for rank_key, shard_paths in manifest["rank_shards"].items()
         }
         manifest["rank_valid_trainable_rows"] = rank_valid
+        manifest["rank_effective_rows_scope"] = (
+            "full_corpus" if full_content else "unavailable_sample_only"
+        )
         manifest["target_samples_per_rank"] = DEFAULT_TARGET_SAMPLES_PER_RANK
         manifest["rank_has_target_samples"] = {
-            rank_key: value >= DEFAULT_TARGET_SAMPLES_PER_RANK
+            rank_key: (value >= DEFAULT_TARGET_SAMPLES_PER_RANK if value is not None else None)
             for rank_key, value in rank_valid.items()
         }
+        manifest["rank_has_raw_capacity"] = {
+            rank_key: value >= DEFAULT_TARGET_SAMPLES_PER_RANK
+            for rank_key, value in manifest["rank_raw_rows"].items()
+        }
         manifest["raw_rows"] = int(audit["total_rows"])
-        manifest["effective_trainable_rows"] = int(audit["content"]["valid_trainable_rows"])
+        manifest["effective_trainable_rows"] = (
+            int(audit["content"]["valid_trainable_rows"]) if full_content else None
+        )
+        manifest["effective_rows_scope"] = (
+            "full_corpus" if full_content else "unavailable_sample_only"
+        )
         manifest["formal_global_samples"] = int(
             DEFAULT_MAX_OPTIMIZER_STEPS
             * config.gradient_accumulation_steps
@@ -2001,15 +2175,22 @@ def _dataset_preaudit(
     if not bundle or "audit" not in bundle or "manifest" not in bundle:
         raise RuntimeError("Failed to broadcast Stage 4 dataset audit/manifest")
     audit, manifest = bundle["audit"], bundle["manifest"]
+    has_full_effective_rows = manifest.get("effective_rows_scope") == "full_corpus"
+    capacity_key = "rank_has_target_samples" if has_full_effective_rows else "rank_has_raw_capacity"
     missing = [
         rank_key
-        for rank_key, ok in manifest.get("rank_has_target_samples", {}).items()
+        for rank_key, ok in manifest.get(capacity_key, {}).items()
         if not ok
     ]
     if missing:
+        if has_full_effective_rows:
+            raise RuntimeError(
+                "Fail-fast: rank shard(s) lack the required 1,183,232 effective samples: "
+                f"{missing}; valid={manifest.get('rank_valid_trainable_rows')}"
+            )
         raise RuntimeError(
-            "Fail-fast: rank shard(s) lack the required 1,183,232 effective samples: "
-            f"{missing}; valid={manifest.get('rank_valid_trainable_rows')}"
+            "Fail-fast: rank shard(s) lack the required 1,183,232 raw-row capacity: "
+            f"{missing}; raw={manifest.get('rank_raw_rows')}"
         )
     if dist.is_initialized():
         dist.barrier()
@@ -2201,24 +2382,33 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 raise ValueError("Gate B requires --model-path for the converted recursive checkpoint")
             tokenizer = _load_tokenizer_only(config.tokenizer_path or model_path)
             files = discover_parquet_files(config.data_dir)
-            audit = audit_parquet_shards(files, tokenizer=tokenizer, context_length=config.context_length, content=True)
+            sampled_files = select_sample_shards(files, sample_shards=3, seed=config.seed)
+            audit = audit_parquet_shards(
+                files,
+                tokenizer=tokenizer,
+                context_length=config.context_length,
+                content=True,
+                content_paths=sampled_files,
+                progress_callback=lambda message: print(message, flush=True),
+            )
             manifest = assign_shards(files, world_size=world_size, seed=config.seed)
             by_name = {item["name"]: item for item in audit["shards"]}
             manifest["rank_raw_rows"] = {"0": audit["total_rows"]}
-            manifest["rank_valid_trainable_rows"] = {
-                "0": audit["content"]["valid_trainable_rows"]
-            }
+            manifest["rank_valid_trainable_rows"] = {"0": None}
+            manifest["rank_effective_rows_scope"] = "unavailable_sample_only"
             manifest["target_samples_per_rank"] = DEFAULT_TARGET_SAMPLES_PER_RANK
-            manifest["rank_has_target_samples"] = {
-                "0": audit["content"]["valid_trainable_rows"] >= DEFAULT_TARGET_SAMPLES_PER_RANK
+            manifest["rank_has_target_samples"] = {"0": None}
+            manifest["rank_has_raw_capacity"] = {
+                "0": audit["total_rows"] >= DEFAULT_TARGET_SAMPLES_PER_RANK
             }
-            if not manifest["rank_has_target_samples"]["0"]:
+            if not manifest["rank_has_raw_capacity"]["0"]:
                 raise RuntimeError(
-                    "Gate B fail-fast: the pre-audited data has fewer than "
-                    f"{DEFAULT_TARGET_SAMPLES_PER_RANK} effective samples"
+                    "Gate B fail-fast: the footer audit has fewer than "
+                    f"{DEFAULT_TARGET_SAMPLES_PER_RANK} raw samples"
                 )
             manifest["raw_rows"] = audit["total_rows"]
-            manifest["effective_trainable_rows"] = audit["content"]["valid_trainable_rows"]
+            manifest["effective_trainable_rows"] = None
+            manifest["effective_rows_scope"] = "unavailable_sample_only"
             manifest["formal_global_samples"] = DEFAULT_MAX_OPTIMIZER_STEPS * 1024
             manifest["formal_remaining_raw_rows"] = audit["total_rows"] - manifest["formal_global_samples"]
             report = {
@@ -2228,7 +2418,8 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 "dataset_audit": audit,
                 "manifest": manifest,
                 "raw_rows": audit["total_rows"],
-                "effective_rows": audit["content"]["valid_trainable_rows"],
+                "effective_rows": None,
+                "effective_rows_scope": "unavailable_sample_only",
                 "formal_global_samples": manifest["formal_global_samples"],
                 "formal_remaining_raw_rows": manifest["formal_remaining_raw_rows"],
                 "torchrun_started": False,

@@ -163,9 +163,10 @@ The five auditable gates are:
 * Gate A: synthetic DDP recursive-model audit (forward `0..14` twice,
   backward second loop then first, label shift, finite/non-zero gradients,
   optimizer update, rank checksums and exact 16 microbatches).
-* Gate B: CPU-only single-process 85-Parquet footer/schema/content pre-audit;
-  run `code/RSmol/scripts/audit_stage4_dataset.py` directly (it never submits
-  a GPU job or starts `torchrun`).
+* Gate B: CPU-only single-process 85-Parquet footer/schema pre-audit plus a
+  deterministic three-shard streaming/tokenizer sample; run
+  `code/RSmol/scripts/audit_stage4_dataset.py` directly (it never submits a
+  GPU job or starts `torchrun`).
 * Gate C: real-data 8-rank short pilot (`--max-optimizer-steps 1` or `2`).
 * Gate D: fixed-step pilot, default 9,244 optimizer steps, with periodic
   complete checkpoints.
@@ -182,12 +183,24 @@ The fixed configuration is `code/RSmol/stage4_default_config.json`:
 `learning_rate=2e-4`, `context_length=1024`, and
 `max_optimizer_steps=9244`.  Thus each rank targets `1,183,232` samples,
 the global effective batch is `1024`, and formal global consumption is
-`9,465,856` samples.  The startup content audit fail-fast checks that every
-rank's deterministic shard assignment has at least the per-rank target and
-reports raw rows, effective rows, and remaining raw rows.
+`9,465,856` samples.  With the sample-only Gate B report, startup fail-fast
+checks exact footer raw-row capacity for every deterministic rank assignment;
+effective trainable rows remain explicitly unknown until rank-local training
+streaming observes them.  Reports retain raw rows, effective-row scope, and
+remaining raw rows.
 
-Gate B runs directly on the remote server with the CPU environment.  Use an
-external output directory (the script refuses to overwrite a non-empty one):
+Gate B runs directly on the remote server with the CPU environment.  It reads
+all 85 Parquet footers, but streams/tokenizes only three shards selected from
+the sorted manifest with `seed=0` (override with `--sample-shards` only when
+needed).  It reports the sampled token-length distribution, p50/p95/p99,
+empty/blank text, missing/source distribution and examples, and over-context
+rows.  These content statistics are explicitly marked as a three-shard sample,
+not as a full-corpus estimate.  Progress is printed for every footer and at
+least every 10,000 sampled rows.  Direct `pyarrow.parquet.ParquetFile`
+iteration uses bounded batches and does not create a Datasets Arrow cache;
+optional HF cache variables point to a dedicated local `/tmp` root and the
+report records the cache audit.  The script refuses to overwrite a non-empty
+output directory:
 
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
@@ -196,12 +209,15 @@ python -u code/RSmol/scripts/audit_stage4_dataset.py \
   --data-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset \
   --output-dir /external/stage4-gate-b-YYYYMMDD \
   --report-path /external/stage4-gate-b-YYYYMMDD/stage4_gate_B_audit.json \
-  --world-size 8 --seed 0 --context-length 1024
+  --world-size 8 --seed 0 --context-length 1024 \
+  --sample-shards 3 --progress-every-rows 10000
 ```
 
-The script records all 85 shard footers and content statistics, tokenizer-empty
-rows, deterministic eight-rank `rank_shards`, per-rank effective rows, the
-`1,183,232` samples/rank target, and formal global/remaining-row totals.  For
+The script records all 85 shard footers, deterministic eight-rank
+`rank_shards`, per-rank raw-row capacity, the `1,183,232` samples/rank target,
+and formal global/remaining-row totals.  It does not claim per-rank effective
+rows from the three-shard sample; the training gates use exact footer row
+capacity and perform their own rank-local streaming/tokenization.  For
 Gate C/D, pass its external JSON via `RSMOL_STAGE4_AUDIT_REPORT`; this keeps
 rank 0 from rescanning the full corpus during a multi-card training launch.
 Those GPU-backed gates use the `vc submit` wrapper (fixed 8 x 5090,

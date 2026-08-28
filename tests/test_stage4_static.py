@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import inspect
+import types
 import sys
 import tempfile
 import unittest
@@ -32,10 +33,21 @@ def load_stage4():
     return module
 
 
+def load_gate_b():
+    spec = importlib.util.spec_from_file_location("gate_b_static", AUDIT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load {AUDIT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 class Stage4StaticContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.stage4 = load_stage4()
+        cls.gate_b = load_gate_b()
         cls.source = SOURCE.read_text(encoding="utf-8")
         cls.audit_source = AUDIT.read_text(encoding="utf-8")
         cls.runtime = RUNTIME.read_text(encoding="utf-8")
@@ -52,9 +64,13 @@ class Stage4StaticContractTest(unittest.TestCase):
             "--context-length",
             "--world-size",
             "--seed",
+            "--sample-shards",
+            "--progress-every-rows",
+            "--cache-root",
             "discover_parquet_files",
             "audit_parquet_shards",
             "assign_shards",
+            "select_sample_shards",
             "rank_valid_trainable_rows",
             "formal_global_samples",
             "formal_remaining_raw_rows",
@@ -68,6 +84,12 @@ class Stage4StaticContractTest(unittest.TestCase):
         self.assertEqual(self.stage4.DEFAULT_TARGET_SAMPLES_PER_RANK, 1_183_232)
         self.assertEqual(self.stage4.DEFAULT_MAX_OPTIMIZER_STEPS, 9_244)
         self.assertEqual(self.stage4.DEFAULT_WORLD_SIZE, 8)
+        files = [Path(f"train-{index:05d}-of-00085.parquet") for index in range(85)]
+        self.assertEqual(
+            [path.name for path in self.stage4.select_sample_shards(files, sample_shards=3, seed=0)],
+            [path.name for path in self.stage4.select_sample_shards(files, sample_shards=3, seed=0)],
+        )
+        self.assertEqual(len(self.stage4.select_sample_shards(files, sample_shards=3, seed=0)), 3)
         assignment = self.stage4.assign_shards(
             [Path(f"train-{index:05d}-of-00085.parquet") for index in range(85)],
             world_size=8,
@@ -95,6 +117,10 @@ class Stage4StaticContractTest(unittest.TestCase):
         for marker in (
             "ParquetFile.iter_batches",
             "content_audit",
+            "content_paths",
+            "content_is_full_corpus",
+            "sampled_shards",
+            "progress_callback",
             "global_loss_sum",
             "global_valid_token_count",
             "world_size",
@@ -124,6 +150,17 @@ class Stage4StaticContractTest(unittest.TestCase):
             "shift_labels = labels[..., 1:].contiguous()",
         ):
             self.assertIn(marker, self.source)
+        for marker in (
+            "sample_shards",
+            "sample_statistics_are_not_full_corpus_estimates",
+            "progress_every_rows",
+            "STAGE4_GATE_B_CACHE_ROOT",
+            "cache_root",
+            "actual_arrow_files",
+            "CPU-only",
+            "full_corpus_tokenizer_scan",
+        ):
+            self.assertIn(marker, self.audit_source)
 
     def test_remote_wrappers_use_eight_gpu_contract(self) -> None:
         self.assertIn("torchrun --standalone", self.runtime)
@@ -160,6 +197,133 @@ class Stage4StaticContractTest(unittest.TestCase):
         self.assertIn('if config.gate == "B" and world_size != 1:', self.source)
         self.assertIn('if config.gate != "B" and world_size != DEFAULT_WORLD_SIZE', self.source)
         self.assertIn('world_size = 1', self.source)
+
+    def test_gate_b_default_sample_and_bounded_stats(self) -> None:
+        config = self.gate_b._parse_args(
+            ["--tokenizer-path", "/tmp/tokenizer", "--output-dir", "/tmp/gate-b-test"]
+        )
+        self.assertEqual(config.sample_shards, 3)
+        self.assertEqual(config.progress_every_rows, 10000)
+        stats = self.stage4._LengthStats(reservoir_size=2, seed=0)
+        for value in (1, 2, 100):
+            stats.add(value)
+        summary = stats.as_dict()
+        self.assertEqual(summary["count"], 3)
+        self.assertEqual(summary["min"], 1)
+        self.assertEqual(summary["max"], 100)
+        self.assertIn("mean", summary)
+        self.assertIn("p99", summary["quantiles"])
+        self.assertEqual(summary["reservoir_size"], 2)
+
+    def test_gate_b_streams_only_selected_shards_and_reports_progress(self) -> None:
+        class Field:
+            def __init__(self, name, field_type="string"):
+                self.name = name
+                self.type = field_type
+                self.nullable = True
+
+        class Column:
+            def __init__(self, values):
+                self.values = values
+
+            def to_pylist(self):
+                return self.values
+
+        class Batch:
+            def __init__(self, texts, sources):
+                self.columns = {"text": Column(texts), "source": Column(sources)}
+
+            def column(self, name):
+                return self.columns[name]
+
+        class FakeParquetFile:
+            opened = []
+
+            def __init__(self, path):
+                self.path = Path(path)
+                self.schema_arrow = [Field("text"), Field("source")]
+                self.metadata = types.SimpleNamespace(num_rows=3)
+                self.num_row_groups = 1
+                self.opened.append(self.path.name)
+
+            def iter_batches(self, **kwargs):
+                if self.path.name == "train-00000-of-00085.parquet":
+                    yield Batch(["short", "", "x" * 20], ["wiki", None, "book"])
+                elif self.path.name == "train-00001-of-00085.parquet":
+                    yield Batch([None, "ok", "long"], ["code", "", "code"])
+                elif self.path.name == "train-00002-of-00085.parquet":
+                    yield Batch(["tiny", "tiny", "tiny"], ["news", "news", "news"])
+
+        parquet_module = types.ModuleType("pyarrow.parquet")
+        parquet_module.ParquetFile = FakeParquetFile
+        pyarrow_module = types.ModuleType("pyarrow")
+        pyarrow_module.__path__ = []
+        pyarrow_module.parquet = parquet_module
+        old_pyarrow = sys.modules.get("pyarrow")
+        old_parquet = sys.modules.get("pyarrow.parquet")
+        sys.modules["pyarrow"] = pyarrow_module
+        sys.modules["pyarrow.parquet"] = parquet_module
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                files = []
+                for index in range(85):
+                    path = root / f"train-{index:05d}-of-00085.parquet"
+                    path.write_bytes(b"fixture")
+                    files.append(path)
+
+                class FakeTokenizer:
+                    def __call__(self, text, **kwargs):
+                        # Each character is a token, making x*20 over context=10.
+                        return {"input_ids": list(range(len(text)))}
+
+                selected = files[:3]
+                progress = []
+                report = self.stage4.audit_parquet_shards(
+                    files,
+                    tokenizer=FakeTokenizer(),
+                    context_length=10,
+                    content=True,
+                    content_paths=selected,
+                    progress_callback=progress.append,
+                    progress_every_rows=2,
+                )
+                self.assertEqual(report["file_count"], 85)
+                self.assertEqual(report["content_scope"], "sampled_shards")
+                self.assertFalse(report["content_is_full_corpus"])
+                self.assertEqual(report["sampled_shard_count"], 3)
+                self.assertEqual(len(FakeParquetFile.opened), 85)
+                self.assertTrue(any("footer 85/85" in item for item in progress))
+                self.assertTrue(any("read_rows=2/3" in item for item in progress))
+                self.assertTrue(any("tokenized_rows=" in item for item in progress))
+                self.assertEqual(report["content"]["none_text"], 1)
+                self.assertEqual(report["content"]["empty_text"], 1)
+                self.assertEqual(report["content"]["over_context_length"], 1)
+                self.assertEqual(report["content"]["over_context_ratio_denominator"], "tokenized_rows")
+                self.assertEqual(report["content"]["token_length"]["count"], 7)
+                self.assertFalse(report["shards"][3]["content"]["audited"])
+        finally:
+            if old_pyarrow is None:
+                sys.modules.pop("pyarrow", None)
+            else:
+                sys.modules["pyarrow"] = old_pyarrow
+            if old_parquet is None:
+                sys.modules.pop("pyarrow.parquet", None)
+            else:
+                sys.modules["pyarrow.parquet"] = old_parquet
+
+    def test_gate_b_cache_root_is_local_and_does_not_create_arrow_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "cache"
+            config = self.gate_b.AuditConfig(cache_root=root)
+            audit = self.gate_b._configure_local_cache(config)
+            self.assertTrue(audit["safe"])
+            self.assertEqual(audit["actual_arrow_files"], [])
+            self.assertEqual(Path(audit["environment"]["HF_DATASETS_CACHE"]).parent, root)
+            with self.assertRaises(ValueError):
+                self.gate_b._configure_local_cache(
+                    self.gate_b.AuditConfig(cache_root=Path("/hpc_stor03/shared-cache"))
+                )
 
     def test_local_pretrained_paths_are_validated_before_hf_loading(self) -> None:
         self.assertIn("_require_local_artifact_dir", self.source)
