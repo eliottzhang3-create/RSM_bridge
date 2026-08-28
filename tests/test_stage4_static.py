@@ -17,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "code" / "RSmol" / "scripts" / "train_stage4_ddp.py"
+AUDIT = ROOT / "code" / "RSmol" / "scripts" / "audit_stage4_dataset.py"
 RUNTIME = ROOT / "code" / "RSmol" / "scripts" / "train_stage4_ddp.sh"
 SUBMIT = ROOT / "code" / "RSmol" / "run_stage4_5090.sh"
 
@@ -36,8 +37,31 @@ class Stage4StaticContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.stage4 = load_stage4()
         cls.source = SOURCE.read_text(encoding="utf-8")
+        cls.audit_source = AUDIT.read_text(encoding="utf-8")
         cls.runtime = RUNTIME.read_text(encoding="utf-8")
         cls.submit = SUBMIT.read_text(encoding="utf-8")
+
+    def test_gate_b_has_independent_cpu_entrypoint(self) -> None:
+        self.assertTrue(AUDIT.is_file())
+        for marker in (
+            "--model-path",
+            "--tokenizer-path",
+            "--data-dir",
+            "--output-dir",
+            "--report-path",
+            "--context-length",
+            "--world-size",
+            "--seed",
+            "discover_parquet_files",
+            "audit_parquet_shards",
+            "assign_shards",
+            "rank_valid_trainable_rows",
+            "formal_global_samples",
+            "formal_remaining_raw_rows",
+        ):
+            self.assertIn(marker, self.audit_source)
+        for forbidden in ("torchrun", "torch.distributed", "_prepare_distributed", "AutoModelForCausalLM"):
+            self.assertNotIn(forbidden, self.audit_source)
 
     def test_fixed_defaults_and_shards(self) -> None:
         self.assertEqual(len(self.stage4.expected_parquet_names()), 85)
@@ -105,16 +129,17 @@ class Stage4StaticContractTest(unittest.TestCase):
         self.assertIn("torchrun --standalone", self.runtime)
         self.assertIn("Gate B", self.runtime)
         self.assertIn("vc submit", self.submit)
-        self.assertIn('GPU_COUNT=8', self.submit)
         self.assertIn('if [[ "$GATE" == "B" ]]', self.submit)
-        self.assertIn('GPU_COUNT=1', self.submit)
-        self.assertIn('-c 32 -m 256G -g "$GPU_COUNT" -n 1', self.submit)
+        self.assertIn('Gate B is CPU-only', self.submit)
+        self.assertNotIn('GPU_COUNT=1', self.submit)
+        self.assertIn('-c 32 -m 256G -g 8 -n 1', self.submit)
         self.assertIn("pdgpu-5090", self.submit)
         self.assertIn('RESUME_PATH="${RSMOL_STAGE4_RESUME_FROM:-}"', self.runtime)
         self.assertIn('if [[ "$GATE" == "E"', self.runtime)
         self.assertIn("checkpoint_complete.json", self.runtime)
         self.assertIn("Gate E requires RSMOL_STAGE4_RESUME_FROM", self.runtime)
         self.assertIn("training_state.pt", self.runtime)
+        self.assertIn("Gate B is CPU-only", self.runtime)
 
     def test_resume_parser_and_cursor_contract(self) -> None:
         config = self.stage4._parse_args(

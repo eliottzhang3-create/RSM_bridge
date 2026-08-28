@@ -3,17 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
-mkdir -p log
 
-# Gate B is a single-process Parquet/tokenizer pre-audit and does not launch
-# torchrun.  Request only one GPU for that gate; the DDP gates retain the full
-# eight-card 5090 allocation.
+# Gate B is CPU-only and must be run directly with scripts/audit_stage4_dataset.py.
+# This vc wrapper submits only the GPU-backed DDP gates.
 GATE="${RSMOL_STAGE4_GATE:-D}"
-GPU_COUNT=8
 if [[ "$GATE" == "B" ]]; then
-  GPU_COUNT=1
+  echo "Gate B is CPU-only and is not submitted through vc; run: python -u scripts/audit_stage4_dataset.py ..." >&2
+  exit 2
 fi
-
+mkdir -p log
 CMD_PREFIX=""
 for name in \
   RSMOL_RECURSIVE_OUTPUT_DIR RSMOL_STAGE4_TOKENIZER_PATH RSMOL_STAGE4_DATA_DIR \
@@ -36,7 +34,7 @@ done
 vc submit \
   -p pdgpu-5090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
-  -c 32 -m 256G -g "$GPU_COUNT" -n 1 \
+  -c 32 -m 256G -g 8 -n 1 \
   -j stage4-ddp-5090-$(date +%m%d%H%M) \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$SCRIPT_DIR/log/stage4_ddp_5090.JOB.log" \

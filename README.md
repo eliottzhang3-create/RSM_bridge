@@ -10,8 +10,9 @@ The five auditable gates are:
 * Gate A: synthetic DDP recursive-model audit (forward `0..14` twice,
   backward second loop then first, label shift, finite/non-zero gradients,
   optimizer update, rank checksums and exact 16 microbatches).
-* Gate B: single-process 85-Parquet footer/schema/content pre-audit; it must
-  be run without `torchrun`.
+* Gate B: CPU-only single-process 85-Parquet footer/schema/content pre-audit;
+  run `code/RSmol/scripts/audit_stage4_dataset.py` directly (it never submits
+  a GPU job or starts `torchrun`).
 * Gate C: real-data 8-rank short pilot (`--max-optimizer-steps 1` or `2`).
 * Gate D: fixed-step pilot, default 9,244 optimizer steps, with periodic
   complete checkpoints.
@@ -32,21 +33,27 @@ the global effective batch is `1024`, and formal global consumption is
 rank's deterministic shard assignment has at least the per-rank target and
 reports raw rows, effective rows, and remaining raw rows.
 
-Remote execution uses the `vc submit` wrapper (8 x 5090, `-c 32 -m 256G
--g 8 -n 1`):
+Gate B runs directly on the remote server with the CPU environment.  Use an
+external output directory (the script refuses to overwrite a non-empty one):
 
 ```bash
-cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
-RSMOL_RECURSIVE_OUTPUT_DIR=/external/recursive-checkpoint \
-RSMOL_STAGE4_GATE=B \
-RSMOL_STAGE4_OUTPUT_DIR=/external/stage4-gate-b-YYYYMMDD \
-bash run_stage4_5090.sh
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+python -u code/RSmol/scripts/audit_stage4_dataset.py \
+  --model-path /external/recursive-checkpoint \
+  --data-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset \
+  --output-dir /external/stage4-gate-b-YYYYMMDD \
+  --report-path /external/stage4-gate-b-YYYYMMDD/stage4_gate_B_audit.json \
+  --world-size 8 --seed 0 --context-length 1024
 ```
 
-For Gate C/D, pass `RSMOL_STAGE4_AUDIT_REPORT` pointing to the external Gate B
-JSON; this keeps rank 0 from rescanning the full corpus during a multi-card
-training launch.  For Gate D omit `RSMOL_STAGE4_GATE` (it defaults to `D`).  Gate E uses a
-fresh `RSMOL_STAGE4_OUTPUT_DIR` and sets
+The script records all 85 shard footers and content statistics, tokenizer-empty
+rows, deterministic eight-rank `rank_shards`, per-rank effective rows, the
+`1,183,232` samples/rank target, and formal global/remaining-row totals.  For
+Gate C/D, pass its external JSON via `RSMOL_STAGE4_AUDIT_REPORT`; this keeps
+rank 0 from rescanning the full corpus during a multi-card training launch.
+Those GPU-backed gates use the `vc submit` wrapper (fixed 8 x 5090,
+`-c 32 -m 256G -g 8 -n 1`).  For Gate D omit `RSMOL_STAGE4_GATE` (it defaults
+to `D`).  Gate E uses a fresh `RSMOL_STAGE4_OUTPUT_DIR` and sets
 `RSMOL_STAGE4_RESUME_FROM` to the latest complete Gate D checkpoint.  Every
 gate emits JSON reports and the training runtime appends resource samples to
 `runtime_monitor_rank*.jsonl`; cache variables are redirected to task-local

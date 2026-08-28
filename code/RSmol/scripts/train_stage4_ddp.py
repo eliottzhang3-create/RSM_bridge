@@ -7,9 +7,11 @@ of the 85 Parquet shards, streams one shard at a time with a bounded shuffle
 buffer, and contributes token-weighted gradients to a DDP model.  The same
 entry point implements the five gates used by the remote job:
 
-``A`` synthetic 8-rank DDP audit, ``B`` single-process data pre-audit,
-``C`` a short real-data pilot, ``D`` the fixed-step pilot, and ``E`` a
-resume smoke using a new output directory.
+``A`` synthetic 8-rank DDP audit, ``B`` a compatibility data-preaudit API,
+``C`` a short real-data pilot, ``D`` the fixed-step pilot, and ``E`` a resume
+smoke using a new output directory.  The supported Gate B command is the
+standalone CPU entry point ``audit_stage4_dataset.py``; this module's Gate B
+branch remains only for internal callers and legacy compatibility.
 
 Only reports/checkpoints under an explicitly external output directory are
 written.  In particular, neither the local checkout nor the remote Git

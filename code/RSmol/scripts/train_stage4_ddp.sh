@@ -34,6 +34,11 @@ DATA_DIR="${RSMOL_STAGE4_DATA_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolL
 OUTPUT_DIR="${RSMOL_STAGE4_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4/$(date +%Y%m%d_%H%M%S)}"
 REPORT_PATH="${RSMOL_STAGE4_REPORT:-$OUTPUT_DIR/stage4_report.json}"
 
+if [[ "$GATE" == "B" ]]; then
+  echo "Gate B is CPU-only and is not handled by the DDP runtime; run python -u code/RSmol/scripts/audit_stage4_dataset.py directly." >&2
+  exit 2
+fi
+
 echo "========== STAGE 4 DDP ${GATE} =========="
 echo "ACTIVE_ENV=${CONDA_DEFAULT_ENV:-<unset>}"
 echo "PYTHON=$(which python)"
@@ -65,16 +70,12 @@ if [[ ("$GATE" == "C" || "$GATE" == "D") && "${RSMOL_STAGE4_DRY_RUN:-0}" != "1" 
   echo "Run Gate B first and set RSMOL_STAGE4_AUDIT_REPORT to its external JSON report" >&2
   exit 2
 fi
-ARG_WORLD_SIZE="$WORLD_SIZE"
-if [[ "$GATE" == "B" ]]; then
-  ARG_WORLD_SIZE=1
-fi
 ARGS=(
   --gate "$GATE"
   --data-dir "$DATA_DIR"
   --output-dir "$OUTPUT_DIR"
   --report-path "$REPORT_PATH"
-  --world-size "$ARG_WORLD_SIZE"
+  --world-size "$WORLD_SIZE"
   --micro-batch-size "${RSMOL_STAGE4_MICRO_BATCH_SIZE:-8}"
   --gradient-accumulation-steps "${RSMOL_STAGE4_GRADIENT_ACCUMULATION_STEPS:-16}"
   --learning-rate "${RSMOL_STAGE4_LEARNING_RATE:-2e-4}"
@@ -108,15 +109,6 @@ if [[ "${RSMOL_STAGE4_DRY_RUN:-0}" == "1" ]]; then
   ARGS+=(--dry-run)
 fi
 
-if [[ "$GATE" == "B" ]]; then
-  # Gate B is deliberately a single-process pre-audit; no torchrun.
-  # vc/slurm may export stale distributed variables even for a plain Python
-  # process.  Remove them so downstream libraries cannot infer DDP here.
-  env -u RANK -u WORLD_SIZE -u LOCAL_RANK -u MASTER_ADDR -u MASTER_PORT \
-    -u TORCHELASTIC_RUN_ID -u GROUP_RANK -u ROLE_RANK \
-    python -u code/RSmol/scripts/train_stage4_ddp.py "${ARGS[@]}"
-else
-  torchrun --standalone --nproc_per_node="$WORLD_SIZE" \
-    code/RSmol/scripts/train_stage4_ddp.py "${ARGS[@]}"
-fi
+torchrun --standalone --nproc_per_node="$WORLD_SIZE" \
+  code/RSmol/scripts/train_stage4_ddp.py "${ARGS[@]}"
 echo "[result] status=PASS"
