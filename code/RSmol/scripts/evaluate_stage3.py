@@ -330,12 +330,19 @@ def _safe_log_component(value: str) -> str:
 
 
 def _task_log_path(log_root: Path, config: EvaluationConfig, task: str) -> Path:
+    # Include the run directory so repeated smoke/formal runs never overwrite
+    # one another's diagnostics (the model leaf alone is usually just
+    # ``original`` or ``recursive``).
+    run_component = _safe_log_component(config.output_dir.parent.name)
     model_component = _safe_log_component(config.output_dir.name or config.model_path.name)
+    model_component = f"{run_component}-{model_component}"
     return log_root / model_component / f"{_safe_log_component(task)}.stderr.log"
 
 
 def _runtime_log_path(log_root: Path, config: EvaluationConfig) -> Path:
+    run_component = _safe_log_component(config.output_dir.parent.name)
     model_component = _safe_log_component(config.output_dir.name or config.model_path.name)
+    model_component = f"{run_component}-{model_component}"
     return log_root / model_component / "runtime.log"
 
 
@@ -1361,6 +1368,13 @@ def _run_single_task(
                 register_auto_class()
             from lm_eval import evaluator
             from lm_eval.tasks import TaskManager
+
+            # lm_eval==0.4.12 unconditionally calls ``git describe`` while
+            # assembling its result payload.  The evaluation container may
+            # expose a non-executable/broken git entry; this metadata probe is
+            # unrelated to model scoring and must not turn a completed task
+            # into a false FAIL.  Keep the project-level git audit intact.
+            evaluator.get_git_commit_hash = lambda: "<disabled:lm_eval_git_probe>"
 
             result = evaluator.simple_evaluate(
                 model="hf",

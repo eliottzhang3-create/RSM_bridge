@@ -126,6 +126,9 @@ established checkout directory
 `RSMOL_STAGE3_SUBMIT_LOG_ROOT`) to choose another allowed log directory.
 The `log_samples.json` files under each external output task directory are
 benchmark sample artifacts, not runtime logs.
+The evaluator also neutralizes lm_eval 0.4.12's non-essential `git describe`
+result-metadata probe; some containers expose a non-executable `git`, which
+otherwise causes a scored task to be reported as failed during finalization.
 
 Local checks (which do not require CUDA, lm_eval, or benchmark data) are:
 

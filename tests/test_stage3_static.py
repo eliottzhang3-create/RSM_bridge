@@ -208,6 +208,7 @@ class Stage3StaticContractTest(unittest.TestCase):
         ):
             self.assertIn(marker, self.source)
         self.assertNotIn("show_config=True", self.source)
+        self.assertIn('evaluator.get_git_commit_hash = lambda: "<disabled:lm_eval_git_probe>"', self.source)
 
     def test_relative_function_reference_becomes_loadable_absolute_ref(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
