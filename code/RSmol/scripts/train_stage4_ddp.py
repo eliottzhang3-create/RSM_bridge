@@ -1155,7 +1155,11 @@ def _prepare_distributed(config: Stage4Config) -> tuple[int, int, Any, bool]:
         if backend == "nccl" and not use_cuda:
             raise RuntimeError("NCCL Stage 4 requires CUDA; use backend=gloo only for CPU static/unit audit")
         dist.init_process_group(backend=backend, init_method="env://")
-    if world_size != DEFAULT_WORLD_SIZE and not (config.allow_non8 or config.dry_run):
+    # Gate B is deliberately single-process; only the training/audit gates
+    # that launch DDP require the production eight-rank topology.
+    if config.gate == "B" and world_size != 1:
+        raise ValueError(f"Stage 4 Gate B requires world_size=1, got {world_size}")
+    if config.gate != "B" and world_size != DEFAULT_WORLD_SIZE and not (config.allow_non8 or config.dry_run):
         raise ValueError(f"Stage 4 Gate {config.gate} requires world_size=8, got {world_size}")
     return rank, world_size, device, use_cuda
 

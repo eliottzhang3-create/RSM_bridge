@@ -128,6 +128,11 @@ class Stage4StaticContractTest(unittest.TestCase):
         self.assertIn("data_cursors_by_rank", save_parameters)
         self.assertNotIn("data_cursor", save_parameters)
 
+    def test_gate_b_is_explicitly_single_process(self) -> None:
+        self.assertIn('if config.gate == "B" and world_size != 1:', self.source)
+        self.assertIn('if config.gate != "B" and world_size != DEFAULT_WORLD_SIZE', self.source)
+        self.assertIn('world_size = 1', self.source)
+
     def test_final_cursor_gather_is_outside_rank0_branch(self) -> None:
         tree = ast.parse(self.source)
         run_training = next(
