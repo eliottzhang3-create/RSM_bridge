@@ -69,6 +69,8 @@ class StepwiseStaticContractTest(unittest.TestCase):
         self.assertIn("configured_sample_prompts", self.smoke_text)
         self.assertIn('RSMOL_RECURSIVE_SAMPLE_PROMPTS', self.smoke_text)
         self.assertIn('"completion_text"', self.smoke_text)
+        self.assertIn("cache_no_cache_tokens_equal", self.smoke_text)
+        self.assertIn("[generation-warning]", self.smoke_text)
 
         source = SimpleNamespace(num_hidden_layers=4)
         target = self.converter.build_target_config(
