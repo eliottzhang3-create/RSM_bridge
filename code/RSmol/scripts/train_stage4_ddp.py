@@ -1545,10 +1545,19 @@ def validate_formal_resume_state(state: Mapping[str, Any]) -> dict[str, int]:
     """
 
     configuration = state.get("configuration", {})
-    if not isinstance(configuration, Mapping) or str(
-        configuration.get("gate", "")
-    ).upper() != "FORMAL":
-        raise ValueError("FORMAL resume requires a checkpoint created by FORMAL mode")
+    actual_gate = (
+        str(configuration.get("gate", "")).upper()
+        if isinstance(configuration, Mapping)
+        else ""
+    )
+    if actual_gate != "FORMAL":
+        checkpoint_mode = actual_gate or "UNKNOWN"
+        raise ValueError(
+            "FORMAL resume requires a checkpoint created by FORMAL mode; "
+            f"got checkpoint gate={checkpoint_mode}. This is usually a Gate D/E checkpoint. "
+            "For a fresh formal run, unset RSMOL_STAGE4_RESUME_FROM; for resume, pass a "
+            "checkpoint-step-NNNNNN created by --gate FORMAL."
+        )
     scheduler = state.get("scheduler_config")
     if not isinstance(scheduler, Mapping):
         raise ValueError("FORMAL resume checkpoint is missing scheduler_config")

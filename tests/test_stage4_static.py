@@ -249,6 +249,10 @@ class Stage4StaticContractTest(unittest.TestCase):
             self.stage4.validate_formal_resume_state(state),
             {"optimizer_step": 9000, "scheduler_total_steps": 9244, "warmup_steps": 463},
         )
+        with self.assertRaisesRegex(ValueError, "checkpoint gate=D"):
+            invalid_mode = dict(state)
+            invalid_mode["configuration"] = {"gate": "D"}
+            self.stage4.validate_formal_resume_state(invalid_mode)
         complete_state = dict(state)
         complete_state["optimizer_step"] = 9244
         self.assertEqual(
