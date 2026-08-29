@@ -76,6 +76,36 @@ def finite(name: str, tensor: torch.Tensor) -> None:
         raise RuntimeError(f"{name} contains non-finite values")
 
 
+def configured_sample_prompts(primary_prompt: str) -> list[str]:
+    """Read optional ``|||``-separated generation prompts from the environment."""
+
+    raw = os.environ.get("RSMOL_RECURSIVE_SAMPLE_PROMPTS", "")
+    if not raw.strip():
+        return [primary_prompt]
+    prompts = [item.strip() for item in raw.split("|||") if item.strip()]
+    return prompts or [primary_prompt]
+
+
+def generation_sample_record(
+    tokenizer: Any,
+    prompt: str,
+    generated: torch.Tensor,
+) -> dict[str, Any]:
+    """Serialize one generated sample without writing model artifacts."""
+
+    prompt_length = int(tokenizer(prompt, return_tensors="pt")["input_ids"].shape[1])
+    sequence = generated[0].detach().cpu().tolist()
+    completion_ids = sequence[prompt_length:]
+    return {
+        "prompt": prompt,
+        "generated_text": tokenizer.decode(sequence, skip_special_tokens=False),
+        "completion_text": tokenizer.decode(completion_ids, skip_special_tokens=False),
+        "prompt_token_count": prompt_length,
+        "generated_token_count": len(completion_ids),
+        "token_ids": sequence,
+    }
+
+
 def cache_slot_state(cache: Any, index: int) -> tuple[int, bool, bool]:
     """Return (sequence length, key non-empty, value non-empty) for one slot."""
 
@@ -172,6 +202,8 @@ def main() -> None:
     )
     tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True, use_fast=True)
     text = os.environ.get("RSMOL_RECURSIVE_SMOKE_PROMPT", "Recursive models are")
+    sample_prompts = configured_sample_prompts(text)
+    text = sample_prompts[0]
     inputs = tokenizer(text, return_tensors="pt")
     inputs = {name: value.to(device) for name, value in inputs.items()}
     # The converted config keeps model_type=llama for Llama compatibility.  An
@@ -326,6 +358,24 @@ def main() -> None:
             "Greedy generation differs between use_cache=True and use_cache=False: "
             f"cached={generated.tolist()} no_cache={generated_no_cache.tolist()}"
         )
+    generation_samples = [generation_sample_record(tokenizer, text, generated)]
+    for sample_prompt in sample_prompts[1:]:
+        sample_inputs = tokenizer(sample_prompt, return_tensors="pt")
+        sample_inputs = {name: value.to(device) for name, value in sample_inputs.items()}
+        with torch.inference_mode():
+            sample_generated = model.generate(
+                **sample_inputs,
+                max_new_tokens=args.max_new_tokens,
+                do_sample=False,
+                use_cache=True,
+                pad_token_id=pad_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+        if sample_generated.shape[1] <= sample_inputs["input_ids"].shape[1]:
+            raise RuntimeError(f"Generation produced no new token for sample prompt: {sample_prompt!r}")
+        generation_samples.append(
+            generation_sample_record(tokenizer, sample_prompt, sample_generated)
+        )
     expected_precreated_length = inputs["input_ids"].shape[1]
     if (
         generated_with_precreated_cache.ndim != 2
@@ -458,6 +508,8 @@ def main() -> None:
             "output_shape": list(generated.shape),
             "cache_no_cache_tokens_equal": True,
             "cached_generation_seconds": generation_seconds,
+            "sample_count": len(generation_samples),
+            "samples": generation_samples,
         },
         "generation_precreated_cache": {
             "cache_type": type(precreated_cache).__name__,
