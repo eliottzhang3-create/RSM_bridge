@@ -158,7 +158,7 @@ evaluation protocol.
 Stage 4 is implemented in `code/RSmol/scripts/train_stage4_ddp.py` and is
 intended for the external `/hpc_stor03` task output area only.  It does not
 write model parameters, checkpoints, or reports into either Git checkout.
-The five auditable gates are:
+The five historical gates and the independent formal mode are:
 
 * Gate A: synthetic DDP recursive-model audit (forward `0..14` twice,
   backward second loop then first, label shift, finite/non-zero gradients,
@@ -169,8 +169,7 @@ The five auditable gates are:
   GPU job or starts `torchrun`).
 * Gate C: real-data 8-rank short pilot (`--max-optimizer-steps 1` or `2`).
 * Gate D: fixed-step ten-optimizer-step smoke by default, with periodic
-  complete checkpoints.  The separate `formal_optimizer_steps=9244` value is
-  a future/formal Stage 4 target record only; it does not implement Stage 5.
+  complete checkpoints.
 * Gate E: resume smoke in a new output directory; optimizer, scheduler, RNG,
   step, manifest, and one `data_cursors_by_rank` cursor per DDP rank are
   restored.  The iterator performs a coarse
@@ -179,14 +178,46 @@ The five auditable gates are:
   `data_cursor_restored=false` and never claim bitwise-exact data resume.
   Gate E rejects legacy checkpoints that contain only a single `data_cursor`.
 
+Formal Stage 4 training is now a separate `--gate FORMAL` mode.  It enforces
+the production contract of 9,244 optimizer steps, schedule domain 9,244,
+linear warmup of 463 steps, `save_every=500`, and retention of the newest
+three verified complete checkpoints.  The mandatory save steps are
+500, 1000, ..., 9000, and 9244; rank 0 writes each checkpoint through the
+existing atomic full-checkpoint contract and all ranks synchronize at saves.
+The optimizer is explicitly `AdamW(betas=(0.9, 0.95), eps=1e-8,
+weight_decay=0.1, amsgrad=false)`.  Accumulation uses unreduced local loss
+sums and one window-global valid shifted-token denominator across all 16
+microbatches; because DDP averages rank gradients, each backward uses the
+scale `world_size / global_window_valid_tokens` and does not divide by the
+accumulation count a second time.
+Formal reports include `mode=formal`, target/actual steps, cumulative samples
+and tokens, stop reason, final checkpoint, and retained checkpoints.  A
+formal run that exhausts data before 9244 is reported as not reached and does
+not claim PASS.  Formal checkpoints can be resumed with
+`--gate FORMAL --resume-from`; the scheduler domain remains 9244 and the
+optimizer/RNG/cumulative counters, manifest, and per-rank cursors are
+restored.  Resume uses the same coarse bounded-shuffle cursor semantics and
+does not claim bitwise-exact data order.  Formal checkpoints are intentionally
+rejected by Gate E, which remains the bounded two-step resume smoke.
+
+Use the same fixed vc wrapper for a remote formal submission:
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+RSMOL_STAGE4_GATE=FORMAL \
+RSMOL_RECURSIVE_OUTPUT_DIR=/external/recursive-checkpoint \
+RSMOL_STAGE4_AUDIT_REPORT=/external/stage4-gate-b/stage4_gate_B_audit.json \
+bash run_stage4_5090.sh
+```
+
 The fixed configuration is `code/RSmol/stage4_default_config.json`:
 `world_size=8`, `micro_batch_size=8`, `gradient_accumulation_steps=16`,
 `learning_rate=2e-4`, `max_lr=2e-4`, `min_lr=2e-5`,
 `scheduler_type=linear_warmup_cosine`, `log_interval_steps=10`,
 `context_length=1024`, and `max_optimizer_steps=10`.  Gate D therefore
-targets `1,280` samples/rank (`160` local microbatches); the separate formal
-target is `formal_optimizer_steps=9244`, with formal global consumption of
-`9,465,856` samples at the global effective batch of `1024`.  Warmup defaults
+targets `1,280` samples/rank (`160` local microbatches).  The independent
+FORMAL mode targets `9,244` steps with global consumption of `9,465,856`
+samples at the global effective batch of `1024`.  Warmup defaults
 to `ceil(0.05 * total_steps_for_schedule)` (one step for Gate D), followed by
 cosine decay to `min_lr`.  With the sample-only Gate B report, startup fail-fast
 checks exact footer raw-row capacity for every deterministic rank assignment;

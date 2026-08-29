@@ -7,6 +7,7 @@ cd "$SCRIPT_DIR"
 # Gate B is CPU-only and must be run directly with scripts/audit_stage4_dataset.py.
 # This vc wrapper submits only the GPU-backed DDP gates.
 GATE="${RSMOL_STAGE4_GATE:-D}"
+GATE="${GATE^^}"
 if [[ "$GATE" == "B" ]]; then
   echo "Gate B is CPU-only and is not submitted through vc; run: python -u scripts/audit_stage4_dataset.py ..." >&2
   exit 2
@@ -25,6 +26,7 @@ for name in \
   RSMOL_STAGE4_LOG_INTERVAL_STEPS RSMOL_STAGE4_SCHEDULER_TOTAL_STEPS \
   RSMOL_STAGE4_SEED RSMOL_STAGE4_WEIGHT_DECAY \
   RSMOL_STAGE4_MAX_GRAD_NORM RSMOL_STAGE4_RECORD_BUFFER_SIZE RSMOL_STAGE4_SAVE_EVERY \
+  RSMOL_STAGE4_CHECKPOINT_RETENTION \
   RSMOL_STAGE4_MONITOR_INTERVAL RSMOL_STAGE4_BACKEND RSMOL_STAGE4_ALLOW_NON8 \
   RSMOL_STAGE4_DRY_RUN; do
   value="${!name:-}"

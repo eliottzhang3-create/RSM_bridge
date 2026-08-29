@@ -1,5 +1,6 @@
 {
   "gate": "D",
+  "formal_gate": "FORMAL",
   "world_size": 8,
   "micro_batch_size": 8,
   "gradient_accumulation_steps": 16,
@@ -9,18 +10,31 @@
   "scheduler_type": "linear_warmup_cosine",
   "scheduler_total_steps": 10,
   "warmup_steps": 1,
+  "formal_scheduler_total_steps": 9244,
+  "formal_warmup_steps": 463,
   "warmup_fraction": 0.05,
   "log_interval_steps": 10,
   "context_length": 1024,
   "packing": false,
   "max_optimizer_steps": 10,
   "formal_optimizer_steps": 9244,
+  "formal_save_every": 500,
+  "checkpoint_retention": 3,
   "target_samples_per_rank": 1280,
   "target_local_microbatches": 160,
+  "formal_target_samples_per_rank": 1183232,
+  "formal_target_local_microbatches": 147904,
   "global_effective_batch": 1024,
   "formal_global_samples": 9465856,
   "record_buffer_size": 4096,
   "weight_decay": 0.1,
+  "optimizer": {
+    "type": "AdamW",
+    "betas": [0.9, 0.95],
+    "eps": 1e-08,
+    "weight_decay": 0.1,
+    "amsgrad": false
+  },
   "max_grad_norm": 1.0,
   "num_workers": 0,
   "pin_memory": false,
@@ -34,5 +48,15 @@
   "physical_shared_layers": 15,
   "recursive_loops": 2,
   "formal_remaining_rows_is_reported": true,
-  "bounded_shuffle_bitwise_exact_resume": false
+  "bounded_shuffle_bitwise_exact_resume": false,
+  "formal": {
+    "gate": "FORMAL",
+    "optimizer_steps": 9244,
+    "scheduler_total_steps": 9244,
+    "warmup_steps": 463,
+    "save_every": 500,
+    "checkpoint_retention": 3,
+    "resume_supported": true,
+    "bounded_shuffle_bitwise_exact_resume": false
+  }
 }

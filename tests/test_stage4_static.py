@@ -85,6 +85,8 @@ class Stage4StaticContractTest(unittest.TestCase):
         self.assertEqual(self.stage4.DEFAULT_TARGET_SAMPLES_PER_RANK, 1_280)
         self.assertEqual(self.stage4.DEFAULT_MAX_OPTIMIZER_STEPS, 10)
         self.assertEqual(self.stage4.DEFAULT_FORMAL_OPTIMIZER_STEPS, 9_244)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_SAMPLES_PER_RANK, 1_183_232)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_LOCAL_MICROBATCHES, 147_904)
         self.assertEqual(self.stage4.DEFAULT_WORLD_SIZE, 8)
         files = [Path(f"train-{index:05d}-of-00085.parquet") for index in range(85)]
         self.assertEqual(
@@ -132,6 +134,135 @@ class Stage4StaticContractTest(unittest.TestCase):
             ).max_optimizer_steps,
             10,
         )
+
+    def test_formal_parser_defaults_and_conflicts(self) -> None:
+        config = self.stage4._parse_args(["--gate", "formal", "--dry-run"])
+        self.assertEqual(config.gate, "FORMAL")
+        self.assertEqual(config.max_optimizer_steps, 9244)
+        self.assertEqual(config.formal_optimizer_steps, 9244)
+        self.assertEqual(config.scheduler_total_steps, 9244)
+        self.assertEqual(config.warmup_steps, 463)
+        self.assertEqual(config.save_every, 500)
+        self.assertEqual(config.checkpoint_retention, 3)
+        default_config = json.loads(
+            (ROOT / "code" / "RSmol" / "stage4_default_config.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(default_config["formal_gate"], "FORMAL")
+        self.assertEqual(default_config["formal_scheduler_total_steps"], 9244)
+        self.assertEqual(default_config["formal_warmup_steps"], 463)
+        self.assertEqual(default_config["formal_save_every"], 500)
+        self.assertEqual(default_config["checkpoint_retention"], 3)
+        self.assertEqual(default_config["formal"]["optimizer_steps"], 9244)
+        self.assertEqual(default_config["formal"]["scheduler_total_steps"], 9244)
+        self.assertEqual(default_config["formal"]["warmup_steps"], 463)
+        self.assertEqual(default_config["formal"]["save_every"], 500)
+        self.assertEqual(default_config["formal"]["checkpoint_retention"], 3)
+        self.assertEqual(default_config["optimizer"]["type"], "AdamW")
+        self.assertEqual(default_config["optimizer"]["betas"], [0.9, 0.95])
+        self.assertEqual(default_config["optimizer"]["eps"], 1e-8)
+        self.assertEqual(default_config["optimizer"]["weight_decay"], 0.1)
+        self.assertFalse(default_config["optimizer"]["amsgrad"])
+        self.assertTrue(default_config["formal"]["resume_supported"])
+        self.assertFalse(default_config["formal"]["bounded_shuffle_bitwise_exact_resume"])
+        self.assertEqual(self.stage4.formal_save_steps(), [*range(500, 9001, 500), 9244])
+        self.assertAlmostEqual(self.stage4.cosine_warmup_factor(0, 9244, 463), 0.1, places=8)
+        self.assertAlmostEqual(self.stage4.cosine_warmup_factor(463, 9244, 463), 1.0, places=8)
+        self.assertAlmostEqual(self.stage4.cosine_warmup_factor(9244, 9244, 463), 0.1, places=8)
+        self.assertAlmostEqual(
+            self.stage4.token_weighted_gradient_scale(
+                world_size=8, global_window_tokens=16 * 1024
+            ),
+            8.0 / (16 * 1024),
+            places=12,
+        )
+        self.assertNotAlmostEqual(
+            self.stage4.token_weighted_gradient_scale(
+                world_size=8, global_window_tokens=16 * 1024
+            ),
+            8.0 / (16 * 16 * 1024),
+            places=12,
+        )
+        self.assertNotIn(
+            "config.gradient_accumulation_steps * global_window_tokens",
+            self.source,
+        )
+        self.assertNotIn(
+            "config.gradient_accumulation_steps * window_global_tokens",
+            self.source,
+        )
+        self.assertGreaterEqual(self.source.count("token_weighted_gradient_scale("), 2)
+        with self.assertRaisesRegex(ValueError, "FORMAL requires max_optimizer_steps=9244"):
+            self.stage4._parse_args(
+                ["--gate", "FORMAL", "--max-optimizer-steps", "10", "--dry-run"]
+            )
+        with self.assertRaisesRegex(ValueError, "FORMAL requires max_optimizer_steps=9244"):
+            self.stage4._parse_args(
+                ["--gate=FORMAL", "--max-steps=10", "--dry-run"]
+            )
+        with self.assertRaisesRegex(ValueError, "FORMAL requires scheduler_total_steps=9244"):
+            self.stage4._parse_args(
+                ["--gate", "FORMAL", "--scheduler-total-steps", "10", "--dry-run"]
+            )
+        with self.assertRaisesRegex(ValueError, "FORMAL requires backend=nccl"):
+            self.stage4._parse_args(
+                ["--gate", "FORMAL", "--backend", "gloo", "--dry-run"]
+            )
+
+    def test_formal_retention_only_removes_verified_step_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for step in (500, 1000, 1500, 2000):
+                checkpoint = root / f"checkpoint-step-{step:06d}"
+                checkpoint.mkdir()
+                (checkpoint / "checkpoint_complete.json").write_text(
+                    json.dumps({"complete": True, "optimizer_step": step}) + "\n",
+                    encoding="utf-8",
+                )
+            (root / "checkpoint-step-999999.tmp").mkdir()
+            (root / "checkpoint-step-000001").mkdir()
+            (root / "checkpoint-step-000002").mkdir()
+            (root / "latest_complete_checkpoint.json").write_text("{}\n", encoding="utf-8")
+            retained = self.stage4.retain_formal_checkpoints(root, keep=3)
+            self.assertEqual([path.name for path in retained], [
+                "checkpoint-step-001000", "checkpoint-step-001500", "checkpoint-step-002000"
+            ])
+            self.assertFalse((root / "checkpoint-step-000500").exists())
+            self.assertTrue((root / "checkpoint-step-999999.tmp").exists())
+            self.assertTrue((root / "checkpoint-step-000001").exists())
+            pointer = json.loads((root / "latest_complete_checkpoint.json").read_text(encoding="utf-8"))
+            self.assertTrue(pointer["complete"])
+            self.assertEqual(pointer["optimizer_step"], 2000)
+
+    def test_formal_resume_parser_and_metadata_contract(self) -> None:
+        config = self.stage4._parse_args(
+            ["--gate", "FORMAL", "--resume-from", "/tmp/formal-checkpoint", "--dry-run"]
+        )
+        self.assertEqual(config.gate, "FORMAL")
+        self.assertEqual(config.resume_from, Path("/tmp/formal-checkpoint"))
+        self.assertEqual(config.max_optimizer_steps, 9244)
+        state = {
+            "configuration": {"gate": "FORMAL"},
+            "scheduler_config": {"total_steps_for_schedule": 9244, "warmup_steps": 463},
+            "optimizer_step": 9000,
+        }
+        self.assertEqual(
+            self.stage4.validate_formal_resume_state(state),
+            {"optimizer_step": 9000, "scheduler_total_steps": 9244, "warmup_steps": 463},
+        )
+        complete_state = dict(state)
+        complete_state["optimizer_step"] = 9244
+        self.assertEqual(
+            self.stage4.validate_formal_resume_state(complete_state)["optimizer_step"],
+            9244,
+        )
+        with self.assertRaisesRegex(ValueError, "scheduler domain must be 9244"):
+            invalid = dict(state)
+            invalid["scheduler_config"] = {"total_steps_for_schedule": 10, "warmup_steps": 1}
+            self.stage4.validate_formal_resume_state(invalid)
+        with self.assertRaisesRegex(ValueError, "created by FORMAL mode"):
+            invalid = dict(state)
+            invalid["configuration"] = {"gate": "D"}
+            self.stage4.validate_formal_resume_state(invalid)
 
     def test_warmup_ceil_and_cosine_boundaries(self) -> None:
         self.assertEqual(self.stage4.compute_warmup_steps(10), 1)
@@ -216,6 +347,17 @@ class Stage4StaticContractTest(unittest.TestCase):
             "logical_30_physical_15_loops_2",
             "checkpoint_complete.json world_size mismatch",
             "checkpoint step mismatch between checkpoint_complete.json and training_state.pt",
+            "FORMAL resume is not implemented",
+            "retain_formal_checkpoints",
+            "formal_save_steps",
+            "token_weighted_gradient_scale",
+            "betas=DEFAULT_ADAMW_BETAS",
+            "eps=DEFAULT_ADAMW_EPS",
+            "amsgrad=DEFAULT_ADAMW_AMSGRAD",
+            "Stage 4 requires AdamW weight_decay",
+            "Stage 4 requires AdamW, got",
+            "validate_formal_resume_state",
+            "formal_resume",
             "torch.autocast(device_type=\"cuda\", dtype=torch.bfloat16)",
             "labels = input_ids.clone()",
             "shift_logits = logits[..., :-1, :]",
@@ -249,6 +391,12 @@ class Stage4StaticContractTest(unittest.TestCase):
         self.assertIn("Gate E requires RSMOL_STAGE4_RESUME_FROM", self.runtime)
         self.assertIn("training_state.pt", self.runtime)
         self.assertIn("Gate B is CPU-only", self.runtime)
+        self.assertIn('if [[ "$GATE" == "FORMAL" ]]', self.runtime)
+        self.assertIn('("$GATE" == "E" || "$GATE" == "FORMAL")', self.runtime)
+        self.assertIn('&& -n "$RESUME_PATH"', self.runtime)
+        self.assertIn('elif [[ "$GATE" != "A"', self.runtime)
+        self.assertIn("RSMOL_STAGE4_CHECKPOINT_RETENTION", self.runtime)
+        self.assertIn("RSMOL_STAGE4_CHECKPOINT_RETENTION", self.submit)
 
     def test_resume_parser_and_cursor_contract(self) -> None:
         config = self.stage4._parse_args(

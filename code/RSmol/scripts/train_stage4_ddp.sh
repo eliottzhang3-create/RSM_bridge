@@ -29,12 +29,27 @@ export TORCH_NCCL_BLOCKING_WAIT=1
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 GATE="${RSMOL_STAGE4_GATE:-D}"
+GATE="${GATE^^}"
 WORLD_SIZE="${RSMOL_STAGE4_WORLD_SIZE:-8}"
 MODEL_PATH="${RSMOL_RECURSIVE_OUTPUT_DIR:-}"
 RESUME_PATH="${RSMOL_STAGE4_RESUME_FROM:-}"
 DATA_DIR="${RSMOL_STAGE4_DATA_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset}"
 OUTPUT_DIR="${RSMOL_STAGE4_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4/$(date +%Y%m%d_%H%M%S)}"
 REPORT_PATH="${RSMOL_STAGE4_REPORT:-$OUTPUT_DIR/stage4_report.json}"
+
+if [[ "$GATE" == "FORMAL" ]]; then
+  # FORMAL has an independent, fail-fast schedule contract.  The Python
+  # parser still rejects any conflicting explicit environment override.
+  MAX_OPTIMIZER_STEPS="${RSMOL_STAGE4_MAX_OPTIMIZER_STEPS:-9244}"
+  WARMUP_STEPS="${RSMOL_STAGE4_WARMUP_STEPS:-463}"
+  SCHEDULER_TOTAL_STEPS="${RSMOL_STAGE4_SCHEDULER_TOTAL_STEPS:-9244}"
+  SAVE_EVERY="${RSMOL_STAGE4_SAVE_EVERY:-500}"
+else
+  MAX_OPTIMIZER_STEPS="${RSMOL_STAGE4_MAX_OPTIMIZER_STEPS:-10}"
+  WARMUP_STEPS="${RSMOL_STAGE4_WARMUP_STEPS:-0}"
+  SCHEDULER_TOTAL_STEPS="${RSMOL_STAGE4_SCHEDULER_TOTAL_STEPS:-}"
+  SAVE_EVERY="${RSMOL_STAGE4_SAVE_EVERY:-500}"
+fi
 
 if [[ "$GATE" == "B" ]]; then
   echo "Gate B is CPU-only and is not handled by the DDP runtime; run python -u code/RSmol/scripts/audit_stage4_dataset.py directly." >&2
@@ -55,13 +70,14 @@ echo "HF_DATASETS_CACHE=$HF_DATASETS_CACHE"
 echo "HF_HOME=$HF_HOME"
 echo "MODELSCOPE_CACHE=$MODELSCOPE_CACHE"
 
-if [[ "$GATE" == "E" && "${RSMOL_STAGE4_DRY_RUN:-0}" != "1" ]]; then
-  if [[ -z "$RESUME_PATH" ]]; then
-    echo "Gate E requires RSMOL_STAGE4_RESUME_FROM: an external complete Stage 4 checkpoint" >&2
+if [[ ("$GATE" == "E" || "$GATE" == "FORMAL") && -n "$RESUME_PATH" && "${RSMOL_STAGE4_DRY_RUN:-0}" != "1" ]]; then
+  if [[ ! -d "$RESUME_PATH" || ! -f "$RESUME_PATH/config.json" || ! -f "$RESUME_PATH/training_state.pt" || ! -f "$RESUME_PATH/checkpoint_complete.json" ]]; then
+    echo "$GATE resume path is incomplete; expected config.json, training_state.pt, checkpoint_complete.json: $RESUME_PATH" >&2
     exit 2
   fi
-  if [[ ! -d "$RESUME_PATH" || ! -f "$RESUME_PATH/config.json" || ! -f "$RESUME_PATH/training_state.pt" || ! -f "$RESUME_PATH/checkpoint_complete.json" ]]; then
-    echo "Gate E resume path is incomplete; expected config.json, training_state.pt, checkpoint_complete.json: $RESUME_PATH" >&2
+elif [[ "$GATE" == "E" && "${RSMOL_STAGE4_DRY_RUN:-0}" != "1" ]]; then
+  if [[ -z "$RESUME_PATH" ]]; then
+    echo "Gate E requires RSMOL_STAGE4_RESUME_FROM: an external complete Stage 4 checkpoint" >&2
     exit 2
   fi
 elif [[ "$GATE" != "A" && "${RSMOL_STAGE4_DRY_RUN:-0}" != "1" && -z "$MODEL_PATH" ]]; then
@@ -84,24 +100,25 @@ ARGS=(
   --max-lr "${RSMOL_STAGE4_MAX_LR:-2e-4}"
   --min-lr "${RSMOL_STAGE4_MIN_LR:-2e-5}"
   --context-length "${RSMOL_STAGE4_CONTEXT_LENGTH:-1024}"
-  --warmup-steps "${RSMOL_STAGE4_WARMUP_STEPS:-0}"
-  --max-optimizer-steps "${RSMOL_STAGE4_MAX_OPTIMIZER_STEPS:-10}"
+  --warmup-steps "$WARMUP_STEPS"
+  --max-optimizer-steps "$MAX_OPTIMIZER_STEPS"
   --formal-optimizer-steps "${RSMOL_STAGE4_FORMAL_OPTIMIZER_STEPS:-9244}"
   --log-interval-steps "${RSMOL_STAGE4_LOG_INTERVAL_STEPS:-10}"
   --seed "${RSMOL_STAGE4_SEED:-0}"
   --weight-decay "${RSMOL_STAGE4_WEIGHT_DECAY:-0.1}"
   --max-grad-norm "${RSMOL_STAGE4_MAX_GRAD_NORM:-1.0}"
   --record-buffer-size "${RSMOL_STAGE4_RECORD_BUFFER_SIZE:-4096}"
-  --save-every "${RSMOL_STAGE4_SAVE_EVERY:-500}"
+  --save-every "$SAVE_EVERY"
   --monitor-interval-seconds "${RSMOL_STAGE4_MONITOR_INTERVAL:-60}"
   --backend "${RSMOL_STAGE4_BACKEND:-nccl}"
 )
 if [[ -n "${RSMOL_STAGE4_AUDIT_REPORT:-}" ]]; then
   ARGS+=(--audit-report "$RSMOL_STAGE4_AUDIT_REPORT")
 fi
-if [[ -n "${RSMOL_STAGE4_SCHEDULER_TOTAL_STEPS:-}" ]]; then
-  ARGS+=(--scheduler-total-steps "$RSMOL_STAGE4_SCHEDULER_TOTAL_STEPS")
+if [[ -n "$SCHEDULER_TOTAL_STEPS" ]]; then
+  ARGS+=(--scheduler-total-steps "$SCHEDULER_TOTAL_STEPS")
 fi
+ARGS+=(--checkpoint-retention "${RSMOL_STAGE4_CHECKPOINT_RETENTION:-3}")
 if [[ -n "$MODEL_PATH" ]]; then
   ARGS+=(--model-path "$MODEL_PATH")
 fi

@@ -5,7 +5,8 @@ The Stage 4 contract is deliberately implemented without ``Trainer`` or an
 implicit dataset worker pool.  Each torchrun rank owns a deterministic subset
 of the 85 Parquet shards, streams one shard at a time with a bounded shuffle
 buffer, and contributes token-weighted gradients to a DDP model.  The same
-entry point implements the five gates used by the remote job:
+entry point implements the five historical gates plus an independent
+``FORMAL`` training mode used by the remote job:
 
 ``A`` synthetic 8-rank DDP audit, ``B`` a compatibility data-preaudit API,
 ``C`` a short real-data pilot, ``D`` the fixed-step pilot, and ``E`` a resume
@@ -29,6 +30,7 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import socket
 import subprocess
@@ -63,6 +65,10 @@ DEFAULT_GRADIENT_ACCUMULATION_STEPS = 16
 DEFAULT_LEARNING_RATE = 2e-4
 DEFAULT_MAX_LR = 2e-4
 DEFAULT_MIN_LR = 2e-5
+DEFAULT_ADAMW_BETAS = (0.9, 0.95)
+DEFAULT_ADAMW_EPS = 1e-8
+DEFAULT_ADAMW_WEIGHT_DECAY = 0.1
+DEFAULT_ADAMW_AMSGRAD = False
 DEFAULT_CONTEXT_LENGTH = 1024
 # Gate D is intentionally a bounded ten-step smoke.  Keep the planned
 # 9,244-step run as an explicit formal/future target so it cannot silently
@@ -82,6 +88,15 @@ DEFAULT_TARGET_SAMPLES_PER_RANK = (
 DEFAULT_LOCAL_MICROBATCHES = DEFAULT_MAX_OPTIMIZER_STEPS * DEFAULT_GRADIENT_ACCUMULATION_STEPS
 DEFAULT_GLOBAL_EFFECTIVE_BATCH = DEFAULT_WORLD_SIZE * DEFAULT_MICRO_BATCH_SIZE * DEFAULT_GRADIENT_ACCUMULATION_STEPS
 DEFAULT_FORMAL_GLOBAL_SAMPLES = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_GLOBAL_EFFECTIVE_BATCH
+DEFAULT_FORMAL_SAMPLES_PER_RANK = (
+    DEFAULT_FORMAL_OPTIMIZER_STEPS
+    * DEFAULT_MICRO_BATCH_SIZE
+    * DEFAULT_GRADIENT_ACCUMULATION_STEPS
+)
+DEFAULT_FORMAL_LOCAL_MICROBATCHES = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_GRADIENT_ACCUMULATION_STEPS
+DEFAULT_FORMAL_WARMUP_STEPS = max(1, math.ceil(DEFAULT_FORMAL_OPTIMIZER_STEPS * 0.05))
+DEFAULT_FORMAL_SAVE_EVERY = 500
+DEFAULT_FORMAL_CHECKPOINT_RETENTION = 3
 # The future/formal 9,244-step target consumes 9,465,856 samples (1024 per
 # optimizer step); Gate D itself consumes only 10 optimizer steps by default.
 DEFAULT_RECORD_BUFFER_SIZE = 4096
@@ -99,8 +114,8 @@ class Stage4Config:
 
     The numerical defaults are part of the experiment contract.  Gate C may
     override ``max_optimizer_steps`` explicitly; Gate D is a ten-step smoke
-    by default.  ``formal_optimizer_steps`` records the planned 9,244-step
-    target for future formal training without changing Stage 4 smoke scope.
+    by default.  ``FORMAL`` selects the independent 9,244-step production
+    training contract.
     """
 
     gate: str = "A"
@@ -123,10 +138,14 @@ class Stage4Config:
     scheduler_total_steps: int | None = None
     log_interval_steps: int = DEFAULT_LOG_INTERVAL_STEPS
     seed: int = 0
-    weight_decay: float = 0.1
+    weight_decay: float = DEFAULT_ADAMW_WEIGHT_DECAY
+    optimizer_betas: tuple[float, float] = DEFAULT_ADAMW_BETAS
+    optimizer_eps: float = DEFAULT_ADAMW_EPS
+    optimizer_amsgrad: bool = DEFAULT_ADAMW_AMSGRAD
     max_grad_norm: float = 1.0
     record_buffer_size: int = DEFAULT_RECORD_BUFFER_SIZE
     save_every: int = 500
+    checkpoint_retention: int = DEFAULT_FORMAL_CHECKPOINT_RETENTION
     monitor_interval_seconds: float = 60.0
     backend: str = "nccl"  # NCCL is the production 8-GPU backend.
     world_size: int = DEFAULT_WORLD_SIZE
@@ -893,6 +912,25 @@ def _causal_loss_sum(logits: Any, labels: Any) -> tuple[Any, Any]:
     return loss_sum, valid_count
 
 
+def token_weighted_gradient_scale(*, world_size: int, global_window_tokens: int) -> float:
+    """Scale one unreduced local loss sum for DDP token-weighted accumulation.
+
+    DDP averages the per-rank gradients.  Therefore each rank contributes
+    ``world_size / global_window_tokens`` times its local loss sum.  The
+    denominator already covers every microbatch in the accumulation window;
+    dividing by ``gradient_accumulation_steps`` here would scale the gradient
+    down a second time.
+    """
+
+    world_size = int(world_size)
+    global_window_tokens = int(global_window_tokens)
+    if world_size <= 0:
+        raise ValueError("world_size must be positive")
+    if global_window_tokens <= 0:
+        raise ValueError("global_window_tokens must be positive")
+    return float(world_size) / float(global_window_tokens)
+
+
 def _all_reduce_scalar(value: Any, *, op: Any | None = None) -> Any:
     import torch.distributed as dist
 
@@ -923,6 +961,8 @@ def _trainable_parameters(model: Any) -> tuple[Any, ...]:
 def optimizer_parameter_audit(optimizer: Any, parameters: Sequence[Any]) -> dict[str, Any]:
     """Ensure AdamW contains each shared Parameter object exactly once."""
 
+    if type(optimizer).__name__ != "AdamW":
+        raise AssertionError(f"Stage 4 requires AdamW, got {type(optimizer).__name__}")
     optimizer_parameters = [
         parameter for group in optimizer.param_groups for parameter in group["params"]
     ]
@@ -935,10 +975,32 @@ def optimizer_parameter_audit(optimizer: Any, parameters: Sequence[Any]) -> dict
     )
     if not exact:
         raise AssertionError("AdamW must contain each unique trainable Parameter exactly once")
+    if len(optimizer.param_groups) != 1:
+        raise AssertionError("Stage 4 requires exactly one AdamW parameter group")
+    group = optimizer.param_groups[0]
+    betas = tuple(float(value) for value in group.get("betas", ()))
+    eps = float(group.get("eps", float("nan")))
+    amsgrad = bool(group.get("amsgrad", False))
+    weight_decay = float(group.get("weight_decay", float("nan")))
+    if betas != DEFAULT_ADAMW_BETAS:
+        raise AssertionError(f"AdamW betas mismatch: expected={DEFAULT_ADAMW_BETAS} got={betas}")
+    if eps != DEFAULT_ADAMW_EPS:
+        raise AssertionError(f"AdamW eps mismatch: expected={DEFAULT_ADAMW_EPS} got={eps}")
+    if amsgrad is not DEFAULT_ADAMW_AMSGRAD:
+        raise AssertionError(f"AdamW amsgrad mismatch: expected={DEFAULT_ADAMW_AMSGRAD} got={amsgrad}")
+    if weight_decay != DEFAULT_ADAMW_WEIGHT_DECAY:
+        raise AssertionError(
+            f"AdamW weight_decay mismatch: expected={DEFAULT_ADAMW_WEIGHT_DECAY} got={weight_decay}"
+        )
     return {
         "trainable_parameter_count": len(parameters),
         "optimizer_parameter_count": len(optimizer_parameters),
         "optimizer_matches_model_exactly_once": True,
+        "optimizer_type": type(optimizer).__name__,
+        "betas": list(betas),
+        "eps": eps,
+        "weight_decay": weight_decay,
+        "amsgrad": amsgrad,
     }
 
 
@@ -1173,7 +1235,15 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
     base_model = getattr(model, "module", model)
     base_model.config.use_cache = False
     parameters = _trainable_parameters(model)
-    optimizer = torch.optim.AdamW(parameters, lr=config.learning_rate, weight_decay=0.0)
+    optimizer = torch.optim.AdamW(
+        parameters,
+        lr=config.learning_rate,
+        betas=DEFAULT_ADAMW_BETAS,
+        eps=DEFAULT_ADAMW_EPS,
+        weight_decay=DEFAULT_ADAMW_WEIGHT_DECAY,
+        amsgrad=DEFAULT_ADAMW_AMSGRAD,
+    )
+    optimizer_audit = optimizer_parameter_audit(optimizer, parameters)
     sequence, handles = _register_forward_trace(model)
     backward_sequence: list[int] = []
     recursive_base = getattr(base_model, "model", base_model)
@@ -1209,7 +1279,10 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
             loss_sum, valid_count = _causal_loss_sum(result.logits, labels)
         if not torch.isfinite(loss_sum):
             raise FloatingPointError("Synthetic loss is non-finite")
-        scale = float(config.world_size) / float(config.gradient_accumulation_steps * window_global_tokens)
+        scale = token_weighted_gradient_scale(
+            world_size=config.world_size,
+            global_window_tokens=window_global_tokens,
+        )
         (loss_sum * scale).backward()
         local_loss_sum += loss_sum.detach().double()
         local_tokens += valid_count.detach()
@@ -1279,6 +1352,7 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
         "gradient_finite_nonzero": True,
         "physical_layer_gradients": layer_gradients,
         "optimizer_step_calls": 1,
+        "optimizer_audit": optimizer_audit,
         "exact_microbatches_per_update": microbatches == config.gradient_accumulation_steps,
         "optimizer_updated_parameters": True,
         "parameter_checksum": float(checksum.item()),
@@ -1316,6 +1390,13 @@ def _prepare_distributed(config: Stage4Config) -> tuple[int, int, Any, bool]:
         local_rank = int(os.environ.get("LOCAL_RANK", str(config.local_rank if config.local_rank >= 0 else rank)))
     config.world_size = world_size
     config.local_rank = local_rank
+    if config.gate == "FORMAL":
+        if world_size != DEFAULT_WORLD_SIZE:
+            raise ValueError(f"FORMAL requires world_size=8, got {world_size}")
+        if str(config.backend).lower() != "nccl":
+            raise ValueError(f"FORMAL requires backend=nccl, got {config.backend!r}")
+        if config.allow_non8:
+            raise ValueError("FORMAL does not allow --allow-non8")
     use_cuda = torch.cuda.is_available()
     if use_cuda:
         torch.cuda.set_device(local_rank)
@@ -1452,6 +1533,44 @@ def scheduler_metadata(
         "warmup_fraction": 0.05,
         "target_optimizer_steps": int(target_steps if target_steps is not None else total_steps),
         "formal_optimizer_steps": int(formal_steps),
+    }
+
+
+def validate_formal_resume_state(state: Mapping[str, Any]) -> dict[str, int]:
+    """Validate metadata required to continue a FORMAL checkpoint.
+
+    The model/optimizer/RNG tensors are restored by the torch-specific resume
+    path; this dependency-light validator protects the scheduler domain and
+    total-step semantics before that state is applied.
+    """
+
+    configuration = state.get("configuration", {})
+    if not isinstance(configuration, Mapping) or str(
+        configuration.get("gate", "")
+    ).upper() != "FORMAL":
+        raise ValueError("FORMAL resume requires a checkpoint created by FORMAL mode")
+    scheduler = state.get("scheduler_config")
+    if not isinstance(scheduler, Mapping):
+        raise ValueError("FORMAL resume checkpoint is missing scheduler_config")
+    try:
+        schedule_total_steps = int(scheduler.get("total_steps_for_schedule", -1))
+        warmup_steps = int(scheduler.get("warmup_steps", -1))
+        optimizer_step = int(state.get("optimizer_step", -1))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("FORMAL resume checkpoint has invalid scheduler/optimizer metadata") from exc
+    if schedule_total_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
+        raise ValueError("FORMAL resume checkpoint scheduler domain must be 9244")
+    if warmup_steps != DEFAULT_FORMAL_WARMUP_STEPS:
+        raise ValueError("FORMAL resume checkpoint warmup_steps must be 463")
+    if optimizer_step < 0 or optimizer_step > DEFAULT_FORMAL_OPTIMIZER_STEPS:
+        raise ValueError(
+            "FORMAL resume checkpoint optimizer_step must be in [0, 9244]; "
+            f"got {optimizer_step}"
+        )
+    return {
+        "optimizer_step": optimizer_step,
+        "scheduler_total_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS,
+        "warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS,
     }
 
 
@@ -1634,6 +1753,7 @@ def save_complete_checkpoint(
                 "report": _json_safe(dict(report)),
                 "checkpoint_contract": {
                     "complete": True,
+                    "mode": "formal" if config.gate == "FORMAL" else str(config.gate),
                     "model_config": True,
                     "tokenizer": True,
                     "optimizer": True,
@@ -1655,6 +1775,7 @@ def save_complete_checkpoint(
             json.dumps(
                 {
                     "complete": True,
+                    "mode": "formal" if config.gate == "FORMAL" else str(config.gate),
                     "optimizer_step": int(optimizer_step),
                     "world_size": int(config.world_size),
                     "rank0_only": True,
@@ -1682,6 +1803,120 @@ def save_complete_checkpoint(
         shutil.rmtree(staging, ignore_errors=True)
         raise
     return checkpoint_dir
+
+
+_FORMAL_CHECKPOINT_NAME = re.compile(r"checkpoint-step-(?P<step>[0-9]{6})\Z")
+
+
+def _complete_checkpoint_step(path: Path) -> int | None:
+    """Return a checkpoint step only for an explicitly complete checkpoint.
+
+    This deliberately does not use a broad glob or infer completeness from a
+    directory name.  Staging directories, reports, latest pointers, and
+    incomplete checkpoints are therefore never retention candidates.
+    """
+
+    match = _FORMAL_CHECKPOINT_NAME.fullmatch(path.name)
+    if match is None or not path.is_dir():
+        return None
+    marker_path = path / "checkpoint_complete.json"
+    if not marker_path.is_file():
+        return None
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(marker, Mapping):
+        return None
+    if marker.get("complete") is not True:
+        return None
+    marker_step = marker.get("optimizer_step")
+    step = int(match.group("step"))
+    if marker_step is not None:
+        try:
+            if int(marker_step) != step:
+                return None
+        except (TypeError, ValueError):
+            return None
+    return step
+
+
+def formal_checkpoint_steps(output_dir: Path) -> list[int]:
+    """List complete formal checkpoint steps in ascending order."""
+
+    output_dir = ensure_external_output(Path(output_dir))
+    if not output_dir.is_dir():
+        return []
+    steps = [
+        step
+        for path in output_dir.iterdir()
+        if (step := _complete_checkpoint_step(path)) is not None
+    ]
+    return sorted(set(steps))
+
+
+def formal_save_steps(total_steps: int = DEFAULT_FORMAL_OPTIMIZER_STEPS,
+                      save_every: int = DEFAULT_FORMAL_SAVE_EVERY) -> list[int]:
+    """Return periodic formal save steps plus the mandatory final step."""
+
+    total_steps = int(total_steps)
+    save_every = int(save_every)
+    if total_steps <= 0 or save_every <= 0:
+        raise ValueError("formal total_steps and save_every must be positive")
+    steps = list(range(save_every, total_steps + 1, save_every))
+    if not steps or steps[-1] != total_steps:
+        steps.append(total_steps)
+    return steps
+
+
+def retain_formal_checkpoints(
+    output_dir: Path,
+    *,
+    keep: int = DEFAULT_FORMAL_CHECKPOINT_RETENTION,
+    latest_checkpoint: Path | None = None,
+) -> list[Path]:
+    """Retain only the newest complete formal checkpoints.
+
+    The caller must invoke this on rank 0 after an atomic checkpoint save.
+    Only exact ``checkpoint-step-NNNNNN`` directories with a verified
+    ``complete=true`` marker may be removed.
+    """
+
+    keep = int(keep)
+    if keep <= 0:
+        raise ValueError("formal checkpoint retention must be positive")
+    output_dir = ensure_external_output(Path(output_dir))
+    candidates = [
+        (step, output_dir / f"checkpoint-step-{step:06d}")
+        for step in formal_checkpoint_steps(output_dir)
+    ]
+    candidates.sort(key=lambda item: item[0])
+    retained = candidates[-keep:]
+    retained_paths = [path for _, path in retained]
+    retained_names = {path.name for path in retained_paths}
+    for _, path in candidates[:-keep]:
+        # Revalidate immediately before deletion so this helper cannot ever
+        # remove a path that changed into a staging/incomplete directory.
+        if path.name in retained_names or _complete_checkpoint_step(path) is None:
+            continue
+        shutil.rmtree(path)
+    if retained_paths:
+        newest = retained_paths[-1]
+        if latest_checkpoint is not None and Path(latest_checkpoint).name == newest.name:
+            newest = Path(latest_checkpoint)
+        pointer = {
+            "checkpoint": str(newest),
+            "optimizer_step": int(retained[-1][0]),
+            "complete": True,
+            "retained_checkpoints": [str(path) for path in retained_paths],
+        }
+        _write_json(output_dir / "latest_complete_checkpoint.json", pointer)
+        verified = json.loads(
+            (output_dir / "latest_complete_checkpoint.json").read_text(encoding="utf-8")
+        )
+        if verified.get("complete") is not True or int(verified.get("optimizer_step", -1)) != retained[-1][0]:
+            raise RuntimeError("latest_complete_checkpoint.json failed post-retention verification")
+    return retained_paths
 
 
 def _restore_training_state(
@@ -1718,6 +1953,8 @@ def _restore_training_state(
     if "optimizer_step" not in state:
         raise ValueError("Resume checkpoint is missing training_state.optimizer_step")
     state_step = int(state["optimizer_step"])
+    if config.gate == "FORMAL":
+        validate_formal_resume_state(state)
     if "world_size" not in complete or int(complete["world_size"]) != int(config.world_size):
         raise ValueError(
             "Resume checkpoint_complete.json world_size mismatch: "
@@ -1856,7 +2093,10 @@ def _training_window(
             loss_sum, valid_count = _causal_loss_sum(result.logits, batch["labels"])
         if not torch.isfinite(loss_sum):
             raise FloatingPointError(f"Non-finite loss at rank={rank}")
-        scale = float(config.world_size) / float(config.gradient_accumulation_steps * global_window_tokens)
+        scale = token_weighted_gradient_scale(
+            world_size=config.world_size,
+            global_window_tokens=global_window_tokens,
+        )
         (loss_sum * scale).backward()
         local_loss_sum_total += loss_sum.detach().double()
         local_valid_total += valid_count.detach()
@@ -1945,6 +2185,17 @@ def run_training(
             "Stage 4 Gate D is a fixed ten-optimizer-step smoke; "
             f"got max_optimizer_steps={config.max_optimizer_steps}"
         )
+    if config.gate == "FORMAL":
+        if config.max_optimizer_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
+            raise ValueError("FORMAL requires exactly 9244 optimizer steps")
+        if config.scheduler_total_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
+            raise ValueError("FORMAL requires scheduler_total_steps=9244")
+        if compute_warmup_steps(config.scheduler_total_steps, config.warmup_steps) != DEFAULT_FORMAL_WARMUP_STEPS:
+            raise ValueError("FORMAL requires warmup_steps=463")
+        if config.save_every != DEFAULT_FORMAL_SAVE_EVERY:
+            raise ValueError("FORMAL requires save_every=500")
+        if config.checkpoint_retention != DEFAULT_FORMAL_CHECKPOINT_RETENTION:
+            raise ValueError("FORMAL requires checkpoint_retention=3")
     model = _ddp_wrap(model, config, device)
     parameters = _trainable_parameters(model)
     schedule_total_steps = int(config.scheduler_total_steps or config.max_optimizer_steps)
@@ -1952,7 +2203,14 @@ def run_training(
     # ``learning_rate`` is the historical CLI name and remains the max LR.
     if abs(float(config.learning_rate) - float(config.max_lr)) > 1e-12:
         raise ValueError("Stage 4 learning_rate and max_lr must match")
-    optimizer = torch.optim.AdamW(parameters, lr=config.max_lr, weight_decay=config.weight_decay)
+    optimizer = torch.optim.AdamW(
+        parameters,
+        lr=config.max_lr,
+        betas=config.optimizer_betas,
+        eps=config.optimizer_eps,
+        weight_decay=config.weight_decay,
+        amsgrad=config.optimizer_amsgrad,
+    )
     optimizer_audit = optimizer_parameter_audit(optimizer, parameters)
     scheduler = _load_scheduler(
         optimizer,
@@ -1977,6 +2235,7 @@ def run_training(
     previous_cursor: dict[str, Any] = {}
     previous_manifest: dict[str, Any] = {}
     previous_cursor_source = "fresh"
+    formal_resume = config.gate == "FORMAL" and resume_state is not None
     if resume_state is not None:
         _stage4_event(
             output_dir,
@@ -2040,8 +2299,13 @@ def run_training(
     metrics: list[dict[str, Any]] = []
     progress_logs: list[dict[str, Any]] = []
     optimizer_step = start_step
-    latest_checkpoint: Path | None = None
+    latest_checkpoint: Path | None = (
+        config.resume_from.resolve() if formal_resume and config.resume_from is not None else None
+    )
+    retained_checkpoints: list[Path] = []
     stop_reason = "max_optimizer_steps"
+    if formal_resume and start_step >= config.max_optimizer_steps:
+        stop_reason = "already_at_formal_target"
     coordinated_stop = False
     training_start = time.perf_counter()
     try:
@@ -2165,10 +2429,17 @@ def run_training(
                     latest_checkpoint = checkpoint
                 if rank == 0 and checkpoint is not None:
                     # Pointer is written only after the complete atomic rename.
-                    _write_json(
-                        output_dir / "latest_complete_checkpoint.json",
-                        {"checkpoint": str(checkpoint), "optimizer_step": optimizer_step, "complete": True},
-                    )
+                    if config.gate == "FORMAL":
+                        retained_checkpoints = retain_formal_checkpoints(
+                            output_dir,
+                            keep=config.checkpoint_retention,
+                            latest_checkpoint=checkpoint,
+                        )
+                    else:
+                        _write_json(
+                            output_dir / "latest_complete_checkpoint.json",
+                            {"checkpoint": str(checkpoint), "optimizer_step": optimizer_step, "complete": True},
+                        )
                 if dist.is_initialized():
                     dist.barrier()
 
@@ -2184,7 +2455,7 @@ def run_training(
                 stream.cursor(include_rng=True), rank=rank, world_size=config.world_size
             )
             if rank == 0:
-                if not final_checkpoint_path.exists():
+                if _complete_checkpoint_step(final_checkpoint_path) is None:
                     final_checkpoint = save_complete_checkpoint(
                         final_checkpoint_path,
                         model=model,
@@ -2216,16 +2487,23 @@ def run_training(
                     latest_checkpoint = final_checkpoint
                 else:
                     latest_checkpoint = final_checkpoint_path
-                _write_json(
-                    output_dir / "latest_complete_checkpoint.json",
-                    {
-                        "checkpoint": str(latest_checkpoint),
-                        "optimizer_step": optimizer_step,
-                        "complete": True,
-                        "stop_reason": stop_reason,
-                        "steps_at_stop": optimizer_step,
-                    },
-                )
+                if config.gate != "FORMAL":
+                    _write_json(
+                        output_dir / "latest_complete_checkpoint.json",
+                        {
+                            "checkpoint": str(latest_checkpoint),
+                            "optimizer_step": optimizer_step,
+                            "complete": True,
+                            "stop_reason": stop_reason,
+                            "steps_at_stop": optimizer_step,
+                        },
+                    )
+                if config.gate == "FORMAL":
+                    retained_checkpoints = retain_formal_checkpoints(
+                        output_dir,
+                        keep=config.checkpoint_retention,
+                        latest_checkpoint=latest_checkpoint,
+                    )
             if dist.is_initialized():
                 dist.barrier()
             # Keep the path in every rank's report even though only rank 0
@@ -2257,11 +2535,17 @@ def run_training(
                     progress_logs.append(progress)
     finally:
         monitor.stop()
-    if optimizer_step == start_step and config.max_optimizer_steps > start_step:
+    if (
+        optimizer_step == start_step
+        and config.max_optimizer_steps > start_step
+        and config.gate != "FORMAL"
+    ):
         raise RuntimeError("No complete optimizer step was available on all ranks")
     checksum = _model_checksum_audit(model, device)
+    formal_target_reached = optimizer_step >= config.max_optimizer_steps
+    training_status = "PASS" if formal_target_reached or config.gate != "FORMAL" else "FAIL"
     return {
-        "status": "PASS",
+        "status": training_status,
         "global_effective_batch": config.world_size * config.micro_batch_size * config.gradient_accumulation_steps,
         "local_samples_per_optimizer_step": config.micro_batch_size * config.gradient_accumulation_steps,
         "optimizer_step_start": start_step,
@@ -2269,13 +2553,25 @@ def run_training(
         "optimizer_step_increment": optimizer_step - start_step,
         "optimizer_step_calls": optimizer_step - start_step,
         "optimizer_scheduler_rng_restored": bool(resume_state is not None),
+        "formal_resume": formal_resume,
+        "formal_resume_source": str(config.resume_from) if formal_resume and config.resume_from else None,
         "resume_smoke_step_increment": optimizer_step - start_step if resume_state is not None else None,
         "cumulative_samples": cumulative_samples,
+        "cumulative_samples_per_rank": cumulative_samples,
+        "cumulative_global_samples": cumulative_samples * config.world_size,
         "cumulative_valid_tokens": cumulative_tokens,
+        "cumulative_global_valid_tokens": cumulative_tokens,
         "target_optimizer_steps": config.max_optimizer_steps,
         "target_samples_per_rank": config.max_optimizer_steps * config.gradient_accumulation_steps * config.micro_batch_size,
+        "target_global_samples": config.max_optimizer_steps * config.world_size * config.gradient_accumulation_steps * config.micro_batch_size,
         "target_local_microbatches": config.max_optimizer_steps * config.gradient_accumulation_steps,
         "formal_optimizer_steps": config.formal_optimizer_steps,
+        "formal_save_steps": (
+            formal_save_steps(config.max_optimizer_steps, config.save_every)
+            if config.gate == "FORMAL"
+            else []
+        ),
+        "checkpoint_retention": config.checkpoint_retention,
         "parameter_checksum_audit": checksum,
         "metrics": metrics,
         "scheduler": schedule,
@@ -2292,12 +2588,15 @@ def run_training(
         "optimizer_audit": optimizer_audit,
         "rank0_only_checkpoint": True,
         "latest_complete_checkpoint": str(latest_checkpoint) if latest_checkpoint is not None else None,
+        "retained_checkpoints": [str(path) for path in retained_checkpoints],
+        "formal_target_reached": formal_target_reached,
+        "target_not_reached": bool(config.gate == "FORMAL" and not formal_target_reached),
         "stop_reason": stop_reason,
         "coordinated_stop": coordinated_stop,
         "steps_at_stop": optimizer_step,
         "final_checkpoint": (
             str(latest_checkpoint)
-            if coordinated_stop and latest_checkpoint is not None
+            if (coordinated_stop or config.gate == "FORMAL") and latest_checkpoint is not None
             else None
         ),
         "final_checkpoint_saved_after_coordinated_stop": bool(
@@ -2599,8 +2898,17 @@ def _synthetic_model(config: Stage4Config, device: Any) -> Any:
 
 def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
+    def has_option(*names: str) -> bool:
+        return any(
+            argument == name or argument.startswith(name + "=")
+            for argument in raw_argv
+            for name in names
+        )
+
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gate", choices=("A", "B", "C", "D", "E"), default="A")
+    parser.add_argument(
+        "--gate", type=str.upper, choices=("A", "B", "C", "D", "E", "FORMAL"), default="A"
+    )
     parser.add_argument("--model-path", type=Path, default=None)
     parser.add_argument("--tokenizer-path", type=Path, default=None)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
@@ -2624,6 +2932,9 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--record-buffer-size", type=int, default=DEFAULT_RECORD_BUFFER_SIZE)
     parser.add_argument("--save-every", type=int, default=500)
+    parser.add_argument(
+        "--checkpoint-retention", type=int, default=DEFAULT_FORMAL_CHECKPOINT_RETENTION
+    )
     parser.add_argument("--monitor-interval-seconds", type=float, default=60.0)
     parser.add_argument("--backend", default="nccl")
     parser.add_argument("--world-size", type=int, default=DEFAULT_WORLD_SIZE)
@@ -2635,6 +2946,38 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
     parser.add_argument("--synthetic-vocab-size", type=int, default=97)
     args = parser.parse_args(argv)
     config = Stage4Config(**vars(args))
+    formal_explicit = config.gate == "FORMAL"
+    if formal_explicit:
+        # FORMAL is an independent training contract.  Defaults from the
+        # pilot parser are not silently reused, and explicit conflicts fail
+        # before distributed/model startup.
+        max_steps_explicit = has_option("--max-optimizer-steps", "--max-steps")
+        if max_steps_explicit and config.max_optimizer_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
+            raise ValueError(
+                "FORMAL requires max_optimizer_steps=9244; refusing an explicit conflicting value"
+            )
+        if has_option("--formal-optimizer-steps") and config.formal_optimizer_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
+            raise ValueError("FORMAL requires formal_optimizer_steps=9244")
+        if has_option("--scheduler-total-steps") and config.scheduler_total_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
+            raise ValueError("FORMAL requires scheduler_total_steps=9244")
+        if has_option("--warmup-steps") and config.warmup_steps not in (0, DEFAULT_FORMAL_WARMUP_STEPS):
+            raise ValueError("FORMAL requires warmup_steps=463 (or 0 for the automatic 5% default)")
+        if has_option("--save-every") and config.save_every != DEFAULT_FORMAL_SAVE_EVERY:
+            raise ValueError("FORMAL requires save_every=500")
+        if has_option("--checkpoint-retention") and config.checkpoint_retention != DEFAULT_FORMAL_CHECKPOINT_RETENTION:
+            raise ValueError("FORMAL requires checkpoint_retention=3")
+        if config.world_size != DEFAULT_WORLD_SIZE:
+            raise ValueError("FORMAL requires world_size=8")
+        if str(config.backend).lower() != "nccl":
+            raise ValueError("FORMAL requires backend=nccl")
+        if config.allow_non8:
+            raise ValueError("FORMAL does not allow --allow-non8")
+        config.max_optimizer_steps = DEFAULT_FORMAL_OPTIMIZER_STEPS
+        config.formal_optimizer_steps = DEFAULT_FORMAL_OPTIMIZER_STEPS
+        config.scheduler_total_steps = DEFAULT_FORMAL_OPTIMIZER_STEPS
+        config.warmup_steps = DEFAULT_FORMAL_WARMUP_STEPS
+        config.save_every = DEFAULT_FORMAL_SAVE_EVERY
+        config.checkpoint_retention = DEFAULT_FORMAL_CHECKPOINT_RETENTION
     if config.micro_batch_size != 8:
         raise ValueError("Stage 4 requires micro_batch_size=8")
     if config.gradient_accumulation_steps != 16:
@@ -2643,6 +2986,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
         raise ValueError("Stage 4 requires learning_rate=2e-4")
     if config.max_lr != DEFAULT_MAX_LR:
         raise ValueError("Stage 4 requires max_lr=2e-4")
+    if tuple(float(value) for value in config.optimizer_betas) != DEFAULT_ADAMW_BETAS:
+        raise ValueError(f"Stage 4 requires AdamW betas={DEFAULT_ADAMW_BETAS}")
+    if float(config.optimizer_eps) != DEFAULT_ADAMW_EPS:
+        raise ValueError(f"Stage 4 requires AdamW eps={DEFAULT_ADAMW_EPS}")
+    if float(config.weight_decay) != DEFAULT_ADAMW_WEIGHT_DECAY:
+        raise ValueError(f"Stage 4 requires AdamW weight_decay={DEFAULT_ADAMW_WEIGHT_DECAY}")
+    if bool(config.optimizer_amsgrad) is not DEFAULT_ADAMW_AMSGRAD:
+        raise ValueError(f"Stage 4 requires AdamW amsgrad={DEFAULT_ADAMW_AMSGRAD}")
     if config.min_lr <= 0 or config.min_lr > config.max_lr:
         raise ValueError("Stage 4 requires 0 < min_lr <= max_lr")
     if config.context_length <= 0 or config.context_length > 1024:
@@ -2655,6 +3006,17 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
             f"got max_optimizer_steps={config.max_optimizer_steps}. "
             "The 9244-step value is formal_optimizer_steps only."
         )
+    if config.gate == "FORMAL":
+        if config.max_optimizer_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
+            raise ValueError("FORMAL requires exactly 9244 optimizer steps")
+        if config.scheduler_total_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
+            raise ValueError("FORMAL requires scheduler_total_steps=9244")
+        if config.warmup_steps != DEFAULT_FORMAL_WARMUP_STEPS:
+            raise ValueError("FORMAL requires warmup_steps=463")
+        if config.save_every != DEFAULT_FORMAL_SAVE_EVERY:
+            raise ValueError("FORMAL requires save_every=500")
+        if config.checkpoint_retention != DEFAULT_FORMAL_CHECKPOINT_RETENTION:
+            raise ValueError("FORMAL requires checkpoint_retention=3")
     if config.formal_optimizer_steps <= 0:
         raise ValueError("formal_optimizer_steps must be positive")
     if config.scheduler_total_steps is not None and config.scheduler_total_steps <= 0:
@@ -2679,6 +3041,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
         raise ValueError("record_buffer_size must be positive")
     if config.save_every <= 0:
         raise ValueError("save_every must be positive")
+    if config.checkpoint_retention <= 0:
+        raise ValueError("checkpoint_retention must be positive")
     if config.world_size <= 0:
         raise ValueError("world_size must be positive")
     if config.report_path is None:
@@ -2712,6 +3076,7 @@ def run(config: Stage4Config) -> dict[str, Any]:
         report = {
             "status": "PASS",
             "gate": config.gate,
+            "mode": "formal" if config.gate == "FORMAL" else "gate",
             "dry_run": True,
             "configuration": asdict(config),
             "data_loader_contract": {
@@ -2726,9 +3091,16 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 * config.micro_batch_size
             ),
             "expected_global_effective_batch": DEFAULT_GLOBAL_EFFECTIVE_BATCH,
+            "expected_formal_samples_per_rank": DEFAULT_FORMAL_SAMPLES_PER_RANK,
+            "expected_formal_local_microbatches": DEFAULT_FORMAL_LOCAL_MICROBATCHES,
             "expected_formal_global_samples": DEFAULT_FORMAL_GLOBAL_SAMPLES,
             "formal_optimizer_steps": config.formal_optimizer_steps,
             "gate_d_smoke_optimizer_steps": DEFAULT_MAX_OPTIMIZER_STEPS,
+            "formal_save_steps": formal_save_steps(
+                config.max_optimizer_steps if config.gate == "FORMAL" else config.formal_optimizer_steps,
+                config.save_every,
+            ) if config.gate == "FORMAL" else [],
+            "checkpoint_retention": config.checkpoint_retention,
             "scheduler": scheduler_metadata(
                 total_steps=int(config.scheduler_total_steps or config.max_optimizer_steps),
                 warmup_steps=config.warmup_steps,
@@ -2873,9 +3245,10 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 raise ValueError("Gate E requires --resume-from")
         elif config.model_path is None and config.resume_from is None:
             raise ValueError(f"Gate {config.gate} requires --model-path")
-        if config.gate in ("C", "D") and world_size > 1 and config.audit_report is None:
+        formal_resume = config.gate == "FORMAL" and config.resume_from is not None
+        if config.gate in ("C", "D", "FORMAL") and world_size > 1 and config.audit_report is None and not formal_resume:
             raise RuntimeError(
-                "Gate C/D requires an external Gate B --audit-report before multi-card startup"
+                "Gate C/D/FORMAL requires an external Gate B --audit-report before multi-card startup"
             )
         model_path = config.resume_from or config.model_path
         _stage4_event(output_dir, rank, "model_load_start", model_path=str(model_path))
@@ -2885,13 +3258,42 @@ def run(config: Stage4Config) -> dict[str, Any]:
         _stage4_event(output_dir, rank, "architecture_audit_done")
         forward_trace_audit = recursive_forward_trace_audit(model, device=device)
         _stage4_event(output_dir, rank, "forward_trace_done")
-        if config.gate in ("C", "D"):
+        if formal_resume:
+            import torch
+
+            state = torch.load(
+                (config.resume_from or Path(".")) / "training_state.pt",
+                map_location="cpu",
+                weights_only=False,
+            )
+            resume_metadata = validate_formal_resume_state(state)
+            resume_step = resume_metadata["optimizer_step"]
+            manifest = dict(state.get("manifest", {}))
+            if not manifest:
+                raise ValueError("FORMAL resume checkpoint does not include a shard manifest")
+            audit = {
+                "resume_manifest_source": str(config.resume_from),
+                "formal_resume": True,
+                "resume_optimizer_step": resume_step,
+                "data_audit_reused_from_checkpoint": True,
+            }
+        elif config.gate in ("C", "D", "FORMAL"):
             audit, manifest = _dataset_preaudit(config, tokenizer=tokenizer, rank=rank, world_size=world_size)
         else:
             resume_state_path = (config.resume_from or Path(".")) / "training_state.pt"
             import torch
 
             state = torch.load(resume_state_path, map_location="cpu", weights_only=False)
+            state_configuration = state.get("configuration", {})
+            if (
+                config.gate == "E"
+                and isinstance(state_configuration, Mapping)
+                and str(state_configuration.get("gate", "")).upper() == "FORMAL"
+            ):
+                raise ValueError(
+                    "Gate E cannot consume a FORMAL checkpoint: FORMAL resume is not implemented by Gate E; "
+                    "use --gate FORMAL to continue the formal target"
+                )
             _stage4_event(
                 output_dir,
                 rank,
@@ -2939,6 +3341,19 @@ def run(config: Stage4Config) -> dict[str, Any]:
         if config.gate == "C" and config.max_optimizer_steps == DEFAULT_MAX_OPTIMIZER_STEPS:
             config.max_optimizer_steps = 2
             config.scheduler_total_steps = 2
+        if config.gate == "FORMAL":
+            # Keep this assertion next to runtime schedule finalization so a
+            # hand-built Stage4Config cannot bypass the parser contract.
+            if config.max_optimizer_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
+                raise ValueError("FORMAL requires exactly 9244 optimizer steps")
+            if config.scheduler_total_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
+                raise ValueError("FORMAL requires scheduler_total_steps=9244")
+            if config.warmup_steps != DEFAULT_FORMAL_WARMUP_STEPS:
+                raise ValueError("FORMAL requires warmup_steps=463")
+            if config.save_every != DEFAULT_FORMAL_SAVE_EVERY:
+                raise ValueError("FORMAL requires save_every=500")
+            if config.checkpoint_retention != DEFAULT_FORMAL_CHECKPOINT_RETENTION:
+                raise ValueError("FORMAL requires checkpoint_retention=3")
         config.scheduler_total_steps = int(config.scheduler_total_steps or config.max_optimizer_steps)
         config.warmup_steps = compute_warmup_steps(config.scheduler_total_steps, config.warmup_steps)
         if rank == 0:
@@ -2991,8 +3406,9 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 ),
             }
         report = {
-            "status": "PASS",
+            "status": train_report.get("status", "PASS"),
             "gate": config.gate,
+            "mode": "formal" if config.gate == "FORMAL" else "gate",
             "configuration": asdict(config),
             "dataset_audit": audit,
             "training": train_report,
@@ -3002,11 +3418,22 @@ def run(config: Stage4Config) -> dict[str, Any]:
             "last_learning_rate": train_report.get("last_learning_rate"),
             "last_samples_per_second": train_report.get("last_samples_per_second"),
             "formal_optimizer_steps": config.formal_optimizer_steps,
+            "formal_save_steps": train_report.get("formal_save_steps", []),
+            "checkpoint_retention": train_report.get("checkpoint_retention", config.checkpoint_retention),
             "gate_d_smoke_optimizer_steps": DEFAULT_MAX_OPTIMIZER_STEPS,
             "stop_reason": train_report.get("stop_reason"),
             "steps_at_stop": train_report.get("steps_at_stop"),
+            "actual_optimizer_steps": train_report.get("optimizer_steps"),
+            "cumulative_samples_per_rank": train_report.get("cumulative_samples_per_rank"),
+            "cumulative_global_samples": train_report.get("cumulative_global_samples"),
+            "cumulative_valid_tokens": train_report.get("cumulative_valid_tokens"),
+            "formal_resume": train_report.get("formal_resume", False),
+            "formal_resume_source": train_report.get("formal_resume_source"),
             "final_checkpoint": train_report.get("final_checkpoint"),
             "latest_complete_checkpoint": train_report.get("latest_complete_checkpoint"),
+            "retained_checkpoints": train_report.get("retained_checkpoints", []),
+            "formal_target_reached": train_report.get("formal_target_reached"),
+            "target_not_reached": train_report.get("target_not_reached", False),
             "architecture_audit": architecture_audit,
             "forward_trace_audit": forward_trace_audit,
             "model_path": str(model_path),
