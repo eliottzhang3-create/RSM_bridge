@@ -1326,7 +1326,17 @@ def _prepare_distributed(config: Stage4Config) -> tuple[int, int, Any, bool]:
         backend = config.backend
         if backend == "nccl" and not use_cuda:
             raise RuntimeError("NCCL Stage 4 requires CUDA; use backend=gloo only for CPU static/unit audit")
+        print(
+            f"[stage4-lifecycle][rank={rank}] phase=distributed_init_start "
+            f"backend={backend} world_size={world_size} local_rank={local_rank}",
+            flush=True,
+        )
         dist.init_process_group(backend=backend, init_method="env://")
+        print(
+            f"[stage4-lifecycle][rank={rank}] phase=distributed_init_done "
+            f"backend={backend} world_size={world_size}",
+            flush=True,
+        )
     # Gate B is deliberately single-process; only the training/audit gates
     # that launch DDP require the production eight-rank topology.
     if config.gate == "B" and world_size != 1:
@@ -1968,6 +1978,12 @@ def run_training(
     previous_manifest: dict[str, Any] = {}
     previous_cursor_source = "fresh"
     if resume_state is not None:
+        _stage4_event(
+            output_dir,
+            rank,
+            "restore_state_start",
+            checkpoint=str(config.resume_from),
+        )
         (
             start_step,
             cumulative_samples,
@@ -1981,6 +1997,13 @@ def run_training(
             scheduler=scheduler,
             config=config,
             rank=rank,
+        )
+        _stage4_event(
+            output_dir,
+            rank,
+            "restore_state_done",
+            start_step=start_step,
+            cursor_source=previous_cursor_source,
         )
         if previous_manifest:
             manifest = previous_manifest
@@ -2000,7 +2023,16 @@ def run_training(
         # coarse skip through the recorded epoch/shard/complete microbatches;
         # the bounded shuffle buffer itself is intentionally not claimed exact.
         stream.restore_cursor(previous_cursor)
+        _stage4_event(
+            output_dir,
+            rank,
+            "cursor_restore_done",
+            epoch=previous_cursor.get("epoch"),
+            shard_index=previous_cursor.get("shard_index"),
+            shard_microbatches_seen=previous_cursor.get("shard_microbatches_seen"),
+        )
     batch_iterator = iter(stream)
+    _stage4_event(output_dir, rank, "stream_ready")
     # A bounded shuffle cannot restore the exact in-shard cursor.  Keep the
     # cursor for audit/restart bookkeeping but never claim bitwise data resume.
     monitor = RuntimeMonitor(output_dir / f"runtime_monitor_rank{rank}.jsonl", interval_seconds=config.monitor_interval_seconds, rank=rank, device=device)
@@ -2511,6 +2543,26 @@ def _append_jsonl(path: Path, value: Mapping[str, Any]) -> None:
         stream.flush()
 
 
+def _stage4_event(output_dir: Path, rank: int, phase: str, **fields: Any) -> None:
+    """Persist and print rank-local lifecycle events for diagnosing slow starts.
+
+    Gate E can spend substantial time loading a checkpoint and replaying a
+    coarse data cursor before the first optimizer step.  These events make
+    that interval observable without changing the training protocol.
+    """
+
+    record = {
+        "timestamp": time.time(),
+        "rank": int(rank),
+        "phase": str(phase),
+        **{str(key): _json_safe(value) for key, value in fields.items()},
+    }
+    _append_jsonl(output_dir / f"stage4_lifecycle_rank{rank}.jsonl", record)
+    details = " ".join(f"{key}={value}" for key, value in fields.items())
+    suffix = f" {details}" if details else ""
+    print(f"[stage4-lifecycle][rank={rank}] phase={phase}{suffix}", flush=True)
+
+
 def _synthetic_model(config: Stage4Config, device: Any) -> Any:
     import torch
     from transformers import LlamaConfig
@@ -2700,6 +2752,14 @@ def run(config: Stage4Config) -> dict[str, Any]:
     _set_seed(config.seed, rank=rank)
     process_group = __import__("torch.distributed", fromlist=["distributed"])
     try:
+        _stage4_event(
+            output_dir,
+            rank,
+            "distributed_ready",
+            gate=config.gate,
+            world_size=world_size,
+            device=str(device),
+        )
         if config.gate == "A":
             model = _synthetic_model(config, device)
             model = _ddp_wrap(model, config, device)
@@ -2818,9 +2878,13 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 "Gate C/D requires an external Gate B --audit-report before multi-card startup"
             )
         model_path = config.resume_from or config.model_path
+        _stage4_event(output_dir, rank, "model_load_start", model_path=str(model_path))
         model, tokenizer = _load_runtime_model(model_path, device, config.tokenizer_path)
+        _stage4_event(output_dir, rank, "model_load_done")
         architecture_audit = _validate_recursive_architecture(model)
+        _stage4_event(output_dir, rank, "architecture_audit_done")
         forward_trace_audit = recursive_forward_trace_audit(model, device=device)
+        _stage4_event(output_dir, rank, "forward_trace_done")
         if config.gate in ("C", "D"):
             audit, manifest = _dataset_preaudit(config, tokenizer=tokenizer, rank=rank, world_size=world_size)
         else:
@@ -2828,6 +2892,13 @@ def run(config: Stage4Config) -> dict[str, Any]:
             import torch
 
             state = torch.load(resume_state_path, map_location="cpu", weights_only=False)
+            _stage4_event(
+                output_dir,
+                rank,
+                "resume_metadata_loaded",
+                checkpoint=str(config.resume_from),
+                checkpoint_step=int(state.get("optimizer_step", -1)),
+            )
             manifest = dict(state.get("manifest", {}))
             if not manifest:
                 raise ValueError("Resume checkpoint does not include a Stage 4 shard manifest")
@@ -2874,6 +2945,7 @@ def run(config: Stage4Config) -> dict[str, Any]:
             _write_json(output_dir / "stage4_manifest.json", manifest)
         if process_group.is_initialized():
             process_group.barrier()
+        _stage4_event(output_dir, rank, "training_start", max_optimizer_steps=config.max_optimizer_steps)
         resume_state = None
         if config.resume_from is not None:
             resume_state = (0, 0, 0, {}, manifest)
@@ -2886,6 +2958,13 @@ def run(config: Stage4Config) -> dict[str, Any]:
             manifest=manifest,
             output_dir=output_dir,
             resume_state=resume_state,
+        )
+        _stage4_event(
+            output_dir,
+            rank,
+            "training_done",
+            optimizer_steps=train_report.get("optimizer_steps"),
+            stop_reason=train_report.get("stop_reason"),
         )
         if config.gate == "E":
             # Gate E is a resume smoke, so make the intentionally coarse data
