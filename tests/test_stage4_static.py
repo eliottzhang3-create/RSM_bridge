@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import inspect
+import json
 import types
 import sys
 import tempfile
@@ -81,8 +82,9 @@ class Stage4StaticContractTest(unittest.TestCase):
 
     def test_fixed_defaults_and_shards(self) -> None:
         self.assertEqual(len(self.stage4.expected_parquet_names()), 85)
-        self.assertEqual(self.stage4.DEFAULT_TARGET_SAMPLES_PER_RANK, 1_183_232)
-        self.assertEqual(self.stage4.DEFAULT_MAX_OPTIMIZER_STEPS, 9_244)
+        self.assertEqual(self.stage4.DEFAULT_TARGET_SAMPLES_PER_RANK, 1_280)
+        self.assertEqual(self.stage4.DEFAULT_MAX_OPTIMIZER_STEPS, 10)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_OPTIMIZER_STEPS, 9_244)
         self.assertEqual(self.stage4.DEFAULT_WORLD_SIZE, 8)
         files = [Path(f"train-{index:05d}-of-00085.parquet") for index in range(85)]
         self.assertEqual(
@@ -96,6 +98,76 @@ class Stage4StaticContractTest(unittest.TestCase):
             seed=0,
         )
         self.assertEqual(assignment["rank_shard_counts"], {str(i): (11 if i < 5 else 10) for i in range(8)})
+
+    def test_gate_d_default_and_scheduler_contract(self) -> None:
+        config = self.stage4._parse_args(["--gate", "D", "--dry-run"])
+        self.assertEqual(config.max_optimizer_steps, 10)
+        self.assertEqual(config.scheduler_total_steps, 10)
+        self.assertEqual(config.warmup_steps, 1)
+        self.assertEqual(config.max_lr, 2e-4)
+        self.assertEqual(config.min_lr, 2e-5)
+        self.assertEqual(config.log_interval_steps, 10)
+        default_config = json.loads(
+            (ROOT / "code" / "RSmol" / "stage4_default_config.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(default_config["max_optimizer_steps"], 10)
+        self.assertEqual(default_config["formal_optimizer_steps"], 9244)
+        self.assertEqual(default_config["scheduler_type"], "linear_warmup_cosine")
+        self.assertEqual(default_config["log_interval_steps"], 10)
+        with self.assertRaisesRegex(ValueError, "fixed ten-optimizer-step"):
+            self.stage4._parse_args(
+                ["--gate", "D", "--max-optimizer-steps", "9244", "--dry-run"]
+            )
+        with self.assertRaisesRegex(ValueError, "fixed ten-optimizer-step"):
+            self.stage4._parse_args(
+                ["--gate", "D", "--max-optimizer-steps", "9", "--dry-run"]
+            )
+        self.assertEqual(
+            self.stage4._parse_args(["--gate", "C", "--dry-run"]).max_optimizer_steps,
+            2,
+        )
+        self.assertEqual(
+            self.stage4._parse_args(
+                ["--gate", "C", "--max-optimizer-steps", "10", "--dry-run"]
+            ).max_optimizer_steps,
+            10,
+        )
+
+    def test_warmup_ceil_and_cosine_boundaries(self) -> None:
+        self.assertEqual(self.stage4.compute_warmup_steps(10), 1)
+        self.assertEqual(self.stage4.compute_warmup_steps(21), 2)
+        self.assertEqual(self.stage4.compute_warmup_steps(1), 1)
+        values = [
+            self.stage4.cosine_warmup_factor(step, 10, 1)
+            for step in range(11)
+        ]
+        self.assertAlmostEqual(values[0], 0.1, places=8)
+        self.assertAlmostEqual(values[1], 1.0, places=8)
+        self.assertAlmostEqual(values[-1], 0.1, places=8)
+        self.assertTrue(all(values[index] >= values[index + 1] for index in range(1, 10)))
+
+    def test_progress_report_and_resume_scheduler_continuity_contract(self) -> None:
+        for marker in (
+            "stage4-progress",
+            "stage4_progress.jsonl",
+            "progress_logging",
+            "log_interval_steps",
+            "total_steps_for_schedule",
+            "last_samples_per_second",
+            "scheduler_config",
+            "scheduler_type",
+            "linear_warmup_cosine",
+        ):
+            self.assertIn(marker, self.source)
+        old_schedule = [
+            self.stage4.cosine_warmup_factor(step, 10, 1)
+            for step in range(13)
+        ]
+        # Gate E extends the smoke target by two steps but restores the
+        # checkpoint's original ten-step schedule, so LR remains continuous
+        # at the old final boundary rather than restarting warmup.
+        self.assertAlmostEqual(old_schedule[10], old_schedule[11], places=8)
+        self.assertAlmostEqual(old_schedule[11], old_schedule[12], places=8)
 
     def test_external_output_guard_and_markers(self) -> None:
         with self.assertRaises(ValueError):

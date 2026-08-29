@@ -168,8 +168,9 @@ The five auditable gates are:
   `code/RSmol/scripts/audit_stage4_dataset.py` directly (it never submits a
   GPU job or starts `torchrun`).
 * Gate C: real-data 8-rank short pilot (`--max-optimizer-steps 1` or `2`).
-* Gate D: fixed-step pilot, default 9,244 optimizer steps, with periodic
-  complete checkpoints.
+* Gate D: fixed-step ten-optimizer-step smoke by default, with periodic
+  complete checkpoints.  The separate `formal_optimizer_steps=9244` value is
+  a future/formal Stage 4 target record only; it does not implement Stage 5.
 * Gate E: resume smoke in a new output directory; optimizer, scheduler, RNG,
   step, manifest, and one `data_cursors_by_rank` cursor per DDP rank are
   restored.  The iterator performs a coarse
@@ -180,10 +181,14 @@ The five auditable gates are:
 
 The fixed configuration is `code/RSmol/stage4_default_config.json`:
 `world_size=8`, `micro_batch_size=8`, `gradient_accumulation_steps=16`,
-`learning_rate=2e-4`, `context_length=1024`, and
-`max_optimizer_steps=9244`.  Thus each rank targets `1,183,232` samples,
-the global effective batch is `1024`, and formal global consumption is
-`9,465,856` samples.  With the sample-only Gate B report, startup fail-fast
+`learning_rate=2e-4`, `max_lr=2e-4`, `min_lr=2e-5`,
+`scheduler_type=linear_warmup_cosine`, `log_interval_steps=10`,
+`context_length=1024`, and `max_optimizer_steps=10`.  Gate D therefore
+targets `1,280` samples/rank (`160` local microbatches); the separate formal
+target is `formal_optimizer_steps=9244`, with formal global consumption of
+`9,465,856` samples at the global effective batch of `1024`.  Warmup defaults
+to `ceil(0.05 * total_steps_for_schedule)` (one step for Gate D), followed by
+cosine decay to `min_lr`.  With the sample-only Gate B report, startup fail-fast
 checks exact footer raw-row capacity for every deterministic rank assignment;
 effective trainable rows remain explicitly unknown until rank-local training
 streaming observes them.  Reports retain raw rows, effective-row scope, and
@@ -214,8 +219,9 @@ python -u code/RSmol/scripts/audit_stage4_dataset.py \
 ```
 
 The script records all 85 shard footers, deterministic eight-rank
-`rank_shards`, per-rank raw-row capacity, the `1,183,232` samples/rank target,
-and formal global/remaining-row totals.  It does not claim per-rank effective
+`rank_shards`, per-rank raw-row capacity, the Gate D smoke target of `1,280`
+samples/rank, and formal global/remaining-row totals for the separate
+`9,244`-step target.  It does not claim per-rank effective
 rows from the three-shard sample; the training gates use exact footer row
 capacity and perform their own rank-local streaming/tokenization.  For
 Gate C/D, pass its external JSON via `RSMOL_STAGE4_AUDIT_REPORT`; this keeps

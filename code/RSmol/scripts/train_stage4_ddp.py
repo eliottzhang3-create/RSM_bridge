@@ -61,19 +61,29 @@ DEFAULT_WORLD_SIZE = 8
 DEFAULT_MICRO_BATCH_SIZE = 8
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 16
 DEFAULT_LEARNING_RATE = 2e-4
+DEFAULT_MAX_LR = 2e-4
+DEFAULT_MIN_LR = 2e-5
 DEFAULT_CONTEXT_LENGTH = 1024
-DEFAULT_MAX_OPTIMIZER_STEPS = 9244
+# Gate D is intentionally a bounded ten-step smoke.  Keep the planned
+# 9,244-step run as an explicit formal/future target so it cannot silently
+# turn a Stage 4 smoke into a Stage 5 implementation.
+DEFAULT_MAX_OPTIMIZER_STEPS = 10
+DEFAULT_FORMAL_OPTIMIZER_STEPS = 9244
+DEFAULT_LOG_INTERVAL_STEPS = 10
+SCHEDULER_TYPE = "linear_warmup_cosine"
 DEFAULT_TARGET_SAMPLES_PER_RANK = (
     DEFAULT_MAX_OPTIMIZER_STEPS
     * DEFAULT_GRADIENT_ACCUMULATION_STEPS
     * DEFAULT_MICRO_BATCH_SIZE
 )
-# Human-readable contract value: 1,183,232 effective samples/rank and
-# 147,904 local microbatches for the default 9,244-step pilot.
+# Human-readable Gate D smoke values: 1,280 effective samples/rank and
+# 160 local microbatches for the default ten-step pilot.  The formal target
+# values are retained separately in ``DEFAULT_FORMAL_*`` constants.
 DEFAULT_LOCAL_MICROBATCHES = DEFAULT_MAX_OPTIMIZER_STEPS * DEFAULT_GRADIENT_ACCUMULATION_STEPS
 DEFAULT_GLOBAL_EFFECTIVE_BATCH = DEFAULT_WORLD_SIZE * DEFAULT_MICRO_BATCH_SIZE * DEFAULT_GRADIENT_ACCUMULATION_STEPS
-DEFAULT_FORMAL_GLOBAL_SAMPLES = DEFAULT_MAX_OPTIMIZER_STEPS * DEFAULT_GLOBAL_EFFECTIVE_BATCH
-# Formal global consumption is 9,465,856 samples (1024 per optimizer step).
+DEFAULT_FORMAL_GLOBAL_SAMPLES = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_GLOBAL_EFFECTIVE_BATCH
+# The future/formal 9,244-step target consumes 9,465,856 samples (1024 per
+# optimizer step); Gate D itself consumes only 10 optimizer steps by default.
 DEFAULT_RECORD_BUFFER_SIZE = 4096
 # Explicitly pinned loader settings: Stage 4 intentionally does not create
 # DataLoader workers or an HF Arrow cache during torchrun.
@@ -88,8 +98,9 @@ class Stage4Config:
     """Serializable Stage 4 configuration.
 
     The numerical defaults are part of the experiment contract.  Gate C may
-    override ``max_optimizer_steps`` explicitly; Gate D keeps 9244 by
-    default, consuming exactly 9,465,856 global samples.
+    override ``max_optimizer_steps`` explicitly; Gate D is a ten-step smoke
+    by default.  ``formal_optimizer_steps`` records the planned 9,244-step
+    target for future formal training without changing Stage 4 smoke scope.
     """
 
     gate: str = "A"
@@ -103,9 +114,14 @@ class Stage4Config:
     micro_batch_size: int = DEFAULT_MICRO_BATCH_SIZE
     gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS
     learning_rate: float = DEFAULT_LEARNING_RATE
+    max_lr: float = DEFAULT_MAX_LR
+    min_lr: float = DEFAULT_MIN_LR
     context_length: int = DEFAULT_CONTEXT_LENGTH
-    warmup_steps: int = 2
+    warmup_steps: int = 0
     max_optimizer_steps: int = DEFAULT_MAX_OPTIMIZER_STEPS
+    formal_optimizer_steps: int = DEFAULT_FORMAL_OPTIMIZER_STEPS
+    scheduler_total_steps: int | None = None
+    log_interval_steps: int = DEFAULT_LOG_INTERVAL_STEPS
     seed: int = 0
     weight_decay: float = 0.1
     max_grad_norm: float = 1.0
@@ -1351,13 +1367,128 @@ def _model_checksum_audit(model: Any, device: Any) -> dict[str, Any]:
     return result
 
 
-def _load_scheduler(optimizer: Any, warmup_steps: int) -> Any:
+def compute_warmup_steps(total_steps: int, requested: int | None = None) -> int:
+    """Return an auditable warmup count for one concrete training target.
+
+    A zero/``None`` request means the Stage 4 contract default: ``ceil(5%)``.
+    Positive explicit values remain accepted for backwards-compatible pilot
+    experiments, but are always clamped to the concrete schedule length.
+    """
+
+    total_steps = int(total_steps)
+    if total_steps <= 0:
+        raise ValueError("total_steps must be positive")
+    if requested is None or int(requested) == 0:
+        return max(1, min(total_steps, math.ceil(0.05 * total_steps)))
+    requested = int(requested)
+    if requested < 0:
+        raise ValueError("warmup_steps must be non-negative")
+    return max(1, min(total_steps, requested))
+
+
+def cosine_warmup_factor(
+    step: int,
+    total_steps: int,
+    warmup_steps: int,
+    *,
+    max_lr: float = DEFAULT_MAX_LR,
+    min_lr: float = DEFAULT_MIN_LR,
+) -> float:
+    """Return the LR multiplier at a completed optimizer-step index.
+
+    Step zero starts at ``min_lr``; the linear warmup reaches ``max_lr`` at
+    ``warmup_steps`` (when there is a post-warmup interval), and cosine decay
+    reaches ``min_lr`` at ``total_steps``.  This pure helper is intentionally
+    dependency-free so static tests can audit boundaries and monotonicity.
+    """
+
+    total_steps = int(total_steps)
+    warmup_steps = compute_warmup_steps(total_steps, warmup_steps)
+    if max_lr <= 0 or min_lr <= 0 or min_lr > max_lr:
+        raise ValueError("scheduler requires 0 < min_lr <= max_lr")
+    step = max(0, min(int(step), total_steps))
+    min_ratio = float(min_lr) / float(max_lr)
+    if step >= total_steps:
+        return min_ratio
+    if warmup_steps < total_steps and step <= warmup_steps:
+        return min_ratio + (1.0 - min_ratio) * (float(step) / float(warmup_steps))
+    if warmup_steps >= total_steps:
+        return min_ratio + (1.0 - min_ratio) * (float(step) / float(total_steps))
+    progress = float(step - warmup_steps) / float(total_steps - warmup_steps)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return min_ratio + (1.0 - min_ratio) * cosine
+
+
+def scheduler_metadata(
+    *,
+    total_steps: int,
+    warmup_steps: int,
+    max_lr: float = DEFAULT_MAX_LR,
+    min_lr: float = DEFAULT_MIN_LR,
+    target_steps: int | None = None,
+    formal_steps: int = DEFAULT_FORMAL_OPTIMIZER_STEPS,
+) -> dict[str, Any]:
+    """Build the scheduler contract copied into reports and checkpoints."""
+
+    total_steps = int(total_steps)
+    warmup_steps = compute_warmup_steps(total_steps, warmup_steps)
+    return {
+        "type": SCHEDULER_TYPE,
+        "scheduler_type": SCHEDULER_TYPE,
+        "max_lr": float(max_lr),
+        "min_lr": float(min_lr),
+        "total_steps_for_schedule": total_steps,
+        "warmup_steps": warmup_steps,
+        "warmup_fraction": 0.05,
+        "target_optimizer_steps": int(target_steps if target_steps is not None else total_steps),
+        "formal_optimizer_steps": int(formal_steps),
+    }
+
+
+def _load_scheduler(
+    optimizer: Any,
+    warmup_steps: int,
+    total_steps: int | None = None,
+    *,
+    max_lr: float = DEFAULT_MAX_LR,
+    min_lr: float = DEFAULT_MIN_LR,
+) -> Any:
+    """Create the shared linear-warmup + cosine-decay scheduler.
+
+    ``warmup_steps`` remains the second positional parameter for compatibility
+    with older audit callers.  The schedule length defaults to the warmup
+    length only when omitted; all real training paths pass an explicit target.
+    """
+
     import torch
 
-    def schedule(step: int) -> float:
-        return min(1.0, float(step + 1) / float(max(1, warmup_steps)))
+    if total_steps is None:
+        total_steps = max(1, int(warmup_steps))
+    total_steps = int(total_steps)
+    warmup_steps = compute_warmup_steps(total_steps, warmup_steps)
+    if max_lr <= 0 or min_lr <= 0 or min_lr > max_lr:
+        raise ValueError("scheduler requires 0 < min_lr <= max_lr")
 
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
+    def schedule(step: int) -> float:
+        return cosine_warmup_factor(
+            step,
+            total_steps,
+            warmup_steps,
+            max_lr=max_lr,
+            min_lr=min_lr,
+        )
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
+    # Keep the pure, auditable contract on the object for checkpoint/report
+    # code without depending on LambdaLR's private lambda serialization.
+    scheduler.stage4_config = scheduler_metadata(
+        total_steps=total_steps,
+        warmup_steps=warmup_steps,
+        max_lr=max_lr,
+        min_lr=min_lr,
+        target_steps=total_steps,
+    )
+    return scheduler
 
 
 def _json_safe(value: Any) -> Any:
@@ -1437,6 +1568,7 @@ def save_complete_checkpoint(
     config: Stage4Config,
     report: Mapping[str, Any],
     rank: int,
+    scheduler_config: Mapping[str, Any] | None = None,
 ) -> Path | None:
     """Write a complete checkpoint on rank 0 through an atomic staging dir.
 
@@ -1461,6 +1593,10 @@ def save_complete_checkpoint(
     normalized_cursors = {
         str(key): dict(value) for key, value in data_cursors_by_rank.items()
     }
+    if scheduler_config is None:
+        candidate_scheduler = report.get("scheduler") if isinstance(report, Mapping) else None
+        scheduler_config = candidate_scheduler if isinstance(candidate_scheduler, Mapping) else getattr(scheduler, "stage4_config", {})
+    normalized_scheduler_config = _json_safe(dict(scheduler_config or {}))
     checkpoint_dir = ensure_external_output(checkpoint_dir)
     if checkpoint_dir.exists():
         raise FileExistsError(f"Refusing to overwrite checkpoint: {checkpoint_dir}")
@@ -1475,6 +1611,7 @@ def save_complete_checkpoint(
             {
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
+                "scheduler_config": normalized_scheduler_config,
                 "optimizer_step": int(optimizer_step),
                 "cumulative_samples": int(cumulative_samples),
                 "cumulative_tokens": int(cumulative_tokens),
@@ -1491,6 +1628,7 @@ def save_complete_checkpoint(
                     "tokenizer": True,
                     "optimizer": True,
                     "scheduler": True,
+                    "scheduler_config": bool(normalized_scheduler_config),
                     "rng": True,
                     "step": True,
                     "data_cursors_by_rank": True,
@@ -1511,6 +1649,7 @@ def save_complete_checkpoint(
                     "world_size": int(config.world_size),
                     "rank0_only": True,
                     "data_cursors_by_rank": sorted(normalized_cursors),
+                    "scheduler_config": normalized_scheduler_config,
                     "files": sorted(path.name for path in staging.iterdir()) + ["checkpoint_complete.json"],
                 },
                 indent=2,
@@ -1735,6 +1874,46 @@ def _training_window(
     }
 
 
+def _emit_progress_log(
+    *,
+    output_dir: Path,
+    rank: int,
+    optimizer_step: int,
+    total_steps: int,
+    loss: float,
+    learning_rate: float,
+    elapsed_seconds: float,
+    samples_per_second: float,
+    steps_per_second: float,
+    reason: str,
+) -> dict[str, Any] | None:
+    """Print and persist one rank-0 training progress record."""
+
+    if rank != 0:
+        return None
+    record = {
+        "optimizer_step": int(optimizer_step),
+        "total_steps": int(total_steps),
+        "loss": float(loss),
+        "learning_rate": float(learning_rate),
+        "samples_per_second": float(samples_per_second),
+        "steps_per_second": float(steps_per_second),
+        "elapsed_seconds": float(elapsed_seconds),
+        "reason": str(reason),
+    }
+    _append_jsonl(output_dir / "stage4_progress.jsonl", record)
+    print(
+        "[stage4-progress] "
+        f"step={record['optimizer_step']}/{record['total_steps']} "
+        f"loss={record['loss']:.6f} lr={record['learning_rate']:.8g} "
+        f"speed={record['samples_per_second']:.3f} samples/sec "
+        f"({record['steps_per_second']:.5f} steps/sec) "
+        f"elapsed={record['elapsed_seconds']:.2f}s reason={record['reason']}",
+        flush=True,
+    )
+    return record
+
+
 def run_training(
     model: Any,
     tokenizer: Any,
@@ -1751,11 +1930,37 @@ def run_training(
     import torch
     import torch.distributed as dist
 
+    if config.gate == "D" and config.max_optimizer_steps != DEFAULT_MAX_OPTIMIZER_STEPS:
+        raise ValueError(
+            "Stage 4 Gate D is a fixed ten-optimizer-step smoke; "
+            f"got max_optimizer_steps={config.max_optimizer_steps}"
+        )
     model = _ddp_wrap(model, config, device)
     parameters = _trainable_parameters(model)
-    optimizer = torch.optim.AdamW(parameters, lr=config.learning_rate, weight_decay=config.weight_decay)
+    schedule_total_steps = int(config.scheduler_total_steps or config.max_optimizer_steps)
+    warmup_steps = compute_warmup_steps(schedule_total_steps, config.warmup_steps)
+    # ``learning_rate`` is the historical CLI name and remains the max LR.
+    if abs(float(config.learning_rate) - float(config.max_lr)) > 1e-12:
+        raise ValueError("Stage 4 learning_rate and max_lr must match")
+    optimizer = torch.optim.AdamW(parameters, lr=config.max_lr, weight_decay=config.weight_decay)
     optimizer_audit = optimizer_parameter_audit(optimizer, parameters)
-    scheduler = _load_scheduler(optimizer, config.warmup_steps)
+    scheduler = _load_scheduler(
+        optimizer,
+        warmup_steps,
+        schedule_total_steps,
+        max_lr=config.max_lr,
+        min_lr=config.min_lr,
+    )
+    schedule = scheduler_metadata(
+        total_steps=schedule_total_steps,
+        warmup_steps=warmup_steps,
+        max_lr=config.max_lr,
+        min_lr=config.min_lr,
+        target_steps=config.max_optimizer_steps,
+        formal_steps=config.formal_optimizer_steps,
+    )
+    config.scheduler_total_steps = schedule_total_steps
+    config.warmup_steps = warmup_steps
     start_step = 0
     cumulative_samples = 0
     cumulative_tokens = 0
@@ -1801,10 +2006,12 @@ def run_training(
     monitor = RuntimeMonitor(output_dir / f"runtime_monitor_rank{rank}.jsonl", interval_seconds=config.monitor_interval_seconds, rank=rank, device=device)
     monitor.start()
     metrics: list[dict[str, Any]] = []
+    progress_logs: list[dict[str, Any]] = []
     optimizer_step = start_step
     latest_checkpoint: Path | None = None
     stop_reason = "max_optimizer_steps"
     coordinated_stop = False
+    training_start = time.perf_counter()
     try:
         while optimizer_step < config.max_optimizer_steps:
             optimizer.zero_grad(set_to_none=True)
@@ -1877,6 +2084,24 @@ def run_training(
             )
             if rank == 0:
                 _append_jsonl(output_dir / "stage4_metrics.jsonl", metrics[-1])
+                if optimizer_step % config.log_interval_steps == 0:
+                    progress = _emit_progress_log(
+                        output_dir=output_dir,
+                        rank=rank,
+                        optimizer_step=optimizer_step,
+                        total_steps=config.max_optimizer_steps,
+                        loss=metrics[-1]["loss"],
+                        learning_rate=metrics[-1]["learning_rate"],
+                        elapsed_seconds=max(time.perf_counter() - training_start, 1e-9),
+                        samples_per_second=(optimizer_step - start_step)
+                        * (config.world_size * config.micro_batch_size * config.gradient_accumulation_steps)
+                        / max(time.perf_counter() - training_start, 1e-9),
+                        steps_per_second=(optimizer_step - start_step)
+                        / max(time.perf_counter() - training_start, 1e-9),
+                        reason="interval",
+                    )
+                    if progress is not None:
+                        progress_logs.append(progress)
             if optimizer_step % config.save_every == 0 or optimizer_step == config.max_optimizer_steps:
                 checkpoint = save_complete_checkpoint(
                     output_dir / f"checkpoint-step-{optimizer_step:06d}",
@@ -1892,8 +2117,17 @@ def run_training(
                     ),
                     manifest=manifest,
                     config=config,
-                    report={"latest_metric": metrics[-1], "architecture": _validate_recursive_architecture(getattr(model, "module", model))},
+                    report={
+                        "latest_metric": metrics[-1],
+                        "scheduler": schedule,
+                        "progress_logging": {
+                            "interval_steps": config.log_interval_steps,
+                            "last": progress_logs[-1] if progress_logs else None,
+                        },
+                        "architecture": _validate_recursive_architecture(getattr(model, "module", model)),
+                    },
                     rank=rank,
+                    scheduler_config=schedule,
                 )
                 if checkpoint is not None:
                     latest_checkpoint = checkpoint
@@ -1933,6 +2167,11 @@ def run_training(
                         config=config,
                         report={
                             "latest_metric": metrics[-1] if metrics else None,
+                            "scheduler": schedule,
+                            "progress_logging": {
+                                "interval_steps": config.log_interval_steps,
+                                "last": progress_logs[-1] if progress_logs else None,
+                            },
                             "stop_reason": stop_reason,
                             "steps_at_stop": optimizer_step,
                             "architecture": _validate_recursive_architecture(
@@ -1940,6 +2179,7 @@ def run_training(
                             ),
                         },
                         rank=rank,
+                        scheduler_config=schedule,
                     )
                     latest_checkpoint = final_checkpoint
                 else:
@@ -1959,6 +2199,30 @@ def run_training(
             # Keep the path in every rank's report even though only rank 0
             # owns the physical write.
             latest_checkpoint = final_checkpoint_path
+        if rank == 0 and metrics:
+            # An interval record may already exist at this step.  Emit a
+            # dedicated final record only when the final/stop step was not
+            # covered by the interval, avoiding duplicate remote log noise.
+            last_logged_step = progress_logs[-1]["optimizer_step"] if progress_logs else None
+            if last_logged_step != optimizer_step:
+                elapsed = max(time.perf_counter() - training_start, 1e-9)
+                last_metric = metrics[-1]
+                progress = _emit_progress_log(
+                    output_dir=output_dir,
+                    rank=rank,
+                    optimizer_step=optimizer_step,
+                    total_steps=config.max_optimizer_steps,
+                    loss=last_metric["loss"],
+                    learning_rate=last_metric["learning_rate"],
+                    elapsed_seconds=elapsed,
+                    samples_per_second=(optimizer_step - start_step)
+                    * (config.world_size * config.micro_batch_size * config.gradient_accumulation_steps)
+                    / elapsed,
+                    steps_per_second=(optimizer_step - start_step) / elapsed,
+                    reason="training_end" if not coordinated_stop else stop_reason,
+                )
+                if progress is not None:
+                    progress_logs.append(progress)
     finally:
         monitor.stop()
     if optimizer_step == start_step and config.max_optimizer_steps > start_step:
@@ -1976,10 +2240,23 @@ def run_training(
         "resume_smoke_step_increment": optimizer_step - start_step if resume_state is not None else None,
         "cumulative_samples": cumulative_samples,
         "cumulative_valid_tokens": cumulative_tokens,
-        "target_samples_per_rank": DEFAULT_TARGET_SAMPLES_PER_RANK,
-        "target_local_microbatches": DEFAULT_LOCAL_MICROBATCHES,
+        "target_optimizer_steps": config.max_optimizer_steps,
+        "target_samples_per_rank": config.max_optimizer_steps * config.gradient_accumulation_steps * config.micro_batch_size,
+        "target_local_microbatches": config.max_optimizer_steps * config.gradient_accumulation_steps,
+        "formal_optimizer_steps": config.formal_optimizer_steps,
         "parameter_checksum_audit": checksum,
         "metrics": metrics,
+        "scheduler": schedule,
+        "progress_logging": {
+            "interval_steps": config.log_interval_steps,
+            "rank0_only": True,
+            "records": progress_logs,
+            "last": progress_logs[-1] if progress_logs else None,
+        },
+        "last_progress": progress_logs[-1] if progress_logs else None,
+        "last_loss": progress_logs[-1]["loss"] if progress_logs else None,
+        "last_learning_rate": progress_logs[-1]["learning_rate"] if progress_logs else None,
+        "last_samples_per_second": progress_logs[-1]["samples_per_second"] if progress_logs else None,
         "optimizer_audit": optimizer_audit,
         "rank0_only_checkpoint": True,
         "latest_complete_checkpoint": str(latest_checkpoint) if latest_checkpoint is not None else None,
@@ -2143,13 +2420,20 @@ def _dataset_preaudit(
         manifest["rank_effective_rows_scope"] = (
             "full_corpus" if full_content else "unavailable_sample_only"
         )
-        manifest["target_samples_per_rank"] = DEFAULT_TARGET_SAMPLES_PER_RANK
+        target_samples_per_rank = (
+            int(config.max_optimizer_steps)
+            * config.gradient_accumulation_steps
+            * config.micro_batch_size
+        )
+        manifest["target_optimizer_steps"] = int(config.max_optimizer_steps)
+        manifest["target_samples_per_rank"] = target_samples_per_rank
+        manifest["formal_optimizer_steps"] = int(config.formal_optimizer_steps)
         manifest["rank_has_target_samples"] = {
-            rank_key: (value >= DEFAULT_TARGET_SAMPLES_PER_RANK if value is not None else None)
+            rank_key: (value >= target_samples_per_rank if value is not None else None)
             for rank_key, value in rank_valid.items()
         }
         manifest["rank_has_raw_capacity"] = {
-            rank_key: value >= DEFAULT_TARGET_SAMPLES_PER_RANK
+            rank_key: value >= target_samples_per_rank
             for rank_key, value in manifest["rank_raw_rows"].items()
         }
         manifest["raw_rows"] = int(audit["total_rows"])
@@ -2160,7 +2444,7 @@ def _dataset_preaudit(
             "full_corpus" if full_content else "unavailable_sample_only"
         )
         manifest["formal_global_samples"] = int(
-            DEFAULT_MAX_OPTIMIZER_STEPS
+            config.formal_optimizer_steps
             * config.gradient_accumulation_steps
             * config.micro_batch_size
             * world_size
@@ -2185,11 +2469,11 @@ def _dataset_preaudit(
     if missing:
         if has_full_effective_rows:
             raise RuntimeError(
-                "Fail-fast: rank shard(s) lack the required 1,183,232 effective samples: "
+                "Fail-fast: rank shard(s) lack the required target effective samples: "
                 f"{missing}; valid={manifest.get('rank_valid_trainable_rows')}"
             )
         raise RuntimeError(
-            "Fail-fast: rank shard(s) lack the required 1,183,232 raw-row capacity: "
+            "Fail-fast: rank shard(s) lack the required target raw-row capacity: "
             f"{missing}; raw={manifest.get('rank_raw_rows')}"
         )
     if dist.is_initialized():
@@ -2262,6 +2546,7 @@ def _synthetic_model(config: Stage4Config, device: Any) -> Any:
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gate", choices=("A", "B", "C", "D", "E"), default="A")
     parser.add_argument("--model-path", type=Path, default=None)
@@ -2274,9 +2559,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
     parser.add_argument("--micro-batch-size", type=int, default=DEFAULT_MICRO_BATCH_SIZE)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=DEFAULT_GRADIENT_ACCUMULATION_STEPS)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
+    parser.add_argument("--max-lr", dest="max_lr", type=float, default=DEFAULT_MAX_LR)
+    parser.add_argument("--min-lr", dest="min_lr", type=float, default=DEFAULT_MIN_LR)
     parser.add_argument("--context-length", type=int, default=DEFAULT_CONTEXT_LENGTH)
-    parser.add_argument("--warmup-steps", type=int, default=2)
+    parser.add_argument("--warmup-steps", type=int, default=0)
     parser.add_argument("--max-optimizer-steps", "--max-steps", dest="max_optimizer_steps", type=int, default=DEFAULT_MAX_OPTIMIZER_STEPS)
+    parser.add_argument("--formal-optimizer-steps", type=int, default=DEFAULT_FORMAL_OPTIMIZER_STEPS)
+    parser.add_argument("--scheduler-total-steps", type=int, default=None)
+    parser.add_argument("--log-interval-steps", type=int, default=DEFAULT_LOG_INTERVAL_STEPS)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
@@ -2297,12 +2587,42 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
         raise ValueError("Stage 4 requires micro_batch_size=8")
     if config.gradient_accumulation_steps != 16:
         raise ValueError("Stage 4 requires gradient_accumulation_steps=16")
-    if config.learning_rate != 2e-4:
+    if config.learning_rate != DEFAULT_MAX_LR:
         raise ValueError("Stage 4 requires learning_rate=2e-4")
+    if config.max_lr != DEFAULT_MAX_LR:
+        raise ValueError("Stage 4 requires max_lr=2e-4")
+    if config.min_lr <= 0 or config.min_lr > config.max_lr:
+        raise ValueError("Stage 4 requires 0 < min_lr <= max_lr")
     if config.context_length <= 0 or config.context_length > 1024:
         raise ValueError("Stage 4 context_length must be in [1, 1024]")
     if config.max_optimizer_steps <= 0:
         raise ValueError("max_optimizer_steps must be positive")
+    if config.gate == "D" and config.max_optimizer_steps != DEFAULT_MAX_OPTIMIZER_STEPS:
+        raise ValueError(
+            "Stage 4 Gate D is a fixed ten-optimizer-step smoke; "
+            f"got max_optimizer_steps={config.max_optimizer_steps}. "
+            "The 9244-step value is formal_optimizer_steps only."
+        )
+    if config.formal_optimizer_steps <= 0:
+        raise ValueError("formal_optimizer_steps must be positive")
+    if config.scheduler_total_steps is not None and config.scheduler_total_steps <= 0:
+        raise ValueError("scheduler_total_steps must be positive")
+    if config.warmup_steps < 0:
+        raise ValueError("warmup_steps must be non-negative")
+    if config.log_interval_steps <= 0:
+        raise ValueError("log_interval_steps must be positive")
+    max_steps_explicit = any(
+        option in raw_argv
+        for option in ("--max-optimizer-steps", "--max-steps")
+    )
+    if (
+        config.gate == "C"
+        and not max_steps_explicit
+        and config.max_optimizer_steps == DEFAULT_MAX_OPTIMIZER_STEPS
+    ):
+        config.max_optimizer_steps = 2
+    config.scheduler_total_steps = int(config.scheduler_total_steps or config.max_optimizer_steps)
+    config.warmup_steps = compute_warmup_steps(config.scheduler_total_steps, config.warmup_steps)
     if config.record_buffer_size <= 0:
         raise ValueError("record_buffer_size must be positive")
     if config.save_every <= 0:
@@ -2318,6 +2638,12 @@ def run(config: Stage4Config) -> dict[str, Any]:
     """Execute one Stage 4 gate and return its auditable JSON report."""
 
     faulthandler.enable()
+    if config.gate == "D" and config.max_optimizer_steps != DEFAULT_MAX_OPTIMIZER_STEPS:
+        raise ValueError(
+            "Stage 4 Gate D is a fixed ten-optimizer-step smoke; "
+            f"got max_optimizer_steps={config.max_optimizer_steps}. "
+            "The 9244-step value is formal_optimizer_steps only."
+        )
     if config.gate == "E" and not config.dry_run and config.resume_from is None:
         raise ValueError("Gate E requires --resume-from (the complete checkpoint is its model source)")
     if config.resume_from is not None and not config.dry_run:
@@ -2342,9 +2668,28 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 "persistent_workers": PERSISTENT_WORKERS,
                 "dataset_num_proc": DATASET_NUM_PROC,
             },
-            "expected_target_samples_per_rank": DEFAULT_TARGET_SAMPLES_PER_RANK,
+            "expected_target_samples_per_rank": (
+                config.max_optimizer_steps
+                * config.gradient_accumulation_steps
+                * config.micro_batch_size
+            ),
             "expected_global_effective_batch": DEFAULT_GLOBAL_EFFECTIVE_BATCH,
             "expected_formal_global_samples": DEFAULT_FORMAL_GLOBAL_SAMPLES,
+            "formal_optimizer_steps": config.formal_optimizer_steps,
+            "gate_d_smoke_optimizer_steps": DEFAULT_MAX_OPTIMIZER_STEPS,
+            "scheduler": scheduler_metadata(
+                total_steps=int(config.scheduler_total_steps or config.max_optimizer_steps),
+                warmup_steps=config.warmup_steps,
+                max_lr=config.max_lr,
+                min_lr=config.min_lr,
+                target_steps=config.max_optimizer_steps,
+                formal_steps=config.formal_optimizer_steps,
+            ),
+            "progress_logging": {
+                "interval_steps": config.log_interval_steps,
+                "rank0_only": True,
+                "last": None,
+            },
             "output_dir_external": True,
             "no_model_or_checkpoint_written": True,
         }
@@ -2393,23 +2738,32 @@ def run(config: Stage4Config) -> dict[str, Any]:
             )
             manifest = assign_shards(files, world_size=world_size, seed=config.seed)
             by_name = {item["name"]: item for item in audit["shards"]}
+            target_samples_per_rank = (
+                int(config.max_optimizer_steps)
+                * config.gradient_accumulation_steps
+                * config.micro_batch_size
+            )
             manifest["rank_raw_rows"] = {"0": audit["total_rows"]}
             manifest["rank_valid_trainable_rows"] = {"0": None}
             manifest["rank_effective_rows_scope"] = "unavailable_sample_only"
-            manifest["target_samples_per_rank"] = DEFAULT_TARGET_SAMPLES_PER_RANK
+            manifest["target_optimizer_steps"] = int(config.max_optimizer_steps)
+            manifest["target_samples_per_rank"] = target_samples_per_rank
+            manifest["formal_optimizer_steps"] = int(config.formal_optimizer_steps)
             manifest["rank_has_target_samples"] = {"0": None}
             manifest["rank_has_raw_capacity"] = {
-                "0": audit["total_rows"] >= DEFAULT_TARGET_SAMPLES_PER_RANK
+                "0": audit["total_rows"] >= target_samples_per_rank
             }
             if not manifest["rank_has_raw_capacity"]["0"]:
                 raise RuntimeError(
                     "Gate B fail-fast: the footer audit has fewer than "
-                    f"{DEFAULT_TARGET_SAMPLES_PER_RANK} raw samples"
+                    f"{target_samples_per_rank} raw samples"
                 )
             manifest["raw_rows"] = audit["total_rows"]
             manifest["effective_trainable_rows"] = None
             manifest["effective_rows_scope"] = "unavailable_sample_only"
-            manifest["formal_global_samples"] = DEFAULT_MAX_OPTIMIZER_STEPS * 1024
+            manifest["formal_optimizer_steps"] = int(config.formal_optimizer_steps)
+            manifest["gate_d_smoke_optimizer_steps"] = DEFAULT_MAX_OPTIMIZER_STEPS
+            manifest["formal_global_samples"] = DEFAULT_FORMAL_GLOBAL_SAMPLES
             manifest["formal_remaining_raw_rows"] = audit["total_rows"] - manifest["formal_global_samples"]
             report = {
                 "status": "PASS",
@@ -2421,6 +2775,21 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 "effective_rows": None,
                 "effective_rows_scope": "unavailable_sample_only",
                 "formal_global_samples": manifest["formal_global_samples"],
+                "formal_optimizer_steps": config.formal_optimizer_steps,
+                "gate_d_smoke_optimizer_steps": DEFAULT_MAX_OPTIMIZER_STEPS,
+                "scheduler": scheduler_metadata(
+                    total_steps=int(config.scheduler_total_steps or config.max_optimizer_steps),
+                    warmup_steps=config.warmup_steps,
+                    max_lr=config.max_lr,
+                    min_lr=config.min_lr,
+                    target_steps=config.max_optimizer_steps,
+                    formal_steps=config.formal_optimizer_steps,
+                ),
+                "progress_logging": {
+                    "interval_steps": config.log_interval_steps,
+                    "rank0_only": True,
+                    "last": None,
+                },
                 "formal_remaining_raw_rows": manifest["formal_remaining_raw_rows"],
                 "torchrun_started": False,
                 "cache_files_audited": True,
@@ -2468,8 +2837,39 @@ def run(config: Stage4Config) -> dict[str, Any]:
             # second long run.  ``max_optimizer_steps`` is therefore treated
             # as an upper bound only for the non-resume gates.
             config.max_optimizer_steps = old_step + 2
+            saved_scheduler = state.get("scheduler_config")
+            if not isinstance(saved_scheduler, Mapping):
+                saved_report = state.get("report", {})
+                saved_scheduler = (
+                    dict(saved_report.get("scheduler", {}))
+                    if isinstance(saved_report, Mapping)
+                    else {}
+                )
+            if not isinstance(saved_scheduler, Mapping):
+                saved_scheduler = {}
+            # Resume with the checkpoint's original schedule domain.  This is
+            # what makes an old final-step LR remain continuous when Gate E
+            # intentionally runs two additional smoke steps.
+            config.scheduler_total_steps = int(
+                saved_scheduler.get(
+                    "total_steps_for_schedule",
+                    state.get("configuration", {}).get("scheduler_total_steps", old_step),
+                )
+            )
+            config.max_lr = float(saved_scheduler.get("max_lr", config.max_lr))
+            config.min_lr = float(saved_scheduler.get("min_lr", config.min_lr))
+            config.learning_rate = config.max_lr
+            config.warmup_steps = int(
+                saved_scheduler.get(
+                    "warmup_steps",
+                    state.get("configuration", {}).get("warmup_steps", 0),
+                )
+            )
         if config.gate == "C" and config.max_optimizer_steps == DEFAULT_MAX_OPTIMIZER_STEPS:
             config.max_optimizer_steps = 2
+            config.scheduler_total_steps = 2
+        config.scheduler_total_steps = int(config.scheduler_total_steps or config.max_optimizer_steps)
+        config.warmup_steps = compute_warmup_steps(config.scheduler_total_steps, config.warmup_steps)
         if rank == 0:
             _write_json(output_dir / "stage4_manifest.json", manifest)
         if process_group.is_initialized():
@@ -2517,6 +2917,13 @@ def run(config: Stage4Config) -> dict[str, Any]:
             "configuration": asdict(config),
             "dataset_audit": audit,
             "training": train_report,
+            "scheduler": train_report.get("scheduler"),
+            "progress_logging": train_report.get("progress_logging"),
+            "last_loss": train_report.get("last_loss"),
+            "last_learning_rate": train_report.get("last_learning_rate"),
+            "last_samples_per_second": train_report.get("last_samples_per_second"),
+            "formal_optimizer_steps": config.formal_optimizer_steps,
+            "gate_d_smoke_optimizer_steps": DEFAULT_MAX_OPTIMIZER_STEPS,
             "stop_reason": train_report.get("stop_reason"),
             "steps_at_stop": train_report.get("steps_at_stop"),
             "final_checkpoint": train_report.get("final_checkpoint"),

@@ -79,9 +79,13 @@ ARGS=(
   --micro-batch-size "${RSMOL_STAGE4_MICRO_BATCH_SIZE:-8}"
   --gradient-accumulation-steps "${RSMOL_STAGE4_GRADIENT_ACCUMULATION_STEPS:-16}"
   --learning-rate "${RSMOL_STAGE4_LEARNING_RATE:-2e-4}"
+  --max-lr "${RSMOL_STAGE4_MAX_LR:-2e-4}"
+  --min-lr "${RSMOL_STAGE4_MIN_LR:-2e-5}"
   --context-length "${RSMOL_STAGE4_CONTEXT_LENGTH:-1024}"
-  --warmup-steps "${RSMOL_STAGE4_WARMUP_STEPS:-2}"
-  --max-optimizer-steps "${RSMOL_STAGE4_MAX_OPTIMIZER_STEPS:-9244}"
+  --warmup-steps "${RSMOL_STAGE4_WARMUP_STEPS:-0}"
+  --max-optimizer-steps "${RSMOL_STAGE4_MAX_OPTIMIZER_STEPS:-10}"
+  --formal-optimizer-steps "${RSMOL_STAGE4_FORMAL_OPTIMIZER_STEPS:-9244}"
+  --log-interval-steps "${RSMOL_STAGE4_LOG_INTERVAL_STEPS:-10}"
   --seed "${RSMOL_STAGE4_SEED:-0}"
   --weight-decay "${RSMOL_STAGE4_WEIGHT_DECAY:-0.1}"
   --max-grad-norm "${RSMOL_STAGE4_MAX_GRAD_NORM:-1.0}"
@@ -92,6 +96,9 @@ ARGS=(
 )
 if [[ -n "${RSMOL_STAGE4_AUDIT_REPORT:-}" ]]; then
   ARGS+=(--audit-report "$RSMOL_STAGE4_AUDIT_REPORT")
+fi
+if [[ -n "${RSMOL_STAGE4_SCHEDULER_TOTAL_STEPS:-}" ]]; then
+  ARGS+=(--scheduler-total-steps "$RSMOL_STAGE4_SCHEDULER_TOTAL_STEPS")
 fi
 if [[ -n "$MODEL_PATH" ]]; then
   ARGS+=(--model-path "$MODEL_PATH")
