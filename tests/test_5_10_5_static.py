@@ -113,6 +113,9 @@ class FiveTenFiveStaticContractTest(unittest.TestCase):
         self.assertIn("train_stage4_5_10_5_ddp.sh", self.submit_text)
         self.assertIn("RSMOL_5_10_5_MODEL_DIR", self.runtime_text)
         self.assertIn("RSMOL_5_10_5_MAX_OPTIMIZER_STEPS", self.submit_text)
+        self.assertIn("MAX_OPTIMIZER_STEPS=9244", self.runtime_text)
+        self.assertIn("WARMUP_STEPS=463", self.runtime_text)
+        self.assertIn("SCHEDULER_TOTAL_STEPS=9244", self.runtime_text)
 
     def test_conversion_shell_propagates_external_source_and_destination(self):
         self.assertIn("convert_stepwise_5_10_5.py", self.convert_runtime_text)

@@ -67,11 +67,16 @@ REPORT_PATH="${RSMOL_5_10_5_REPORT:-${RSMOL_STAGE4_REPORT:-$OUTPUT_DIR/stage4_re
 
 if [[ "$GATE" == "FORMAL" ]]; then
   # FORMAL has an independent, fail-fast schedule contract.  The Python
-  # parser still rejects any conflicting explicit environment override.
-  MAX_OPTIMIZER_STEPS="${RSMOL_5_10_5_MAX_OPTIMIZER_STEPS:-${RSMOL_STAGE4_MAX_OPTIMIZER_STEPS:-9244}}"
-  WARMUP_STEPS="${RSMOL_5_10_5_WARMUP_STEPS:-${RSMOL_STAGE4_WARMUP_STEPS:-463}}"
-  SCHEDULER_TOTAL_STEPS="${RSMOL_5_10_5_SCHEDULER_TOTAL_STEPS:-${RSMOL_STAGE4_SCHEDULER_TOTAL_STEPS:-9244}}"
-  SAVE_EVERY="${RSMOL_5_10_5_SAVE_EVERY:-${RSMOL_STAGE4_SAVE_EVERY:-500}}"
+  # Do not inherit the pilot defaults exported above (notably
+  # RSMOL_STAGE4_MAX_OPTIMIZER_STEPS=10).  The formal entry point is
+  # intentionally self-contained and must always pass its production
+  # contract to Python: 9,244 steps, 463 warmup steps, 9,244 scheduler
+  # domain, and save_every=500.  This also makes a stale launcher
+  # environment harmless.
+  MAX_OPTIMIZER_STEPS=9244
+  WARMUP_STEPS=463
+  SCHEDULER_TOTAL_STEPS=9244
+  SAVE_EVERY=500
 else
   MAX_OPTIMIZER_STEPS="${RSMOL_5_10_5_MAX_OPTIMIZER_STEPS:-${RSMOL_STAGE4_MAX_OPTIMIZER_STEPS:-10}}"
   WARMUP_STEPS="${RSMOL_5_10_5_WARMUP_STEPS:-${RSMOL_STAGE4_WARMUP_STEPS:-0}}"
