@@ -15,7 +15,7 @@ for name in RSMOL_5_10_5_SOURCE_CHECKPOINT RSMOL_5_10_5_OUTPUT_DIR RSMOL_5_10_5_
 done
 
 vc submit \
-  -p pdgpu-5090 \
+  -p pdgpu-3090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 8 -m 32G -g 1 -n 1 \
   -j stepwise-convert-5090-$(date +%m%d%H%M) \
