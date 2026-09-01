@@ -2385,10 +2385,17 @@ def run_training(
             representative_delta = float(
                 (representative_parameter.detach().flatten()[0] - representative_before).abs().item()
             )
-            if representative_delta <= 0.0:
-                raise FloatingPointError(
-                    f"Trainable parameter did not update at optimizer_step={optimizer_step}"
-                )
+            # Disabled as a hard-stop condition.  A single scalar in a
+            # representative layer parameter can legitimately remain exactly
+            # unchanged after an optimizer step (for example because its
+            # gradient is zero or the FP32 update rounds away).  The value is
+            # retained below as diagnostic metadata, but must not terminate a
+            # long formal run.  Loss/gradient finiteness and optimizer-step
+            # execution remain enforced.
+            # if representative_delta <= 0.0:
+            #     raise FloatingPointError(
+            #         f"Trainable parameter did not update at optimizer_step={optimizer_step}"
+            #     )
             cumulative_samples += config.micro_batch_size * config.gradient_accumulation_steps
             cumulative_tokens += int(window["window_global_valid_token_count"])
             elapsed = max(time.perf_counter() - window_start, 1e-9)
