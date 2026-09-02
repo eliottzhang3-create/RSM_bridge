@@ -57,7 +57,7 @@ EXPECTED_ARCHITECTURES = ("SmolLM2_5_10_5LinearForCausalLM",)
 def _load_linear() -> Any:
     return _load(
         "code.RSmol.recursive_model_5_10_5_linear",
-        SCRIPT_ROOT.parent / "recursive_model_5_10_5_linear.py",
+        SCRIPT_ROOT / "recursive_model_5_10_5_linear.py",
     )
 
 
