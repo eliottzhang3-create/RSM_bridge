@@ -1,5 +1,126 @@
 # RSM_bridge
 
+## Handoff status for the next Codex session (updated 2026-09-02)
+
+This section is the authoritative handoff summary.  It supersedes older
+planning text below whenever the two conflict.  “Verified” means that the
+user supplied a remote PASS report or a concrete successful checkpoint;
+“pending” means that the code exists or is planned but has not passed the
+required remote audit yet.
+
+### Verified experiments
+
+* **Original SmolLM2-135M:** the single-GPU `pdgpu-5090` inference smoke
+  passed.  The source checkpoint is
+  `/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2`.
+* **15R recursive model (main line):** Stage 1 conversion and inference
+  audits passed.  It has 15 unique physical layers (source layers
+  `1,3,5,...,25,27,30`, using the checked-in conversion metadata) executed
+  twice for a 30-layer logical forward.  Stage 2 single-GPU toy-batch and
+  real-tokenizer short training audits passed.  Stage 4 Gates A, C, D and E
+  passed, and formal training was run on eight `pdgpu-5090` GPUs.  The
+  first-epoch checkpoint is
+  `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4/formal-20260829_183543/checkpoint-step-009244`;
+  an epoch-2 continuation was also produced at
+  `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4/formal-epoch2-20260831_165359/checkpoint-step-009244`.
+* **5-10-5 recursive model:** conversion, Stage 1 audits, Gate A, Gate D and
+  Gate E passed.  The model has prefix layers 1–5, middle source layers
+  `6,8,10,12,14,16,18,20,22,24`, and suffix layers 26–30; the middle ten
+  physical layers are executed twice.  Its source/target model directory is
+  `/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10-5`, and its formal
+  checkpoint is
+  `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10_5/formal-20260830_172928/checkpoint-step-009244`.
+* **5-10-5 non-recursive linear baseline:** conversion and smoke/evaluation
+  plumbing exist.  A formal run reached step 5,500 and later stopped because
+  of the trainable-parameter checksum audit at step 5,832; that checksum
+  check was explicitly disabled for the continuation experiment.  Do not
+  describe this run as a completed formal training unless a later report
+  proves it.
+* **Stage 3 evaluation:** the checked-in evaluator uses `lm-eval==0.4.12`
+  with local parquet overlays for HellaSwag, the 57-subject MMLU group,
+  GSM8K, ARC-Easy and ARC-Challenge.  The original model, 15R checkpoints,
+  and 5-10-5 checkpoints have been evaluated through the remote wrapper;
+  every claimed score must be tied to the corresponding external output
+  directory and JSON report.
+
+### Current pending experiment: 5-10×7-5 with selective BPTT (方案 B)
+
+The intended architecture is a **new isolated variant** and must not modify
+the 15R or existing 5-10-5 files.  The source mapping is:
+
+```text
+prefix:  source layers 1,2,3,4,5
+middle:  source layers 6,8,10,12,14,16,18,20,22,24 (10 layers)
+suffix:  source layers 26,27,28,29,30
+forward: prefix + (middle × 7) + suffix = 80 logical layer executions
+storage: 20 unique physical decoder layers
+```
+
+方案 B means that all seven middle loops are executed in the forward pass,
+but the autograd path is truncated at the boundary before loop 4: loops 1–3
+must not receive parameter gradients, while loops 4, 5, 6 and 7 do.  The
+suffix and prefix remain trainable; in reverse order the intended trainable
+path is suffix → loop 7 → loop 6 → loop 5 → loop 4 → prefix.  This is a
+research variant and is **not verified yet**.  The currently present files
+`recursive_model_5_10x7_5.py`, `scripts/convert_stepwise_5_10x7_5.py`,
+`scripts/smoke_recursive_5_10x7_5.py`, and
+`scripts/train_stage4_5_10x7_5_ddp.py` are uncommitted handoff artifacts;
+the next session must inspect their diff and run the required tests before
+using them.
+
+The requested output model directory is expected to be outside the Git
+checkout, for example
+`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x7-5`.  New-variant
+conversion and training wrappers target `pdgpu-3090`; the already running
+15R formal job continues to use `pdgpu-5090`.
+
+Expected new-variant entry points (once reviewed and committed) are:
+
+```text
+code/RSmol/scripts/convert_stepwise_5_10x7_5.py
+code/RSmol/scripts/smoke_recursive_5_10x7_5.py
+code/RSmol/scripts/train_stage4_5_10x7_5_ddp.py
+code/RSmol/run_smoke_recursive_5_10x7_5_3090.sh
+code/RSmol/scripts/smoke_recursive_5_10x7_5.sh
+code/RSmol/scripts/train_stage4_5_10x7_5_ddp.sh
+```
+
+The intended validation sequence is deliberately shorter than the original
+15R route: (1) convert from the actual SmolLM2 `config.json`; (2) run the
+new model's Stage-1-style forward/cache/generation/reload audit on one
+`pdgpu-3090`; (3) reuse the existing sampled Gate-B JSON for Gate A; (4) run
+Gate D (ten optimizer steps) and Gate E resume smoke on eight `pdgpu-3090`
+GPUs; and only after both pass, launch the 9,244-step formal training.  Do
+not run Gate B again for this variant unless the audit manifest changes.
+
+### Shared data and training contract
+
+The training corpus is the `text` column of
+`/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset`.  The audit
+found 85 parquet shards, 10,058,156 raw rows and approximately 25.6 GB.  Each
+shard has 119 row groups and 118,331 or 118,332 rows.  Gate B is a CPU-only
+three-shard streaming sample (`pyarrow.parquet.ParquetFile`), not a full
+token-length census; it must not create a shared Arrow cache.  The external
+Gate-B report currently used by multi-card gates is supplied with
+`RSMOL_STAGE4_AUDIT_REPORT`.
+
+Unless a variant explicitly documents a different contract, the formal
+training settings are: eight ranks, micro-batch 8 per rank, gradient
+accumulation 16, effective global batch 1,024 samples, context length 1,024,
+9,244 optimizer steps, AdamW with `betas=(0.9,0.95)`, `eps=1e-8`,
+`weight_decay=0.1`, `amsgrad=false`, maximum learning rate `2e-4`, minimum
+learning rate `2e-5`, linear warmup for `ceil(0.05*9244)=463` steps followed by
+cosine decay, progress/loss/LR/speed every 10 steps, and complete checkpoints
+every 500 steps plus the final step, retaining at most three verified
+checkpoints.  Loss is next-token prediction over every non-padding token;
+only dynamic padding positions are masked.  Gradient accumulation must use
+the window-global valid-token denominator exactly once.
+
+All model/data/checkpoint/output paths above are remote and outside the Git
+checkout.  GPU work must be submitted through the corresponding `vc submit`
+wrapper; never run model loading or training directly on the login node.
+
+
 ## Stage 3 offline benchmark evaluation (2026-08-28)
 
 Stage 3 is the current evaluation gate for the original SmolLM2-135M and the
