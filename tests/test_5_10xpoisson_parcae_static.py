@@ -142,6 +142,8 @@ class PoissonParcaeStaticContractTest(unittest.TestCase):
             self.assertIn(marker, self.stage4_text)
         for marker in ("formal_audits", "report_policy", "audit_point", "_collective_check", "_collective_error_guard", "broadcast_object_list", "_close_process_group(barrier=False)"):
             self.assertIn(marker, self.stage4_text)
+        self.assertIn('parquet_root = root / "data" if (root / "data").is_dir() else root', self.stage4_text)
+        self.assertIn('parquet_root.glob("train-*.parquet")', self.stage4_text)
 
     def test_gradient_audit_is_fail_closed_not_serialization_only(self):
         valid = {

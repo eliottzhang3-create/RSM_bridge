@@ -134,9 +134,15 @@ def expected_parquet_names(shard_count: int = 85) -> list[str]:
 
 
 def discover_parquet_files(data_dir: Path) -> list[Path]:
-    files = sorted(Path(data_dir).glob("*.parquet"))
+    # The immutable 85-shard snapshot is distributed as
+    # ``<data_dir>/data/train-xxxxx-of-00085.parquet``.  Accept the dataset
+    # root used in README/configuration as well as a directly supplied
+    # ``data`` directory, matching the established Stage 2/legacy loaders.
+    root = Path(data_dir).expanduser().resolve()
+    parquet_root = root / "data" if (root / "data").is_dir() else root
+    files = sorted(parquet_root.glob("train-*.parquet"))
     if not files:
-        raise FileNotFoundError(f"no parquet shards found under {data_dir}")
+        raise FileNotFoundError(f"no parquet shards found under {data_dir} (searched {parquet_root})")
     return files
 
 
