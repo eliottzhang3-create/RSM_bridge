@@ -372,6 +372,8 @@ class PreludeNorm(LlamaRMSNorm):
 class ParcaeInjection(nn.Module):
     """Exact Parcae diagonal injection ``h*decay + dt*(PN(e) @ B.T)``."""
 
+    NO_WEIGHT_DECAY_PARAMETER_NAMES = ("A_log", "dt_bias", "B")
+
     def __init__(self, hidden_size: int, *, ssm_decay: float = DEFAULT_SSM_DECAY) -> None:
         super().__init__()
         if not 0.0 < float(ssm_decay) < 1.0:
@@ -383,8 +385,24 @@ class ParcaeInjection(nn.Module):
         self.dt_bias = nn.Parameter(torch.full((hidden_size,), math.log(math.expm1(self.target_product))))
         # Parcae identity B init keeps the initial input map well-conditioned.
         self.B = nn.Parameter(torch.eye(hidden_size))
-        for parameter in (self.A_log, self.dt_bias, self.B):
-            parameter._no_weight_decay = True
+        self.mark_no_weight_decay()
+
+    def mark_no_weight_decay(self) -> None:
+        """Restore transient Parameter flags after HF checkpoint loading.
+
+        Hugging Face may replace ``Parameter`` objects while materializing a
+        checkpoint (notably with low-memory/meta-device loading).  Arbitrary
+        Python attributes are not part of a state dict, so the optimizer must
+        also recognize these parameters by their stable qualified names.
+        """
+
+        for name in self.NO_WEIGHT_DECAY_PARAMETER_NAMES:
+            getattr(self, name)._no_weight_decay = True
+
+    def no_weight_decay_parameter_names(self) -> tuple[str, ...]:
+        """Return the persistent module-level no-weight-decay declaration."""
+
+        return self.NO_WEIGHT_DECAY_PARAMETER_NAMES
 
     def reset_parameters(self) -> None:
         """Re-apply the exact Parcae initialization after HF ``post_init``."""
@@ -393,8 +411,7 @@ class ParcaeInjection(nn.Module):
             self.A_log.zero_()
             self.dt_bias.fill_(math.log(math.expm1(self.target_product)))
             self.B.copy_(torch.eye(self.B.shape[0], device=self.B.device, dtype=self.B.dtype))
-        for parameter in (self.A_log, self.dt_bias, self.B):
-            parameter._no_weight_decay = True
+        self.mark_no_weight_decay()
 
     def forward(self, h_t: torch.Tensor, pn_e: torch.Tensor) -> torch.Tensor:
         dt = F.softplus(self.dt_bias)
@@ -420,7 +437,7 @@ class ParcaeInjection(nn.Module):
             "A_log_zero": bool(torch.allclose(self.A_log, torch.zeros_like(self.A_log))),
             "B_identity": bool(torch.allclose(self.B, torch.eye(self.B.shape[0], device=self.B.device, dtype=self.B.dtype))),
             "decay_strictly_between_zero_one": bool(torch.all((decay > 0) & (decay < 1))),
-            "no_weight_decay": all(bool(getattr(parameter, "_no_weight_decay", False)) for parameter in (self.A_log, self.dt_bias, self.B)),
+            "no_weight_decay": tuple(self.no_weight_decay_parameter_names()) == ("A_log", "dt_bias", "B"),
         }
 
 
@@ -573,8 +590,7 @@ class RecursiveLlama5_10xpoisson_parcaeModel(LlamaPreTrainedModel):
         self._last_forward_audit: dict[str, Any] = {}
         self.post_init()
         self.recurrent.injection.reset_parameters()
-        for parameter in (self.recurrent.injection.A_log, self.recurrent.injection.dt_bias, self.recurrent.injection.B):
-            parameter._no_weight_decay = True
+        self.recurrent.injection.mark_no_weight_decay()
 
     @property
     def layers(self) -> list[nn.Module]:
@@ -717,8 +733,7 @@ class RecursiveLlama5_10xpoisson_parcaeForCausalLM(LlamaForCausalLM):
         # The outer causal-LM ``post_init`` also touches nested parameters;
         # restore Parcae's exact injection values after that pass.
         self.model.recurrent.injection.reset_parameters()
-        for parameter in (self.model.recurrent.injection.A_log, self.model.recurrent.injection.dt_bias, self.model.recurrent.injection.B):
-            parameter._no_weight_decay = True
+        self.model.recurrent.injection.mark_no_weight_decay()
 
     def _prepare_cache_for_generation(self, generation_config: Any, model_kwargs: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
         if model_kwargs.get("past_key_values") is None and bool(getattr(generation_config, "use_cache", True)):

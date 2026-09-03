@@ -61,6 +61,11 @@ POISSON_PROBABILITIES = tuple((math.exp(-POISSON_LAMBDA) * POISSON_LAMBDA**k / m
 EXPECTED_MAPPING_POLICY = "explicit_5_10xpoisson_parcae_source_layers"
 EXPECTED_BACKWARD_POLICY = "hidden_path_all_calls_parameter_gradients_final_four_aligned_calls_v1"
 EXPECTED_INJECTION_INIT = "parcae_exact_ssm_decay_sqrt_1_over_5_identity_B_no_weight_decay"
+INJECTION_NO_WEIGHT_DECAY_SUFFIXES = (
+    "recurrent.injection.a_log",
+    "recurrent.injection.dt_bias",
+    "recurrent.injection.b",
+)
 
 
 def formal_save_steps(total_steps: int = DEFAULT_FORMAL_OPTIMIZER_STEPS, every: int = DEFAULT_SAVE_EVERY) -> list[int]:
@@ -570,6 +575,10 @@ def _load_runtime_model(config: Stage4Config, device: Any) -> tuple[Any, Any]:
     model = AutoModelForCausalLM.from_pretrained(model_path, local_files_only=True, torch_dtype="auto")
     validate_runtime_model_contract(model)
     model.to(device)
+    # Parameter objects can be replaced by HF loading/device movement, so
+    # restore convenience flags while retaining the optimizer's name policy.
+    recursive_model = getattr(model, "model", model)
+    recursive_model.recurrent.injection.mark_no_weight_decay()
     return model, tokenizer
 
 
@@ -678,7 +687,10 @@ def build_optimizer_param_groups(model: Any, *, weight_decay: float = 0.1) -> li
         if not parameter.requires_grad:
             continue
         module_name = name.lower()
-        flagged = bool(getattr(parameter, "_no_weight_decay", False))
+        # The name-based clause is the persistent contract.  Custom Parameter
+        # attributes are transient and can disappear after from_pretrained.
+        injection_no_decay = any(module_name.endswith(suffix) for suffix in INJECTION_NO_WEIGHT_DECAY_SUFFIXES)
+        flagged = bool(getattr(parameter, "_no_weight_decay", False)) or injection_no_decay
         is_norm_or_bias = module_name.endswith(".bias") or "norm" in module_name
         (no_decay if flagged or is_norm_or_bias else decay).append(parameter)
     return [
@@ -696,14 +708,27 @@ def _optimizer_group_audit(model: Any, optimizer: Any) -> dict[str, Any]:
     for index, group in enumerate(optimizer.param_groups):
         names = [names_by_id.get(id(parameter), f"<unnamed:{id(parameter)}>") for parameter in group["params"]]
         groups.append({"index": index, "weight_decay": float(group.get("weight_decay", 0.0)), "count": len(names), "names": names})
-    no_wd_names = [name for name, parameter in actual.named_parameters() if bool(getattr(parameter, "_no_weight_decay", False))]
+    no_wd_names = [
+        name
+        for name, parameter in actual.named_parameters()
+        if bool(getattr(parameter, "_no_weight_decay", False))
+        or any(name.lower().endswith(suffix) for suffix in INJECTION_NO_WEIGHT_DECAY_SUFFIXES)
+    ]
+    expected_injection_no_wd = {
+        name
+        for name, _parameter in actual.named_parameters()
+        if any(name.lower().endswith(suffix) for suffix in INJECTION_NO_WEIGHT_DECAY_SUFFIXES)
+    }
     effective_no_wd = {name for group in groups if group["weight_decay"] == 0.0 for name in group["names"]}
-    injection_no_wd = [name for name in no_wd_names if name in effective_no_wd]
+    injection_no_wd = sorted(expected_injection_no_wd & effective_no_wd)
     return {
         "groups": groups,
         "flagged_no_weight_decay": sorted(no_wd_names),
-        "flagged_parameters_effectively_no_weight_decay": sorted(injection_no_wd),
-        "all_flagged_parameters_no_weight_decay": set(no_wd_names).issubset(effective_no_wd),
+        "expected_injection_no_weight_decay": sorted(expected_injection_no_wd),
+        "flagged_parameters_effectively_no_weight_decay": injection_no_wd,
+        "all_flagged_parameters_no_weight_decay": bool(expected_injection_no_wd)
+        and expected_injection_no_wd.issubset(effective_no_wd)
+        and set(no_wd_names).issubset(effective_no_wd),
     }
 
 

@@ -32,6 +32,10 @@ def _load_model(model_path: Path, device: str = "cpu") -> tuple[Any, Any]:
     model = AutoModelForCausalLM.from_pretrained(model_path, local_files_only=True, torch_dtype=torch.float32)
     tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
     model.to(device)
+    # HF checkpoint materialization (and, on some torch versions, device
+    # movement) can replace Parameter objects and drop Python-only flags.
+    recursive_model = getattr(model, "model", model)
+    recursive_model.recurrent.injection.mark_no_weight_decay()
     return model, tokenizer
 
 
@@ -469,8 +473,11 @@ def validate_model_semantics(model: Any, *, device: str = "cpu") -> dict[str, An
     expected_decay = math.sqrt(1.0 / 5.0)
     if not torch.allclose(decay.detach(), torch.full_like(decay, expected_decay), rtol=1e-5, atol=1e-6):
         raise AssertionError("initial decay does not match sqrt(1/5)")
-    for name in ("A_log", "dt_bias", "B"):
-        if not bool(getattr(injection, name)._no_weight_decay):
+    declared_no_weight_decay = tuple(injection.no_weight_decay_parameter_names())
+    if declared_no_weight_decay != ("A_log", "dt_bias", "B"):
+        raise AssertionError(f"unexpected injection no-weight-decay declaration: {declared_no_weight_decay}")
+    for name in declared_no_weight_decay:
+        if not bool(getattr(getattr(injection, name), "_no_weight_decay", False)):
             raise AssertionError(f"{name} missing _no_weight_decay flag")
     return {"state_shape": list(state.shape), "state_nonzero": True, "state_is_parameter": False, "state_init": "like-init", "state_init_std": audit["state_init_std"], "embedding_scale": audit["embedding_scale"], "pn_single_compute_reused": True, "active_updates_per_sample": update_counts, "noop_updates_per_sample": noop_counts, "final_four_all_active": True, "injection_formula_match": True, "decay_range": [float(decay.min()), float(decay.max())], "initial_decay": float(decay.mean()), "initial_decay_target": expected_decay, "B_identity": True, "injection_no_weight_decay": True}
 

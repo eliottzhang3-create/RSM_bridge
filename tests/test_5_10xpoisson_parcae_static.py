@@ -111,6 +111,23 @@ class PoissonParcaeStaticContractTest(unittest.TestCase):
         for marker in ("SAMPLING_POLICY = \"truncated_poisson\"", "SAMPLER_VERSION", "POISSON_LAMBDA", "POISSON_SUPPORT", "POISSON_NORMALIZATION_Z", "recursive_sampler_version", "recursive_poisson_lambda", "recursive_poisson_support", "recursive_poisson_probabilities", "recursive_poisson_normalization_z", "recursive_state_init_std", "recursive_embedding_scale", "recursive_prelude_norm", "recursive_injection_formula", "recursive_injection_no_weight_decay", "conversion_metadata.json", "checkpoint_complete.json", "tempfile.mkdtemp", "staging.replace(output)", "allow-overwrite", "FORBIDDEN_CHECKOUT"):
             self.assertIn(marker, self.converter_text + self.stage4_text)
 
+    def test_no_weight_decay_survives_checkpoint_parameter_replacement(self):
+        # The persistent optimizer contract must use qualified parameter names;
+        # _no_weight_decay is only a convenience flag and is not serialized.
+        for marker in (
+            "NO_WEIGHT_DECAY_PARAMETER_NAMES",
+            "mark_no_weight_decay",
+            "no_weight_decay_parameter_names",
+        ):
+            self.assertIn(marker, self.model_text + self.stage1_text)
+        for marker in (
+            "INJECTION_NO_WEIGHT_DECAY_SUFFIXES",
+            "module_name.endswith(suffix)",
+            "expected_injection_no_weight_decay",
+            "bool(expected_injection_no_wd)",
+        ):
+            self.assertIn(marker, self.stage4_text)
+
     def test_stage4_resume_ddp_and_optimizer_wiring(self):
         for marker in ("--resume-from", "_load_resume_state", "_resume_sampler_sequence_audit", "_resume_step_hint", "rng_states_by_rank", "optimizer_group_audit", "build_optimizer_param_groups", "find_unused_parameters=False", "all_rank_depth_summaries", "rank_local_tmax", "gradient_shape_fingerprint", "global_window_loss_sum", "all_reduce(global_window_loss_sum", "FORMAL data ended before target", "no_global_tmax_broadcast", "torchrun", "_gradient_audit_passes", "all_physical_layers_finite_nonzero", "all_gradients_finite_nonzero", "total_grad_norm must be finite and >0", "total_grad_norm_finite_nonzero", "error_if_nonfinite=False", "_collective_check", "_resume_configuration_mismatches", "checkpoint_seed", "current_seed"):
             self.assertIn(marker, self.stage4_text + (ROOT / "code" / "RSmol" / "scripts" / "smoke_recursive_5_10xpoisson_parcae.sh").read_text(encoding="utf-8"))
