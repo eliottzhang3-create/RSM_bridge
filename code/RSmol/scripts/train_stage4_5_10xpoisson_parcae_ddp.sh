@@ -16,6 +16,8 @@ TOKENIZER_PATH="${RSMOL_5_10XPOISSON_PARCAE_TOKENIZER_PATH:-}"
 DATA_DIR="${RSMOL_5_10XPOISSON_PARCAE_DATA_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset}"
 OUTPUT_DIR="${RSMOL_5_10XPOISSON_PARCAE_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10xpoisson_parcae/$(date +%Y%m%d_%H%M%S)}"
 WORLD_SIZE="${RSMOL_5_10XPOISSON_PARCAE_WORLD_SIZE:-8}"
+MICRO_BATCH_SIZE="${RSMOL_5_10XPOISSON_PARCAE_MICRO_BATCH_SIZE:-8}"
+GRADIENT_ACCUMULATION_STEPS="${RSMOL_5_10XPOISSON_PARCAE_GRADIENT_ACCUMULATION_STEPS:-16}"
 if [[ "$GATE" == "D" || "$GATE" == "FORMAL" ]]; then
   if [[ "$WORLD_SIZE" != "8" ]]; then
     echo "5_10xpoisson_parcae $GATE requires exactly 8 ranks; got WORLD_SIZE=$WORLD_SIZE" >&2
@@ -35,7 +37,7 @@ fi
 
 ARGS=(--gate "$GATE" --model-path "$MODEL_PATH" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR"
   --world-size "$WORLD_SIZE" --backend "${RSMOL_5_10XPOISSON_PARCAE_BACKEND:-nccl}"
-  --micro-batch-size 8 --gradient-accumulation-steps 16 --context-length 1024
+  --micro-batch-size "$MICRO_BATCH_SIZE" --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --context-length 1024
   --max-optimizer-steps "$MAX_STEPS" --scheduler-total-steps "$SCHEDULER_STEPS"
   --warmup-steps "$WARMUP_STEPS" --save-every "${RSMOL_5_10XPOISSON_PARCAE_SAVE_EVERY:-500}"
   --checkpoint-retention 3 --seed "${RSMOL_5_10XPOISSON_PARCAE_SEED:-0}")

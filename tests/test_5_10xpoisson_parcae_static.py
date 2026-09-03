@@ -190,6 +190,12 @@ class PoissonParcaeStaticContractTest(unittest.TestCase):
         self.assertIn("total_grad_norm_finite_nonzero", (ROOT / "README.md").read_text(encoding="utf-8"))
         self.assertIn('"total_grad_norm": float(total_grad_norm.detach().item())', self.stage4_text)
         self.assertNotIn('"total_grad_norm": float(total_grad_norm.detach().item()) if audit_point else None', self.stage4_text)
+        wrapper_text = (ROOT / "code" / "RSmol" / "scripts" / "train_stage4_5_10xpoisson_parcae_ddp.sh").read_text(encoding="utf-8")
+        submit_text = (ROOT / "code" / "RSmol" / "run_stage4_5_10xpoisson_parcae_3090.sh").read_text(encoding="utf-8")
+        self.assertIn("RSMOL_5_10XPOISSON_PARCAE_MICRO_BATCH_SIZE", wrapper_text + submit_text)
+        self.assertIn("RSMOL_5_10XPOISSON_PARCAE_GRADIENT_ACCUMULATION_STEPS", wrapper_text + submit_text)
+        self.assertIn('--micro-batch-size "$MICRO_BATCH_SIZE"', wrapper_text)
+        self.assertIn('--gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS"', wrapper_text)
 
     def test_cursor_identity_rejects_resume_environment_changes(self):
         stream = self.stage4.DistributedParquetStream.__new__(self.stage4.DistributedParquetStream)
