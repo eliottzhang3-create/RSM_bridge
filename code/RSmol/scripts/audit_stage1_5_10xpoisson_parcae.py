@@ -111,16 +111,23 @@ def _seed_context(device: Any, seed: int):
 def _cache_storage(cache: Any, slot: int) -> tuple[Any, Any]:
     """Read DynamicCache key/value storage across transformers 4.54 layouts."""
 
+    # New cache API first.  Merely reading cache.key_cache/value_cache emits
+    # a deprecation warning in transformers 4.54 and is removed in 4.56.
+    layers = getattr(cache, "layers", None)
+    if layers is not None and int(slot) < len(layers):
+        layer = layers[int(slot)]
+        keys = getattr(layer, "keys", None)
+        values = getattr(layer, "values", None)
+        if keys is None:
+            keys = getattr(layer, "key_cache", None)
+        if values is None:
+            values = getattr(layer, "value_cache", None)
+        return keys, values
+    # Compatibility fallback for transformers versions predating cache.layers.
     key_cache = getattr(cache, "key_cache", None)
     value_cache = getattr(cache, "value_cache", None)
     if key_cache is not None and value_cache is not None and int(slot) < len(key_cache):
         return key_cache[int(slot)], value_cache[int(slot)]
-    layers = getattr(cache, "layers", None)
-    if layers is not None and int(slot) < len(layers):
-        layer = layers[int(slot)]
-        keys = getattr(layer, "keys", getattr(layer, "key_cache", None))
-        values = getattr(layer, "values", getattr(layer, "value_cache", None))
-        return keys, values
     raise AssertionError(f"cache has no logical slot {slot} key/value storage")
 
 
@@ -293,7 +300,24 @@ def _generation_audit_one(model: Any, input_ids: Any, *, middle_loop_count: int 
             handles.append(recursive_model.register_forward_pre_hook(lambda module, args: explicit_args.append(None)))
         handles.append(recursive_model.register_forward_hook(recursive_post_hook))
         handles.append(model.register_forward_hook(outer_post_hook))
-        kwargs: dict[str, Any] = {"input_ids": input_ids, "max_new_tokens": 2, "do_sample": False, "use_cache": True}
+        pad_token_id = getattr(getattr(model, "generation_config", None), "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(model.config, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(model.config, "eos_token_id", None)
+        if pad_token_id is None:
+            raise AssertionError("generation audit requires an explicit pad_token_id or eos_token_id")
+        # The synthetic prompt contains no padding.  Pass an explicit all-one
+        # mask because pad_token_id may equal eos_token_id and is then not
+        # inferable by transformers.
+        kwargs: dict[str, Any] = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids, dtype=torch.long),
+            "pad_token_id": int(pad_token_id),
+            "max_new_tokens": 2,
+            "do_sample": False,
+            "use_cache": True,
+        }
         if middle_loop_count is not None:
             kwargs["middle_loop_count"] = int(middle_loop_count)
         with torch.inference_mode():

@@ -235,6 +235,9 @@ class PoissonParcaeStaticContractTest(unittest.TestCase):
         self.assertNotIn("physical_index=layer.layer_idx", self.model_text)
         self.assertIn("for physical_index, layer in enumerate(self.prefix_layers)", self.model_text)
         self.assertIn("detached_decay = decay.detach()", self.stage1_text)
+        self.assertLess(self.stage1_text.index('layers = getattr(cache, "layers", None)'), self.stage1_text.index('key_cache = getattr(cache, "key_cache", None)'))
+        self.assertIn('"attention_mask": torch.ones_like(input_ids, dtype=torch.long)', self.stage1_text)
+        self.assertIn('"pad_token_id": int(pad_token_id)', self.stage1_text)
 
     def test_formal_arithmetic(self):
         self.assertEqual(self.stage4.DEFAULT_FORMAL_OPTIMIZER_STEPS, 9244)
