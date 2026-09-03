@@ -677,10 +677,14 @@ class RecursiveLlama5_10xpoisson_parcaeModel(LlamaPreTrainedModel):
         causal_mask = _causal_mask(attention_mask=attention_mask, batch_size=batch_size, query_length=query_length, past_length=past_length, dtype=hidden_states.dtype, device=hidden_states.device)
         position_embeddings = self.rotary_emb(hidden_states, position_ids=position_ids)
         all_hidden_states: tuple[torch.Tensor, ...] = ()
-        for layer in self.prefix_layers:
+        for physical_index, layer in enumerate(self.prefix_layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
-            hidden_states = _call_decoder_layer(layer, hidden_states, attention_mask=causal_mask, position_ids=position_ids, cache=None if cache is None else LogicalSlotCacheView(cache, physical_index=layer.layer_idx, logical_slot=layer.layer_idx), use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings)[0]
+            # LlamaDecoderLayer accepts layer_idx for constructing attention,
+            # but transformers versions do not consistently expose it again
+            # as layer.layer_idx.  Our ModuleList order is the authoritative
+            # physical/logical prefix mapping (0..4).
+            hidden_states = _call_decoder_layer(layer, hidden_states, attention_mask=causal_mask, position_ids=position_ids, cache=None if cache is None else LogicalSlotCacheView(cache, physical_index=physical_index, logical_slot=physical_index), use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings)[0]
         e = hidden_states
         pn_e = self.prelude_norm(e)  # PN(e) is the sole recurrent input injection.
         h = self._initialize_state(e)

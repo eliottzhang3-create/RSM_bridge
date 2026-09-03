@@ -232,6 +232,9 @@ class PoissonParcaeStaticContractTest(unittest.TestCase):
         self.assertIn("resolved_depths", self.stage1_text)
         self.assertIn("self.post_init()\n        # The outer causal-LM", self.model_text)
         self.assertIn("self.model.recurrent.injection.reset_parameters()", self.model_text)
+        self.assertNotIn("physical_index=layer.layer_idx", self.model_text)
+        self.assertIn("for physical_index, layer in enumerate(self.prefix_layers)", self.model_text)
+        self.assertIn("detached_decay = decay.detach()", self.stage1_text)
 
     def test_formal_arithmetic(self):
         self.assertEqual(self.stage4.DEFAULT_FORMAL_OPTIMIZER_STEPS, 9244)

@@ -479,7 +479,8 @@ def validate_model_semantics(model: Any, *, device: str = "cpu") -> dict[str, An
     for name in declared_no_weight_decay:
         if not bool(getattr(getattr(injection, name), "_no_weight_decay", False)):
             raise AssertionError(f"{name} missing _no_weight_decay flag")
-    return {"state_shape": list(state.shape), "state_nonzero": True, "state_is_parameter": False, "state_init": "like-init", "state_init_std": audit["state_init_std"], "embedding_scale": audit["embedding_scale"], "pn_single_compute_reused": True, "active_updates_per_sample": update_counts, "noop_updates_per_sample": noop_counts, "final_four_all_active": True, "injection_formula_match": True, "decay_range": [float(decay.min()), float(decay.max())], "initial_decay": float(decay.mean()), "initial_decay_target": expected_decay, "B_identity": True, "injection_no_weight_decay": True}
+    detached_decay = decay.detach()
+    return {"state_shape": list(state.shape), "state_nonzero": True, "state_is_parameter": False, "state_init": "like-init", "state_init_std": audit["state_init_std"], "embedding_scale": audit["embedding_scale"], "pn_single_compute_reused": True, "active_updates_per_sample": update_counts, "noop_updates_per_sample": noop_counts, "final_four_all_active": True, "injection_formula_match": True, "decay_range": [float(detached_decay.min().item()), float(detached_decay.max().item())], "initial_decay": float(detached_decay.mean().item()), "initial_decay_target": expected_decay, "B_identity": True, "injection_no_weight_decay": True}
 
 
 def validate_gradient_policy(model: Any, *, device: str = "cpu") -> dict[str, Any]:
