@@ -37,6 +37,8 @@ PHYSICAL_LAYER_COUNT, PREFIX_LAYER_COUNT, MIDDLE_LAYER_COUNT, SUFFIX_LAYER_COUNT
 DEFAULT_WORLD_SIZE = 8
 DEFAULT_MICRO_BATCH_SIZE = 8
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 16
+DEFAULT_FORMAL_MICRO_BATCH_SIZE = 2
+DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS = 64
 DEFAULT_CONTEXT_LENGTH = 1024
 DEFAULT_MAX_OPTIMIZER_STEPS = 10
 DEFAULT_FORMAL_OPTIMIZER_STEPS = 9244
@@ -44,8 +46,8 @@ DEFAULT_FORMAL_WARMUP_STEPS = 463  # ceil(5% of the formal 9244-step schedule)
 DEFAULT_GLOBAL_EFFECTIVE_BATCH = DEFAULT_WORLD_SIZE * DEFAULT_MICRO_BATCH_SIZE * DEFAULT_GRADIENT_ACCUMULATION_STEPS
 DEFAULT_TARGET_SAMPLES_PER_RANK = DEFAULT_MICRO_BATCH_SIZE * DEFAULT_GRADIENT_ACCUMULATION_STEPS * DEFAULT_MAX_OPTIMIZER_STEPS
 DEFAULT_LOCAL_MICROBATCHES = DEFAULT_MAX_OPTIMIZER_STEPS * DEFAULT_GRADIENT_ACCUMULATION_STEPS
-DEFAULT_FORMAL_SAMPLES_PER_RANK = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_GRADIENT_ACCUMULATION_STEPS * DEFAULT_MICRO_BATCH_SIZE
-DEFAULT_FORMAL_LOCAL_MICROBATCHES = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_GRADIENT_ACCUMULATION_STEPS
+DEFAULT_FORMAL_SAMPLES_PER_RANK = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS * DEFAULT_FORMAL_MICRO_BATCH_SIZE
+DEFAULT_FORMAL_LOCAL_MICROBATCHES = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS
 DEFAULT_FORMAL_GLOBAL_SAMPLES = DEFAULT_FORMAL_SAMPLES_PER_RANK * DEFAULT_WORLD_SIZE
 DEFAULT_LEARNING_RATE, DEFAULT_MIN_LR = 2e-4, 2e-5
 DEFAULT_SAVE_EVERY, DEFAULT_CHECKPOINT_RETENTION = 500, 3
@@ -278,10 +280,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
             raise ValueError("FORMAL requires save_every=500")
         if args.checkpoint_retention != DEFAULT_CHECKPOINT_RETENTION:
             raise ValueError("FORMAL requires checkpoint_retention=3")
-        if args.gradient_accumulation_steps != DEFAULT_GRADIENT_ACCUMULATION_STEPS:
-            raise ValueError("FORMAL requires gradient_accumulation_steps=16")
-        if args.micro_batch_size != DEFAULT_MICRO_BATCH_SIZE:
-            raise ValueError("FORMAL requires micro_batch_size=8")
+        if args.gradient_accumulation_steps != DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS:
+            raise ValueError("FORMAL requires gradient_accumulation_steps=64 for the memory-safe 2x64 topology")
+        if args.micro_batch_size != DEFAULT_FORMAL_MICRO_BATCH_SIZE:
+            raise ValueError("FORMAL requires micro_batch_size=2 for the memory-safe 2x64 topology")
         if args.context_length != DEFAULT_CONTEXT_LENGTH:
             raise ValueError("FORMAL requires context_length=1024")
         if args.world_size != DEFAULT_WORLD_SIZE:
@@ -318,8 +320,8 @@ def _validate_formal_runtime_configuration(config: Stage4Config, *, world_size: 
         raise RuntimeError(f"{config.gate} requires WORLD_SIZE=8, got {world_size}")
     if config.gate == "FORMAL":
         expected = {
-            "micro_batch_size": DEFAULT_MICRO_BATCH_SIZE,
-            "gradient_accumulation_steps": DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+            "micro_batch_size": DEFAULT_FORMAL_MICRO_BATCH_SIZE,
+            "gradient_accumulation_steps": DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS,
             "context_length": DEFAULT_CONTEXT_LENGTH,
             "max_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS,
             "scheduler_total_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS,
@@ -1392,7 +1394,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
             "dry_run": True,
             "configuration": asdict(config),
             "scheduler": scheduler_metadata(total_steps=config.scheduler_total_steps, warmup_steps=config.warmup_steps, max_lr=config.learning_rate, min_lr=config.min_lr),
-            "formal_contract": {"world_size": 8, "micro_batch_size": 8, "gradient_accumulation_steps": 16, "context_length": 1024, "max_optimizer_steps": 9244, "scheduler_total_steps": 9244, "warmup_steps": 463, "save_every": 500, "retention": 3, "max_microbatches": None},
+            "formal_contract": {"world_size": 8, "micro_batch_size": DEFAULT_FORMAL_MICRO_BATCH_SIZE, "gradient_accumulation_steps": DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS, "global_effective_batch_size": DEFAULT_GLOBAL_EFFECTIVE_BATCH, "context_length": 1024, "max_optimizer_steps": 9244, "scheduler_total_steps": 9244, "warmup_steps": 463, "save_every": 500, "retention": 3, "max_microbatches": None},
             "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS,
             "formal_warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS,
             "sampling_contract": sampling_contract,
@@ -1492,7 +1494,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 config.warmup_steps = int(saved_configuration.get("warmup_steps", config.warmup_steps))
         elif config.gate == "FORMAL":
             saved_configuration = state.get("configuration", {})
-            required_saved = {"world_size": 8, "micro_batch_size": 8, "gradient_accumulation_steps": 16, "context_length": 1024, "max_optimizer_steps": 9244, "scheduler_total_steps": 9244, "warmup_steps": 463, "save_every": 500, "checkpoint_retention": 3, "max_microbatches": None}
+            required_saved = {"world_size": 8, "micro_batch_size": DEFAULT_FORMAL_MICRO_BATCH_SIZE, "gradient_accumulation_steps": DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS, "context_length": 1024, "max_optimizer_steps": 9244, "scheduler_total_steps": 9244, "warmup_steps": 463, "save_every": 500, "checkpoint_retention": 3, "max_microbatches": None}
             if not isinstance(saved_configuration, dict) or any(saved_configuration.get(key) != value for key, value in required_saved.items()):
                 raise ValueError("FORMAL resume checkpoint configuration is not the exact 8-rank/9244-step contract")
         if optimizer_step > config.max_optimizer_steps:

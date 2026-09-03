@@ -253,9 +253,11 @@ class PoissonParcaeStaticContractTest(unittest.TestCase):
     def test_formal_arithmetic(self):
         self.assertEqual(self.stage4.DEFAULT_FORMAL_OPTIMIZER_STEPS, 9244)
         self.assertEqual(self.stage4.DEFAULT_FORMAL_WARMUP_STEPS, 463)
-        self.assertEqual(self.stage4.DEFAULT_FORMAL_LOCAL_MICROBATCHES, 9244 * 16)
-        self.assertEqual(self.stage4.DEFAULT_FORMAL_SAMPLES_PER_RANK, 9244 * 16 * 8)
-        self.assertEqual(self.stage4.DEFAULT_FORMAL_GLOBAL_SAMPLES, 9244 * 16 * 8 * 8)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_MICRO_BATCH_SIZE, 2)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS, 64)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_LOCAL_MICROBATCHES, 9244 * 64)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_SAMPLES_PER_RANK, 9244 * 64 * 2)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_GLOBAL_SAMPLES, 9244 * 64 * 2 * 8)
 
 
 if __name__ == "__main__":
