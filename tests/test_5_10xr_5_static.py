@@ -48,42 +48,50 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
         cls.converter = load_module(CONVERTER, "convert_5_10xr_5_static")
         cls.stage4 = load_module(STAGE4, "stage4_5_10xr_5_static")
 
+    def test_poisson_default_paths_are_isolated(self):
+        self.assertIn("SmolLM2-5-10xr-5-poisson", self.smoke_runtime_text)
+        self.assertIn("stage1_5_10xr_5_poisson_", self.smoke_runtime_text)
+        self.assertIn("SmolLM2-5-10xr-5-poisson", self.stage4_runtime_text)
+        self.assertIn("stage4_5_10xr_5_poisson/", self.stage4_runtime_text)
+        self.assertEqual(
+            self.stage4.DEFAULT_OUTPUT_DIR.as_posix(),
+            "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10xr_5_poisson",
+        )
     def test_dynamic_schedule_all_r_values(self):
-        for r, logical in ((4, 50), (5, 60), (6, 70), (7, 80)):
+        for r, logical in ((4, 50), (5, 60), (6, 70), (7, 80), (8, 90), (9, 100), (10, 110)):
             schedule = self.converter.SOURCE_LAYER_INDICES_0BASED
             self.assertEqual(len(schedule), 20)
-            self.assertEqual(len(self.stage4.LOGICAL_TO_PHYSICAL), 80)
+            self.assertEqual(len(self.stage4.LOGICAL_TO_PHYSICAL), 110)
             model_text = self.model_text
             self.assertIn("def build_5_10xr_5_schedule", model_text)
-            self.assertIn("middle_loop_count must be in [4, 7]", model_text)
+            self.assertIn("middle_loop_count must be in [4, 10]", model_text)
             self.assertEqual(5 + 10 * r + 5, logical)
 
     def test_sampling_probabilities_and_step_determinism(self):
-        self.assertEqual(self.stage4.SAMPLING_WEIGHTS, {4: 16, 5: 25, 6: 36, 7: 49})
-        self.assertEqual(self.stage4.SAMPLING_WEIGHT_TOTAL, 126)
-        self.assertEqual(
-            {r: self.stage4.SAMPLING_WEIGHTS[r] / self.stage4.SAMPLING_WEIGHT_TOTAL for r in (4, 5, 6, 7)},
-            {4: 16 / 126, 5: 25 / 126, 6: 36 / 126, 7: 49 / 126},
-        )
-        values = [self.stage4.sample_middle_loop_count(17, step) for step in range(512)]
-        self.assertEqual(values[:32], [self.stage4.sample_middle_loop_count(17, step) for step in range(32)])
-        self.assertTrue(all(value in (4, 5, 6, 7) for value in values))
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is not installed in the dependency-light local checkout")
+        self.assertEqual(self.stage4.POISSON_SUPPORT, tuple(range(4, 11)))
+        self.assertAlmostEqual(self.stage4.POISSON_NORMALIZATION_Z, 0.8197137896443656)
+        values = [self.stage4.sample_middle_loop_counts(17, 2, 0, step, 2) for step in range(512)]
+        self.assertEqual(values[:32], [self.stage4.sample_middle_loop_counts(17, 2, 0, step, 2) for step in range(32)])
+        self.assertTrue(all(int(value) in range(4, 11) for row in values for value in row))
         before = random.getstate()
-        self.stage4.sample_middle_loop_count(17, 999)
+        self.stage4.sample_middle_loop_counts(17, 2, 0, 999, 2)
         self.assertEqual(random.getstate(), before)
 
     def test_exact_checkpoint_sampling_contract(self):
         contract = {
-            "sampling_policy": "increasing_power_weight",
-            "sampling_alpha": 2,
-            "sampling_weights": {"4": 16, "5": 25, "6": 36, "7": 49},
-            "sampling_weight_total": 126,
+            "sampling_policy": "truncated_poisson",
+            "sampler_version": self.stage4.SAMPLER_VERSION,
+            "poisson_lambda": 7.0,
+            "poisson_support": list(range(4, 11)),
+            "poisson_probabilities": list(self.stage4.POISSON_PROBABILITIES),
             "sampler_key": self.stage4.SAMPLER_KEY,
         }
         self.stage4._validate_exact_sampling_contract(contract, label="unit")
         for key, bad_value in (
-            ("sampling_weights", {"4": 16, "5": 25, "6": 36, "7": 48}),
-            ("sampling_weight_total", 125),
+            ("poisson_support", [4, 5, 6]),
+            ("poisson_lambda", 6.0),
             ("sampler_key", "legacy"),
         ):
             broken = dict(contract)
@@ -101,8 +109,8 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
         self.assertLess(preaudit, hooks)
         self.assertIn("len(sequence) == expected_trace_length", self.stage4_text)
         self.assertIn("len(backward_sequence) == expected_trace_length", self.stage4_text)
-        self.assertIn("all(chunk == forward_expected for chunk in forward_chunks)", self.stage4_text)
-        self.assertIn("all(chunk == backward_expected for chunk in backward_chunks)", self.stage4_text)
+        self.assertIn("zip(forward_chunks, forward_expected)", self.stage4_text)
+        self.assertIn("zip(backward_chunks, backward_expected)", self.stage4_text)
 
     def test_model_selective_bptt_contract(self):
         for marker in (
@@ -111,7 +119,7 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
             "backward_traversed_middle_loops", "_bind_cache_middle_loop_count",
             "cache is already bound to a different middle_loop_count",
             "DEFAULT_INFERENCE_MIDDLE_LOOPS = 7", "PARAMETER_GRADIENT_TAIL_LOOPS = 4",
-            "Invalid 5-10xr-5 sampling metadata", "SAMPLER_KEY",
+            "Invalid 5-10xr-5-Poisson sampling metadata", "SAMPLER_KEY",
         ):
             self.assertIn(marker, self.model_text)
         self.assertNotIn("no_grad():", self.model_text)
@@ -119,15 +127,15 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
     def test_converter_metadata_and_isolation(self):
         for marker in (
             "AutoConfig.from_pretrained", "raw_layers != 30", "actual_layers != 30",
-            "source_layers_module", "len(source_layers_module) != 30", "target.num_hidden_layers = 80",
+            "source_layers_module", "len(source_layers_module) != 30", "target.num_hidden_layers = 110",
             "recursive_source_num_hidden_layers = 30", "recursive_source_layer_count = 30",
             "recursive_min_middle_loops", "recursive_max_middle_loops",
-            "recursive_parameter_gradient_tail_loops", "sampling_weights",
+            "recursive_parameter_gradient_tail_loops", "recursive_poisson_support",
             "target.architectures = [\"RecursiveLlama5_10xr_5ForCausalLM\"]",
             "tempfile.mkdtemp", "staging.replace(output)", "allow-overwrite", "FORBIDDEN_CHECKOUT",
         ):
             self.assertIn(marker, self.converter_text)
-        self.assertEqual(self.converter.DEFAULT_OUTPUT_DIR.as_posix(), "/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10xr-5")
+        self.assertEqual(self.converter.DEFAULT_OUTPUT_DIR.as_posix(), "/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10xr-5-poisson")
         self.assertNotIn("recursive_model_5_10_5", self.converter_text)
 
     def test_stage1_and_stage4_audit_contracts(self):
@@ -140,28 +148,27 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
             "expected_entries = r * MIDDLE_LAYER_COUNT", "middle loop {loop} must contain physical layers 5..14 exactly once",
             "parameter_identity_and_requires_grad_restored",
             "suffix_layers_with_grad", "suffix_all_receive_finite_nonzero_grad",
-            "recursive_sampling_policy", "recursive_sampling_weight_total", "recursive_sampler_key",
+            "recursive_sampling_policy", "recursive_poisson_support", "recursive_sampler_key",
         ):
             self.assertIn(marker, self.smoke_text)
         self.assertIn("prepare_inputs_for_generation", self.model_text)
         for marker in (
-            "MODEL_ARCHITECTURE_CONTRACT = \"logical_50_80_physical_20_5_10xr_5_dynamic_r4_7_tail4\"",
-            "sample_middle_loop_count", "broadcast_middle_loop_count", "optimizer_step",
+            "MODEL_ARCHITECTURE_CONTRACT = \"logical_50_110_physical_20_5_10xr_5_poisson_r4_10_tail4\"",
+            "sample_middle_loop_counts", "optimizer_step",
             "all_rank_r_equal", "parameter_gradient_enabled_middle_loops", "sampling_contract",
-            "DEFAULT_FORMAL_OPTIMIZER_STEPS = 4500", "DEFAULT_FORMAL_WARMUP_STEPS",
-            "FORMAL requires scheduler_total_steps=4500", "warmup_steps=225",
+            "DEFAULT_FORMAL_OPTIMIZER_STEPS = 9244", "DEFAULT_FORMAL_WARMUP_STEPS",
+            "FORMAL requires scheduler_total_steps=9244", "warmup_steps=463",
             "data_cursors_by_rank", "checkpoint_contract", "fixed_parameter_gradient_tail_loops",
-            "r_sequence_matches_uninterrupted", "sampled_r_expected_from_step_key",
+            "depth_sequence_matches_uninterrupted",
             "selective_middle_gradient_audit", "early_parameter_gradient_edges_absent",
             "all_r_backward_audits", "for middle_loop_count in range(MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS + 1)",
             "Install the sampled-r trace hooks only after the all-r pre-audit",
-            "all_microbatches_same_r_trace", "expected_sampled_r_trace_total_length",
+            "all_microbatches_match_local_tmax_trace", "expected_sampled_r_trace_total_length",
             "prefix_layers_with_grad", "prefix_all_receive_finite_nonzero_grad",
             "suffix_layers_with_grad", "suffix_all_receive_finite_nonzero_grad",
-            "sampler seed mismatch", "sampled_r_expected_from_step_key",
-            "\"sampling_weight_total\": SAMPLING_WEIGHT_TOTAL",
+            "sample_middle_loop_counts",
             "_validate_exact_sampling_contract", "Resume checkpoint_complete.json",
-            "sha256", "random.Random(local_seed).randrange(SAMPLING_WEIGHT_TOTAL)",
+            "sha256", "torch.multinomial", "per local sequence",
         ):
             self.assertIn(marker, self.stage4_text)
 
@@ -172,15 +179,15 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
         self.assertIn("pdgpu-3090", self.stage4_submit_text)
         self.assertIn("-c 32 -m 256G -g 8", self.stage4_submit_text)
         self.assertIn("-c 8 -m 32G -g 1", self.smoke_submit_text)
-        self.assertIn("4500", self.stage4_runtime_text)
-        self.assertIn("225", self.stage4_runtime_text)
+        self.assertIn("9244", self.stage4_runtime_text)
+        self.assertIn("463", self.stage4_runtime_text)
 
     def test_formal_sample_contract(self):
-        self.assertEqual(4500 * 8 * 16 * 8, 4_608_000)
-        self.assertEqual(4500 * 16 * 8, 576_000)
-        self.assertEqual(4500 * 16, 72_000)
-        self.assertEqual(self.stage4.DEFAULT_FORMAL_WARMUP_STEPS, 225)
-        self.assertEqual(self.stage4.formal_save_steps(4500, 500)[-1], 4500)
+        self.assertEqual(9244 * 8 * 64 * 2, 9_465_856)
+        self.assertEqual(9244 * 64 * 2, 1_183_232)
+        self.assertEqual(9244 * 64, 591_616)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_WARMUP_STEPS, 463)
+        self.assertEqual(self.stage4.formal_save_steps(9244, 500)[-1], 9244)
 
 
 if __name__ == "__main__":

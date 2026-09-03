@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a 30-layer SmolLM2 checkpoint to the dynamic 5-10xr-5 model.
+"""Convert a 30-layer SmolLM2 checkpoint to the dynamic 5-10xr-5-Poisson model.
 
 Only the twenty physical layers in the fixed source mapping are copied. The
 destination is assembled in a temporary sibling directory and atomically
@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import platform
 import shutil
 import subprocess
@@ -27,7 +28,7 @@ if str(SCRIPT_ROOT) not in sys.path:
 
 FORBIDDEN_CHECKOUT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM")
 LOCAL_CHECKOUT = SCRIPT_ROOT.parents[1]
-DEFAULT_OUTPUT_DIR = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10xr-5")
+DEFAULT_OUTPUT_DIR = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10xr-5-poisson")
 WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".ckpt")
 TOKENIZER_NAMES = {
     "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
@@ -35,21 +36,21 @@ TOKENIZER_NAMES = {
     "added_tokens.json", "generation_config.json",
 }
 SOURCE_LAYER_INDICES_0BASED = (0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 26, 27, 28, 29)
-LOGICAL_TO_PHYSICAL = (0, 1, 2, 3, 4,
-                       5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-                       5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-                       5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-                       5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-                       5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-                       5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-                       5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-                       15, 16, 17, 18, 19)
+LOGICAL_TO_PHYSICAL = (tuple(range(5)) + tuple(range(5, 15)) * 10 + tuple(range(15, 20)))
 MAPPING_POLICY = "explicit_5_10xr_5_source_layers"
-SAMPLING_POLICY = "increasing_power_weight"
-SAMPLING_ALPHA = 2
-SAMPLING_WEIGHTS = {4: 16, 5: 25, 6: 36, 7: 49}
-SAMPLING_WEIGHT_TOTAL = 126
-SAMPLER_KEY = "seed_plus_optimizer_step_sha256_local_random_randrange126_v1"
+SAMPLING_POLICY = "truncated_poisson"
+SAMPLER_VERSION = "truncated_poisson_lambda7_support4_10_v1"
+SAMPLER_KEY = "sha256_cpu_torch_generator_base_seed_rank_optimizer_step_microbatch_v1"
+POISSON_LAMBDA = 7.0
+POISSON_SUPPORT = tuple(range(4, 11))
+POISSON_NORMALIZATION_Z = sum(
+    math.exp(-POISSON_LAMBDA) * POISSON_LAMBDA**k / math.factorial(k)
+    for k in POISSON_SUPPORT
+)
+POISSON_PROBABILITIES = tuple(
+    (math.exp(-POISSON_LAMBDA) * POISSON_LAMBDA**k / math.factorial(k)) / POISSON_NORMALIZATION_Z
+    for k in POISSON_SUPPORT
+)
 
 
 def _resolved(path: Path) -> Path:
@@ -167,25 +168,28 @@ def build_target_config(source_config: Any) -> Any:
         raise ValueError("SmolLM2-5-10xr-5 requires source num_hidden_layers=30")
     target = copy.deepcopy(source_config)
     # HF's layer count is used here as the maximum logical/cache namespace;
-    # each forward selects a concrete r and executes 50/60/70/80 entries.
-    target.num_hidden_layers = 80
+    # each forward selects a concrete r and executes 50..110 entries.
+    target.num_hidden_layers = 110
     target.recursive_source_num_hidden_layers = 30
     target.recursive_source_layer_count = 30
     target.recursive_layer_count = 20
-    target.recursive_loops = 7
+    target.recursive_loops = 10
     target.recursive_min_middle_loops = 4
-    target.recursive_max_middle_loops = 7
+    target.recursive_max_middle_loops = 10
     target.recursive_default_inference_middle_loops = 7
     target.recursive_parameter_gradient_tail_loops = 4
     target.recursive_backward_policy = "selective_parameter_gradients_final_four_middle_calls_v1"
-    target.recursive_training_loop_mode = "dynamic_per_optimizer_step"
+    target.recursive_training_loop_mode = "per_local_microbatch_per_sequence_truncated_poisson"
     target.recursive_sampling_policy = SAMPLING_POLICY
-    target.recursive_sampling_alpha = SAMPLING_ALPHA
-    target.recursive_sampling_weights = {str(key): value for key, value in SAMPLING_WEIGHTS.items()}
-    target.recursive_sampling_weight_total = SAMPLING_WEIGHT_TOTAL
+    target.recursive_sampler_version = SAMPLER_VERSION
+    target.recursive_poisson_lambda = POISSON_LAMBDA
+    target.recursive_poisson_support = list(POISSON_SUPPORT)
+    target.recursive_poisson_normalization_z = POISSON_NORMALIZATION_Z
+    target.recursive_poisson_Z = POISSON_NORMALIZATION_Z
+    target.recursive_poisson_probabilities = list(POISSON_PROBABILITIES)
     target.recursive_sampler_key = SAMPLER_KEY
     target.recursive_min_logical_layer_count = 50
-    target.recursive_max_logical_layer_count = 80
+    target.recursive_max_logical_layer_count = 110
     target.recursive_prefix_layer_count = 5
     target.recursive_middle_layer_count = 10
     target.recursive_suffix_layer_count = 5
@@ -225,15 +229,18 @@ def _parameter_audit(model: Any) -> dict[str, Any]:
         "source_physical_layer_count": 30,
         "physical_layer_count": len(model.model.layers),
         "logical_layer_count": int(model.config.num_hidden_layers),
-        "logical_cache_slot_count": 80,
-        "recursive_loops": 7,
+        "logical_cache_slot_count": 110,
+        "recursive_loops": 10,
         "min_middle_loops": 4,
-        "max_middle_loops": 7,
+        "max_middle_loops": 10,
         "default_inference_middle_loops": 7,
         "parameter_gradient_tail_loops": 4,
         "sampling_policy": SAMPLING_POLICY,
-        "sampling_alpha": SAMPLING_ALPHA,
-        "sampling_weights": SAMPLING_WEIGHTS,
+        "sampler_version": SAMPLER_VERSION,
+        "poisson_lambda": POISSON_LAMBDA,
+        "poisson_support": list(POISSON_SUPPORT),
+        "poisson_normalization_z": POISSON_NORMALIZATION_Z,
+        "poisson_probabilities": list(POISSON_PROBABILITIES),
         "middle_recurrent_count": 10,
         "schedule": list(LOGICAL_TO_PHYSICAL),
         "shared_storage_is_unique": len(unique) == len(list(model.parameters())),
@@ -293,12 +300,12 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
             "status": "ok", "conversion": "SmolLM2-5-10xr-5", "source_checkpoint": str(source),
             "target_output": str(output), "source_config": source_config_summary(source_config),
             "source_config_json": raw, "target_config": target_config.to_dict(),
-            "source_logical_layer_count": 30, "target_logical_layer_count": 80,
+            "source_logical_layer_count": 30, "target_logical_layer_count": 110,
             "physical_layer_count": 20, "recursive_layer_count": 20,
             "source_layers": 30, "target_layers": 20,
             "target_physical_unique_layers": 20,
             "prefix_layer_count": 5, "middle_recurrent_count": 10, "suffix_layer_count": 5,
-            "loops": 7, "recursive_loops": 7, "min_middle_loops": 4, "max_middle_loops": 7,
+            "loops": 10, "recursive_loops": 10, "min_middle_loops": 4, "max_middle_loops": 10,
             "default_inference_middle_loops": 7, "parameter_gradient_tail_loops": 4,
             "loops_scope": "middle_only", "recursive_loops_scope": "middle_only",
             "logical_to_physical": list(LOGICAL_TO_PHYSICAL),
@@ -313,9 +320,10 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
             "suffix_physical_indices_0based": [15, 16, 17, 18, 19],
             "architectures": ["RecursiveLlama5_10xr_5ForCausalLM"], "mapping_policy": MAPPING_POLICY,
             "backward_policy": "selective_parameter_gradients_final_four_middle_calls_v1",
-            "sampling_policy": SAMPLING_POLICY, "sampling_alpha": SAMPLING_ALPHA,
-            "sampling_weights": SAMPLING_WEIGHTS, "sampling_weight_total": SAMPLING_WEIGHT_TOTAL,
-            "sampler_key": SAMPLER_KEY,
+            "sampling_policy": SAMPLING_POLICY, "sampler_version": SAMPLER_VERSION,
+            "poisson_lambda": POISSON_LAMBDA, "poisson_support": list(POISSON_SUPPORT),
+            "poisson_normalization_z": POISSON_NORMALIZATION_Z,
+            "poisson_probabilities": list(POISSON_PROBABILITIES), "sampler_key": SAMPLER_KEY,
             "parameter_audit": audit, "copied_tokenizer_files": copied, "seed": args.seed,
             "code_commit": git_commit(), "python": sys.version, "platform": platform.platform(),
             "torch": torch.__version__, "transformers": package_version("transformers"),

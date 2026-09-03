@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Stage 4 training/smoke entry point for 5-10xpoisson-parcae.
 
-The formal contract is 9,244 optimizer steps, 16 local microbatches per
-window, eight sequences per local microbatch, and ceil(5%)=463 warmup steps.
+The formal contract is 9,244 optimizer steps, 64 local microbatches per
+window, two sequences per local microbatch, and ceil(5%)=463 warmup steps.
 Every local microbatch samples an independent vector ``(T_1, ..., T_B)`` from
 the exact truncated Poisson distribution.  The vector is deliberately not
 broadcast between ranks.
@@ -50,6 +50,7 @@ DEFAULT_FORMAL_SAMPLES_PER_RANK = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_FORMA
 DEFAULT_FORMAL_LOCAL_MICROBATCHES = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS
 DEFAULT_FORMAL_GLOBAL_SAMPLES = DEFAULT_FORMAL_SAMPLES_PER_RANK * DEFAULT_WORLD_SIZE
 DEFAULT_LEARNING_RATE, DEFAULT_MIN_LR = 2e-4, 2e-5
+DEFAULT_FORMAL_LEARNING_RATE, DEFAULT_FORMAL_MIN_LR = 8e-4, 8e-5
 DEFAULT_SAVE_EVERY, DEFAULT_CHECKPOINT_RETENTION = 500, 3
 SAMPLING_POLICY = "truncated_poisson"
 SAMPLER_VERSION = "truncated_poisson_lambda7_support4_10_v1"
@@ -245,9 +246,9 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=DEFAULT_GRADIENT_ACCUMULATION_STEPS)
     parser.add_argument("--micro-batch-size", type=int, default=DEFAULT_MICRO_BATCH_SIZE)
     parser.add_argument("--context-length", type=int, default=DEFAULT_CONTEXT_LENGTH)
-    parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
+    parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--max-lr", type=float)
-    parser.add_argument("--min-lr", type=float, default=DEFAULT_MIN_LR)
+    parser.add_argument("--min-lr", type=float)
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--save-every", type=int, default=DEFAULT_SAVE_EVERY)
@@ -263,6 +264,25 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     gate = str(args.gate).upper()
+    requested_max_lr = args.max_lr if args.max_lr is not None else args.learning_rate
+    if gate == "FORMAL":
+        learning_rate = (
+            DEFAULT_FORMAL_LEARNING_RATE
+            if requested_max_lr is None
+            else float(requested_max_lr)
+        )
+        min_lr = DEFAULT_FORMAL_MIN_LR if args.min_lr is None else float(args.min_lr)
+        if learning_rate != DEFAULT_FORMAL_LEARNING_RATE:
+            raise ValueError("FORMAL requires maximum learning rate=8e-4")
+        if min_lr != DEFAULT_FORMAL_MIN_LR:
+            raise ValueError("FORMAL requires minimum learning rate=8e-5")
+    else:
+        learning_rate = DEFAULT_LEARNING_RATE if requested_max_lr is None else float(requested_max_lr)
+        min_lr = DEFAULT_MIN_LR if args.min_lr is None else float(args.min_lr)
+    if learning_rate <= 0.0 or min_lr <= 0.0 or min_lr > learning_rate:
+        raise ValueError("learning rates must satisfy 0 < min_lr <= max_lr")
+    if not math.isclose(min_lr, learning_rate * 0.1, rel_tol=0.0, abs_tol=1e-15):
+        raise ValueError("minimum learning rate must equal 0.1 * maximum learning rate")
     if args.max_steps is not None and args.max_optimizer_steps is not None and args.max_steps != args.max_optimizer_steps:
         raise ValueError("--max-steps and --max-optimizer-steps disagree")
     requested_steps = args.max_optimizer_steps if args.max_optimizer_steps is not None else args.max_steps
@@ -300,13 +320,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
             raise ValueError("Gate D is the fixed ten-optimizer-step real-data smoke")
         scheduler_steps = steps if args.scheduler_total_steps is None else args.scheduler_total_steps
         warmup = max(1, math.ceil(scheduler_steps * 0.05)) if args.warmup_steps is None else args.warmup_steps
-    learning_rate = args.learning_rate if args.max_lr is None else args.max_lr
     if gate == "E" and args.resume_from is None:
         raise ValueError("Gate E requires --resume-from")
     if gate == "FORMAL" and args.resume_from is not None:
         # Formal resume is supported, but must continue the exact 9244-step domain.
         pass
-    return Stage4Config(gate=gate, model_path=args.model_path, tokenizer_path=args.tokenizer_path, data_dir=args.data_dir, output_dir=args.output_dir, max_optimizer_steps=int(steps), scheduler_total_steps=int(scheduler_steps), warmup_steps=int(warmup), gradient_accumulation_steps=args.gradient_accumulation_steps, micro_batch_size=args.micro_batch_size, context_length=args.context_length, learning_rate=learning_rate, min_lr=args.min_lr, save_every=args.save_every, checkpoint_retention=args.checkpoint_retention, world_size=args.world_size, report_path=args.report_path, backend=args.backend, weight_decay=args.weight_decay, max_grad_norm=args.max_grad_norm, resume_from=args.resume_from, audit_report=args.audit_report, seed=args.seed, device=args.device, dry_run=args.dry_run, max_microbatches=args.max_microbatches)
+    return Stage4Config(gate=gate, model_path=args.model_path, tokenizer_path=args.tokenizer_path, data_dir=args.data_dir, output_dir=args.output_dir, max_optimizer_steps=int(steps), scheduler_total_steps=int(scheduler_steps), warmup_steps=int(warmup), gradient_accumulation_steps=args.gradient_accumulation_steps, micro_batch_size=args.micro_batch_size, context_length=args.context_length, learning_rate=learning_rate, min_lr=min_lr, save_every=args.save_every, checkpoint_retention=args.checkpoint_retention, world_size=args.world_size, report_path=args.report_path, backend=args.backend, weight_decay=args.weight_decay, max_grad_norm=args.max_grad_norm, resume_from=args.resume_from, audit_report=args.audit_report, seed=args.seed, device=args.device, dry_run=args.dry_run, max_microbatches=args.max_microbatches)
 
 
 def _validate_formal_runtime_configuration(config: Stage4Config, *, world_size: int, dry_run: bool) -> None:
@@ -326,6 +345,8 @@ def _validate_formal_runtime_configuration(config: Stage4Config, *, world_size: 
             "max_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS,
             "scheduler_total_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS,
             "warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS,
+            "learning_rate": DEFAULT_FORMAL_LEARNING_RATE,
+            "min_lr": DEFAULT_FORMAL_MIN_LR,
             "save_every": DEFAULT_SAVE_EVERY,
             "checkpoint_retention": DEFAULT_CHECKPOINT_RETENTION,
             "max_microbatches": None,
@@ -1036,6 +1057,8 @@ def _resume_configuration_mismatches(saved: Mapping[str, Any], current: Stage4Co
         "micro_batch_size": int(current.micro_batch_size),
         "gradient_accumulation_steps": int(current.gradient_accumulation_steps),
         "context_length": int(current.context_length),
+        "learning_rate": float(current.learning_rate),
+        "min_lr": float(current.min_lr),
         "data_dir": _normalized_data_dir(current.data_dir),
     }
     mismatches: dict[str, Any] = {}
@@ -1045,6 +1068,11 @@ def _resume_configuration_mismatches(saved: Mapping[str, Any], current: Stage4Co
             try:
                 saved_value = _normalized_data_dir(saved_value) if saved_value is not None else None
             except Exception:
+                pass
+        elif key in {"learning_rate", "min_lr"} and saved_value is not None:
+            try:
+                saved_value = float(saved_value)
+            except (TypeError, ValueError):
                 pass
         elif saved_value is not None:
             try:
@@ -1394,7 +1422,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
             "dry_run": True,
             "configuration": asdict(config),
             "scheduler": scheduler_metadata(total_steps=config.scheduler_total_steps, warmup_steps=config.warmup_steps, max_lr=config.learning_rate, min_lr=config.min_lr),
-            "formal_contract": {"world_size": 8, "micro_batch_size": DEFAULT_FORMAL_MICRO_BATCH_SIZE, "gradient_accumulation_steps": DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS, "global_effective_batch_size": DEFAULT_GLOBAL_EFFECTIVE_BATCH, "context_length": 1024, "max_optimizer_steps": 9244, "scheduler_total_steps": 9244, "warmup_steps": 463, "save_every": 500, "retention": 3, "max_microbatches": None},
+            "formal_contract": {"world_size": 8, "micro_batch_size": DEFAULT_FORMAL_MICRO_BATCH_SIZE, "gradient_accumulation_steps": DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS, "global_effective_batch_size": DEFAULT_GLOBAL_EFFECTIVE_BATCH, "context_length": 1024, "max_optimizer_steps": 9244, "scheduler_total_steps": 9244, "warmup_steps": 463, "max_lr": DEFAULT_FORMAL_LEARNING_RATE, "min_lr": DEFAULT_FORMAL_MIN_LR, "save_every": 500, "retention": 3, "max_microbatches": None},
             "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS,
             "formal_warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS,
             "sampling_contract": sampling_contract,
@@ -1494,7 +1522,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 config.warmup_steps = int(saved_configuration.get("warmup_steps", config.warmup_steps))
         elif config.gate == "FORMAL":
             saved_configuration = state.get("configuration", {})
-            required_saved = {"world_size": 8, "micro_batch_size": DEFAULT_FORMAL_MICRO_BATCH_SIZE, "gradient_accumulation_steps": DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS, "context_length": 1024, "max_optimizer_steps": 9244, "scheduler_total_steps": 9244, "warmup_steps": 463, "save_every": 500, "checkpoint_retention": 3, "max_microbatches": None}
+            required_saved = {"world_size": 8, "micro_batch_size": DEFAULT_FORMAL_MICRO_BATCH_SIZE, "gradient_accumulation_steps": DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS, "context_length": 1024, "max_optimizer_steps": 9244, "scheduler_total_steps": 9244, "warmup_steps": 463, "learning_rate": DEFAULT_FORMAL_LEARNING_RATE, "min_lr": DEFAULT_FORMAL_MIN_LR, "save_every": 500, "checkpoint_retention": 3, "max_microbatches": None}
             if not isinstance(saved_configuration, dict) or any(saved_configuration.get(key) != value for key, value in required_saved.items()):
                 raise ValueError("FORMAL resume checkpoint configuration is not the exact 8-rank/9244-step contract")
         if optimizer_step > config.max_optimizer_steps:

@@ -1,8 +1,8 @@
 """SmolLM2 5-10xr-5 recursive Llama model with selective BPTT scheduling.
 
-The 5-10xr-5 model owns twenty physical decoder modules.  Physical modules
+The 5-10xr-5-Poisson model owns twenty physical decoder modules.  Physical modules
 0--4 are the prefix, 5--14 are the recurrent middle, and 15--19 are the
-suffix.  The middle is executed a runtime-selected ``r`` times (``4 <= r <= 7``).
+suffix.  The middle is executed a runtime-selected ``r`` times (``4 <= r <= 10``).
 Inference defaults to ``r=7``. The training policy keeps the hidden-state
 autograd path through every middle call but only enables parameter gradients
 for the final four calls.
@@ -19,6 +19,8 @@ the selected executions of one middle module use distinct slots.
 from __future__ import annotations
 
 import inspect
+import hashlib
+import math
 import warnings
 from collections import defaultdict
 from typing import Any, Mapping, Sequence
@@ -42,26 +44,34 @@ except ImportError as exc:  # pragma: no cover - dependency-less static checkout
     ) from exc
 
 
-LOGICAL_LAYER_COUNT = 80  # maximum logical/cache namespace depth
+LOGICAL_LAYER_COUNT = 110  # maximum logical/cache namespace depth
 MIN_LOGICAL_LAYER_COUNT = 50
-MAX_LOGICAL_LAYER_COUNT = 80
+MAX_LOGICAL_LAYER_COUNT = 110
 PHYSICAL_LAYER_COUNT = 20
 PREFIX_LAYER_COUNT = 5
 MIDDLE_LAYER_COUNT = 10
 SUFFIX_LAYER_COUNT = 5
-RECURSIVE_LOOPS = 7  # maximum/default inference value
+RECURSIVE_LOOPS = 10  # maximum supported middle-loop value
 MIN_MIDDLE_LOOPS = 4
-MAX_MIDDLE_LOOPS = 7
+MAX_MIDDLE_LOOPS = 10
 DEFAULT_INFERENCE_MIDDLE_LOOPS = 7
 PARAMETER_GRADIENT_TAIL_LOOPS = 4
-TRAINABLE_MIDDLE_LOOPS = (4, 5, 6, 7)
+TRAINABLE_MIDDLE_LOOPS = tuple(range(4, 11))
 MAPPING_POLICY = "explicit_5_10xr_5_source_layers"
 BACKWARD_POLICY = "selective_parameter_gradients_final_four_middle_calls_v1"
-SAMPLING_POLICY = "increasing_power_weight"
-SAMPLING_ALPHA = 2
-SAMPLING_WEIGHTS = {4: 16, 5: 25, 6: 36, 7: 49}
-SAMPLING_WEIGHT_TOTAL = 126
-SAMPLER_KEY = "seed_plus_optimizer_step_sha256_local_random_randrange126_v1"
+POISSON_LAMBDA = 7.0
+POISSON_SUPPORT = tuple(range(MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS + 1))
+POISSON_NORMALIZATION_Z = sum(
+    math.exp(-POISSON_LAMBDA) * POISSON_LAMBDA**k / math.factorial(k)
+    for k in POISSON_SUPPORT
+)
+POISSON_PROBABILITIES = tuple(
+    (math.exp(-POISSON_LAMBDA) * POISSON_LAMBDA**k / math.factorial(k)) / POISSON_NORMALIZATION_Z
+    for k in POISSON_SUPPORT
+)
+SAMPLING_POLICY = "truncated_poisson"
+SAMPLER_VERSION = "truncated_poisson_lambda7_support4_10_v1"
+SAMPLER_KEY = "sha256_cpu_torch_generator_base_seed_rank_optimizer_step_microbatch_v1"
 SUPPORTED_TRANSFORMERS_VERSION = "4.54.1"
 SOURCE_LAYER_INDICES_0BASED = (
     0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23,
@@ -71,15 +81,9 @@ SOURCE_LAYER_INDICES_1BASED = tuple(index + 1 for index in SOURCE_LAYER_INDICES_
 SOURCE_MAPPING_0BASED = SOURCE_LAYER_INDICES_0BASED
 SOURCE_MAPPING_1BASED = SOURCE_LAYER_INDICES_1BASED
 LOGICAL_TO_PHYSICAL = (
-    0, 1, 2, 3, 4,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    15, 16, 17, 18, 19,
+    tuple(range(PREFIX_LAYER_COUNT))
+    + tuple(range(PREFIX_LAYER_COUNT, PREFIX_LAYER_COUNT + MIDDLE_LAYER_COUNT)) * MAX_MIDDLE_LOOPS
+    + tuple(range(PREFIX_LAYER_COUNT + MIDDLE_LAYER_COUNT, PHYSICAL_LAYER_COUNT))
 )
 LOGICAL_TO_PHYSICAL_SCHEDULE = LOGICAL_TO_PHYSICAL
 
@@ -94,7 +98,7 @@ def build_5_10xr_5_schedule(
 
     middle_loop_count = int(middle_loop_count)
     if not MIN_MIDDLE_LOOPS <= middle_loop_count <= MAX_MIDDLE_LOOPS:
-        raise ValueError(f"middle_loop_count must be in [4, 7], got {middle_loop_count}")
+        raise ValueError(f"middle_loop_count must be in [4, 10], got {middle_loop_count}")
     if int(physical_layer_count) != PHYSICAL_LAYER_COUNT:
         raise ValueError(f"5-10xr-5 requires 20 physical layers, got {physical_layer_count}")
     schedule = tuple(range(PREFIX_LAYER_COUNT)) + tuple(range(5, 15)) * middle_loop_count + tuple(range(15, 20))
@@ -129,6 +133,88 @@ def build_5_10xr_5_source_mapping(num_hidden_layers: int) -> tuple[int, ...]:
             f"got {num_hidden_layers}"
         )
     return SOURCE_LAYER_INDICES_0BASED
+
+
+def poisson_metadata() -> dict[str, Any]:
+    return {
+        "sampling_policy": SAMPLING_POLICY,
+        "sampler_version": SAMPLER_VERSION,
+        "sampler_key": SAMPLER_KEY,
+        "poisson_lambda": POISSON_LAMBDA,
+        "poisson_support": list(POISSON_SUPPORT),
+        "poisson_normalization_z": POISSON_NORMALIZATION_Z,
+        "poisson_probabilities": list(POISSON_PROBABILITIES),
+    }
+
+
+def _stable_sampler_seed(
+    base_seed: int, rank: int, optimizer_step: int, microbatch_index: int
+) -> int:
+    payload = (
+        f"{int(base_seed)}:{int(rank)}:{int(optimizer_step)}:{int(microbatch_index)}"
+    ).encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "little", signed=False)
+
+
+def sample_middle_loop_counts(
+    base_seed: int,
+    rank: int,
+    optimizer_step: int,
+    microbatch_index: int,
+    batch_size: int,
+    *,
+    generator: torch.Generator | None = None,
+) -> torch.LongTensor:
+    """Sample one independent truncated-Poisson depth per local sequence."""
+
+    batch_size = int(batch_size)
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    if generator is None:
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(
+            _stable_sampler_seed(base_seed, rank, optimizer_step, microbatch_index)
+        )
+    probabilities = torch.tensor(POISSON_PROBABILITIES, dtype=torch.float64, device="cpu")
+    indices = torch.multinomial(probabilities, batch_size, replacement=True, generator=generator)
+    return torch.tensor(POISSON_SUPPORT, dtype=torch.long, device="cpu")[indices]
+
+
+def normalize_middle_loop_counts(
+    middle_loop_counts: torch.Tensor | Sequence[int],
+    batch_size: int,
+    *,
+    device: torch.device,
+) -> torch.LongTensor:
+    counts = torch.as_tensor(middle_loop_counts, dtype=torch.long, device=device).flatten()
+    if counts.numel() != int(batch_size):
+        raise ValueError(
+            "training middle_loop_counts must have one T_i per sequence "
+            f"({batch_size}), got {counts.numel()}"
+        )
+    if bool(torch.any(counts < MIN_MIDDLE_LOOPS)) or bool(torch.any(counts > MAX_MIDDLE_LOOPS)):
+        raise ValueError("every training T_i must be in support 4..10")
+    return counts
+
+
+def left_alignment_tau(
+    middle_loop_counts: torch.Tensor | Sequence[int], local_tmax: int | None = None
+) -> torch.LongTensor:
+    counts = torch.as_tensor(middle_loop_counts, dtype=torch.long)
+    if counts.ndim != 1 or counts.numel() == 0:
+        raise ValueError("middle_loop_counts must be a non-empty vector")
+    tmax = int(counts.max().item()) if local_tmax is None else int(local_tmax)
+    if tmax != int(counts.max().item()):
+        raise ValueError("local_tmax must equal the maximum depth on this rank")
+    if bool(torch.any(counts < MIN_MIDDLE_LOOPS)) or bool(torch.any(counts > MAX_MIDDLE_LOOPS)):
+        raise ValueError("every T_i must be in support 4..10")
+    return tmax - counts
+
+
+def no_op_mask(tau: torch.Tensor, aligned_step: int) -> torch.BoolTensor:
+    """Return the per-sample mask for an aligned no-op/copy step."""
+
+    return torch.as_tensor(aligned_step, device=tau.device) < tau
 
 
 
@@ -415,7 +501,7 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
         )
         if (source_logical, source_physical, logical, physical, loops) != (30, 30, MAX_LOGICAL_LAYER_COUNT, PHYSICAL_LAYER_COUNT, MAX_MIDDLE_LOOPS):
             raise ValueError(
-                "SmolLM2-5-10xr-5 requires source=30, logical=80, physical=20, max loops=7; "
+                "SmolLM2-5-10xr-5-Poisson requires source=30, logical=110, physical=20, max loops=10; "
                 f"got source_logical={source_logical} source_physical={source_physical} "
                 f"logical={logical} physical={physical} loops={loops}"
             )
@@ -433,25 +519,29 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
         self.max_middle_loops = int(getattr(config, "recursive_max_middle_loops", MAX_MIDDLE_LOOPS))
         self.default_inference_middle_loops = int(getattr(config, "recursive_default_inference_middle_loops", DEFAULT_INFERENCE_MIDDLE_LOOPS))
         self.parameter_gradient_tail_loops = int(getattr(config, "recursive_parameter_gradient_tail_loops", PARAMETER_GRADIENT_TAIL_LOOPS))
-        if (self.min_middle_loops, self.max_middle_loops, self.default_inference_middle_loops, self.parameter_gradient_tail_loops) != (4, 7, 7, 4):
+        if (self.min_middle_loops, self.max_middle_loops, self.default_inference_middle_loops, self.parameter_gradient_tail_loops) != (4, 10, 7, 4):
             raise ValueError("Invalid 5-10xr-5 dynamic loop metadata")
-        raw_sampling_weights = getattr(config, "recursive_sampling_weights", {})
-        try:
-            sampling_weights = {int(key): int(value) for key, value in raw_sampling_weights.items()}
-        except (AttributeError, TypeError, ValueError):
-            sampling_weights = {}
         sampling_metadata = (
             str(getattr(config, "recursive_sampling_policy", "")),
-            int(getattr(config, "recursive_sampling_alpha", -1)),
-            sampling_weights,
-            int(getattr(config, "recursive_sampling_weight_total", -1)),
+            str(getattr(config, "recursive_sampler_version", "")),
             str(getattr(config, "recursive_sampler_key", "")),
+            float(getattr(config, "recursive_poisson_lambda", -1.0)),
+            tuple(int(value) for value in getattr(config, "recursive_poisson_support", ())),
         )
         if sampling_metadata != (
-            SAMPLING_POLICY, SAMPLING_ALPHA, SAMPLING_WEIGHTS,
-            SAMPLING_WEIGHT_TOTAL, SAMPLER_KEY,
+            SAMPLING_POLICY, SAMPLER_VERSION, SAMPLER_KEY,
+            POISSON_LAMBDA, POISSON_SUPPORT,
         ):
-            raise ValueError(f"Invalid 5-10xr-5 sampling metadata: {sampling_metadata}")
+            raise ValueError(f"Invalid 5-10xr-5-Poisson sampling metadata: {sampling_metadata}")
+        configured_probabilities = tuple(
+            float(value) for value in getattr(config, "recursive_poisson_probabilities", ())
+        )
+        if len(configured_probabilities) != len(POISSON_PROBABILITIES) or any(
+            abs(a - b) > 1e-14 for a, b in zip(configured_probabilities, POISSON_PROBABILITIES)
+        ):
+            raise ValueError("recursive_poisson_probabilities do not match truncated Poisson")
+        if abs(float(getattr(config, "recursive_poisson_normalization_z", -1.0)) - POISSON_NORMALIZATION_Z) > 1e-14:
+            raise ValueError("recursive_poisson_normalization_z does not match truncated Poisson")
         self.recursive_loops_scope = "middle_only"
         self.logical_to_physical = schedule
         self.layers = nn.ModuleList(
@@ -485,15 +575,20 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
         output_hidden_states: bool | None = None, return_dict: bool | None = None,
         cache_position: torch.LongTensor | None = None,
         middle_loop_count: int | None = None,
+        middle_loop_counts: torch.Tensor | Sequence[int] | None = None,
         **kwargs: Any,
     ) -> BaseModelOutputWithPast | tuple[Any, ...]:
         if (input_ids is None) == (inputs_embeds is None):
             raise ValueError("Specify exactly one of input_ids or inputs_embeds")
         if kwargs:
             raise TypeError(f"Unsupported RecursiveLlama5_10xr_5Model arguments: {sorted(kwargs)}")
-        middle_loop_count = self.default_inference_middle_loops if middle_loop_count is None else int(middle_loop_count)
-        schedule = build_5_10xr_5_schedule(middle_loop_count)
-        logical_layer_count = len(schedule)
+        if self.training:
+            if middle_loop_count is not None:
+                raise ValueError("training uses vector middle_loop_counts; scalar middle_loop_count is inference-only")
+            if middle_loop_counts is None:
+                raise ValueError("training requires one middle_loop_counts T_i per local sequence")
+        elif middle_loop_counts is not None:
+            raise ValueError("inference uses scalar middle_loop_count; vector middle_loop_counts is training-only")
         use_cache = bool(_config_value(self.config, "use_cache", True) if use_cache is None else use_cache)
         output_attentions = bool(_config_value(self.config, "output_attentions", False) if output_attentions is None else output_attentions)
         output_hidden_states = bool(_config_value(self.config, "output_hidden_states", False) if output_hidden_states is None else output_hidden_states)
@@ -504,11 +599,25 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
             inputs_embeds = self.embed_tokens(input_ids.to(self.embed_tokens.weight.device))
         hidden_states = inputs_embeds
         batch_size, query_length = hidden_states.shape[:2]
+        if self.training:
+            counts = normalize_middle_loop_counts(
+                middle_loop_counts, batch_size, device=hidden_states.device
+            )
+            local_tmax = int(counts.max().item())
+            tau = left_alignment_tau(counts, local_tmax).to(hidden_states.device)
+        else:
+            scalar = self.default_inference_middle_loops if middle_loop_count is None else int(middle_loop_count)
+            if not MIN_MIDDLE_LOOPS <= scalar <= MAX_MIDDLE_LOOPS:
+                raise ValueError("inference middle_loop_count must be an explicit scalar in [4, 10]")
+            counts = torch.full((batch_size,), scalar, dtype=torch.long, device=hidden_states.device)
+            local_tmax, tau = scalar, torch.zeros(batch_size, dtype=torch.long, device=hidden_states.device)
+        schedule = build_5_10xr_5_schedule(local_tmax)
+        logical_layer_count = len(schedule)
         cache = past_key_values
         if use_cache and cache is None:
             cache = _make_cache(self.config)
         if use_cache:
-            _bind_cache_middle_loop_count(cache, middle_loop_count)
+            _bind_cache_middle_loop_count(cache, local_tmax)
             _validate_cache_capacity(cache, logical_layer_count)
         past_length = _cache_seq_length(cache)
         if cache_position is not None:
@@ -536,23 +645,25 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
         all_hidden_states: tuple[torch.Tensor, ...] = ()
         all_attentions: tuple[torch.Tensor, ...] = ()
         self._last_forward_audit = {
-            "middle_loop_count": middle_loop_count,
+            "middle_loop_count": local_tmax,
+            "middle_loop_counts": [int(x) for x in counts.detach().cpu().tolist()],
+            "local_tmax": local_tmax,
+            "tau": [int(x) for x in tau.detach().cpu().tolist()],
             "logical_layer_count": logical_layer_count,
-            "backward_traversed_middle_loops": list(range(1, middle_loop_count + 1)),
+            "backward_traversed_middle_loops": list(range(1, local_tmax + 1)),
             "parameter_gradient_enabled_middle_loops": list(
-                range(middle_loop_count - PARAMETER_GRADIENT_TAIL_LOOPS + 1, middle_loop_count + 1)
+                range(local_tmax - PARAMETER_GRADIENT_TAIL_LOOPS + 1, local_tmax + 1)
             ),
             "parameter_gradient_disabled_middle_loops": list(
-                range(1, middle_loop_count - PARAMETER_GRADIENT_TAIL_LOOPS + 1)
+                range(1, local_tmax - PARAMETER_GRADIENT_TAIL_LOOPS + 1)
             ),
             "parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
+            "direct_recurrence": "h0=e; h_{t+1}=Block(h_t)",
+            "sampler": poisson_metadata(),
         }
         self._last_middle_gradient_audit = []
-        # One invocation per logical schedule entry. A nested full-stack loop
-        # would be incorrect for the 5-10xr-5 architecture.
-        middle_start = PREFIX_LAYER_COUNT
-        middle_end = middle_start + MIDDLE_LAYER_COUNT * middle_loop_count
-        for logical_index, physical_index in enumerate(schedule):
+        prefix_schedule = schedule[:PREFIX_LAYER_COUNT]
+        for logical_index, physical_index in enumerate(prefix_schedule):
             layer = self.layers[physical_index]
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -561,35 +672,75 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
                     cache, physical_index=physical_index, logical_slot=logical_index
                 ) if cache is not None else None
             )
-            is_middle = middle_start <= logical_index < middle_end
-            middle_loop_number = ((logical_index - middle_start) // MIDDLE_LAYER_COUNT) + 1 if is_middle else None
-            parameter_grad_enabled = (
-                not is_middle
-                or middle_loop_number > middle_loop_count - PARAMETER_GRADIENT_TAIL_LOOPS
-            )
-            audit_input = hidden_states if is_middle and self._collect_middle_gradient_audit else None
             outputs = _call_decoder_layer(
                 layer, hidden_states, attention_mask=causal_mask, position_ids=position_ids,
                 cache=layer_cache, use_cache=use_cache, cache_position=cache_position,
                 position_embeddings=position_embeddings, output_attentions=output_attentions,
-                parameter_grad_enabled=parameter_grad_enabled,
             )
             hidden_states = outputs[0]
-            if is_middle and self._collect_middle_gradient_audit:
-                self._last_middle_gradient_audit.append(
-                    {
-                        "loop": int(middle_loop_number),
-                        "physical_index": int(physical_index),
-                        "parameter_grad_enabled": bool(parameter_grad_enabled),
-                        "input": audit_input,
-                        "output": hidden_states,
-                        "layer": layer,
-                    }
-                )
             if output_attentions:
                 if len(outputs) < 2 or outputs[1] is None:
                     raise RuntimeError("Decoder did not return attentions")
                 all_attentions += (outputs[1],)
+        e = hidden_states
+        h = e
+        for aligned_step in range(local_tmax):
+            parameter_grad_enabled = (
+                not self.training
+                or aligned_step >= local_tmax - PARAMETER_GRADIENT_TAIL_LOOPS
+            )
+            previous_h = h
+            audit_input = h if self._collect_middle_gradient_audit else None
+            for middle_offset in range(MIDDLE_LAYER_COUNT):
+                physical_index = PREFIX_LAYER_COUNT + middle_offset
+                layer = self.layers[physical_index]
+                logical_index = PREFIX_LAYER_COUNT + aligned_step * MIDDLE_LAYER_COUNT + middle_offset
+                if output_hidden_states:
+                    all_hidden_states += (h,)
+                layer_cache = (
+                    LogicalSlotCacheView(
+                        cache, physical_index=physical_index, logical_slot=logical_index
+                    ) if cache is not None else None
+                )
+                layer_input = h
+                outputs = _call_decoder_layer(
+                    layer, layer_input, attention_mask=causal_mask, position_ids=position_ids,
+                    cache=layer_cache, use_cache=use_cache, cache_position=cache_position,
+                    position_embeddings=position_embeddings, output_attentions=output_attentions,
+                    parameter_grad_enabled=parameter_grad_enabled,
+                )
+                h = outputs[0]
+                if self._collect_middle_gradient_audit:
+                    self._last_middle_gradient_audit.append(
+                        {
+                            "aligned_step": int(aligned_step),
+                            "loop": int(aligned_step + 1),
+                            "physical_index": int(physical_index),
+                            "parameter_grad_enabled": bool(parameter_grad_enabled),
+                            "input": layer_input,
+                            "output": h,
+                            "layer": layer,
+                        }
+                    )
+            inactive = no_op_mask(tau, aligned_step).view(batch_size, 1, 1)
+            h = torch.where(inactive, previous_h, h)
+            hidden_states = h
+        hidden_states = h
+        for suffix_offset, physical_index in enumerate(range(15, 20)):
+            layer = self.layers[physical_index]
+            logical_index = PREFIX_LAYER_COUNT + MIDDLE_LAYER_COUNT * local_tmax + suffix_offset
+            if output_hidden_states:
+                all_hidden_states += (hidden_states,)
+            layer_cache = (
+                LogicalSlotCacheView(
+                    cache, physical_index=physical_index, logical_slot=logical_index
+                ) if cache is not None else None
+            )
+            hidden_states = _call_decoder_layer(
+                layer, hidden_states, attention_mask=causal_mask, position_ids=position_ids,
+                cache=layer_cache, use_cache=use_cache, cache_position=cache_position,
+                position_embeddings=position_embeddings, output_attentions=output_attentions,
+            )[0]
         hidden_states = self.norm(hidden_states)
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
@@ -654,6 +805,7 @@ class RecursiveLlama5_10xr_5ForCausalLM(LlamaForCausalLM):
         output_attentions: bool | None = None, output_hidden_states: bool | None = None,
         return_dict: bool | None = None, cache_position: torch.LongTensor | None = None,
         middle_loop_count: int | None = None,
+        middle_loop_counts: torch.Tensor | Sequence[int] | None = None,
         logits_to_keep: int | torch.Tensor = 0, **kwargs: Any,
     ) -> CausalLMOutputWithPast | tuple[Any, ...]:
         loss_kwargs = {}
@@ -667,6 +819,7 @@ class RecursiveLlama5_10xr_5ForCausalLM(LlamaForCausalLM):
             output_attentions=output_attentions, output_hidden_states=output_hidden_states,
             return_dict=True, cache_position=cache_position,
             middle_loop_count=middle_loop_count,
+            middle_loop_counts=middle_loop_counts,
         )
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         logits = self.lm_head(outputs.last_hidden_state[:, slice_indices, :])
@@ -734,11 +887,14 @@ __all__ = [
     "LOGICAL_LAYER_COUNT", "PHYSICAL_LAYER_COUNT", "PREFIX_LAYER_COUNT",
     "MIDDLE_LAYER_COUNT", "SUFFIX_LAYER_COUNT", "RECURSIVE_LOOPS", "MIN_MIDDLE_LOOPS", "MAX_MIDDLE_LOOPS",
     "DEFAULT_INFERENCE_MIDDLE_LOOPS", "PARAMETER_GRADIENT_TAIL_LOOPS", "TRAINABLE_MIDDLE_LOOPS",
-    "MAPPING_POLICY", "BACKWARD_POLICY", "SAMPLING_POLICY", "SAMPLING_ALPHA", "SAMPLING_WEIGHTS", "SAMPLING_WEIGHT_TOTAL", "SAMPLER_KEY",
+    "MAPPING_POLICY", "BACKWARD_POLICY", "SAMPLING_POLICY", "SAMPLER_VERSION", "SAMPLER_KEY",
+    "POISSON_LAMBDA", "POISSON_SUPPORT", "POISSON_NORMALIZATION_Z", "POISSON_PROBABILITIES",
     "SUPPORTED_TRANSFORMERS_VERSION", "SOURCE_LAYER_INDICES_0BASED", "SOURCE_LAYER_INDICES_1BASED", "SOURCE_MAPPING_0BASED", "SOURCE_MAPPING_1BASED",
     "LOGICAL_TO_PHYSICAL", "LOGICAL_TO_PHYSICAL_SCHEDULE", "LogicalSlotCacheView", "RecursiveLlama5_10xr_5Model",
     "RecursiveLlama5_10xr_5ForCausalLM", "RecursiveLlamaForCausalLM", "build_5_10xr_5_schedule",
-    "build_5_10xr_5_source_mapping", "logical_slot_for_execution", "make_dynamic_cache",
+    "build_5_10xr_5_source_mapping", "poisson_metadata", "sample_middle_loop_counts",
+    "normalize_middle_loop_counts", "left_alignment_tau", "no_op_mask",
+    "logical_slot_for_execution", "make_dynamic_cache",
     "_bind_cache_middle_loop_count",
     "parameter_audit", "register_auto_class",
 ]

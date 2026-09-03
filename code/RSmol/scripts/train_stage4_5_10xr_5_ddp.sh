@@ -16,10 +16,10 @@ TASK_TMP="${RSMOL_5_10XR_5_TASK_TMP:-/tmp/rsmol-5-10xr-5-${USER:-unknown}-${SLUR
 mkdir -p "$TASK_TMP/hf-datasets" "$TASK_TMP/hf-home" "$TASK_TMP/modelscope"
 export HF_DATASETS_CACHE="$TASK_TMP/hf-datasets" HF_HOME="$TASK_TMP/hf-home" MODELSCOPE_CACHE="$TASK_TMP/modelscope"
 
-MODEL_PATH="${RSMOL_5_10XR_5_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10xr-5}"
+MODEL_PATH="${RSMOL_5_10XR_5_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10xr-5-poisson}"
 TOKENIZER_PATH="${RSMOL_5_10XR_5_TOKENIZER_PATH:-}"
 DATA_DIR="${RSMOL_5_10XR_5_DATA_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset}"
-OUTPUT_DIR="${RSMOL_5_10XR_5_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10xr_5/$(date +%Y%m%d_%H%M%S)}"
+OUTPUT_DIR="${RSMOL_5_10XR_5_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10xr_5_poisson/$(date +%Y%m%d_%H%M%S)}"
 REPORT_PATH="${RSMOL_5_10XR_5_REPORT:-$OUTPUT_DIR/stage4_report.json}"
 RESUME_PATH="${RSMOL_5_10XR_5_RESUME_FROM:-}"
 WORLD_SIZE="${RSMOL_5_10XR_5_WORLD_SIZE:-8}"
@@ -39,7 +39,7 @@ if [[ "$GATE" == "D" && -z "$AUDIT_REPORT" && "${RSMOL_5_10XR_5_DRY_RUN:-0}" != 
 fi
 
 if [[ "$GATE" == "FORMAL" ]]; then
-  MAX_STEPS=4500; WARMUP_STEPS=225; SCHEDULER_STEPS=4500; SAVE_EVERY=500
+  MAX_STEPS=9244; WARMUP_STEPS=463; SCHEDULER_STEPS=9244; SAVE_EVERY=500
 else
   MAX_STEPS="${RSMOL_5_10XR_5_MAX_OPTIMIZER_STEPS:-10}"
   WARMUP_STEPS="${RSMOL_5_10XR_5_WARMUP_STEPS:-0}"
@@ -48,9 +48,9 @@ else
 fi
 
 ARGS=(--gate "$GATE" --world-size "$WORLD_SIZE" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --report-path "$REPORT_PATH"
-  --micro-batch-size 8 --gradient-accumulation-steps 16 --learning-rate 2e-4 --max-lr 2e-4 --min-lr 2e-5
+  --micro-batch-size 2 --gradient-accumulation-steps 64 --learning-rate 2e-4 --max-lr 2e-4 --min-lr 2e-5
   --context-length 1024 --warmup-steps "$WARMUP_STEPS" --max-optimizer-steps "$MAX_STEPS"
-  --formal-optimizer-steps 4500 --scheduler-total-steps "$SCHEDULER_STEPS" --log-interval-steps 10
+  --formal-optimizer-steps 9244 --scheduler-total-steps "$SCHEDULER_STEPS" --log-interval-steps 10
   --seed "${RSMOL_5_10XR_5_SEED:-0}" --weight-decay 0.1 --max-grad-norm "${RSMOL_5_10XR_5_MAX_GRAD_NORM:-1.0}"
   --record-buffer-size "${RSMOL_5_10XR_5_RECORD_BUFFER_SIZE:-4096}" --save-every "$SAVE_EVERY"
   --checkpoint-retention 3 --backend nccl)

@@ -176,10 +176,12 @@ class PoissonParcaeStaticContractTest(unittest.TestCase):
             "micro_batch_size": 8,
             "gradient_accumulation_steps": 16,
             "context_length": 1024,
+            "learning_rate": 2e-4,
+            "min_lr": 2e-5,
             "data_dir": "/data/poisson-parcae",
         }
         self.assertEqual(self.stage4._resume_configuration_mismatches(saved, current), {})
-        for field, value in (("seed", 18), ("world_size", 1), ("micro_batch_size", 4), ("gradient_accumulation_steps", 8), ("context_length", 512), ("data_dir", "/other")):
+        for field, value in (("seed", 18), ("world_size", 1), ("micro_batch_size", 4), ("gradient_accumulation_steps", 8), ("context_length", 512), ("learning_rate", 8e-4), ("min_lr", 8e-5), ("data_dir", "/other")):
             changed = dict(saved)
             changed[field] = value
             self.assertIn(field, self.stage4._resume_configuration_mismatches(changed, current))
@@ -197,8 +199,12 @@ class PoissonParcaeStaticContractTest(unittest.TestCase):
         submit_text = (ROOT / "code" / "RSmol" / "run_stage4_5_10xpoisson_parcae_3090.sh").read_text(encoding="utf-8")
         self.assertIn("RSMOL_5_10XPOISSON_PARCAE_MICRO_BATCH_SIZE", wrapper_text + submit_text)
         self.assertIn("RSMOL_5_10XPOISSON_PARCAE_GRADIENT_ACCUMULATION_STEPS", wrapper_text + submit_text)
+        self.assertIn("RSMOL_5_10XPOISSON_PARCAE_MAX_LR", wrapper_text + submit_text)
+        self.assertIn("RSMOL_5_10XPOISSON_PARCAE_MIN_LR", wrapper_text + submit_text)
         self.assertIn('--micro-batch-size "$MICRO_BATCH_SIZE"', wrapper_text)
         self.assertIn('--gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS"', wrapper_text)
+        self.assertIn('--max-lr "$MAX_LR"', wrapper_text)
+        self.assertIn('--min-lr "$MIN_LR"', wrapper_text)
 
     def test_cursor_identity_rejects_resume_environment_changes(self):
         stream = self.stage4.DistributedParquetStream.__new__(self.stage4.DistributedParquetStream)
@@ -253,11 +259,27 @@ class PoissonParcaeStaticContractTest(unittest.TestCase):
     def test_formal_arithmetic(self):
         self.assertEqual(self.stage4.DEFAULT_FORMAL_OPTIMIZER_STEPS, 9244)
         self.assertEqual(self.stage4.DEFAULT_FORMAL_WARMUP_STEPS, 463)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_LEARNING_RATE, 8e-4)
+        self.assertEqual(self.stage4.DEFAULT_FORMAL_MIN_LR, 8e-5)
         self.assertEqual(self.stage4.DEFAULT_FORMAL_MICRO_BATCH_SIZE, 2)
         self.assertEqual(self.stage4.DEFAULT_FORMAL_GRADIENT_ACCUMULATION_STEPS, 64)
         self.assertEqual(self.stage4.DEFAULT_FORMAL_LOCAL_MICROBATCHES, 9244 * 64)
         self.assertEqual(self.stage4.DEFAULT_FORMAL_SAMPLES_PER_RANK, 9244 * 64 * 2)
         self.assertEqual(self.stage4.DEFAULT_FORMAL_GLOBAL_SAMPLES, 9244 * 64 * 2 * 8)
+        config = self.stage4._parse_args([
+            "--gate", "FORMAL",
+            "--micro-batch-size", "2",
+            "--gradient-accumulation-steps", "64",
+            "--world-size", "8",
+        ])
+        self.assertEqual(config.learning_rate, 8e-4)
+        self.assertEqual(config.min_lr, 8e-5)
+        with self.assertRaisesRegex(ValueError, "maximum learning rate=8e-4"):
+            self.stage4._parse_args([
+                "--gate", "FORMAL", "--micro-batch-size", "2",
+                "--gradient-accumulation-steps", "64", "--world-size", "8",
+                "--max-lr", "2e-4", "--min-lr", "2e-5",
+            ])
 
 
 if __name__ == "__main__":

@@ -32,10 +32,12 @@ from recursive_model_5_10xr_5 import (  # noqa: E402
     PHYSICAL_LAYER_COUNT,
     RecursiveLlama5_10xr_5ForCausalLM,
     SAMPLER_KEY,
-    SAMPLING_ALPHA,
+    SAMPLER_VERSION,
+    POISSON_LAMBDA,
+    POISSON_SUPPORT,
+    POISSON_NORMALIZATION_Z,
+    POISSON_PROBABILITIES,
     SAMPLING_POLICY,
-    SAMPLING_WEIGHT_TOTAL,
-    SAMPLING_WEIGHTS,
     build_5_10xr_5_schedule,
     make_dynamic_cache,
     parameter_audit,
@@ -82,7 +84,11 @@ def _trace_forward(model: Any, input_ids: torch.Tensor, r: int) -> dict[str, Any
     handles = [layer.register_forward_hook(lambda _m, _i, _o, index=index: sequence.append(index)) for index, layer in enumerate(_layers(model))]
     try:
         with torch.inference_mode():
-            result = model(input_ids=input_ids, use_cache=False, middle_loop_count=r)
+            result = model(
+                input_ids=input_ids,
+                use_cache=False,
+                middle_loop_count=r,
+            )
     finally:
         for handle in handles:
             handle.remove()
@@ -109,7 +115,13 @@ def _backward_audit(model: Any, input_ids: torch.Tensor, r: int) -> dict[str, An
     early_parameter_gradient_edges_absent = True
     try:
         with torch.enable_grad():
-            result = model(input_ids=input_ids, use_cache=False, middle_loop_count=r)
+            result = model(
+                input_ids=input_ids,
+                use_cache=False,
+                middle_loop_counts=torch.full(
+                    (input_ids.shape[0],), r, dtype=torch.long, device=input_ids.device
+                ),
+            )
             middle_call_audit = list(getattr(recursive_model, "_last_middle_gradient_audit", ()))
             expected_entries = r * MIDDLE_LAYER_COUNT
             if len(middle_call_audit) != expected_entries:
@@ -299,7 +311,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.max_new_tokens <= 0:
         raise ValueError("--max-new-tokens must be positive")
-    if (MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS, PARAMETER_GRADIENT_TAIL_LOOPS) != (4, 7, 4):
+    if (MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS, PARAMETER_GRADIENT_TAIL_LOOPS) != (4, 10, 4):
         raise AssertionError("invalid 5-10xr-5 audit constants")
     model_path = args.model_path.expanduser().resolve()
     output_report = ensure_external_report(args.output_report)
@@ -309,14 +321,18 @@ def main(argv: list[str] | None = None) -> None:
     register_auto_class()
     model = RecursiveLlama5_10xr_5ForCausalLM.from_pretrained(model_path, local_files_only=True, torch_dtype=torch.bfloat16).to(device).eval()
     config = model.config
-    if (int(getattr(config, "num_hidden_layers", -1)), int(getattr(config, "recursive_layer_count", -1))) != (80, 20):
-        raise AssertionError("checkpoint must declare max logical depth 80 and 20 physical layers")
-    config_weights = {int(key): int(value) for key, value in dict(getattr(config, "recursive_sampling_weights", {})).items()}
+    if (int(getattr(config, "num_hidden_layers", -1)), int(getattr(config, "recursive_layer_count", -1))) != (110, 20):
+        raise AssertionError("checkpoint must declare max logical depth 110 and 20 physical layers")
+    config_support = tuple(int(value) for value in getattr(config, "recursive_poisson_support", ()))
+    config_probabilities = tuple(float(value) for value in getattr(config, "recursive_poisson_probabilities", ()))
     if (
         str(getattr(config, "recursive_sampling_policy", "")) != SAMPLING_POLICY
-        or int(getattr(config, "recursive_sampling_alpha", -1)) != SAMPLING_ALPHA
-        or config_weights != SAMPLING_WEIGHTS
-        or int(getattr(config, "recursive_sampling_weight_total", -1)) != SAMPLING_WEIGHT_TOTAL
+        or str(getattr(config, "recursive_sampler_version", "")) != SAMPLER_VERSION
+        or float(getattr(config, "recursive_poisson_lambda", -1.0)) != POISSON_LAMBDA
+        or config_support != POISSON_SUPPORT
+        or abs(float(getattr(config, "recursive_poisson_normalization_z", -1.0)) - POISSON_NORMALIZATION_Z) > 1e-14
+        or len(config_probabilities) != len(POISSON_PROBABILITIES)
+        or any(abs(a - b) > 1e-14 for a, b in zip(config_probabilities, POISSON_PROBABILITIES))
         or str(getattr(config, "recursive_sampler_key", "")) != SAMPLER_KEY
     ):
         raise AssertionError("checkpoint sampling metadata does not match the 5-10xr-5 contract")
@@ -325,9 +341,9 @@ def main(argv: list[str] | None = None) -> None:
     if len({id(layer) for layer in _layers(model)}) != 20:
         raise AssertionError("physical decoder modules are not unique")
     input_ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long, device=device)
-    traces = [_trace_forward(model, input_ids, r) for r in range(4, 8)]
-    backwards = [_backward_audit(model, input_ids, r) for r in range(4, 8)]
-    caches = [_cache_audit(model, input_ids, r) for r in range(4, 8)]
+    traces = [_trace_forward(model, input_ids, r) for r in range(4, 11)]
+    backwards = [_backward_audit(model, input_ids, r) for r in range(4, 11)]
+    caches = [_cache_audit(model, input_ids, r) for r in range(4, 11)]
     generation = _generation_audit(model, input_ids, args.max_new_tokens)
     with tempfile.TemporaryDirectory(prefix="rsmol-5-10xr-5-reload-") as temp_dir:
         model.save_pretrained(temp_dir, safe_serialization=False)
@@ -346,7 +362,7 @@ def main(argv: list[str] | None = None) -> None:
     report = {
         "status": "PASS", "variant": "SmolLM2-5-10xr-5", "model_path": str(model_path),
         "logical_layer_count_max": LOGICAL_LAYER_COUNT, "physical_layer_count": PHYSICAL_LAYER_COUNT,
-        "r_values_audited": [4, 5, 6, 7], "default_inference_r": 7,
+        "r_values_audited": list(range(4, 11)), "default_inference_r": 7,
         "fixed_parameter_gradient_tail_loops": 4, "physical_module_unique": True,
         "parameter_audit": parameter_audit(model), "forward_trace_audit": traces,
         "backward_trace_audit": backwards, "cache_audit": caches,

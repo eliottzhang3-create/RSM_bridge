@@ -1262,9 +1262,11 @@ The `scripts/convert_stepwise_5_10xpoisson_parcae.sh`,
 The `run_*_3090.sh` files are the supported login-node submission entrypoints;
 Stage 4 payloads themselves invoke eight-rank `torchrun` inside the job.
 
-The Stage 4 formal target is 9,244 optimizer steps, 16 microbatches per
-optimizer window, 8 sequences per local microbatch, and `ceil(5%)=463`
-warmup steps.  Acceptance requires `compileall`, `git diff --check`, the
+The Stage 4 formal target is 9,244 optimizer steps, 64 microbatches per
+optimizer window, 2 sequences per local microbatch, and `ceil(5%)=463`
+warmup steps.  Its maximum learning rate is `8e-4`; after warmup the cosine
+schedule decays to the minimum learning rate `8e-5` (exactly `0.1` of the
+maximum).  Acceptance requires `compileall`, `git diff --check`, the
 dedicated Poisson/schedule/PreludeNorm/additive-injection/selective-gradient
 static tests, Stage 1 vector-gradient isolation plus real scalar inference
 audits for every `r=4..10`, default `r=7`, logical cache slots and incremental
@@ -1284,9 +1286,10 @@ prefix of microbatches.  The preaudit verifies the unchanged 85-shard
 manifest, schema, sampled tokenization, and at least one trainable row per
 rank; raw parquet row counts are never presented as training capacity.
 
-FORMAL additionally requires runtime `WORLD_SIZE=8`, microbatch size 8,
-accumulation 16, context length 1024, 9244 optimizer/scheduler steps,
-warmup 463, save interval 500, retention 3, and `max_microbatches=None`.
+FORMAL additionally requires runtime `WORLD_SIZE=8`, microbatch size 2,
+accumulation 64, context length 1024, 9244 optimizer/scheduler steps,
+warmup 463, maximum/minimum learning rates `8e-4`/`8e-5`, save interval 500,
+retention 3, and `max_microbatches=None`.
 Formal reports append one compact scalar metric per optimizer step containing
 loss, learning rate, valid tokens, depth/Tmax histograms, the numeric
 `total_grad_norm`, and its `total_grad_norm_finite_nonzero` status.  Only step 1, checkpoint steps, and the final step carry detailed

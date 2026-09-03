@@ -9,7 +9,7 @@ entry point implements the five historical gates plus an independent
 ``FORMAL`` training mode used by the remote job:
 
 ``A`` synthetic 8-rank DDP audit, ``D`` the fixed ten-step real-data pilot,
-``E`` a resume smoke, and ``FORMAL`` the 4,500-step training target. Gate B/C
+``E`` a resume smoke, and ``FORMAL`` the 9,244-step training target. Gate B/C
 are intentionally unsupported here: reuse the existing Gate B audit JSON and
 do not rerun either audit from this entry point.
 
@@ -49,38 +49,39 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 REMOTE_CHECKOUT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM")
-MODEL_ARCHITECTURE_CONTRACT = "logical_50_80_physical_20_5_10xr_5_dynamic_r4_7_tail4"
-LOGICAL_LAYER_COUNT = 80
+MODEL_ARCHITECTURE_CONTRACT = "logical_50_110_physical_20_5_10xr_5_poisson_r4_10_tail4"
+LOGICAL_LAYER_COUNT = 110
 PHYSICAL_LAYER_COUNT = 20
 MIDDLE_LAYER_COUNT = 10
 MIN_MIDDLE_LOOPS = 4
-MAX_MIDDLE_LOOPS = 7
+MAX_MIDDLE_LOOPS = 10
 DEFAULT_INFERENCE_MIDDLE_LOOPS = 7
 PARAMETER_GRADIENT_TAIL_LOOPS = 4
-LOGICAL_TO_PHYSICAL = (0, 1, 2, 3, 4,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    15, 16, 17, 18, 19)
-SAMPLING_POLICY = "increasing_power_weight"
-SAMPLING_ALPHA = 2
-SAMPLING_WEIGHTS = {4: 16, 5: 25, 6: 36, 7: 49}
-SAMPLING_WEIGHT_TOTAL = 126
-SAMPLER_KEY = "seed_plus_optimizer_step_sha256_local_random_randrange126_v1"
+LOGICAL_TO_PHYSICAL = tuple(range(5)) + tuple(range(5, 15)) * MAX_MIDDLE_LOOPS + tuple(range(15, 20))
+SAMPLING_POLICY = "truncated_poisson"
+SAMPLER_VERSION = "truncated_poisson_lambda7_support4_10_v1"
+SAMPLER_KEY = "sha256_cpu_torch_generator_base_seed_rank_optimizer_step_microbatch_v1"
+POISSON_LAMBDA = 7.0
+POISSON_SUPPORT = tuple(range(MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS + 1))
+POISSON_NORMALIZATION_Z = sum(
+    math.exp(-POISSON_LAMBDA) * POISSON_LAMBDA**k / math.factorial(k)
+    for k in POISSON_SUPPORT
+)
+POISSON_Z = POISSON_NORMALIZATION_Z
+POISSON_PROBABILITIES = tuple(
+    (math.exp(-POISSON_LAMBDA) * POISSON_LAMBDA**k / math.factorial(k)) / POISSON_NORMALIZATION_Z
+    for k in POISSON_SUPPORT
+)
 DEFAULT_DATA_DIR = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset")
-DEFAULT_OUTPUT_DIR = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10xr_5")
+DEFAULT_OUTPUT_DIR = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10xr_5_poisson")
 EXPECTED_PARQUET_COUNT = 85
 EXPECTED_PARQUET_NAMES = tuple(
     f"train-{index:05d}-of-{EXPECTED_PARQUET_COUNT:05d}.parquet"
     for index in range(EXPECTED_PARQUET_COUNT)
 )
 DEFAULT_WORLD_SIZE = 8
-DEFAULT_MICRO_BATCH_SIZE = 8
-DEFAULT_GRADIENT_ACCUMULATION_STEPS = 16
+DEFAULT_MICRO_BATCH_SIZE = 2
+DEFAULT_GRADIENT_ACCUMULATION_STEPS = 64
 DEFAULT_LEARNING_RATE = 2e-4
 DEFAULT_MAX_LR = 2e-4
 DEFAULT_MIN_LR = 2e-5
@@ -90,10 +91,10 @@ DEFAULT_ADAMW_WEIGHT_DECAY = 0.1
 DEFAULT_ADAMW_AMSGRAD = False
 DEFAULT_CONTEXT_LENGTH = 1024
 # Gate D is intentionally a bounded ten-step smoke.  Keep the planned
-# 4,500-step run as an explicit formal target so it cannot silently
+# 9,244-step run as an explicit formal target so it cannot silently
 # turn a Stage 4 smoke into a Stage 5 implementation.
 DEFAULT_MAX_OPTIMIZER_STEPS = 10
-DEFAULT_FORMAL_OPTIMIZER_STEPS = 4500
+DEFAULT_FORMAL_OPTIMIZER_STEPS = 9244
 DEFAULT_LOG_INTERVAL_STEPS = 10
 SCHEDULER_TYPE = "linear_warmup_cosine"
 DEFAULT_TARGET_SAMPLES_PER_RANK = (
@@ -102,7 +103,7 @@ DEFAULT_TARGET_SAMPLES_PER_RANK = (
     * DEFAULT_MICRO_BATCH_SIZE
 )
 # Human-readable Gate D smoke values: 1,280 effective samples/rank and
-# 160 local microbatches for the default ten-step pilot.  The formal target
+# 640 local microbatches for the default ten-step pilot.  The formal target
 # values are retained separately in ``DEFAULT_FORMAL_*`` constants.
 DEFAULT_LOCAL_MICROBATCHES = DEFAULT_MAX_OPTIMIZER_STEPS * DEFAULT_GRADIENT_ACCUMULATION_STEPS
 DEFAULT_GLOBAL_EFFECTIVE_BATCH = DEFAULT_WORLD_SIZE * DEFAULT_MICRO_BATCH_SIZE * DEFAULT_GRADIENT_ACCUMULATION_STEPS
@@ -116,7 +117,7 @@ DEFAULT_FORMAL_LOCAL_MICROBATCHES = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_GRA
 DEFAULT_FORMAL_WARMUP_STEPS = max(1, math.ceil(DEFAULT_FORMAL_OPTIMIZER_STEPS * 0.05))
 DEFAULT_FORMAL_SAVE_EVERY = 500
 DEFAULT_FORMAL_CHECKPOINT_RETENTION = 3
-# The formal 4,500-step target consumes 4,608,000 samples (1024 per
+# The formal 9,244-step target consumes 9,465,856 global samples (1024 per
 # optimizer step); Gate D itself consumes only 10 optimizer steps by default.
 DEFAULT_RECORD_BUFFER_SIZE = 4096
 # Explicitly pinned loader settings: Stage 4 intentionally does not create
@@ -127,77 +128,60 @@ PERSISTENT_WORKERS = False
 DATASET_NUM_PROC = 1
 
 
-def sample_middle_loop_count(seed: int, optimizer_step: int) -> int:
-    """Stateless reproducible r sampler with weights ``r**2``."""
-
-    if int(optimizer_step) < 0:
-        raise ValueError("optimizer_step must be non-negative")
-    digest = hashlib.sha256(f"{int(seed)}:{int(optimizer_step)}".encode("ascii")).digest()
-    # Seed a private PRNG from the full digest.  This keeps the draw exactly
-    # uniform over [0,126), avoids modulo bias, and never consumes global RNG
-    # state, so resume remains keyed solely by (seed, optimizer_step).
-    local_seed = int.from_bytes(digest, "big")
-    draw = random.Random(local_seed).randrange(SAMPLING_WEIGHT_TOTAL)
-    cumulative = 0
-    for middle_loop_count in range(MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS + 1):
-        cumulative += middle_loop_count ** SAMPLING_ALPHA
-        if draw < cumulative:
-            return middle_loop_count
-    raise AssertionError("r sampler failed to select a value")
+def poisson_metadata() -> dict[str, Any]:
+    return {
+        "sampling_policy": SAMPLING_POLICY,
+        "sampler_version": SAMPLER_VERSION,
+        "sampler_key": SAMPLER_KEY,
+        "poisson_lambda": POISSON_LAMBDA,
+        "poisson_support": list(POISSON_SUPPORT),
+        "poisson_normalization_z": POISSON_NORMALIZATION_Z,
+        "poisson_probabilities": list(POISSON_PROBABILITIES),
+    }
 
 
-def _normalize_sampling_weights(value: Any) -> dict[int, int]:
-    """Normalize JSON/config mappings before exact sampling-contract checks."""
+def _sampler_seed(base_seed: int, rank: int, optimizer_step: int, microbatch_index: int) -> int:
+    payload = f"{int(base_seed)}:{int(rank)}:{int(optimizer_step)}:{int(microbatch_index)}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "little", signed=False)
 
-    if not isinstance(value, Mapping):
-        return {}
-    try:
-        return {int(key): int(weight) for key, weight in value.items()}
-    except (TypeError, ValueError):
-        return {}
+
+def sample_middle_loop_counts(
+    base_seed: int, rank: int, optimizer_step: int, microbatch_index: int, batch_size: int
+) -> Any:
+    """Sample one independent truncated-Poisson depth per local sequence."""
+
+    import torch
+
+    batch_size = int(batch_size)
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(_sampler_seed(base_seed, rank, optimizer_step, microbatch_index))
+    probabilities = torch.tensor(POISSON_PROBABILITIES, dtype=torch.float64, device="cpu")
+    indices = torch.multinomial(probabilities, batch_size, replacement=True, generator=generator)
+    return torch.tensor(POISSON_SUPPORT, dtype=torch.long, device="cpu")[indices]
 
 
 def _validate_exact_sampling_contract(value: Mapping[str, Any], *, label: str) -> None:
     """Reject any checkpoint/report sampling metadata drift."""
 
-    try:
-        alpha = int(value.get("sampling_alpha", -1))
-        total = int(value.get("sampling_weight_total", -1))
-    except (TypeError, ValueError):
-        alpha, total = -1, -1
-    weights = _normalize_sampling_weights(value.get("sampling_weights", {}))
+    support = tuple(int(item) for item in value.get("poisson_support", ()))
+    probabilities = tuple(float(item) for item in value.get("poisson_probabilities", ()))
     if (
         value.get("sampling_policy") != SAMPLING_POLICY
-        or alpha != SAMPLING_ALPHA
-        or weights != SAMPLING_WEIGHTS
-        or total != SAMPLING_WEIGHT_TOTAL
+        or value.get("sampler_version") != SAMPLER_VERSION
         or value.get("sampler_key") != SAMPLER_KEY
+        or float(value.get("poisson_lambda", -1.0)) != POISSON_LAMBDA
+        or support != POISSON_SUPPORT
+        or len(probabilities) != len(POISSON_PROBABILITIES)
+        or any(abs(a - b) > 1e-14 for a, b in zip(probabilities, POISSON_PROBABILITIES))
     ):
         raise ValueError(
             f"{label} sampling contract mismatch: "
-            f"policy={value.get('sampling_policy')!r} alpha={alpha} "
-            f"weights={weights} total={total} sampler_key={value.get('sampler_key')!r}"
+            f"policy={value.get('sampling_policy')!r} version={value.get('sampler_version')!r} "
+            f"lambda={value.get('poisson_lambda')!r} support={support} "
+            f"sampler_key={value.get('sampler_key')!r}"
         )
-
-
-def broadcast_middle_loop_count(*, rank: int, seed: int, optimizer_step: int, device: Any) -> int:
-    """Sample once on rank 0 and broadcast one r to all ranks."""
-
-    import torch
-    import torch.distributed as dist
-
-    selected = sample_middle_loop_count(seed, optimizer_step) if int(rank) == 0 else 0
-    if dist.is_available() and dist.is_initialized():
-        value = torch.tensor([selected], device=device, dtype=torch.int64)
-        dist.broadcast(value, src=0)
-        selected = int(value.item())
-        lo = value.clone()
-        hi = value.clone()
-        dist.all_reduce(lo, op=dist.ReduceOp.MIN)
-        dist.all_reduce(hi, op=dist.ReduceOp.MAX)
-        if int(lo.item()) != int(hi.item()):
-            raise AssertionError(f"broadcast middle_loop_count differs across ranks: min={lo.item()} max={hi.item()}")
-    return selected
 
 
 @dataclass
@@ -205,7 +189,7 @@ class Stage4Config:
     """Serializable Stage 4 configuration.
 
     The numerical defaults are part of the experiment contract. Gate D is a
-    fixed ten-step smoke; ``FORMAL`` selects the independent 4,500-step
+    fixed ten-step smoke; ``FORMAL`` selects the independent 9,244-step
     production training contract. Gate B/C are rejected by this entry point.
     """
 
@@ -247,7 +231,6 @@ class Stage4Config:
     synthetic_hidden_size: int = 32
     synthetic_vocab_size: int = 97
     sampling_policy: str = SAMPLING_POLICY
-    sampling_alpha: int = SAMPLING_ALPHA
     sampler_key: str = SAMPLER_KEY
 
 
@@ -859,8 +842,8 @@ class DistributedParquetStream:
         self._rng = random.Random(self.seed + 1009 * self.rank)
         self._resume_cursor: dict[str, Any] | None = None
         self._resume_applied = False
-        if self.micro_batch_size != 8:
-            raise ValueError("Stage 4 requires micro_batch_size=8")
+        if self.micro_batch_size != 2:
+            raise ValueError("Stage 4 requires micro_batch_size=2")
         if not (0 < self.context_length <= 1024):
             raise ValueError("Stage 4 context_length must be in [1, 1024]")
 
@@ -1162,9 +1145,9 @@ def _validate_recursive_architecture(model: Any, *, production: bool = True) -> 
     loops_scope = str(getattr(config, "recursive_loops_scope", ""))
     expected_source_mapping = [0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 26, 27, 28, 29]
     expected_schedule = list(LOGICAL_TO_PHYSICAL)
-    if (source_logical, source_physical) != (30, 30) or loops != 7 or loops_scope != "middle_only" or (logical, physical) != (80, 20) or schedule != expected_schedule or source_mapping != expected_source_mapping:
+    if (source_logical, source_physical) != (30, 30) or loops != 10 or loops_scope != "middle_only" or (logical, physical) != (110, 20) or schedule != expected_schedule or source_mapping != expected_source_mapping:
         raise ValueError(
-            "Stage 4 5-10xr-5 requires source=30, logical=80 physical=20 max loops=7 and the explicit schedule; "
+            "Stage 4 5-10xr-5-Poisson requires source=30, logical=110 physical=20 max loops=10 and the explicit schedule; "
             f"got source_logical={source_logical}, source_physical={source_physical}, logical={logical}, "
             f"physical={physical}, loops={loops}, loops_scope={loops_scope}, schedule={schedule}, source_mapping={source_mapping}"
         )
@@ -1176,27 +1159,22 @@ def _validate_recursive_architecture(model: Any, *, production: bool = True) -> 
         int(getattr(config, "recursive_default_inference_middle_loops", -1)),
         int(getattr(config, "recursive_parameter_gradient_tail_loops", -1)),
     )
-    if dynamic_metadata != (4, 7, 7, 4):
+    if dynamic_metadata != (4, 10, 7, 4):
         raise ValueError(f"Invalid dynamic 5-10xr-5 metadata: {dynamic_metadata}")
-    config_sampling_policy = str(getattr(config, "recursive_sampling_policy", ""))
-    config_sampling_alpha = int(getattr(config, "recursive_sampling_alpha", -1))
-    config_sampling_weights = _normalize_sampling_weights(
-        getattr(config, "recursive_sampling_weights", {})
-    )
-    config_sampling_total = int(getattr(config, "recursive_sampling_weight_total", -1))
-    config_sampler_key = str(getattr(config, "recursive_sampler_key", ""))
-    if (
-        config_sampling_policy != SAMPLING_POLICY
-        or config_sampling_alpha != SAMPLING_ALPHA
-        or config_sampling_weights != SAMPLING_WEIGHTS
-        or config_sampling_total != SAMPLING_WEIGHT_TOTAL
-        or config_sampler_key != SAMPLER_KEY
-    ):
+    config_sampling = {
+        "sampling_policy": str(getattr(config, "recursive_sampling_policy", "")),
+        "sampler_version": str(getattr(config, "recursive_sampler_version", "")),
+        "sampler_key": str(getattr(config, "recursive_sampler_key", "")),
+        "poisson_lambda": float(getattr(config, "recursive_poisson_lambda", -1.0)),
+        "poisson_support": list(getattr(config, "recursive_poisson_support", ())),
+        "poisson_probabilities": list(getattr(config, "recursive_poisson_probabilities", ())),
+    }
+    try:
+        _validate_exact_sampling_contract(config_sampling, label="checkpoint")
+    except (TypeError, ValueError):
         raise ValueError(
-            "Stage 4 5-10xr-5 checkpoint sampling metadata mismatch: "
-            f"policy={config_sampling_policy!r} alpha={config_sampling_alpha} "
-            f"weights={config_sampling_weights} total={config_sampling_total} "
-            f"sampler_key={config_sampler_key!r}"
+            "Stage 4 5-10xr-5-Poisson checkpoint sampling metadata mismatch: "
+            f"metadata={config_sampling!r}"
         )
     try:
         named = list(model.named_parameters(remove_duplicate=False))
@@ -1221,13 +1199,14 @@ def _validate_recursive_architecture(model: Any, *, production: bool = True) -> 
         "physical_layer_count": physical,
         "recursive_loops": loops,
         "min_middle_loops": int(getattr(config, "recursive_min_middle_loops", 4)),
-        "max_middle_loops": int(getattr(config, "recursive_max_middle_loops", 7)),
+        "max_middle_loops": int(getattr(config, "recursive_max_middle_loops", 10)),
         "default_inference_middle_loops": int(getattr(config, "recursive_default_inference_middle_loops", 7)),
         "parameter_gradient_tail_loops": int(getattr(config, "recursive_parameter_gradient_tail_loops", 4)),
         "sampling_policy": SAMPLING_POLICY,
-        "sampling_alpha": SAMPLING_ALPHA,
-        "sampling_weights": SAMPLING_WEIGHTS,
-        "sampling_weight_total": SAMPLING_WEIGHT_TOTAL,
+        "sampler_version": SAMPLER_VERSION,
+        "poisson_lambda": POISSON_LAMBDA,
+        "poisson_support": list(POISSON_SUPPORT),
+        "poisson_probabilities": list(POISSON_PROBABILITIES),
         "sampler_key": SAMPLER_KEY,
         "physical_module_count": len(recursive_model.layers),
         "parameter_storage_unique": unique,
@@ -1468,6 +1447,7 @@ def _all_r_backward_audit(
     audits: list[dict[str, Any]] = []
     labels = batch["labels"]
     for middle_loop_count in range(MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS + 1):
+        model.train()
         model.zero_grad(set_to_none=True)
         backward_sequence: list[int] = []
         handles = [
@@ -1483,7 +1463,10 @@ def _all_r_backward_audit(
                     input_ids=batch["input_ids"],
                     attention_mask=batch["attention_mask"],
                     use_cache=False,
-                    middle_loop_count=middle_loop_count,
+                    middle_loop_counts=torch.full(
+                        (batch["input_ids"].shape[0],), middle_loop_count,
+                        dtype=torch.long, device=device,
+                    ),
                 )
                 selective = _selective_middle_gradient_audit(
                     recursive_base, middle_loop_count=middle_loop_count
@@ -1533,15 +1516,10 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
 
     base_model = getattr(model, "module", model)
     base_model.config.use_cache = False
-    sampled_r = broadcast_middle_loop_count(
-        rank=rank, seed=config.seed, optimizer_step=0, device=device
+    sampled_counts = sample_middle_loop_counts(
+        config.seed, rank, 0, 0, config.micro_batch_size
     )
-    expected_sampled_r = sample_middle_loop_count(config.seed, 0)
-    if sampled_r != expected_sampled_r:
-        raise AssertionError(
-            f"Gate A broadcast r disagrees with the stateless step sampler: "
-            f"expected={expected_sampled_r} got={sampled_r}"
-        )
+    sampled_r = int(sampled_counts.max().item())
     parameters = _trainable_parameters(model)
     optimizer = torch.optim.AdamW(
         parameters,
@@ -1561,7 +1539,7 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
         model, recursive_base, batch=batch, device=device
     )
     # Install the sampled-r trace hooks only after the all-r pre-audit.  This
-    # keeps the 16-microbatch trace free of the four standalone audit runs.
+    # keeps the 64-microbatch trace free of the seven standalone all-r audit runs.
     sequence, handles = _register_forward_trace(model)
     backward_sequence: list[int] = []
     backward_handles = [
@@ -1574,6 +1552,8 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
     local_loss_sum = torch.zeros((), device=device, dtype=torch.float64)
     local_tokens = torch.zeros((), device=device, dtype=torch.int64)
     microbatches = 0
+    sampled_counts_history: list[list[int]] = []
+    sampled_tmax_history: list[int] = []
     selective_gradient_audit: dict[str, Any] | None = None
     # Obtain every microbatch's global valid-token denominator before any
     # backward pass, then use the window-global denominator for token-weighted
@@ -1584,17 +1564,23 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
     if window_global_tokens <= 0:
         raise FloatingPointError("Synthetic accumulation window has no supervised tokens")
     for micro_index in range(config.gradient_accumulation_steps):
+        micro_counts = sample_middle_loop_counts(
+            config.seed, rank, 0, micro_index, config.micro_batch_size
+        )
+        micro_tmax = int(micro_counts.max().item())
+        sampled_counts_history.append([int(value) for value in micro_counts.tolist()])
+        sampled_tmax_history.append(micro_tmax)
         recursive_base._collect_middle_gradient_audit = micro_index == 0
         with _bf16_autocast(device):
             result = model(
                 input_ids=batch["input_ids"],
                 attention_mask=batch["attention_mask"],
                 use_cache=False,
-                middle_loop_count=sampled_r,
+                middle_loop_counts=micro_counts.to(device=device),
             )
             if micro_index == 0:
                 selective_gradient_audit = _selective_middle_gradient_audit(
-                    recursive_base, middle_loop_count=sampled_r
+                    recursive_base, middle_loop_count=micro_tmax
                 )
         recursive_base._collect_middle_gradient_audit = False
         loss_sum, valid_count = _causal_loss_sum(result.logits, labels)
@@ -1622,35 +1608,34 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
         raise AssertionError("Gate A did not run the selective middle-gradient audit")
     physical = len(recursive_base.layers)
     from code.RSmol.recursive_model_5_10xr_5 import build_5_10xr_5_schedule
-    forward_expected = list(build_5_10xr_5_schedule(sampled_r))
-    backward_expected = list(reversed(forward_expected))
-    expected_trace_length = config.gradient_accumulation_steps * len(forward_expected)
-    forward_chunks = [
-        sequence[offset:offset + len(forward_expected)]
-        for offset in range(0, len(sequence), len(forward_expected))
-    ]
-    backward_chunks = [
-        backward_sequence[offset:offset + len(backward_expected)]
-        for offset in range(0, len(backward_sequence), len(backward_expected))
-    ]
+    forward_expected = [list(build_5_10xr_5_schedule(tmax)) for tmax in sampled_tmax_history]
+    backward_expected = [list(reversed(chunk)) for chunk in forward_expected]
+    forward_chunks, backward_chunks = [], []
+    forward_offset = backward_offset = 0
+    for expected_forward, expected_backward in zip(forward_expected, backward_expected):
+        forward_chunks.append(sequence[forward_offset:forward_offset + len(expected_forward)])
+        backward_chunks.append(backward_sequence[backward_offset:backward_offset + len(expected_backward)])
+        forward_offset += len(expected_forward)
+        backward_offset += len(expected_backward)
+    expected_trace_length = sum(len(chunk) for chunk in forward_expected)
     trace_forward_ok = (
         len(sequence) == expected_trace_length
         and len(forward_chunks) == config.gradient_accumulation_steps
-        and all(chunk == forward_expected for chunk in forward_chunks)
+        and all(actual == expected for actual, expected in zip(forward_chunks, forward_expected))
     )
     trace_backward_ok = (
         len(backward_sequence) == expected_trace_length
         and len(backward_chunks) == config.gradient_accumulation_steps
-        and all(chunk == backward_expected for chunk in backward_chunks)
+        and all(actual == expected for actual, expected in zip(backward_chunks, backward_expected))
     )
     if not trace_forward_ok:
         raise AssertionError(
-            "Forward trace is not sixteen identical sampled-r schedules: "
+            "Forward trace does not match the per-microbatch local-Tmax schedules: "
             f"expected_length={expected_trace_length} got_length={len(sequence)} chunks={forward_chunks}"
         )
     if not trace_backward_ok:
         raise AssertionError(
-            "Backward must traverse sixteen identical reversed sampled-r schedules: "
+            "Backward does not match the per-microbatch reversed local-Tmax schedules: "
             f"expected_length={expected_trace_length} got_length={len(backward_sequence)} chunks={backward_chunks}"
         )
     layer_gradients = {}
@@ -1693,27 +1678,29 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
         "backend": dist.get_backend() if dist.is_initialized() else None,
         "ddp_initialized": bool(dist.is_initialized()),
         "recursive_forward_trace": sequence[:LOGICAL_LAYER_COUNT],
-        "recursive_forward_trace_expected": forward_expected,
+        "recursive_forward_trace_expected": forward_expected[0],
         "recursive_backward_trace": backward_sequence[:LOGICAL_LAYER_COUNT],
-        "recursive_backward_trace_expected": backward_expected,
+        "recursive_backward_trace_expected": backward_expected[0],
         "sampled_r_forward_trace_total_length": len(sequence),
         "sampled_r_backward_trace_total_length": len(backward_sequence),
         "expected_sampled_r_trace_total_length": expected_trace_length,
         "sampled_r_trace_chunk_count": len(forward_chunks),
-        "all_microbatches_same_r_trace": bool(trace_forward_ok and trace_backward_ok),
+        "all_microbatches_same_r_trace": False,
+        "all_microbatches_match_local_tmax_trace": bool(trace_forward_ok and trace_backward_ok),
         "forward_trace_ok": trace_forward_ok,
         "backward_second_loop_then_first": trace_backward_ok,
-        "logical_layers": len(forward_expected),
+        "logical_layers": len(forward_expected[0]),
         "physical_layers": physical,
         "recursive_loops": sampled_r,
         "sampled_r": sampled_r,
-        "sampling_weight": sampled_r ** SAMPLING_ALPHA,
-        "sampling_probability": (sampled_r ** SAMPLING_ALPHA) / SAMPLING_WEIGHT_TOTAL,
-        "sampled_r_expected_from_step_key": expected_sampled_r,
-        "all_rank_r_equal": True,
+        "sampled_middle_loop_counts_per_microbatch": sampled_counts_history,
+        "sampled_local_tmax_per_microbatch": sampled_tmax_history,
+        "sampling_policy": SAMPLING_POLICY,
+        "sampler_metadata": poisson_metadata(),
+        "all_rank_r_equal": False,
         "backward_traversed_middle_loops": list(range(1, sampled_r + 1)),
-        "parameter_gradient_enabled_middle_loops": list(range(sampled_r - 3, sampled_r + 1)),
-        "parameter_gradient_disabled_middle_loops": list(range(1, sampled_r - 3)),
+        "parameter_gradient_enabled_middle_loops": list(range(max(1, sampled_r - 3), sampled_r + 1)),
+        "parameter_gradient_disabled_middle_loops": list(range(1, max(1, sampled_r - 3))),
         "label_shift": "logits[..., :-1, :] vs labels[..., 1:]",
         "padding_only_label_mask": True,
         "global_loss_sum": float(global_loss.item()),
@@ -1947,12 +1934,12 @@ def validate_formal_resume_state(state: Mapping[str, Any]) -> dict[str, int]:
     except (TypeError, ValueError) as exc:
         raise ValueError("FORMAL resume checkpoint has invalid scheduler/optimizer metadata") from exc
     if schedule_total_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
-        raise ValueError("FORMAL resume checkpoint scheduler domain must be 4500")
+        raise ValueError("FORMAL resume checkpoint scheduler domain must be 9244")
     if warmup_steps != DEFAULT_FORMAL_WARMUP_STEPS:
-        raise ValueError("FORMAL resume checkpoint warmup_steps must be 225")
+        raise ValueError("FORMAL resume checkpoint warmup_steps must be 463")
     if optimizer_step < 0 or optimizer_step > DEFAULT_FORMAL_OPTIMIZER_STEPS:
         raise ValueError(
-            "FORMAL resume checkpoint optimizer_step must be in [0, 4500]; "
+            "FORMAL resume checkpoint optimizer_step must be in [0, 9244]; "
             f"got {optimizer_step}"
         )
     return {
@@ -2154,9 +2141,11 @@ def save_complete_checkpoint(
                     "world_size": int(config.world_size),
                     "architecture": MODEL_ARCHITECTURE_CONTRACT,
                     "sampling_policy": SAMPLING_POLICY,
-                    "sampling_alpha": SAMPLING_ALPHA,
-                    "sampling_weights": SAMPLING_WEIGHTS,
-                    "sampling_weight_total": SAMPLING_WEIGHT_TOTAL,
+                    "sampler_version": SAMPLER_VERSION,
+                    "poisson_lambda": POISSON_LAMBDA,
+                    "poisson_support": list(POISSON_SUPPORT),
+                    "poisson_normalization_z": POISSON_NORMALIZATION_Z,
+                    "poisson_probabilities": list(POISSON_PROBABILITIES),
                     "sampler_key": SAMPLER_KEY,
                     "default_inference_r": DEFAULT_INFERENCE_MIDDLE_LOOPS,
                     "fixed_parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
@@ -2175,9 +2164,11 @@ def save_complete_checkpoint(
                     "world_size": int(config.world_size),
                     "architecture": MODEL_ARCHITECTURE_CONTRACT,
                     "sampling_policy": SAMPLING_POLICY,
-                    "sampling_alpha": SAMPLING_ALPHA,
-                    "sampling_weights": SAMPLING_WEIGHTS,
-                    "sampling_weight_total": SAMPLING_WEIGHT_TOTAL,
+                    "sampler_version": SAMPLER_VERSION,
+                    "poisson_lambda": POISSON_LAMBDA,
+                    "poisson_support": list(POISSON_SUPPORT),
+                    "poisson_normalization_z": POISSON_NORMALIZATION_Z,
+                    "poisson_probabilities": list(POISSON_PROBABILITIES),
                     "sampler_key": SAMPLER_KEY,
                     "default_inference_r": DEFAULT_INFERENCE_MIDDLE_LOOPS,
                     "fixed_parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
@@ -2471,7 +2462,7 @@ def _training_window(
     rank: int,
     optimizer_step: int,
 ) -> tuple[bool, dict[str, Any]]:
-    """Collect exactly 16 complete microbatches before doing backward."""
+    """Collect exactly 64 complete microbatches before doing backward."""
 
     import torch
     import torch.distributed as dist
@@ -2499,28 +2490,24 @@ def _training_window(
     global_window_tokens = sum(global_counts)
     if global_window_tokens <= 0:
         raise FloatingPointError("Accumulation window has no supervised shifted tokens")
-    # The window is complete before this point, so this is the only place the
-    # per-optimizer-step r sampler is consumed. Every rank receives the same
-    # value by broadcast and all 16 microbatches use it.
-    middle_loop_count = broadcast_middle_loop_count(
-        rank=rank, seed=config.seed, optimizer_step=optimizer_step, device=device
-    )
-    expected_step_r = sample_middle_loop_count(config.seed, optimizer_step)
-    if middle_loop_count != expected_step_r:
-        raise AssertionError(
-            f"broadcast r disagrees with step-keyed sampler at step={optimizer_step}: "
-            f"expected={expected_step_r} got={middle_loop_count}"
-        )
     local_loss_sum_total = torch.zeros((), device=device, dtype=torch.float64)
     local_valid_total = torch.zeros((), device=device, dtype=torch.int64)
     micro_records: list[dict[str, Any]] = []
-    for batch, global_count in zip(batches, global_counts):
+    sampled_counts_history: list[list[int]] = []
+    sampled_tmax_history: list[int] = []
+    for micro_index, (batch, global_count) in enumerate(zip(batches, global_counts)):
+        middle_loop_counts = sample_middle_loop_counts(
+            config.seed, rank, optimizer_step, micro_index, batch["input_ids"].shape[0]
+        )
+        local_tmax = int(middle_loop_counts.max().item())
+        sampled_counts_history.append([int(value) for value in middle_loop_counts.tolist()])
+        sampled_tmax_history.append(local_tmax)
         with _bf16_autocast(device):
             result = model(
                 input_ids=batch["input_ids"],
                 attention_mask=batch["attention_mask"],
                 use_cache=False,
-                middle_loop_count=middle_loop_count,
+                middle_loop_counts=middle_loop_counts.to(device=device),
             )
             loss_sum, valid_count = _causal_loss_sum(result.logits, batch["labels"])
         if not torch.isfinite(loss_sum):
@@ -2536,6 +2523,9 @@ def _training_window(
         micro_records.append(
             {
                 "microbatch": len(micro_records),
+                "middle_loop_counts": sampled_counts_history[-1],
+                "local_tmax": local_tmax,
+                "tau": [local_tmax - int(value) for value in sampled_counts_history[-1]],
                 "local_loss_sum": float(loss_sum.detach().float().item()),
                 "local_valid_token_count": int(valid_count.detach().item()),
                 "global_loss_sum": float(global_loss.item()),
@@ -2548,21 +2538,16 @@ def _training_window(
     return True, {
         "partial_accumulation_window_discarded": False,
         "microbatches_collected": len(batches),
-        "exact_16_microbatches": len(batches) == 16,
+        "exact_accumulation_microbatches": len(batches) == config.gradient_accumulation_steps,
         "window_global_loss_sum": float(global_loss_sum.item()),
         "window_global_valid_token_count": int(global_valid_tokens.item()),
         "window_global_loss_count_consistent": True,
         "microbatch_records": micro_records,
-        "middle_loop_count": middle_loop_count,
-        "sampling_weight": middle_loop_count ** SAMPLING_ALPHA,
-        "sampling_probability": (middle_loop_count ** SAMPLING_ALPHA) / SAMPLING_WEIGHT_TOTAL,
-        "sampled_r_expected_from_step_key": expected_step_r,
+        "middle_loop_counts_per_microbatch": sampled_counts_history,
+        "local_tmax_per_microbatch": sampled_tmax_history,
         "sampling_policy": SAMPLING_POLICY,
-        "sampling_alpha": SAMPLING_ALPHA,
-        "all_rank_r_equal": True,
-        "backward_traversed_middle_loops": list(range(1, middle_loop_count + 1)),
-        "parameter_gradient_enabled_middle_loops": list(range(middle_loop_count - 3, middle_loop_count + 1)),
-        "parameter_gradient_disabled_middle_loops": list(range(1, middle_loop_count - 3)),
+        "sampler_metadata": poisson_metadata(),
+        "all_rank_r_equal": False,
     }
 
 
@@ -2629,11 +2614,11 @@ def run_training(
         )
     if config.gate == "FORMAL":
         if config.max_optimizer_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
-            raise ValueError("FORMAL requires exactly 4500 optimizer steps")
+            raise ValueError("FORMAL requires exactly 9244 optimizer steps")
         if config.scheduler_total_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
-            raise ValueError("FORMAL requires scheduler_total_steps=4500")
+            raise ValueError("FORMAL requires scheduler_total_steps=9244")
         if compute_warmup_steps(config.scheduler_total_steps, config.warmup_steps) != DEFAULT_FORMAL_WARMUP_STEPS:
-            raise ValueError("FORMAL requires warmup_steps=225")
+            raise ValueError("FORMAL requires warmup_steps=463")
         if config.save_every != DEFAULT_FORMAL_SAVE_EVERY:
             raise ValueError("FORMAL requires save_every=500")
         if config.checkpoint_retention != DEFAULT_FORMAL_CHECKPOINT_RETENTION:
@@ -2803,16 +2788,12 @@ def run_training(
             metrics.append(
                 {
                     "optimizer_step": optimizer_step,
-                    "middle_loop_count": window["middle_loop_count"],
-                    "sampling_weight": window["sampling_weight"],
-                    "sampling_probability": window["sampling_probability"],
-                    "sampled_r_expected_from_step_key": window["sampled_r_expected_from_step_key"],
+                    "middle_loop_counts_per_microbatch": window["middle_loop_counts_per_microbatch"],
+                    "local_tmax_per_microbatch": window["local_tmax_per_microbatch"],
                     "all_rank_r_equal": window["all_rank_r_equal"],
-                    "backward_traversed_middle_loops": window["backward_traversed_middle_loops"],
-                    "parameter_gradient_enabled_middle_loops": window["parameter_gradient_enabled_middle_loops"],
-                    "parameter_gradient_disabled_middle_loops": window["parameter_gradient_disabled_middle_loops"],
+                    "parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
                     "microbatches": config.gradient_accumulation_steps,
-                    "exact_16_microbatches": True,
+                    "exact_accumulation_microbatches": True,
                     "global_loss_sum": window["window_global_loss_sum"],
                     "global_valid_token_count": window["window_global_valid_token_count"],
                     "loss": window["window_global_loss_sum"] / max(window["window_global_valid_token_count"], 1),
@@ -3041,14 +3022,19 @@ def run_training(
         "optimizer_audit": optimizer_audit,
         "sampling_contract": {
             "policy": SAMPLING_POLICY,
-            "alpha": SAMPLING_ALPHA,
-            "weights": SAMPLING_WEIGHTS,
-            "weight_total": SAMPLING_WEIGHT_TOTAL,
+            "sampler_version": SAMPLER_VERSION,
+            "poisson_lambda": POISSON_LAMBDA,
+            "poisson_support": list(POISSON_SUPPORT),
+            "poisson_normalization_z": POISSON_NORMALIZATION_Z,
+            "poisson_probabilities": list(POISSON_PROBABILITIES),
             "sampler_key": SAMPLER_KEY,
             "default_inference_r": DEFAULT_INFERENCE_MIDDLE_LOOPS,
             "fixed_parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
-            "r_histogram": dict(Counter(str(item["middle_loop_count"]) for item in metrics)),
-            "all_rank_r_equal": all(bool(item.get("all_rank_r_equal")) for item in metrics),
+            "local_tmax_histogram": dict(
+                Counter(str(tmax) for item in metrics for tmax in item.get("local_tmax_per_microbatch", ()))
+            ),
+            "per_sequence_sampling": True,
+            "all_rank_r_equal": False,
         },
         "rank0_only_checkpoint": True,
         "latest_complete_checkpoint": str(latest_checkpoint) if latest_checkpoint is not None else None,
@@ -3335,7 +3321,7 @@ def _synthetic_model(config: Stage4Config, device: Any) -> Any:
     # Gate A is an exact architecture audit, not the legacy configurable
     # 4-layer fixture: it must instantiate all 20 physical modules and the
     # complete max-depth 5-10xr-5 logical schedule.
-    logical = 80
+    logical = 110
     physical = 20
     llama_config = LlamaConfig(
         vocab_size=config.synthetic_vocab_size,
@@ -3352,15 +3338,18 @@ def _synthetic_model(config: Stage4Config, device: Any) -> Any:
     )
     llama_config.recursive_source_num_hidden_layers = 30
     llama_config.recursive_source_layer_count = 30
-    llama_config.recursive_loops = 7
+    llama_config.recursive_loops = 10
     llama_config.recursive_min_middle_loops = 4
-    llama_config.recursive_max_middle_loops = 7
+    llama_config.recursive_max_middle_loops = 10
     llama_config.recursive_default_inference_middle_loops = 7
     llama_config.recursive_parameter_gradient_tail_loops = 4
     llama_config.recursive_sampling_policy = SAMPLING_POLICY
-    llama_config.recursive_sampling_alpha = SAMPLING_ALPHA
-    llama_config.recursive_sampling_weights = {str(key): value for key, value in SAMPLING_WEIGHTS.items()}
-    llama_config.recursive_sampling_weight_total = SAMPLING_WEIGHT_TOTAL
+    llama_config.recursive_sampler_version = SAMPLER_VERSION
+    llama_config.recursive_poisson_lambda = POISSON_LAMBDA
+    llama_config.recursive_poisson_support = list(POISSON_SUPPORT)
+    llama_config.recursive_poisson_normalization_z = POISSON_NORMALIZATION_Z
+    llama_config.recursive_poisson_Z = POISSON_NORMALIZATION_Z
+    llama_config.recursive_poisson_probabilities = list(POISSON_PROBABILITIES)
     llama_config.recursive_sampler_key = SAMPLER_KEY
     llama_config.recursive_loops_scope = "middle_only"
     llama_config.recursive_layer_count = physical
@@ -3444,14 +3433,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
         max_steps_explicit = has_option("--max-optimizer-steps", "--max-steps")
         if max_steps_explicit and config.max_optimizer_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
             raise ValueError(
-                "FORMAL requires max_optimizer_steps=4500; refusing an explicit conflicting value"
+                "FORMAL requires max_optimizer_steps=9244; refusing an explicit conflicting value"
             )
         if has_option("--formal-optimizer-steps") and config.formal_optimizer_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
-            raise ValueError("FORMAL requires formal_optimizer_steps=4500")
+            raise ValueError("FORMAL requires formal_optimizer_steps=9244")
         if has_option("--scheduler-total-steps") and config.scheduler_total_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
-            raise ValueError("FORMAL requires scheduler_total_steps=4500")
+            raise ValueError("FORMAL requires scheduler_total_steps=9244")
         if has_option("--warmup-steps") and config.warmup_steps not in (0, DEFAULT_FORMAL_WARMUP_STEPS):
-            raise ValueError("FORMAL requires warmup_steps=225 (or 0 for the automatic 5% default)")
+            raise ValueError("FORMAL requires warmup_steps=463 (or 0 for the automatic 5% default)")
         if has_option("--save-every") and config.save_every != DEFAULT_FORMAL_SAVE_EVERY:
             raise ValueError("FORMAL requires save_every=500")
         if has_option("--checkpoint-retention") and config.checkpoint_retention != DEFAULT_FORMAL_CHECKPOINT_RETENTION:
@@ -3468,10 +3457,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
         config.warmup_steps = DEFAULT_FORMAL_WARMUP_STEPS
         config.save_every = DEFAULT_FORMAL_SAVE_EVERY
         config.checkpoint_retention = DEFAULT_FORMAL_CHECKPOINT_RETENTION
-    if config.micro_batch_size != 8:
-        raise ValueError("Stage 4 requires micro_batch_size=8")
-    if config.gradient_accumulation_steps != 16:
-        raise ValueError("Stage 4 requires gradient_accumulation_steps=16")
+    if config.micro_batch_size != 2:
+        raise ValueError("Stage 4 requires micro_batch_size=2")
+    if config.gradient_accumulation_steps != 64:
+        raise ValueError("Stage 4 requires gradient_accumulation_steps=64")
     if config.learning_rate != DEFAULT_MAX_LR:
         raise ValueError("Stage 4 requires learning_rate=2e-4")
     if config.max_lr != DEFAULT_MAX_LR:
@@ -3494,15 +3483,15 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
         raise ValueError(
             "Stage 4 Gate D is a fixed ten-optimizer-step smoke; "
             f"got max_optimizer_steps={config.max_optimizer_steps}. "
-            "The 4500-step value is formal_optimizer_steps only."
+            "The 9244-step value is formal_optimizer_steps only."
         )
     if config.gate == "FORMAL":
         if config.max_optimizer_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
-            raise ValueError("FORMAL requires exactly 4500 optimizer steps")
+            raise ValueError("FORMAL requires exactly 9244 optimizer steps")
         if config.scheduler_total_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
-            raise ValueError("FORMAL requires scheduler_total_steps=4500")
+            raise ValueError("FORMAL requires scheduler_total_steps=9244")
         if config.warmup_steps != DEFAULT_FORMAL_WARMUP_STEPS:
-            raise ValueError("FORMAL requires warmup_steps=225")
+            raise ValueError("FORMAL requires warmup_steps=463")
         if config.save_every != DEFAULT_FORMAL_SAVE_EVERY:
             raise ValueError("FORMAL requires save_every=500")
         if config.checkpoint_retention != DEFAULT_FORMAL_CHECKPOINT_RETENTION:
@@ -3552,7 +3541,7 @@ def run(config: Stage4Config) -> dict[str, Any]:
         raise ValueError(
             "Stage 4 Gate D is a fixed ten-optimizer-step smoke; "
             f"got max_optimizer_steps={config.max_optimizer_steps}. "
-            "The 4500-step value is formal_optimizer_steps only."
+            "The 9244-step value is formal_optimizer_steps only."
         )
     if config.gate == "E" and not config.dry_run and config.resume_from is None:
         raise ValueError("Gate E requires --resume-from (the complete checkpoint is its model source)")
@@ -3597,9 +3586,11 @@ def run(config: Stage4Config) -> dict[str, Any]:
             "checkpoint_retention": config.checkpoint_retention,
             "sampling_contract": {
                 "policy": SAMPLING_POLICY,
-                "alpha": SAMPLING_ALPHA,
-                "weights": SAMPLING_WEIGHTS,
-                "weight_total": SAMPLING_WEIGHT_TOTAL,
+                "sampler_version": SAMPLER_VERSION,
+                "poisson_lambda": POISSON_LAMBDA,
+                "poisson_support": list(POISSON_SUPPORT),
+                "poisson_normalization_z": POISSON_NORMALIZATION_Z,
+                "poisson_probabilities": list(POISSON_PROBABILITIES),
                 "sampler_key": SAMPLER_KEY,
                 "default_inference_r": DEFAULT_INFERENCE_MIDDLE_LOOPS,
                 "fixed_parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
@@ -3848,11 +3839,11 @@ def run(config: Stage4Config) -> dict[str, Any]:
             # Keep this assertion next to runtime schedule finalization so a
             # hand-built Stage4Config cannot bypass the parser contract.
             if config.max_optimizer_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
-                raise ValueError("FORMAL requires exactly 4500 optimizer steps")
+                raise ValueError("FORMAL requires exactly 9244 optimizer steps")
             if config.scheduler_total_steps != DEFAULT_FORMAL_OPTIMIZER_STEPS:
-                raise ValueError("FORMAL requires scheduler_total_steps=4500")
+                raise ValueError("FORMAL requires scheduler_total_steps=9244")
             if config.warmup_steps != DEFAULT_FORMAL_WARMUP_STEPS:
-                raise ValueError("FORMAL requires warmup_steps=225")
+                raise ValueError("FORMAL requires warmup_steps=463")
             if config.save_every != DEFAULT_FORMAL_SAVE_EVERY:
                 raise ValueError("FORMAL requires save_every=500")
             if config.checkpoint_retention != DEFAULT_FORMAL_CHECKPOINT_RETENTION:
@@ -3897,17 +3888,24 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 raise RuntimeError("Gate E must report data_cursor_restored=false for bounded shuffle")
             train_report["gate_e_resume_semantics_verified"] = True
             resume_start_step = int(train_report.get("optimizer_step_start", 0))
-            resumed_r_sequence = [
-                int(item["middle_loop_count"]) for item in train_report.get("metrics", [])
+            resumed_depth_sequence = [
+                item.get("middle_loop_counts_per_microbatch", [])
+                for item in train_report.get("metrics", [])
             ]
-            uninterrupted_reference_r_sequence = [
-                sample_middle_loop_count(config.seed, resume_start_step + offset)
-                for offset in range(len(resumed_r_sequence))
+            uninterrupted_reference_depth_sequence = [
+                [
+                    sample_middle_loop_counts(
+                        config.seed, rank, resume_start_step + offset,
+                        micro_index, config.micro_batch_size,
+                    ).tolist()
+                    for micro_index in range(config.gradient_accumulation_steps)
+                ]
+                for offset in range(len(resumed_depth_sequence))
             ]
-            if resumed_r_sequence != uninterrupted_reference_r_sequence:
+            if resumed_depth_sequence != uninterrupted_reference_depth_sequence:
                 raise RuntimeError(
-                    "Gate E resume r sequence differs from the uninterrupted step-keyed sequence: "
-                    f"actual={resumed_r_sequence} expected={uninterrupted_reference_r_sequence}"
+                    "Gate E resume Poisson depth sequence differs from the uninterrupted keyed sequence: "
+                    f"actual={resumed_depth_sequence} expected={uninterrupted_reference_depth_sequence}"
                 )
             train_report["gate_e_resume_verification"] = {
                 "rank": rank,
@@ -3921,9 +3919,9 @@ def run(config: Stage4Config) -> dict[str, Any]:
                     any(item.get("shared_parameter_updated") for item in train_report.get("metrics", []))
                 ),
                 "resume_start_optimizer_step": resume_start_step,
-                "resumed_r_sequence": resumed_r_sequence,
-                "uninterrupted_reference_r_sequence": uninterrupted_reference_r_sequence,
-                "r_sequence_matches_uninterrupted": True,
+                "resumed_depth_sequence": resumed_depth_sequence,
+                "uninterrupted_reference_depth_sequence": uninterrupted_reference_depth_sequence,
+                "depth_sequence_matches_uninterrupted": True,
             }
         report = {
             "status": train_report.get("status", "PASS"),

@@ -11,7 +11,7 @@ cd "$REPO_ROOT"
 export PYTHONUNBUFFERED=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 
 SOURCE_CHECKPOINT="${RSMOL_5_10XR_5_SOURCE_CHECKPOINT:-}"
-OUTPUT_DIR="${RSMOL_5_10XR_5_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10xr-5}"
+OUTPUT_DIR="${RSMOL_5_10XR_5_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10xr-5-poisson}"
 if [[ -z "$SOURCE_CHECKPOINT" ]]; then
   echo "Set RSMOL_5_10XR_5_SOURCE_CHECKPOINT to an external local checkpoint" >&2
   exit 2
