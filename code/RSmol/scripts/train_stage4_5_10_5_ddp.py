@@ -63,9 +63,9 @@ EXPECTED_PARQUET_NAMES = tuple(
 DEFAULT_WORLD_SIZE = 8
 DEFAULT_MICRO_BATCH_SIZE = 8
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 16
-DEFAULT_LEARNING_RATE = 2e-4
-DEFAULT_MAX_LR = 2e-4
-DEFAULT_MIN_LR = 2e-5
+DEFAULT_LEARNING_RATE = 8e-4
+DEFAULT_MAX_LR = 8e-4
+DEFAULT_MIN_LR = 8e-5
 DEFAULT_ADAMW_BETAS = (0.9, 0.95)
 DEFAULT_ADAMW_EPS = 1e-8
 DEFAULT_ADAMW_WEIGHT_DECAY = 0.1
@@ -3018,10 +3018,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
         raise ValueError("Stage 4 requires micro_batch_size=8")
     if config.gradient_accumulation_steps != 16:
         raise ValueError("Stage 4 requires gradient_accumulation_steps=16")
-    if config.learning_rate != DEFAULT_MAX_LR:
-        raise ValueError("Stage 4 requires learning_rate=2e-4")
-    if config.max_lr != DEFAULT_MAX_LR:
-        raise ValueError("Stage 4 requires max_lr=2e-4")
+    if config.learning_rate <= 0 or config.max_lr <= 0:
+        raise ValueError("Stage 4 requires positive learning_rate and max_lr")
+    if abs(float(config.learning_rate) - float(config.max_lr)) > max(1e-12, abs(float(config.max_lr)) * 1e-9):
+        raise ValueError("Stage 4 learning_rate and max_lr must match")
     if tuple(float(value) for value in config.optimizer_betas) != DEFAULT_ADAMW_BETAS:
         raise ValueError(f"Stage 4 requires AdamW betas={DEFAULT_ADAMW_BETAS}")
     if float(config.optimizer_eps) != DEFAULT_ADAMW_EPS:
@@ -3030,8 +3030,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
         raise ValueError(f"Stage 4 requires AdamW weight_decay={DEFAULT_ADAMW_WEIGHT_DECAY}")
     if bool(config.optimizer_amsgrad) is not DEFAULT_ADAMW_AMSGRAD:
         raise ValueError(f"Stage 4 requires AdamW amsgrad={DEFAULT_ADAMW_AMSGRAD}")
+    expected_min_lr = float(config.max_lr) * 0.1
     if config.min_lr <= 0 or config.min_lr > config.max_lr:
         raise ValueError("Stage 4 requires 0 < min_lr <= max_lr")
+    if abs(float(config.min_lr) - expected_min_lr) > max(1e-12, abs(expected_min_lr) * 1e-9):
+        raise ValueError(
+            "Stage 4 requires min_lr=0.1*max_lr; "
+            f"got min_lr={config.min_lr} max_lr={config.max_lr}"
+        )
     if config.context_length <= 0 or config.context_length > 1024:
         raise ValueError("Stage 4 context_length must be in [1, 1024]")
     if config.max_optimizer_steps <= 0:
