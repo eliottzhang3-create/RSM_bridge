@@ -1522,7 +1522,17 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
     local_noop_updates = 0
     local_depth_samples = 0
     start = time.time()
+    progress_last_time = start
+    progress_last_step = optimizer_step
+    progress_global_tokens = 0
+    progress_global_samples = 0
+    progress_log_last_tokens = 0
+    progress_log_last_samples = 0
     stopping_reason = "target_reached"
+    if device.type == "cuda":
+        # Report peaks for the training loop itself, excluding model loading
+        # and startup/preaudit allocations.
+        torch.cuda.reset_peak_memory_stats(device)
     while optimizer_step < config.max_optimizer_steps:
         optimizer.zero_grad(set_to_none=True)
         window_loss_sum = torch.zeros((), device=device, dtype=torch.float64)
@@ -1632,6 +1642,10 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         optimizer.step()
         scheduler.step()
         optimizer_step = next_step
+        global_window_token_count = int(global_window_tokens.item())
+        global_window_sample_count = int(config.micro_batch_size * config.gradient_accumulation_steps * world_size)
+        progress_global_tokens += global_window_token_count
+        progress_global_samples += global_window_sample_count
         depth_summary = _depth_window_summary(counts_per_microbatch, tmax_per_microbatch=tmax_per_microbatch, tau_per_microbatch=tau_per_microbatch)
         for value in [item for row in counts_per_microbatch for item in row]:
             local_depth_counts[int(value)] += 1
@@ -1657,6 +1671,62 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 "grad_norm_finite": bool(total_grad_norm_finite_nonzero),
                 "total_grad_norm_finite_nonzero": bool(total_grad_norm_finite_nonzero),
             }
+        progress_log_due = optimizer_step % 10 == 0 or optimizer_step == config.max_optimizer_steps
+        if progress_log_due:
+            # CUDA kernels are asynchronous; synchronize only at the requested
+            # progress points so the reported interval/speed and memory are
+            # meaningful.  All ranks participate in the memory reduction;
+            # only rank 0 emits the human-readable line.
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            now = time.time()
+            memory = "memory=cpu"
+            if device.type == "cuda":
+                gib = float(1024 ** 3)
+                memory_values = torch.tensor(
+                    [
+                        torch.cuda.memory_allocated(device) / gib,
+                        torch.cuda.memory_reserved(device) / gib,
+                        torch.cuda.max_memory_allocated(device) / gib,
+                        torch.cuda.max_memory_reserved(device) / gib,
+                    ],
+                    device=device,
+                    dtype=torch.float64,
+                )
+                if dist.is_available() and dist.is_initialized():
+                    dist.all_reduce(memory_values, op=dist.ReduceOp.MAX)
+                if rank == 0:
+                    memory = (
+                        f"memory_max_allocated_gib={memory_values[0].item():.2f} "
+                        f"memory_max_reserved_gib={memory_values[1].item():.2f} "
+                        f"memory_max_peak_allocated_gib={memory_values[2].item():.2f} "
+                        f"memory_max_peak_reserved_gib={memory_values[3].item():.2f}"
+                    )
+            if rank == 0:
+                interval_seconds = max(1e-9, now - progress_last_time)
+                interval_steps = max(1, optimizer_step - progress_last_step)
+                interval_tokens = progress_global_tokens
+                interval_samples = progress_global_samples
+                if progress_last_step > 0:
+                    # The counters are cumulative; retain the previous snapshot
+                    # values on the function scope below for subsequent windows.
+                    interval_tokens = progress_global_tokens - progress_log_last_tokens
+                    interval_samples = progress_global_samples - progress_log_last_samples
+                print(
+                    f"[stage4][rank=0][progress] step={optimizer_step} "
+                    f"loss={global_window_loss_sum.item() / max(1, global_window_token_count):.6f} "
+                    f"interval_seconds={interval_seconds:.2f} "
+                    f"steps_per_second={interval_steps / interval_seconds:.4f} "
+                    f"global_tokens_per_second={interval_tokens / interval_seconds:.1f} "
+                    f"global_samples_per_second={interval_samples / interval_seconds:.2f} "
+                    f"global_valid_tokens={progress_global_tokens} "
+                    f"global_samples={progress_global_samples} {memory}",
+                    flush=True,
+                )
+                progress_last_time = now
+                progress_last_step = optimizer_step
+                progress_log_last_tokens = progress_global_tokens
+                progress_log_last_samples = progress_global_samples
         if optimizer_step % config.save_every == 0 or optimizer_step == config.max_optimizer_steps:
             _write_checkpoint(model, optimizer, scheduler, output_dir=config.output_dir, optimizer_step=optimizer_step, config=config, metadata=sampling_contract, rank=rank, world_size=world_size, tokenizer=tokenizer, data_cursor=stream.cursor(), cumulative_samples=cumulative_samples, cumulative_valid_tokens=cumulative_valid_tokens, rank_tmax_stats={"tmax_histogram": dict(local_tmax_counts), "depth_histogram": dict(local_depth_counts), "active_updates_total": int(local_active_updates), "no_op_updates_total": int(local_noop_updates), "sample_count": int(local_depth_samples), "window_min": min(tmax_per_microbatch), "window_max": max(tmax_per_microbatch), "window_mean": sum(tmax_per_microbatch) / len(tmax_per_microbatch)})
     if config.gate == "FORMAL" and optimizer_step < config.max_optimizer_steps:
