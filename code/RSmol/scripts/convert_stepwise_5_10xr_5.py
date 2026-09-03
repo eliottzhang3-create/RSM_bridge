@@ -49,6 +49,7 @@ SAMPLING_POLICY = "increasing_power_weight"
 SAMPLING_ALPHA = 2
 SAMPLING_WEIGHTS = {4: 16, 5: 25, 6: 36, 7: 49}
 SAMPLING_WEIGHT_TOTAL = 126
+SAMPLER_KEY = "seed_plus_optimizer_step_sha256_local_random_randrange126_v1"
 
 
 def _resolved(path: Path) -> Path:
@@ -168,6 +169,8 @@ def build_target_config(source_config: Any) -> Any:
     # HF's layer count is used here as the maximum logical/cache namespace;
     # each forward selects a concrete r and executes 50/60/70/80 entries.
     target.num_hidden_layers = 80
+    target.recursive_source_num_hidden_layers = 30
+    target.recursive_source_layer_count = 30
     target.recursive_layer_count = 20
     target.recursive_loops = 7
     target.recursive_min_middle_loops = 4
@@ -180,6 +183,7 @@ def build_target_config(source_config: Any) -> Any:
     target.recursive_sampling_alpha = SAMPLING_ALPHA
     target.recursive_sampling_weights = {str(key): value for key, value in SAMPLING_WEIGHTS.items()}
     target.recursive_sampling_weight_total = SAMPLING_WEIGHT_TOTAL
+    target.recursive_sampler_key = SAMPLER_KEY
     target.recursive_min_logical_layer_count = 50
     target.recursive_max_logical_layer_count = 80
     target.recursive_prefix_layer_count = 5
@@ -217,6 +221,8 @@ def _parameter_audit(model: Any) -> dict[str, Any]:
     return {
         "parameter_count_unique": sum(parameter.numel() for parameter in unique.values()),
         "parameter_count_references": sum(parameter.numel() for _, parameter in names),
+        "source_logical_layer_count": 30,
+        "source_physical_layer_count": 30,
         "physical_layer_count": len(model.model.layers),
         "logical_layer_count": int(model.config.num_hidden_layers),
         "logical_cache_slot_count": 80,
@@ -309,6 +315,7 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
             "backward_policy": "selective_parameter_gradients_final_four_middle_calls_v1",
             "sampling_policy": SAMPLING_POLICY, "sampling_alpha": SAMPLING_ALPHA,
             "sampling_weights": SAMPLING_WEIGHTS, "sampling_weight_total": SAMPLING_WEIGHT_TOTAL,
+            "sampler_key": SAMPLER_KEY,
             "parameter_audit": audit, "copied_tokenizer_files": copied, "seed": args.seed,
             "code_commit": git_commit(), "python": sys.version, "platform": platform.platform(),
             "torch": torch.__version__, "transformers": package_version("transformers"),

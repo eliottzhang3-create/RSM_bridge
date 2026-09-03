@@ -14,7 +14,7 @@ for name in RSMOL_5_10XR_5_MODEL_DIR RSMOL_5_10XR_5_SMOKE_REPORT RSMOL_5_10XR_5_
   fi
 done
 
-QUEUE="${RSMOL_RECURSIVE_QUEUE:-pdgpu-3090}"
+QUEUE="${RSMOL_5_10XR_5_QUEUE:-pdgpu-3090}"
 JOB_NAME="${RSMOL_5_10XR_5_JOB_NAME:-recursive-5-10xr-5-${QUEUE#pdgpu-}-$(date +%m%d%H%M)}"
 SUBMIT_LOG="${RSMOL_5_10XR_5_SUBMIT_LOG:-$SCRIPT_DIR/log/recursive_5_10xr_5_${QUEUE#pdgpu-}.JOB.log}"
 

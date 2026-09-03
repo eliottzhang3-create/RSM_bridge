@@ -2,8 +2,8 @@
 
 The 5-10xr-5 model owns twenty physical decoder modules.  Physical modules
 0--4 are the prefix, 5--14 are the recurrent middle, and 15--19 are the
-suffix.  The middle is executed a runtime-selected ``r`` times (``4 <= r <=
-7``). Inference defaults to ``r=7``. The training policy keeps the hidden-state
+suffix.  The middle is executed a runtime-selected ``r`` times (``4 <= r <= 7``).
+Inference defaults to ``r=7``. The training policy keeps the hidden-state
 autograd path through every middle call but only enables parameter gradients
 for the final four calls.
 The logical execution schedule is exactly::
@@ -13,7 +13,7 @@ The logical execution schedule is exactly::
 This file is deliberately separate from :mod:`recursive_model` and the
 fixed-depth recursive implementation.  The cache view translates
 a physical layer's ``layer_idx`` to its current *logical* slot, so each of
-the seven executions of one middle module uses a distinct slot.
+the selected executions of one middle module use distinct slots.
 """
 
 from __future__ import annotations
@@ -61,6 +61,7 @@ SAMPLING_POLICY = "increasing_power_weight"
 SAMPLING_ALPHA = 2
 SAMPLING_WEIGHTS = {4: 16, 5: 25, 6: 36, 7: 49}
 SAMPLING_WEIGHT_TOTAL = 126
+SAMPLER_KEY = "seed_plus_optimizer_step_sha256_local_random_randrange126_v1"
 SUPPORTED_TRANSFORMERS_VERSION = "4.54.1"
 SOURCE_LAYER_INDICES_0BASED = (
     0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23,
@@ -70,8 +71,15 @@ SOURCE_LAYER_INDICES_1BASED = tuple(index + 1 for index in SOURCE_LAYER_INDICES_
 SOURCE_MAPPING_0BASED = SOURCE_LAYER_INDICES_0BASED
 SOURCE_MAPPING_1BASED = SOURCE_LAYER_INDICES_1BASED
 LOGICAL_TO_PHYSICAL = (
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    0, 1, 2, 3, 4,
+    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    15, 16, 17, 18, 19,
 )
 LOGICAL_TO_PHYSICAL_SCHEDULE = LOGICAL_TO_PHYSICAL
 
@@ -115,7 +123,7 @@ def build_5_10xr_5_schedule(
 def build_5_10xr_5_source_mapping(num_hidden_layers: int) -> tuple[int, ...]:
     """Return the fixed source mapping after checking source depth is 30."""
 
-    if int(num_hidden_layers) != LOGICAL_LAYER_COUNT:
+    if int(num_hidden_layers) != 30:
         raise ValueError(
             "SmolLM2-5-10xr-5 conversion requires source num_hidden_layers=30; "
             f"got {num_hidden_layers}"
@@ -125,12 +133,16 @@ def build_5_10xr_5_source_mapping(num_hidden_layers: int) -> tuple[int, ...]:
 
 
 
-def logical_slot_for_execution(logical_index: int, physical_index: int) -> int:
+def logical_slot_for_execution(
+    logical_index: int,
+    physical_index: int,
+    middle_loop_count: int = DEFAULT_INFERENCE_MIDDLE_LOOPS,
+) -> int:
     """Map one schedule entry to its explicit logical KV-cache slot."""
 
     logical_index = int(logical_index)
     physical_index = int(physical_index)
-    schedule = build_5_10xr_5_schedule(DEFAULT_INFERENCE_MIDDLE_LOOPS)
+    schedule = build_5_10xr_5_schedule(middle_loop_count)
     if not 0 <= logical_index < len(schedule) or schedule[logical_index] != physical_index:
         raise ValueError(
             f"schedule entry mismatch: logical={logical_index} physical={physical_index}"
@@ -293,7 +305,10 @@ def _validate_cache_capacity(cache: Any, logical_layer_count: int) -> None:
     if not hasattr(cache, "get_seq_length") or not hasattr(cache, "update"):
         raise TypeError("past_key_values must be a Transformers Cache object")
     if isinstance(cache, DynamicCache):
-        return  # DynamicCache() grows lazily to all 30 logical slots.
+        # DynamicCache() grows lazily to the concrete 50/60/70/80-slot
+        # namespace selected by this forward; its capacity is not fixed at
+        # construction time in transformers==4.54.1.
+        return
     try:
         capacity = len(cache)
     except TypeError:
@@ -386,6 +401,8 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
 
     def __init__(self, config: LlamaConfig) -> None:
         super().__init__(config)
+        source_logical = int(getattr(config, "recursive_source_num_hidden_layers", 0))
+        source_physical = int(getattr(config, "recursive_source_layer_count", 0))
         logical = int(getattr(config, "num_hidden_layers", 0))
         physical = int(getattr(config, "recursive_layer_count", 0))
         loops = int(getattr(config, "recursive_loops", MAX_MIDDLE_LOOPS))
@@ -396,10 +413,11 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
                 getattr(config, "logical_to_physical_schedule", LOGICAL_TO_PHYSICAL),
             )
         )
-        if (logical, physical, loops) != (MAX_LOGICAL_LAYER_COUNT, PHYSICAL_LAYER_COUNT, MAX_MIDDLE_LOOPS):
+        if (source_logical, source_physical, logical, physical, loops) != (30, 30, MAX_LOGICAL_LAYER_COUNT, PHYSICAL_LAYER_COUNT, MAX_MIDDLE_LOOPS):
             raise ValueError(
-                "SmolLM2-5-10xr-5 requires logical=80, physical=20, max loops=7; "
-                f"got logical={logical} physical={physical} loops={loops}"
+                "SmolLM2-5-10xr-5 requires source=30, logical=80, physical=20, max loops=7; "
+                f"got source_logical={source_logical} source_physical={source_physical} "
+                f"logical={logical} physical={physical} loops={loops}"
             )
         if schedule != build_5_10xr_5_schedule(MAX_MIDDLE_LOOPS):
             raise ValueError(f"Invalid 5-10xr-5 logical_to_physical schedule: {schedule}")
@@ -417,6 +435,23 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
         self.parameter_gradient_tail_loops = int(getattr(config, "recursive_parameter_gradient_tail_loops", PARAMETER_GRADIENT_TAIL_LOOPS))
         if (self.min_middle_loops, self.max_middle_loops, self.default_inference_middle_loops, self.parameter_gradient_tail_loops) != (4, 7, 7, 4):
             raise ValueError("Invalid 5-10xr-5 dynamic loop metadata")
+        raw_sampling_weights = getattr(config, "recursive_sampling_weights", {})
+        try:
+            sampling_weights = {int(key): int(value) for key, value in raw_sampling_weights.items()}
+        except (AttributeError, TypeError, ValueError):
+            sampling_weights = {}
+        sampling_metadata = (
+            str(getattr(config, "recursive_sampling_policy", "")),
+            int(getattr(config, "recursive_sampling_alpha", -1)),
+            sampling_weights,
+            int(getattr(config, "recursive_sampling_weight_total", -1)),
+            str(getattr(config, "recursive_sampler_key", "")),
+        )
+        if sampling_metadata != (
+            SAMPLING_POLICY, SAMPLING_ALPHA, SAMPLING_WEIGHTS,
+            SAMPLING_WEIGHT_TOTAL, SAMPLER_KEY,
+        ):
+            raise ValueError(f"Invalid 5-10xr-5 sampling metadata: {sampling_metadata}")
         self.recursive_loops_scope = "middle_only"
         self.logical_to_physical = schedule
         self.layers = nn.ModuleList(
@@ -429,6 +464,12 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
+        # Disabled in normal training/inference. Stage-1 enables this narrow
+        # audit hook to retain only the current forward's middle-call tensors
+        # and prove that early calls have input-gradient edges without
+        # parameter-gradient edges.
+        self._collect_middle_gradient_audit = False
+        self._last_middle_gradient_audit: list[dict[str, Any]] = []
         self._supports_output_attentions = "output_attentions" in inspect.signature(
             self.layers[0].forward
         ).parameters
@@ -506,6 +547,7 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
             ),
             "parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
         }
+        self._last_middle_gradient_audit = []
         # One invocation per logical schedule entry. A nested full-stack loop
         # would be incorrect for the 5-10xr-5 architecture.
         middle_start = PREFIX_LAYER_COUNT
@@ -525,6 +567,7 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
                 not is_middle
                 or middle_loop_number > middle_loop_count - PARAMETER_GRADIENT_TAIL_LOOPS
             )
+            audit_input = hidden_states if is_middle and self._collect_middle_gradient_audit else None
             outputs = _call_decoder_layer(
                 layer, hidden_states, attention_mask=causal_mask, position_ids=position_ids,
                 cache=layer_cache, use_cache=use_cache, cache_position=cache_position,
@@ -532,6 +575,17 @@ class RecursiveLlama5_10xr_5Model(LlamaPreTrainedModel):
                 parameter_grad_enabled=parameter_grad_enabled,
             )
             hidden_states = outputs[0]
+            if is_middle and self._collect_middle_gradient_audit:
+                self._last_middle_gradient_audit.append(
+                    {
+                        "loop": int(middle_loop_number),
+                        "physical_index": int(physical_index),
+                        "parameter_grad_enabled": bool(parameter_grad_enabled),
+                        "input": audit_input,
+                        "output": hidden_states,
+                        "layer": layer,
+                    }
+                )
             if output_attentions:
                 if len(outputs) < 2 or outputs[1] is None:
                     raise RuntimeError("Decoder did not return attentions")
@@ -573,6 +627,22 @@ class RecursiveLlama5_10xr_5ForCausalLM(LlamaForCausalLM):
         if model_kwargs.get("past_key_values") is None and bool(getattr(generation_config, "use_cache", True)) and implementation is None:
             model_kwargs["past_key_values"] = make_dynamic_cache()
         return super()._prepare_cache_for_generation(generation_config, model_kwargs, *args, **kwargs)
+
+    def prepare_inputs_for_generation(self, input_ids: torch.LongTensor, **kwargs: Any) -> dict[str, Any]:
+        """Preserve the explicitly selected ``r`` across every decode step.
+
+        The inherited Llama helper may discard architecture-specific model
+        kwargs while slicing ``input_ids`` for an incremental cache call.  A
+        dynamic cache namespace must never silently switch from an explicit
+        ``r`` to the inference default, so carry it back into the returned
+        model inputs on every generation iteration.
+        """
+
+        middle_loop_count = kwargs.pop("middle_loop_count", None)
+        model_inputs = super().prepare_inputs_for_generation(input_ids, **kwargs)
+        if middle_loop_count is not None:
+            model_inputs["middle_loop_count"] = int(middle_loop_count)
+        return model_inputs
 
     def forward(
         self, input_ids: torch.LongTensor | None = None,
@@ -640,6 +710,8 @@ def parameter_audit(model: nn.Module) -> dict[str, Any]:
         "parameter_count_references": int(sum(parameter.numel() for _, parameter in names)),
         "logical_layer_count": LOGICAL_LAYER_COUNT,
         "logical_cache_slot_count": LOGICAL_LAYER_COUNT,
+        "source_logical_layer_count": 30,
+        "source_physical_layer_count": 30,
         "physical_layer_count": PHYSICAL_LAYER_COUNT,
         "recursive_layer_count": PHYSICAL_LAYER_COUNT,
         "recursive_loops": RECURSIVE_LOOPS,
@@ -662,7 +734,7 @@ __all__ = [
     "LOGICAL_LAYER_COUNT", "PHYSICAL_LAYER_COUNT", "PREFIX_LAYER_COUNT",
     "MIDDLE_LAYER_COUNT", "SUFFIX_LAYER_COUNT", "RECURSIVE_LOOPS", "MIN_MIDDLE_LOOPS", "MAX_MIDDLE_LOOPS",
     "DEFAULT_INFERENCE_MIDDLE_LOOPS", "PARAMETER_GRADIENT_TAIL_LOOPS", "TRAINABLE_MIDDLE_LOOPS",
-    "MAPPING_POLICY", "BACKWARD_POLICY", "SAMPLING_POLICY", "SAMPLING_ALPHA", "SAMPLING_WEIGHTS", "SAMPLING_WEIGHT_TOTAL",
+    "MAPPING_POLICY", "BACKWARD_POLICY", "SAMPLING_POLICY", "SAMPLING_ALPHA", "SAMPLING_WEIGHTS", "SAMPLING_WEIGHT_TOTAL", "SAMPLER_KEY",
     "SUPPORTED_TRANSFORMERS_VERSION", "SOURCE_LAYER_INDICES_0BASED", "SOURCE_LAYER_INDICES_1BASED", "SOURCE_MAPPING_0BASED", "SOURCE_MAPPING_1BASED",
     "LOGICAL_TO_PHYSICAL", "LOGICAL_TO_PHYSICAL_SCHEDULE", "LogicalSlotCacheView", "RecursiveLlama5_10xr_5Model",
     "RecursiveLlama5_10xr_5ForCausalLM", "RecursiveLlamaForCausalLM", "build_5_10xr_5_schedule",

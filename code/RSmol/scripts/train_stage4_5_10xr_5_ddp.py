@@ -9,7 +9,7 @@ entry point implements the five historical gates plus an independent
 ``FORMAL`` training mode used by the remote job:
 
 ``A`` synthetic 8-rank DDP audit, ``D`` the fixed ten-step real-data pilot,
-``E`` a resume smoke, and ``FORMAL`` the 9,244-step training target. Gate B/C
+``E`` a resume smoke, and ``FORMAL`` the 4,500-step training target. Gate B/C
 are intentionally unsupported here: reuse the existing Gate B audit JSON and
 do not rerun either audit from this entry point.
 
@@ -52,6 +52,7 @@ REMOTE_CHECKOUT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM")
 MODEL_ARCHITECTURE_CONTRACT = "logical_50_80_physical_20_5_10xr_5_dynamic_r4_7_tail4"
 LOGICAL_LAYER_COUNT = 80
 PHYSICAL_LAYER_COUNT = 20
+MIDDLE_LAYER_COUNT = 10
 MIN_MIDDLE_LOOPS = 4
 MAX_MIDDLE_LOOPS = 7
 DEFAULT_INFERENCE_MIDDLE_LOOPS = 7
@@ -69,6 +70,7 @@ SAMPLING_POLICY = "increasing_power_weight"
 SAMPLING_ALPHA = 2
 SAMPLING_WEIGHTS = {4: 16, 5: 25, 6: 36, 7: 49}
 SAMPLING_WEIGHT_TOTAL = 126
+SAMPLER_KEY = "seed_plus_optimizer_step_sha256_local_random_randrange126_v1"
 DEFAULT_DATA_DIR = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset")
 DEFAULT_OUTPUT_DIR = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10xr_5")
 EXPECTED_PARQUET_COUNT = 85
@@ -88,7 +90,7 @@ DEFAULT_ADAMW_WEIGHT_DECAY = 0.1
 DEFAULT_ADAMW_AMSGRAD = False
 DEFAULT_CONTEXT_LENGTH = 1024
 # Gate D is intentionally a bounded ten-step smoke.  Keep the planned
-# 9,244-step run as an explicit formal/future target so it cannot silently
+# 4,500-step run as an explicit formal target so it cannot silently
 # turn a Stage 4 smoke into a Stage 5 implementation.
 DEFAULT_MAX_OPTIMIZER_STEPS = 10
 DEFAULT_FORMAL_OPTIMIZER_STEPS = 4500
@@ -114,7 +116,7 @@ DEFAULT_FORMAL_LOCAL_MICROBATCHES = DEFAULT_FORMAL_OPTIMIZER_STEPS * DEFAULT_GRA
 DEFAULT_FORMAL_WARMUP_STEPS = max(1, math.ceil(DEFAULT_FORMAL_OPTIMIZER_STEPS * 0.05))
 DEFAULT_FORMAL_SAVE_EVERY = 500
 DEFAULT_FORMAL_CHECKPOINT_RETENTION = 3
-# The future/formal 9,244-step target consumes 9,465,856 samples (1024 per
+# The formal 4,500-step target consumes 4,608,000 samples (1024 per
 # optimizer step); Gate D itself consumes only 10 optimizer steps by default.
 DEFAULT_RECORD_BUFFER_SIZE = 4096
 # Explicitly pinned loader settings: Stage 4 intentionally does not create
@@ -131,13 +133,51 @@ def sample_middle_loop_count(seed: int, optimizer_step: int) -> int:
     if int(optimizer_step) < 0:
         raise ValueError("optimizer_step must be non-negative")
     digest = hashlib.sha256(f"{int(seed)}:{int(optimizer_step)}".encode("ascii")).digest()
-    draw = int.from_bytes(digest[:8], "big") % SAMPLING_WEIGHT_TOTAL
+    # Seed a private PRNG from the full digest.  This keeps the draw exactly
+    # uniform over [0,126), avoids modulo bias, and never consumes global RNG
+    # state, so resume remains keyed solely by (seed, optimizer_step).
+    local_seed = int.from_bytes(digest, "big")
+    draw = random.Random(local_seed).randrange(SAMPLING_WEIGHT_TOTAL)
     cumulative = 0
     for middle_loop_count in range(MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS + 1):
         cumulative += middle_loop_count ** SAMPLING_ALPHA
         if draw < cumulative:
             return middle_loop_count
     raise AssertionError("r sampler failed to select a value")
+
+
+def _normalize_sampling_weights(value: Any) -> dict[int, int]:
+    """Normalize JSON/config mappings before exact sampling-contract checks."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    try:
+        return {int(key): int(weight) for key, weight in value.items()}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _validate_exact_sampling_contract(value: Mapping[str, Any], *, label: str) -> None:
+    """Reject any checkpoint/report sampling metadata drift."""
+
+    try:
+        alpha = int(value.get("sampling_alpha", -1))
+        total = int(value.get("sampling_weight_total", -1))
+    except (TypeError, ValueError):
+        alpha, total = -1, -1
+    weights = _normalize_sampling_weights(value.get("sampling_weights", {}))
+    if (
+        value.get("sampling_policy") != SAMPLING_POLICY
+        or alpha != SAMPLING_ALPHA
+        or weights != SAMPLING_WEIGHTS
+        or total != SAMPLING_WEIGHT_TOTAL
+        or value.get("sampler_key") != SAMPLER_KEY
+    ):
+        raise ValueError(
+            f"{label} sampling contract mismatch: "
+            f"policy={value.get('sampling_policy')!r} alpha={alpha} "
+            f"weights={weights} total={total} sampler_key={value.get('sampler_key')!r}"
+        )
 
 
 def broadcast_middle_loop_count(*, rank: int, seed: int, optimizer_step: int, device: Any) -> int:
@@ -151,6 +191,12 @@ def broadcast_middle_loop_count(*, rank: int, seed: int, optimizer_step: int, de
         value = torch.tensor([selected], device=device, dtype=torch.int64)
         dist.broadcast(value, src=0)
         selected = int(value.item())
+        lo = value.clone()
+        hi = value.clone()
+        dist.all_reduce(lo, op=dist.ReduceOp.MIN)
+        dist.all_reduce(hi, op=dist.ReduceOp.MAX)
+        if int(lo.item()) != int(hi.item()):
+            raise AssertionError(f"broadcast middle_loop_count differs across ranks: min={lo.item()} max={hi.item()}")
     return selected
 
 
@@ -159,7 +205,7 @@ class Stage4Config:
     """Serializable Stage 4 configuration.
 
     The numerical defaults are part of the experiment contract. Gate D is a
-    fixed ten-step smoke; ``FORMAL`` selects the independent 9,244-step
+    fixed ten-step smoke; ``FORMAL`` selects the independent 4,500-step
     production training contract. Gate B/C are rejected by this entry point.
     """
 
@@ -202,7 +248,7 @@ class Stage4Config:
     synthetic_vocab_size: int = 97
     sampling_policy: str = SAMPLING_POLICY
     sampling_alpha: int = SAMPLING_ALPHA
-    sampler_key: str = "seed_plus_optimizer_step_sha256"
+    sampler_key: str = SAMPLER_KEY
 
 
 def _path_is_within(candidate: Path, root: Path) -> bool:
@@ -1106,6 +1152,8 @@ def _load_runtime_model(model_path: Path, device: Any, tokenizer_path: Path | No
 def _validate_recursive_architecture(model: Any, *, production: bool = True) -> dict[str, Any]:
     recursive_model = getattr(model, "model", model)
     config = getattr(model, "config", None)
+    source_logical = int(getattr(config, "recursive_source_num_hidden_layers", 0))
+    source_physical = int(getattr(config, "recursive_source_layer_count", 0))
     logical = int(getattr(config, "num_hidden_layers", 0))
     physical = int(getattr(config, "recursive_layer_count", 0))
     loops = int(getattr(config, "recursive_loops", 0))
@@ -1114,10 +1162,11 @@ def _validate_recursive_architecture(model: Any, *, production: bool = True) -> 
     loops_scope = str(getattr(config, "recursive_loops_scope", ""))
     expected_source_mapping = [0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 26, 27, 28, 29]
     expected_schedule = list(LOGICAL_TO_PHYSICAL)
-    if loops != 7 or loops_scope != "middle_only" or (logical, physical) != (80, 20) or schedule != expected_schedule or source_mapping != expected_source_mapping:
+    if (source_logical, source_physical) != (30, 30) or loops != 7 or loops_scope != "middle_only" or (logical, physical) != (80, 20) or schedule != expected_schedule or source_mapping != expected_source_mapping:
         raise ValueError(
-            "Stage 4 5-10xr-5 requires logical=80 physical=20 max loops=7 and the explicit schedule; "
-            f"got logical={logical}, physical={physical}, loops={loops}, loops_scope={loops_scope}, schedule={schedule}, source_mapping={source_mapping}"
+            "Stage 4 5-10xr-5 requires source=30, logical=80 physical=20 max loops=7 and the explicit schedule; "
+            f"got source_logical={source_logical}, source_physical={source_physical}, logical={logical}, "
+            f"physical={physical}, loops={loops}, loops_scope={loops_scope}, schedule={schedule}, source_mapping={source_mapping}"
         )
     if len(getattr(recursive_model, "layers", ())) != physical:
         raise ValueError("Recursive model physical layer module count does not match config")
@@ -1129,6 +1178,26 @@ def _validate_recursive_architecture(model: Any, *, production: bool = True) -> 
     )
     if dynamic_metadata != (4, 7, 7, 4):
         raise ValueError(f"Invalid dynamic 5-10xr-5 metadata: {dynamic_metadata}")
+    config_sampling_policy = str(getattr(config, "recursive_sampling_policy", ""))
+    config_sampling_alpha = int(getattr(config, "recursive_sampling_alpha", -1))
+    config_sampling_weights = _normalize_sampling_weights(
+        getattr(config, "recursive_sampling_weights", {})
+    )
+    config_sampling_total = int(getattr(config, "recursive_sampling_weight_total", -1))
+    config_sampler_key = str(getattr(config, "recursive_sampler_key", ""))
+    if (
+        config_sampling_policy != SAMPLING_POLICY
+        or config_sampling_alpha != SAMPLING_ALPHA
+        or config_sampling_weights != SAMPLING_WEIGHTS
+        or config_sampling_total != SAMPLING_WEIGHT_TOTAL
+        or config_sampler_key != SAMPLER_KEY
+    ):
+        raise ValueError(
+            "Stage 4 5-10xr-5 checkpoint sampling metadata mismatch: "
+            f"policy={config_sampling_policy!r} alpha={config_sampling_alpha} "
+            f"weights={config_sampling_weights} total={config_sampling_total} "
+            f"sampler_key={config_sampler_key!r}"
+        )
     try:
         named = list(model.named_parameters(remove_duplicate=False))
     except TypeError:
@@ -1147,6 +1216,8 @@ def _validate_recursive_architecture(model: Any, *, production: bool = True) -> 
         recursive_parameter_audit = {"available": False}
     return {
         "logical_layer_count": logical,
+        "source_logical_layer_count": source_logical,
+        "source_physical_layer_count": source_physical,
         "physical_layer_count": physical,
         "recursive_loops": loops,
         "min_middle_loops": int(getattr(config, "recursive_min_middle_loops", 4)),
@@ -1156,6 +1227,8 @@ def _validate_recursive_architecture(model: Any, *, production: bool = True) -> 
         "sampling_policy": SAMPLING_POLICY,
         "sampling_alpha": SAMPLING_ALPHA,
         "sampling_weights": SAMPLING_WEIGHTS,
+        "sampling_weight_total": SAMPLING_WEIGHT_TOTAL,
+        "sampler_key": SAMPLER_KEY,
         "physical_module_count": len(recursive_model.layers),
         "parameter_storage_unique": unique,
         "parameters_fp32": True,
@@ -1300,6 +1373,158 @@ def _synthetic_batch(*, rank: int, device: Any, vocab_size: int) -> dict[str, An
     return collate_dynamic_padding(rows, pad_token_id=0, device=device)
 
 
+def _selective_middle_gradient_audit(
+    recursive_base: Any, *, middle_loop_count: int
+) -> dict[str, Any]:
+    """Prove one forward has hidden edges through early calls only.
+
+    This probe is intentionally run before the regular loss backward.  For
+    each early middle output, ``autograd.grad`` must find a finite nonzero
+    derivative with respect to that call's hidden input while finding no edge
+    to the shared layer Parameters.  The normal backward then traverses the
+    complete schedule and accumulates the final four calls' parameter grads.
+    """
+
+    import torch
+
+    details = list(getattr(recursive_base, "_last_middle_gradient_audit", ()))
+    expected_entries = int(middle_loop_count) * MIDDLE_LAYER_COUNT
+    if len(details) != expected_entries:
+        raise AssertionError(
+            "selective middle-gradient audit did not capture every physical middle call: "
+            f"expected={expected_entries} (10r) got={len(details)}"
+        )
+    expected_enabled = list(
+        range(int(middle_loop_count) - PARAMETER_GRADIENT_TAIL_LOOPS + 1, int(middle_loop_count) + 1)
+    )
+    expected_disabled = list(range(1, int(middle_loop_count) - PARAMETER_GRADIENT_TAIL_LOOPS + 1))
+    early_input_gradient_norms: dict[str, float] = {}
+    middle_physical_indices = list(range(5, 5 + MIDDLE_LAYER_COUNT))
+    middle_call_audit_keys: list[str] = []
+    for loop in range(1, int(middle_loop_count) + 1):
+        loop_details = [detail for detail in details if int(detail["loop"]) == loop]
+        physical_trace = [int(detail["physical_index"]) for detail in loop_details]
+        if physical_trace != middle_physical_indices:
+            raise AssertionError(
+                f"middle loop {loop} must contain physical layers 5..14 exactly once; "
+                f"got {physical_trace}"
+            )
+        for detail in loop_details:
+            physical = int(detail["physical_index"])
+            key = f"{loop}:{physical}"
+            middle_call_audit_keys.append(key)
+            expected = loop in expected_enabled
+            if bool(detail["parameter_grad_enabled"]) != expected:
+                raise AssertionError(
+                    f"middle loop {key} parameter-gradient flag mismatch: "
+                    f"expected={expected} detail={detail}"
+                )
+            if expected:
+                continue
+            probe = detail["output"].float().square().mean()
+            input_gradient = torch.autograd.grad(
+                probe, detail["input"], retain_graph=True, allow_unused=True
+            )[0]
+            if (
+                input_gradient is None
+                or not torch.isfinite(input_gradient).all()
+                or float(input_gradient.norm().item()) <= 0
+            ):
+                raise AssertionError(f"early middle loop {key} lost its hidden-state gradient path")
+            parameter_gradients = torch.autograd.grad(
+                probe,
+                tuple(detail["layer"].parameters()),
+                retain_graph=True,
+                allow_unused=True,
+            )
+            if any(gradient is not None for gradient in parameter_gradients):
+                raise AssertionError(f"early middle loop {key} unexpectedly has parameter-gradient edges")
+            early_input_gradient_norms[key] = float(input_gradient.norm().item())
+    return {
+        "all_middle_calls_captured": True,
+        "middle_call_count": expected_entries,
+        "middle_call_audit_keys": middle_call_audit_keys,
+        "each_middle_loop_has_exactly_ten_physical_calls": True,
+        "backward_traversed_middle_loops": list(range(1, int(middle_loop_count) + 1)),
+        "parameter_gradient_enabled_middle_loops": expected_enabled,
+        "parameter_gradient_disabled_middle_loops": expected_disabled,
+        "early_hidden_input_gradient_norms": early_input_gradient_norms,
+        "early_parameter_gradient_edges_absent": True,
+        "exact_parameter_gradient_tail": len(expected_enabled) == PARAMETER_GRADIENT_TAIL_LOOPS,
+    }
+
+
+def _all_r_backward_audit(
+    model: Any,
+    recursive_base: Any,
+    *,
+    batch: Mapping[str, Any],
+    device: Any,
+) -> list[dict[str, Any]]:
+    """Run a dependency-light backward-path audit for every supported r."""
+
+    import torch
+
+    audits: list[dict[str, Any]] = []
+    labels = batch["labels"]
+    for middle_loop_count in range(MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS + 1):
+        model.zero_grad(set_to_none=True)
+        backward_sequence: list[int] = []
+        handles = [
+            layer.register_full_backward_hook(
+                lambda _module, _grad_input, _grad_output, index=index: backward_sequence.append(index)
+            )
+            for index, layer in enumerate(recursive_base.layers)
+        ]
+        try:
+            recursive_base._collect_middle_gradient_audit = True
+            with _bf16_autocast(device):
+                result = model(
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    use_cache=False,
+                    middle_loop_count=middle_loop_count,
+                )
+                selective = _selective_middle_gradient_audit(
+                    recursive_base, middle_loop_count=middle_loop_count
+                )
+                loss_sum, _valid_count = _causal_loss_sum(result.logits, labels)
+            recursive_base._collect_middle_gradient_audit = False
+            loss_sum.backward()
+        finally:
+            recursive_base._collect_middle_gradient_audit = False
+            for handle in handles:
+                handle.remove()
+        from code.RSmol.recursive_model_5_10xr_5 import build_5_10xr_5_schedule
+
+        expected_forward = list(build_5_10xr_5_schedule(middle_loop_count))
+        expected_backward = list(reversed(expected_forward))
+        if backward_sequence != expected_backward:
+            raise AssertionError(
+                f"r={middle_loop_count} backward trace mismatch: "
+                f"expected={expected_backward} got={backward_sequence}"
+            )
+        if not all(
+            parameter.grad is not None
+            and torch.isfinite(parameter.grad).all()
+            and float(parameter.grad.detach().norm().item()) > 0
+            for layer in recursive_base.layers
+            for parameter in layer.parameters()
+        ):
+            raise AssertionError(f"r={middle_loop_count} has missing/non-finite/zero layer gradients")
+        audits.append(
+            {
+                "r": middle_loop_count,
+                "forward_trace": expected_forward,
+                "backward_trace": backward_sequence,
+                "backward_trace_ok": True,
+                "selective_middle_gradient_audit": selective,
+            }
+        )
+    model.zero_grad(set_to_none=True)
+    return audits
+
+
 def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: int) -> dict[str, Any]:
     """Audit DDP initialization, recursive trace, masks, gradients and update."""
 
@@ -1311,6 +1536,12 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
     sampled_r = broadcast_middle_loop_count(
         rank=rank, seed=config.seed, optimizer_step=0, device=device
     )
+    expected_sampled_r = sample_middle_loop_count(config.seed, 0)
+    if sampled_r != expected_sampled_r:
+        raise AssertionError(
+            f"Gate A broadcast r disagrees with the stateless step sampler: "
+            f"expected={expected_sampled_r} got={sampled_r}"
+        )
     parameters = _trainable_parameters(model)
     optimizer = torch.optim.AdamW(
         parameters,
@@ -1321,23 +1552,29 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
         amsgrad=DEFAULT_ADAMW_AMSGRAD,
     )
     optimizer_audit = optimizer_parameter_audit(optimizer, parameters)
+    recursive_base = getattr(base_model, "model", base_model)
+    batch = _synthetic_batch(rank=rank, device=device, vocab_size=config.synthetic_vocab_size)
+    labels = batch["labels"]
+    if labels[0, 0].item() == -100 or labels[1, 1].item() == -100:
+        raise AssertionError("Synthetic audit masked a non-padding label")
+    all_r_backward_audits = _all_r_backward_audit(
+        model, recursive_base, batch=batch, device=device
+    )
+    # Install the sampled-r trace hooks only after the all-r pre-audit.  This
+    # keeps the 16-microbatch trace free of the four standalone audit runs.
     sequence, handles = _register_forward_trace(model)
     backward_sequence: list[int] = []
-    recursive_base = getattr(base_model, "model", base_model)
     backward_handles = [
         layer.register_full_backward_hook(
             lambda _module, _grad_input, _grad_output, i=index: backward_sequence.append(i)
         )
         for index, layer in enumerate(recursive_base.layers)
     ]
-    batch = _synthetic_batch(rank=rank, device=device, vocab_size=config.synthetic_vocab_size)
-    labels = batch["labels"]
-    if labels[0, 0].item() == -100 or labels[1, 1].item() == -100:
-        raise AssertionError("Synthetic audit masked a non-padding label")
     optimizer.zero_grad(set_to_none=True)
     local_loss_sum = torch.zeros((), device=device, dtype=torch.float64)
     local_tokens = torch.zeros((), device=device, dtype=torch.int64)
     microbatches = 0
+    selective_gradient_audit: dict[str, Any] | None = None
     # Obtain every microbatch's global valid-token denominator before any
     # backward pass, then use the window-global denominator for token-weighted
     # accumulation under DDP's default gradient averaging.
@@ -1346,7 +1583,8 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
     window_global_tokens = sum(global_counts)
     if window_global_tokens <= 0:
         raise FloatingPointError("Synthetic accumulation window has no supervised tokens")
-    for _ in range(config.gradient_accumulation_steps):
+    for micro_index in range(config.gradient_accumulation_steps):
+        recursive_base._collect_middle_gradient_audit = micro_index == 0
         with _bf16_autocast(device):
             result = model(
                 input_ids=batch["input_ids"],
@@ -1354,7 +1592,12 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
                 use_cache=False,
                 middle_loop_count=sampled_r,
             )
-            loss_sum, valid_count = _causal_loss_sum(result.logits, labels)
+            if micro_index == 0:
+                selective_gradient_audit = _selective_middle_gradient_audit(
+                    recursive_base, middle_loop_count=sampled_r
+                )
+        recursive_base._collect_middle_gradient_audit = False
+        loss_sum, valid_count = _causal_loss_sum(result.logits, labels)
         if not torch.isfinite(loss_sum):
             raise FloatingPointError("Synthetic loss is non-finite")
         scale = token_weighted_gradient_scale(
@@ -1375,18 +1618,40 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
         raise AssertionError("Synthetic optimizer did not update parameters")
     for handle in handles + backward_handles:
         handle.remove()
+    if selective_gradient_audit is None:
+        raise AssertionError("Gate A did not run the selective middle-gradient audit")
     physical = len(recursive_base.layers)
     from code.RSmol.recursive_model_5_10xr_5 import build_5_10xr_5_schedule
     forward_expected = list(build_5_10xr_5_schedule(sampled_r))
     backward_expected = list(reversed(forward_expected))
-    trace_forward_ok = sequence[:len(forward_expected)] == forward_expected
-    trace_backward_ok = backward_sequence[:len(backward_expected)] == backward_expected
+    expected_trace_length = config.gradient_accumulation_steps * len(forward_expected)
+    forward_chunks = [
+        sequence[offset:offset + len(forward_expected)]
+        for offset in range(0, len(sequence), len(forward_expected))
+    ]
+    backward_chunks = [
+        backward_sequence[offset:offset + len(backward_expected)]
+        for offset in range(0, len(backward_sequence), len(backward_expected))
+    ]
+    trace_forward_ok = (
+        len(sequence) == expected_trace_length
+        and len(forward_chunks) == config.gradient_accumulation_steps
+        and all(chunk == forward_expected for chunk in forward_chunks)
+    )
+    trace_backward_ok = (
+        len(backward_sequence) == expected_trace_length
+        and len(backward_chunks) == config.gradient_accumulation_steps
+        and all(chunk == backward_expected for chunk in backward_chunks)
+    )
     if not trace_forward_ok:
-        raise AssertionError(f"Forward trace is not the 5-10xr-5 schedule: {sequence[:LOGICAL_LAYER_COUNT]}")
+        raise AssertionError(
+            "Forward trace is not sixteen identical sampled-r schedules: "
+            f"expected_length={expected_trace_length} got_length={len(sequence)} chunks={forward_chunks}"
+        )
     if not trace_backward_ok:
         raise AssertionError(
-            "Backward must traverse the second recursive loop and then the first loop: "
-            f"got {backward_sequence[:LOGICAL_LAYER_COUNT]}"
+            "Backward must traverse sixteen identical reversed sampled-r schedules: "
+            f"expected_length={expected_trace_length} got_length={len(backward_sequence)} chunks={backward_chunks}"
         )
     layer_gradients = {}
     for index, layer in enumerate(recursive_base.layers):
@@ -1395,6 +1660,22 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
         if not norms or not all(math.isfinite(value) and value > 0 for value in norms):
             raise AssertionError(f"Physical layer {index} has missing/non-finite/zero gradient")
         layer_gradients[str(index)] = {"norm": max(norms), "finite_nonzero": True}
+    prefix_layers_with_grad = [
+        index for index in range(5)
+        if layer_gradients.get(str(index), {}).get("finite_nonzero") is True
+    ]
+    if prefix_layers_with_grad != [0, 1, 2, 3, 4]:
+        raise AssertionError(
+            f"Gate A prefix layers must all receive finite nonzero gradients: {prefix_layers_with_grad}"
+        )
+    suffix_layers_with_grad = [
+        index for index in range(15, 20)
+        if layer_gradients.get(str(index), {}).get("finite_nonzero") is True
+    ]
+    if suffix_layers_with_grad != [15, 16, 17, 18, 19]:
+        raise AssertionError(
+            f"Gate A suffix layers must all receive finite nonzero gradients: {suffix_layers_with_grad}"
+        )
     checksum = _parameter_checksum(model)
     if dist.is_available() and dist.is_initialized():
         lo, hi = checksum.clone(), checksum.clone()
@@ -1415,6 +1696,11 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
         "recursive_forward_trace_expected": forward_expected,
         "recursive_backward_trace": backward_sequence[:LOGICAL_LAYER_COUNT],
         "recursive_backward_trace_expected": backward_expected,
+        "sampled_r_forward_trace_total_length": len(sequence),
+        "sampled_r_backward_trace_total_length": len(backward_sequence),
+        "expected_sampled_r_trace_total_length": expected_trace_length,
+        "sampled_r_trace_chunk_count": len(forward_chunks),
+        "all_microbatches_same_r_trace": bool(trace_forward_ok and trace_backward_ok),
         "forward_trace_ok": trace_forward_ok,
         "backward_second_loop_then_first": trace_backward_ok,
         "logical_layers": len(forward_expected),
@@ -1423,6 +1709,7 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
         "sampled_r": sampled_r,
         "sampling_weight": sampled_r ** SAMPLING_ALPHA,
         "sampling_probability": (sampled_r ** SAMPLING_ALPHA) / SAMPLING_WEIGHT_TOTAL,
+        "sampled_r_expected_from_step_key": expected_sampled_r,
         "all_rank_r_equal": True,
         "backward_traversed_middle_loops": list(range(1, sampled_r + 1)),
         "parameter_gradient_enabled_middle_loops": list(range(sampled_r - 3, sampled_r + 1)),
@@ -1437,19 +1724,14 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
         "gradient_norm": float(torch.as_tensor(gradient_norm).item()),
         "gradient_finite_nonzero": True,
         "physical_layer_gradients": layer_gradients,
+        "prefix_layers_with_grad": prefix_layers_with_grad,
+        "prefix_all_receive_finite_nonzero_grad": True,
+        "suffix_layers_with_grad": suffix_layers_with_grad,
+        "suffix_all_receive_finite_nonzero_grad": True,
         "optimizer_step_calls": 1,
         "optimizer_audit": optimizer_audit,
-        "sampling_contract": {
-            "policy": SAMPLING_POLICY,
-            "alpha": SAMPLING_ALPHA,
-            "weights": SAMPLING_WEIGHTS,
-            "weight_total": SAMPLING_WEIGHT_TOTAL,
-            "sampler_key": "seed_plus_optimizer_step_sha256",
-            "default_inference_r": DEFAULT_INFERENCE_MIDDLE_LOOPS,
-            "fixed_parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
-            "r_histogram": dict(Counter(str(item["middle_loop_count"]) for item in metrics)),
-            "all_rank_r_equal": all(bool(item.get("all_rank_r_equal")) for item in metrics),
-        },
+        "selective_middle_gradient_audit": selective_gradient_audit,
+        "all_r_backward_audits": all_r_backward_audits,
         "exact_microbatches_per_update": microbatches == config.gradient_accumulation_steps,
         "optimizer_updated_parameters": True,
         "parameter_checksum": float(checksum.item()),
@@ -1652,7 +1934,7 @@ def validate_formal_resume_state(state: Mapping[str, Any]) -> dict[str, int]:
         raise ValueError(
             "FORMAL resume requires a checkpoint created by FORMAL mode; "
             f"got checkpoint gate={checkpoint_mode}. This is usually a Gate D/E checkpoint. "
-            "For a fresh formal run, unset RSMOL_STAGE4_RESUME_FROM; for resume, pass a "
+            "For a fresh formal run, unset RSMOL_5_10XR_5_RESUME_FROM; for resume, pass a "
             "checkpoint-step-NNNNNN created by --gate FORMAL."
         )
     scheduler = state.get("scheduler_config")
@@ -1875,7 +2157,7 @@ def save_complete_checkpoint(
                     "sampling_alpha": SAMPLING_ALPHA,
                     "sampling_weights": SAMPLING_WEIGHTS,
                     "sampling_weight_total": SAMPLING_WEIGHT_TOTAL,
-                    "sampler_key": "seed_plus_optimizer_step_sha256",
+                    "sampler_key": SAMPLER_KEY,
                     "default_inference_r": DEFAULT_INFERENCE_MIDDLE_LOOPS,
                     "fixed_parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
                     "bounded_shuffle_rng_state_saved": True,
@@ -1894,6 +2176,9 @@ def save_complete_checkpoint(
                     "architecture": MODEL_ARCHITECTURE_CONTRACT,
                     "sampling_policy": SAMPLING_POLICY,
                     "sampling_alpha": SAMPLING_ALPHA,
+                    "sampling_weights": SAMPLING_WEIGHTS,
+                    "sampling_weight_total": SAMPLING_WEIGHT_TOTAL,
+                    "sampler_key": SAMPLER_KEY,
                     "default_inference_r": DEFAULT_INFERENCE_MIDDLE_LOOPS,
                     "fixed_parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
                     "rank0_only": True,
@@ -1947,6 +2232,10 @@ def _complete_checkpoint_step(path: Path) -> int | None:
     if not isinstance(marker, Mapping):
         return None
     if marker.get("complete") is not True:
+        return None
+    try:
+        _validate_exact_sampling_contract(marker, label="Checkpoint retention marker")
+    except ValueError:
         return None
     marker_step = marker.get("optimizer_step")
     step = int(match.group("step"))
@@ -2063,8 +2352,7 @@ def _restore_training_state(
             "Resume checkpoint architecture contract mismatch: "
             f"expected={architecture_contract!r} got={contract.get('architecture')!r}"
         )
-    if contract.get("sampling_policy") != SAMPLING_POLICY or int(contract.get("sampling_alpha", -1)) != SAMPLING_ALPHA:
-        raise ValueError("Resume checkpoint sampling contract mismatch")
+    _validate_exact_sampling_contract(contract, label="Resume checkpoint")
     if int(contract.get("default_inference_r", -1)) != DEFAULT_INFERENCE_MIDDLE_LOOPS:
         raise ValueError("Resume checkpoint default inference r mismatch")
     if int(contract.get("fixed_parameter_gradient_tail_loops", -1)) != PARAMETER_GRADIENT_TAIL_LOOPS:
@@ -2084,6 +2372,7 @@ def _restore_training_state(
             "Resume checkpoint_complete.json world_size mismatch: "
             f"checkpoint={complete.get('world_size')!r} current={config.world_size}"
         )
+    _validate_exact_sampling_contract(complete, label="Resume checkpoint_complete.json")
     if "optimizer_step" not in complete or int(complete["optimizer_step"]) != state_step:
         raise ValueError(
             "Resume checkpoint step mismatch between checkpoint_complete.json and training_state.pt: "
@@ -2094,6 +2383,11 @@ def _restore_training_state(
         raise ValueError(
             "Resume training_state configuration world_size mismatch: "
             f"checkpoint={state_configuration['world_size']} current={config.world_size}"
+        )
+    if "seed" in state_configuration and int(state_configuration["seed"]) != int(config.seed):
+        raise ValueError(
+            "Resume training_state sampler seed mismatch: "
+            f"checkpoint={state_configuration['seed']} current={config.seed}"
         )
     has_per_rank_cursors = "data_cursors_by_rank" in state
     if config.gate == "E" and not has_per_rank_cursors:
@@ -2512,6 +2806,7 @@ def run_training(
                     "middle_loop_count": window["middle_loop_count"],
                     "sampling_weight": window["sampling_weight"],
                     "sampling_probability": window["sampling_probability"],
+                    "sampled_r_expected_from_step_key": window["sampled_r_expected_from_step_key"],
                     "all_rank_r_equal": window["all_rank_r_equal"],
                     "backward_traversed_middle_loops": window["backward_traversed_middle_loops"],
                     "parameter_gradient_enabled_middle_loops": window["parameter_gradient_enabled_middle_loops"],
@@ -2744,6 +3039,17 @@ def run_training(
         "last_learning_rate": progress_logs[-1]["learning_rate"] if progress_logs else None,
         "last_samples_per_second": progress_logs[-1]["samples_per_second"] if progress_logs else None,
         "optimizer_audit": optimizer_audit,
+        "sampling_contract": {
+            "policy": SAMPLING_POLICY,
+            "alpha": SAMPLING_ALPHA,
+            "weights": SAMPLING_WEIGHTS,
+            "weight_total": SAMPLING_WEIGHT_TOTAL,
+            "sampler_key": SAMPLER_KEY,
+            "default_inference_r": DEFAULT_INFERENCE_MIDDLE_LOOPS,
+            "fixed_parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
+            "r_histogram": dict(Counter(str(item["middle_loop_count"]) for item in metrics)),
+            "all_rank_r_equal": all(bool(item.get("all_rank_r_equal")) for item in metrics),
+        },
         "rank0_only_checkpoint": True,
         "latest_complete_checkpoint": str(latest_checkpoint) if latest_checkpoint is not None else None,
         "retained_checkpoints": [str(path) for path in retained_checkpoints],
@@ -2815,7 +3121,7 @@ def _require_local_artifact_dir(path: Path, *, kind: str) -> Path:
         raise FileNotFoundError(
             f"Stage 4 {kind} path is not an existing local directory: {candidate}. "
             "Check the external checkpoint mount/path or pass "
-            "RSMOL_STAGE4_TOKENIZER_PATH explicitly."
+            "RSMOL_5_10XR_5_TOKENIZER_PATH explicitly."
         )
     if kind == "recursive model":
         if not (candidate / "config.json").is_file():
@@ -3044,11 +3350,18 @@ def _synthetic_model(config: Stage4Config, device: Any) -> Any:
         eos_token_id=2,
         _attn_implementation="eager",
     )
+    llama_config.recursive_source_num_hidden_layers = 30
+    llama_config.recursive_source_layer_count = 30
     llama_config.recursive_loops = 7
     llama_config.recursive_min_middle_loops = 4
     llama_config.recursive_max_middle_loops = 7
     llama_config.recursive_default_inference_middle_loops = 7
     llama_config.recursive_parameter_gradient_tail_loops = 4
+    llama_config.recursive_sampling_policy = SAMPLING_POLICY
+    llama_config.recursive_sampling_alpha = SAMPLING_ALPHA
+    llama_config.recursive_sampling_weights = {str(key): value for key, value in SAMPLING_WEIGHTS.items()}
+    llama_config.recursive_sampling_weight_total = SAMPLING_WEIGHT_TOTAL
+    llama_config.recursive_sampler_key = SAMPLER_KEY
     llama_config.recursive_loops_scope = "middle_only"
     llama_config.recursive_layer_count = physical
     llama_config.recursive_mapping_policy = "stage4_5_10xr_5_synthetic_fixture"
@@ -3282,6 +3595,15 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 config.save_every,
             ) if config.gate == "FORMAL" else [],
             "checkpoint_retention": config.checkpoint_retention,
+            "sampling_contract": {
+                "policy": SAMPLING_POLICY,
+                "alpha": SAMPLING_ALPHA,
+                "weights": SAMPLING_WEIGHTS,
+                "weight_total": SAMPLING_WEIGHT_TOTAL,
+                "sampler_key": SAMPLER_KEY,
+                "default_inference_r": DEFAULT_INFERENCE_MIDDLE_LOOPS,
+                "fixed_parameter_gradient_tail_loops": PARAMETER_GRADIENT_TAIL_LOOPS,
+            },
             "scheduler": scheduler_metadata(
                 total_steps=int(config.scheduler_total_steps or config.max_optimizer_steps),
                 warmup_steps=config.warmup_steps,
@@ -3574,6 +3896,19 @@ def run(config: Stage4Config) -> dict[str, Any]:
             if train_report.get("data_cursor_restored") is not False:
                 raise RuntimeError("Gate E must report data_cursor_restored=false for bounded shuffle")
             train_report["gate_e_resume_semantics_verified"] = True
+            resume_start_step = int(train_report.get("optimizer_step_start", 0))
+            resumed_r_sequence = [
+                int(item["middle_loop_count"]) for item in train_report.get("metrics", [])
+            ]
+            uninterrupted_reference_r_sequence = [
+                sample_middle_loop_count(config.seed, resume_start_step + offset)
+                for offset in range(len(resumed_r_sequence))
+            ]
+            if resumed_r_sequence != uninterrupted_reference_r_sequence:
+                raise RuntimeError(
+                    "Gate E resume r sequence differs from the uninterrupted step-keyed sequence: "
+                    f"actual={resumed_r_sequence} expected={uninterrupted_reference_r_sequence}"
+                )
             train_report["gate_e_resume_verification"] = {
                 "rank": rank,
                 "step_increment": train_report.get("resume_smoke_step_increment"),
@@ -3585,6 +3920,10 @@ def run(config: Stage4Config) -> dict[str, Any]:
                 "shared_parameter_updated": bool(
                     any(item.get("shared_parameter_updated") for item in train_report.get("metrics", []))
                 ),
+                "resume_start_optimizer_step": resume_start_step,
+                "resumed_r_sequence": resumed_r_sequence,
+                "uninterrupted_reference_r_sequence": uninterrupted_reference_r_sequence,
+                "r_sequence_matches_uninterrupted": True,
             }
         report = {
             "status": train_report.get("status", "PASS"),

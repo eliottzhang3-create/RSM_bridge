@@ -1,0 +1,65 @@
+{
+  "architecture_contract": "logical_50_110_physical_20_5_10xpoisson_parcae_tail4",
+  "model_label": "5_10xpoisson_parcae",
+  "physical_layer_count": 20,
+  "prefix_layer_count": 5,
+  "middle_recurrent_count": 10,
+  "suffix_layer_count": 5,
+  "logical_depth_min": 50,
+  "logical_depth_max": 110,
+  "mapping_policy": "explicit_5_10xpoisson_parcae_source_layers",
+  "backward_policy": "hidden_path_all_calls_parameter_gradients_final_four_aligned_calls_v1",
+  "source_layer_indices_0based": [0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 26, 27, 28, 29],
+  "training": {
+    "optimizer_steps": 9244,
+    "warmup_steps": 463,
+    "gradient_accumulation_steps": 16,
+    "micro_batch_size": 8,
+    "use_cache": false
+  },
+  "inference": {
+    "default_middle_loop_count": 7,
+    "supported_middle_loop_count": [4, 5, 6, 7, 8, 9, 10],
+    "use_cache": true,
+    "prelude_norm": "LlamaRMSNorm"
+  },
+  "sampler": {
+    "policy": "truncated_poisson",
+    "version": "truncated_poisson_lambda7_support4_10_v1",
+    "lambda": 7.0,
+    "support": [4, 5, 6, 7, 8, 9, 10],
+    "probabilities": [0.11129029765002292, 0.1558064167100321, 0.18177415282837078, 0.18177415282837078, 0.15905238372482441, 0.12370740956375234, 0.08659518669462665],
+    "normalization_z": 0.8197137896443656,
+    "sampler_key": "sha256_cpu_torch_generator_base_seed_rank_optimizer_step_microbatch_v1",
+    "granularity": "one_T_i_per_local_microbatch_sequence",
+    "seed_fields": ["base_seed", "rank", "optimizer_step", "microbatch_index"]
+  },
+  "backward": {
+    "tail_live_aligned_steps": 4,
+    "early_calls_hidden_graph": true,
+    "early_calls_parameter_edges": false,
+    "ddp_find_unused_parameters": false,
+    "injection": {
+      "ssm_decay": 0.4472135954999579,
+      "target_product": 0.8047189562170503,
+      "initial_dt": 0.8047189562170503,
+      "initial_decay": 0.4472135954999579,
+      "B_init": "identity",
+      "no_weight_decay": true
+    },
+    "state_init": "like-init",
+    "state_init_std": "config.initializer_range",
+    "embedding_scale": "config.embedding_scale_or_embed_scale_or_1"
+  },
+  "runtime_contract": {
+    "prelude_norm": "LlamaRMSNorm",
+    "injection_formula": "h*decay + dt*(PN(e) @ B.T)",
+    "injection_init": "parcae_exact_ssm_decay_sqrt_1_over_5_identity_B_no_weight_decay",
+    "injection_no_weight_decay": true,
+    "B_init": "identity",
+    "learned_h0": false,
+    "training_loop_mode": "per_local_microbatch_per_sequence_truncated_poisson",
+    "local_tmax": true,
+    "left_alignment_noop": true
+  }
+}

@@ -25,7 +25,7 @@ echo "OUTPUT_DIR=$OUTPUT_DIR"
 echo "ALLOW_OVERWRITE=${RSMOL_5_10XR_5_ALLOW_OVERWRITE:-false}"
 echo "OFFLINE_MODE=true"
 
-ARGS=(--source-checkpoint "$SOURCE_CHECKPOINT" --output-dir "$OUTPUT_DIR")
+ARGS=(--source-checkpoint "$SOURCE_CHECKPOINT" --output-dir "$OUTPUT_DIR" --seed "${RSMOL_5_10XR_5_SEED:-0}")
 if [[ "${RSMOL_5_10XR_5_ALLOW_OVERWRITE:-false}" == "true" ]]; then
   ARGS+=(--allow-overwrite)
 fi

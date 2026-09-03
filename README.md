@@ -43,38 +43,78 @@ required remote audit yet.
   every claimed score must be tied to the corresponding external output
   directory and JSON report.
 
-### Current pending experiment: 5-10×7-5 with selective BPTT (方案 B)
+### Current pending experiment: dynamic 5-10×r-5 with selective BPTT (方案 B)
 
-The intended architecture is a **new isolated variant** and must not modify
+Updated 2026-09-02: the authoritative variant is now `5-10xr-5` (written
+conceptually as `5-10×r-5`), with `r∈{4,5,6,7}` sampled once per complete
+optimizer step using increasing power weights `w(r)=r²`: probabilities are
+`16:25:36:49 / 126`. Rank 0 samples a stateless `(seed, optimizer_step)`
+value and broadcasts it to all eight ranks; all sixteen microbatches in that
+accumulation window use the same `r`. Non-training inference defaults to
+`r=7`.
+
+The formal target is currently limited to **4,500 optimizer steps** with
+`ceil(0.05×4500)=225` warmup steps. The dataset and other training
+hyperparameters remain unchanged. The isolated implementation is pending
+remote conversion, Stage 1, Gate A, Gate D and Gate E audits; local checks do
+not constitute a remote PASS.
+
+Implemented isolated entry points are:
+
+```text
+code/RSmol/recursive_model_5_10xr_5.py
+code/RSmol/scripts/convert_stepwise_5_10xr_5.py
+code/RSmol/scripts/convert_stepwise_5_10xr_5.sh
+code/RSmol/scripts/smoke_recursive_5_10xr_5.py
+code/RSmol/scripts/smoke_recursive_5_10xr_5.sh
+code/RSmol/scripts/train_stage4_5_10xr_5_ddp.py
+code/RSmol/scripts/train_stage4_5_10xr_5_ddp.sh
+code/RSmol/run_convert_stepwise_5_10xr_5_3090.sh
+code/RSmol/run_smoke_recursive_5_10xr_5_3090.sh
+code/RSmol/run_stage4_5_10xr_5_3090.sh
+```
+
+The earlier `5-10x7-5` files are superseded handoff artifacts and are not the
+authoritative implementation. Existing 15R, fixed 5-10-5 recursive and
+5-10-5 linear files remain isolated and unchanged.
+
+The Stage 1 smoke audits every `r=4,5,6,7` for dynamic forward/backward
+lengths, cache slots and incremental decoding, generation r-persistence,
+reload, and the selective-gradient contract.  Gate A additionally exercises
+all four backward schedules before its synchronized sampled-r, 16-microbatch
+optimizer update.
+
+The architecture contract for this **new isolated variant** must not modify
 the 15R or existing 5-10-5 files.  The source mapping is:
 
 ```text
 prefix:  source layers 1,2,3,4,5
 middle:  source layers 6,8,10,12,14,16,18,20,22,24 (10 layers)
 suffix:  source layers 26,27,28,29,30
-forward: prefix + (middle × 7) + suffix = 80 logical layer executions
+forward: prefix + (middle × r) + suffix = 50/60/70/80 logical executions
 storage: 20 unique physical decoder layers
 ```
 
-方案 B means that all seven middle loops are executed in the forward pass,
-but the autograd path is truncated at the boundary before loop 4: loops 1–3
-must not receive parameter gradients, while loops 4, 5, 6 and 7 do.  The
-suffix and prefix remain trainable; in reverse order the intended trainable
-path is suffix → loop 7 → loop 6 → loop 5 → loop 4 → prefix.  This is a
-research variant and is **not verified yet**.  The currently present files
+方案 B means that all selected middle loops are executed in the forward pass,
+but only the final four middle calls receive shared-parameter gradients; the
+hidden-state autograd path traverses every selected middle call.  The suffix
+and prefix remain trainable.  This is a research variant and is **not verified
+yet**.  The superseded fixed-r files
 `recursive_model_5_10x7_5.py`, `scripts/convert_stepwise_5_10x7_5.py`,
 `scripts/smoke_recursive_5_10x7_5.py`, and
-`scripts/train_stage4_5_10x7_5_ddp.py` are uncommitted handoff artifacts;
-the next session must inspect their diff and run the required tests before
-using them.
+`scripts/train_stage4_5_10x7_5_ddp.py` are superseded handoff artifacts;
+they are not part of the dynamic variant and must not be used for conversion,
+smoke, or training.
 
 The requested output model directory is expected to be outside the Git
 checkout, for example
-`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x7-5`.  New-variant
+`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10xr-5`.  New-variant
 conversion and training wrappers target `pdgpu-3090`; the already running
 15R formal job continues to use `pdgpu-5090`.
 
-Expected new-variant entry points (once reviewed and committed) are:
+The following fixed-r entry-point list is retained only as historical evidence
+of the superseded draft; the authoritative dynamic entry points are listed
+above:
 
 ```text
 code/RSmol/scripts/convert_stepwise_5_10x7_5.py
@@ -88,10 +128,12 @@ code/RSmol/scripts/train_stage4_5_10x7_5_ddp.sh
 The intended validation sequence is deliberately shorter than the original
 15R route: (1) convert from the actual SmolLM2 `config.json`; (2) run the
 new model's Stage-1-style forward/cache/generation/reload audit on one
-`pdgpu-3090`; (3) reuse the existing sampled Gate-B JSON for Gate A; (4) run
-Gate D (ten optimizer steps) and Gate E resume smoke on eight `pdgpu-3090`
-GPUs; and only after both pass, launch the 9,244-step formal training.  Do
-not run Gate B again for this variant unless the audit manifest changes.
+`pdgpu-3090`; (3) run the isolated synthetic Gate A DDP audit (Gate A does
+not need Gate-B data); (4) reuse the existing Gate-B JSON for Gate D and
+FORMAL, then run Gate D (ten optimizer steps) and Gate E resume smoke on eight
+`pdgpu-3090` GPUs; only after those checks pass, launch the 4,500-step formal
+training.  Do not run Gate B again for this variant unless the audit manifest
+changes.
 
 ### Shared data and training contract
 
@@ -1160,3 +1202,107 @@ bash run_smoke_smollm2_inference_5090.sh
 - [Relaxed Recursive Transformers paper](https://arxiv.org/abs/2410.20672)
 - [SmolLM2-135M model card](https://huggingface.co/HuggingFaceTB/SmolLM2-135M)
 - [SmolLM2-135M-10B dataset card](https://huggingface.co/datasets/EleutherAI/SmolLM2-135M-10B)
+
+## 22. Independent `5_10xpoisson_parcae` variant
+
+This section documents the new namespace only; the historical 5-10xr-5
+implementation and its audit history above remain unchanged.  The new model
+maps source 30 layers to 20 physical modules: prefix 5, shared middle 10,
+and suffix 5.  Its logical depth is `5 + 10*T_i + 5`, ranging from 50 to 110.
+
+Training samples one independent `T_i` for every sequence in every local
+microbatch from the exact truncated standard Poisson distribution:
+
+```text
+P(T=k) = [exp(-7) * 7^k / k!] / Z,  k in {4,5,6,7,8,9,10}
+Z = sum(exp(-7) * 7^k / k!) for k=4..10
+```
+
+The private CPU generator seed is derived from
+`(base_seed, rank, optimizer_step, microbatch_index)`.  The local maximum
+`Tmax` is used for left alignment, `tau_i=Tmax-T_i`; aligned steps before
+`tau_i` are no-op/copy operations.  No depth vector is broadcast between
+ranks.  The first five outputs are `e`, and injection always uses
+`PN(e)=PreludeNorm(e)`:
+
+```text
+u_t = Abar(h_t) + Bbar(PN(e))
+h_{t+1} = MiddleBlockStack(u_t)
+```
+
+`A_log`, `dt_bias`, `B`, softplus `dt`, exponential decay, and identity-B
+initialization are recorded in the converted checkpoint metadata; all three
+injection tensors carry `_no_weight_decay=True` and are placed in the actual
+AdamW `weight_decay=0` group.  PreludeNorm is a single `LlamaRMSNorm` call,
+and `h0` is a fresh per-forward, per-sequence truncated-normal like-init
+state (`state_init_std=initializer_range`, with the explicit embedding scale
+recorded in metadata), not a learned parameter.  The hidden-input graph is
+retained for all calls.  Earlier aligned recurrent
+calls use `torch.func.functional_call` with detached injection and all ten
+middle-block parameters; only the final four aligned calls retain parameter
+gradient edges.  Training always sets `use_cache=False`; scalar inference
+accepts explicit `r/T=4..10` and defaults to 7, with cache slots rebuilt for
+the selected schedule.
+
+Run the isolated workflow through the vc submission wrappers (these wrappers
+submit jobs; do not run `scripts/*.sh` directly on a login node):
+
+```bash
+RSMOL_5_10XPOISSON_PARCAE_SOURCE_CHECKPOINT=/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2 \
+  bash code/RSmol/run_convert_stepwise_5_10xpoisson_parcae_3090.sh
+bash code/RSmol/run_audit_stage1_5_10xpoisson_parcae_3090.sh
+bash code/RSmol/run_stage4_5_10xpoisson_parcae_3090.sh  # default GATE=D, 8 GPUs
+RSMOL_5_10XPOISSON_PARCAE_STAGE4_GATE=FORMAL \
+  bash code/RSmol/run_stage4_5_10xpoisson_parcae_3090.sh  # 9244 steps
+```
+
+The `scripts/convert_stepwise_5_10xpoisson_parcae.sh`,
+`scripts/audit_stage1_5_10xpoisson_parcae.sh`, and
+`scripts/train_stage4_5_10xpoisson_parcae_ddp.sh` files are vc job payloads.
+The `run_*_3090.sh` files are the supported login-node submission entrypoints;
+Stage 4 payloads themselves invoke eight-rank `torchrun` inside the job.
+
+The Stage 4 formal target is 9,244 optimizer steps, 16 microbatches per
+optimizer window, 8 sequences per local microbatch, and `ceil(5%)=463`
+warmup steps.  Acceptance requires `compileall`, `git diff --check`, the
+dedicated Poisson/schedule/PreludeNorm/additive-injection/selective-gradient
+static tests, Stage 1 vector-gradient isolation plus real scalar inference
+audits for every `r=4..10`, default `r=7`, logical cache slots and incremental
+append, generation propagation, and AutoModel reload, and a successful
+ten-step real-data smoke.  Conversion writes `conversion_metadata.json` and a
+completion marker atomically in the new output directory.  The smoke wrapper
+uses eight-rank `torchrun`; it is not a single-process check.
+
+Real-data Stage 4 streams only the rank's deterministic hashed shard
+assignment.  Every non-empty text row is tokenized with
+`add_special_tokens=False, truncation=True, max_length=1024`; rows shorter
+than 1024 are retained, and each microbatch is dynamically padded with a
+padding-only valid mask.  Fixed shard order rolls over to deterministic
+epochs, carrying a partial batch across the boundary.  Checkpoints save the
+exact epoch/shard/row/pending-row cursor, so resume does not replay a large
+prefix of microbatches.  The preaudit verifies the unchanged 85-shard
+manifest, schema, sampled tokenization, and at least one trainable row per
+rank; raw parquet row counts are never presented as training capacity.
+
+FORMAL additionally requires runtime `WORLD_SIZE=8`, microbatch size 8,
+accumulation 16, context length 1024, 9244 optimizer/scheduler steps,
+warmup 463, save interval 500, retention 3, and `max_microbatches=None`.
+Formal reports append one compact scalar metric per optimizer step containing
+loss, learning rate, valid tokens, depth/Tmax histograms, the numeric
+`total_grad_norm`, and its `total_grad_norm_finite_nonzero` status.  Only step 1, checkpoint steps, and the final step carry detailed
+gradient audits.  Gate D/E retain the full per-window depth and gradient audit
+detail.
+
+Every detailed/audit-point gradient report is fail-closed across all ranks:
+physical prefix/middle/suffix layers, the injection group, parameters, and
+the `total_grad_norm_finite_nonzero` check must pass before
+`optimizer.step` (the total gradient norm is finite and >0).
+Checkpoint markers enumerate every model and tokenizer file, including model
+index files for sharded weights; resume rejects any incomplete or
+non-reloadable offline artifact.
+
+Stage 1 writes separate `scalar_inference_all_r`, `default_r7`,
+`cache_contract`, `generation_contract`, and `reload_contract` report entries.
+The cache audit checks every logical K/V slot before and after a one-token
+append, rejects reuse under a different scalar `r`, and forks CPU/CUDA RNG so
+the cache/no-cache prompt comparison uses the same fresh like-init `h0`.
