@@ -26,6 +26,10 @@ if str(SCRIPT_ROOT) not in sys.path:
 FORBIDDEN_CHECKOUT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM")
 LOCAL_CHECKOUT = SCRIPT_ROOT.parents[1]
 DEFAULT_OUTPUT_DIR = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10xpoisson-parcae")
+# Keep the conversion label local to this standalone converter.  The
+# converter is executed as a script and must not rely on a symbol imported
+# from the model module merely to write conversion metadata.
+MODEL_LABEL = "5_10xpoisson_parcae"
 WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".ckpt")
 TOKENIZER_NAMES = {"tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "tokenizer.model", "spiece.model", "vocab.json", "merges.txt", "added_tokens.json", "generation_config.json"}
 
