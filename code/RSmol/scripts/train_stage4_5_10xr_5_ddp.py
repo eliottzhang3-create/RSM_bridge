@@ -82,9 +82,9 @@ EXPECTED_PARQUET_NAMES = tuple(
 DEFAULT_WORLD_SIZE = 8
 DEFAULT_MICRO_BATCH_SIZE = 2
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 64
-DEFAULT_LEARNING_RATE = 2e-4
-DEFAULT_MAX_LR = 2e-4
-DEFAULT_MIN_LR = 2e-5
+DEFAULT_LEARNING_RATE = 8e-4
+DEFAULT_MAX_LR = 8e-4
+DEFAULT_MIN_LR = 8e-5
 DEFAULT_ADAMW_BETAS = (0.9, 0.95)
 DEFAULT_ADAMW_EPS = 1e-8
 DEFAULT_ADAMW_WEIGHT_DECAY = 0.1
@@ -2603,6 +2603,8 @@ def _emit_progress_log(
     samples_per_second: float,
     steps_per_second: float,
     reason: str,
+    loop_stats: Mapping[str, Any] | None = None,
+    memory_stats: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Print and persist one rank-0 training progress record."""
 
@@ -2618,17 +2620,100 @@ def _emit_progress_log(
         "elapsed_seconds": float(elapsed_seconds),
         "reason": str(reason),
     }
+    if loop_stats is not None:
+        record["loop_sampling"] = dict(loop_stats)
+    if memory_stats is not None:
+        record["memory"] = dict(memory_stats)
     _append_jsonl(output_dir / "stage4_progress.jsonl", record)
+    loop_text = ""
+    if loop_stats is not None:
+        loop_text = (
+            f" r_mean={float(loop_stats['mean']):.3f} "
+            f"r_range={int(loop_stats['min'])}-{int(loop_stats['max'])} "
+            f"r_hist={loop_stats['histogram']}"
+        )
+    memory_text = ""
+    if memory_stats is not None:
+        memory_text = (
+            f" gpu_alloc={float(memory_stats['gpu_allocated_gib']):.2f}GiB"
+            f" gpu_reserved={float(memory_stats['gpu_reserved_gib']):.2f}GiB"
+            f" gpu_peak={float(memory_stats['gpu_peak_allocated_gib']):.2f}GiB"
+            f" cpu_rss={float(memory_stats['cpu_rss_gib']):.2f}GiB"
+        )
     print(
         "[stage4-progress] "
         f"step={record['optimizer_step']}/{record['total_steps']} "
         f"loss={record['loss']:.6f} lr={record['learning_rate']:.8g} "
         f"speed={record['samples_per_second']:.3f} samples/sec "
         f"({record['steps_per_second']:.5f} steps/sec) "
+        f"{loop_text}{memory_text} "
         f"elapsed={record['elapsed_seconds']:.2f}s reason={record['reason']}",
         flush=True,
     )
     return record
+
+
+def _progress_runtime_stats(window: Mapping[str, Any], *, device: Any) -> dict[str, dict[str, Any]]:
+    """Summarize sampled depths and peak memory across all DDP ranks."""
+
+    import torch
+    import torch.distributed as dist
+
+    sampled_values = [
+        int(value)
+        for row in window["middle_loop_counts_per_microbatch"]
+        for value in row
+    ]
+    if not sampled_values:
+        raise ValueError("progress window contains no sampled loop counts")
+    histogram = torch.bincount(
+        torch.tensor(sampled_values, dtype=torch.long, device=device),
+        minlength=MAX_MIDDLE_LOOPS + 1,
+    )[MIN_MIDDLE_LOOPS : MAX_MIDDLE_LOOPS + 1].to(dtype=torch.int64)
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(histogram, op=dist.ReduceOp.SUM)
+    total = int(histogram.sum().item())
+    weighted = sum((MIN_MIDDLE_LOOPS + offset) * int(count) for offset, count in enumerate(histogram.tolist()))
+    observed = [
+        MIN_MIDDLE_LOOPS + offset
+        for offset, count in enumerate(histogram.tolist())
+        if int(count) > 0
+    ]
+    loop_stats = {
+        "histogram": {
+            str(MIN_MIDDLE_LOOPS + offset): int(count)
+            for offset, count in enumerate(histogram.tolist())
+        },
+        "min": min(observed),
+        "max": max(observed),
+        "mean": weighted / max(total, 1),
+        "sequence_count": total,
+        "scope": "all_ddp_ranks_and_microbatches",
+    }
+    proc_stats = RuntimeMonitor._proc_stats()
+    memory_values = [
+        int(torch.cuda.memory_allocated(device)) if torch.cuda.is_available() and getattr(device, "type", "") == "cuda" else 0,
+        int(torch.cuda.memory_reserved(device)) if torch.cuda.is_available() and getattr(device, "type", "") == "cuda" else 0,
+        int(torch.cuda.max_memory_allocated(device)) if torch.cuda.is_available() and getattr(device, "type", "") == "cuda" else 0,
+        int(proc_stats.get("rss_bytes") or 0),
+    ]
+    memory_tensor = torch.tensor(memory_values, dtype=torch.int64, device=device)
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(memory_tensor, op=dist.ReduceOp.MAX)
+    memory_bytes = [int(value) for value in memory_tensor.tolist()]
+    gib = float(1024**3)
+    memory_stats = {
+        "gpu_allocated_bytes": memory_bytes[0],
+        "gpu_reserved_bytes": memory_bytes[1],
+        "gpu_peak_allocated_bytes": memory_bytes[2],
+        "cpu_rss_bytes": memory_bytes[3],
+        "gpu_allocated_gib": memory_bytes[0] / gib,
+        "gpu_reserved_gib": memory_bytes[1] / gib,
+        "gpu_peak_allocated_gib": memory_bytes[2] / gib,
+        "cpu_rss_gib": memory_bytes[3] / gib,
+        "scope": "max_across_ddp_ranks",
+    }
+    return {"loop_sampling": loop_stats, "memory": memory_stats}
 
 
 def run_training(
@@ -2852,6 +2937,11 @@ def run_training(
                     "data_cursor": stream.cursor(include_rng=False),
                 }
             )
+            interval_runtime_stats = None
+            if optimizer_step % config.log_interval_steps == 0:
+                # Every rank participates in these reductions; only rank 0
+                # emits the resulting single human-readable line.
+                interval_runtime_stats = _progress_runtime_stats(window, device=device)
             if rank == 0:
                 _append_jsonl(output_dir / "stage4_metrics.jsonl", metrics[-1])
                 if optimizer_step % config.log_interval_steps == 0:
@@ -2869,6 +2959,8 @@ def run_training(
                         steps_per_second=(optimizer_step - start_step)
                         / max(time.perf_counter() - training_start, 1e-9),
                         reason="interval",
+                        loop_stats=interval_runtime_stats["loop_sampling"] if interval_runtime_stats else None,
+                        memory_stats=interval_runtime_stats["memory"] if interval_runtime_stats else None,
                     )
                     if progress is not None:
                         progress_logs.append(progress)
@@ -3502,9 +3594,9 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
     if config.gradient_accumulation_steps != 64:
         raise ValueError("Stage 4 requires gradient_accumulation_steps=64")
     if config.learning_rate != DEFAULT_MAX_LR:
-        raise ValueError("Stage 4 requires learning_rate=2e-4")
+        raise ValueError("Stage 4 requires learning_rate=8e-4")
     if config.max_lr != DEFAULT_MAX_LR:
-        raise ValueError("Stage 4 requires max_lr=2e-4")
+        raise ValueError("Stage 4 requires max_lr=8e-4")
     if tuple(float(value) for value in config.optimizer_betas) != DEFAULT_ADAMW_BETAS:
         raise ValueError(f"Stage 4 requires AdamW betas={DEFAULT_ADAMW_BETAS}")
     if float(config.optimizer_eps) != DEFAULT_ADAMW_EPS:
@@ -3515,6 +3607,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
         raise ValueError(f"Stage 4 requires AdamW amsgrad={DEFAULT_ADAMW_AMSGRAD}")
     if config.min_lr <= 0 or config.min_lr > config.max_lr:
         raise ValueError("Stage 4 requires 0 < min_lr <= max_lr")
+    if config.min_lr != DEFAULT_MIN_LR:
+        raise ValueError("Stage 4 requires min_lr=8e-5")
     if config.context_length <= 0 or config.context_length > 1024:
         raise ValueError("Stage 4 context_length must be in [1, 1024]")
     if config.max_optimizer_steps <= 0:

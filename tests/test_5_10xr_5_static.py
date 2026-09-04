@@ -171,6 +171,8 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
             "sample_middle_loop_counts", "optimizer_step",
             "all_rank_r_equal", "parameter_gradient_enabled_middle_loops", "sampling_contract",
             "DEFAULT_FORMAL_OPTIMIZER_STEPS = 9244", "DEFAULT_FORMAL_WARMUP_STEPS",
+            "loop_sampling", "_progress_runtime_stats", "gpu_allocated_gib",
+            "r_hist", "max_across_ddp_ranks", '"scope": "all_ddp_ranks_and_microbatches"',
             "FORMAL requires scheduler_total_steps=9244", "warmup_steps=463",
             "data_cursors_by_rank", "checkpoint_contract", "fixed_parameter_gradient_tail_loops",
             "depth_sequence_matches_uninterrupted",
@@ -202,6 +204,9 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
         self.assertEqual(9244 * 64, 591_616)
         self.assertEqual(self.stage4.DEFAULT_FORMAL_WARMUP_STEPS, 463)
         self.assertEqual(self.stage4.formal_save_steps(9244, 500)[-1], 9244)
+        self.assertEqual(self.stage4.DEFAULT_MAX_LR, 8e-4)
+        self.assertEqual(self.stage4.DEFAULT_MIN_LR, 8e-5)
+        self.assertIn("--learning-rate 8e-4 --max-lr 8e-4 --min-lr 8e-5", self.stage4_runtime_text)
 
 
 if __name__ == "__main__":

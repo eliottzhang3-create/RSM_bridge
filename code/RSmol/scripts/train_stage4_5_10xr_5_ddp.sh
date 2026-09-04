@@ -48,7 +48,7 @@ else
 fi
 
 ARGS=(--gate "$GATE" --world-size "$WORLD_SIZE" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --report-path "$REPORT_PATH"
-  --micro-batch-size 2 --gradient-accumulation-steps 64 --learning-rate 2e-4 --max-lr 2e-4 --min-lr 2e-5
+  --micro-batch-size 2 --gradient-accumulation-steps 64 --learning-rate 8e-4 --max-lr 8e-4 --min-lr 8e-5
   --context-length 1024 --warmup-steps "$WARMUP_STEPS" --max-optimizer-steps "$MAX_STEPS"
   --formal-optimizer-steps 9244 --scheduler-total-steps "$SCHEDULER_STEPS" --log-interval-steps 10
   --seed "${RSMOL_5_10XR_5_SEED:-0}" --weight-decay 0.1 --max-grad-norm "${RSMOL_5_10XR_5_MAX_GRAD_NORM:-1.0}"
