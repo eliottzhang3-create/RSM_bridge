@@ -146,6 +146,12 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
         for marker in (
             "r_values_audited", "forward_trace_audit", "backward_trace_audit", "cache_r_mismatch_rejected",
             "save_reload_audit", "default_inference_r", "fixed_parameter_gradient_tail_loops",
+            "BF16_INCREMENTAL_MAX_ABS", "BF16_INCREMENTAL_MIN_COSINE",
+            "FP32_INCREMENTAL_ATOL", "FP32_INCREMENTAL_RTOL",
+            "incremental_semantic_ok", "incremental_fp32_cache_audit",
+            "invalid incremental cache slots", "invalid FP32 incremental cache slots",
+            "torch.backends.cuda.matmul.allow_tf32 = False",
+            "model.zero_grad(set_to_none=True)",
             "explicit_r4_fixed", "all_supported_r_fixed", "all_supported_r",
             "early_parameter_gradient_edges_absent",
             "early_hidden_gradient_norms", "exact_parameter_gradient_tail",

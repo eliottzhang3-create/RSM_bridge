@@ -46,6 +46,12 @@ from recursive_model_5_10xr_5 import (  # noqa: E402
 )
 
 REMOTE_CHECKOUT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM")
+CACHE_ATOL = 1e-5
+CACHE_RTOL = 1e-4
+BF16_INCREMENTAL_MAX_ABS = 1.0
+BF16_INCREMENTAL_MIN_COSINE = 0.999
+FP32_INCREMENTAL_ATOL = 1e-3
+FP32_INCREMENTAL_RTOL = 1e-4
 
 
 def ensure_external_report(path: Path) -> Path:
@@ -263,52 +269,202 @@ def _cache_slot_state(cache: Any, index: int) -> dict[str, Any]:
     return {"sequence_length": length, "key_nonempty": bool(isinstance(key_state, torch.Tensor) and key_state.numel()), "value_nonempty": bool(isinstance(value_state, torch.Tensor) and value_state.numel())}
 
 
+def _require_finite(label: str, tensor: torch.Tensor) -> None:
+    if not bool(torch.isfinite(tensor).all().item()):
+        raise AssertionError(f"{label} contains non-finite values")
+
+
 def _cache_audit(model: Any, input_ids: torch.Tensor, r: int) -> dict[str, Any]:
+    prompt_length = int(input_ids.shape[1])
+    attention_mask = torch.ones_like(input_ids)
     with torch.inference_mode():
-        no_cache = model(input_ids=input_ids, use_cache=False, middle_loop_count=r)
-        cached = model(input_ids=input_ids, use_cache=True, middle_loop_count=r)
-    if not torch.allclose(no_cache.logits, cached.logits, atol=1e-5, rtol=1e-4):
-        raise AssertionError(f"cache/no-cache logits disagree for r={r}")
+        no_cache = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False, middle_loop_count=r)
+        cached = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, middle_loop_count=r)
+    _require_finite(f"r={r} no-cache prefill logits", no_cache.logits)
+    _require_finite(f"r={r} cached prefill logits", cached.logits)
+    prefill_max_diff = float((no_cache.logits.float() - cached.logits.float()).abs().max().item())
+    if not torch.allclose(no_cache.logits, cached.logits, atol=CACHE_ATOL, rtol=CACHE_RTOL):
+        raise AssertionError(
+            f"cache/no-cache prefill logits disagree for r={r}: "
+            f"max_diff={prefill_max_diff} atol={CACHE_ATOL} rtol={CACHE_RTOL}"
+        )
     cache = cached.past_key_values
     expected_slots = len(build_5_10xr_5_schedule(r))
     if len(cache) < expected_slots:
         raise AssertionError(f"cache has {len(cache)} slots; expected at least {expected_slots}")
-    slots = [_cache_slot_state(cache, index) for index in range(expected_slots)]
-    if not all(slot["sequence_length"] == input_ids.shape[1] and slot["key_nonempty"] and slot["value_nonempty"] for slot in slots):
-        raise AssertionError(f"invalid cache slots for r={r}: {slots}")
+    prefill_slots = [_cache_slot_state(cache, index) for index in range(expected_slots)]
+    if not all(slot["sequence_length"] == prompt_length and slot["key_nonempty"] and slot["value_nonempty"] for slot in prefill_slots):
+        raise AssertionError(f"invalid prefill cache slots for r={r}: {prefill_slots}")
     precreated_cache = make_dynamic_cache()
     with torch.inference_mode():
-        precreated = model(input_ids=input_ids, past_key_values=precreated_cache, use_cache=True, middle_loop_count=r)
+        precreated = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            past_key_values=precreated_cache,
+            use_cache=True,
+            middle_loop_count=r,
+        )
     if len(precreated_cache) < expected_slots or precreated.past_key_values is not precreated_cache:
         raise AssertionError(f"precreated lazy DynamicCache failed for r={r}")
+    precreated_slots = [_cache_slot_state(precreated_cache, index) for index in range(expected_slots)]
+    if not all(slot["sequence_length"] == prompt_length and slot["key_nonempty"] and slot["value_nonempty"] for slot in precreated_slots):
+        raise AssertionError(f"invalid precreated cache slots for r={r}: {precreated_slots}")
     next_ids = input_ids[:, -1:]
+    extended_attention_mask = torch.cat((attention_mask, torch.ones_like(attention_mask[:, :1])), dim=1)
     with torch.inference_mode():
-        incremental = model(input_ids=next_ids, past_key_values=cache, use_cache=True, middle_loop_count=r)
-        full = model(input_ids=torch.cat((input_ids, next_ids), dim=1), use_cache=False, middle_loop_count=r)
-    if not torch.allclose(incremental.logits[:, -1], full.logits[:, -1], atol=1e-3, rtol=1e-3):
-        raise AssertionError(f"incremental cache logits disagree for r={r}")
+        incremental = model(
+            input_ids=next_ids,
+            attention_mask=extended_attention_mask,
+            past_key_values=cache,
+            use_cache=True,
+            middle_loop_count=r,
+        )
+        full = model(
+            input_ids=torch.cat((input_ids, next_ids), dim=1),
+            attention_mask=extended_attention_mask,
+            use_cache=False,
+            middle_loop_count=r,
+        )
+    _require_finite(f"r={r} incremental logits", incremental.logits)
+    _require_finite(f"r={r} full-sequence logits", full.logits)
+    incremental_logits = incremental.logits[:, -1].float()
+    full_logits = full.logits[:, -1].float()
+    incremental_abs_diff = (incremental_logits - full_logits).abs()
+    incremental_max_diff = float(incremental_abs_diff.max().item())
+    incremental_mean_diff = float(incremental_abs_diff.mean().item())
+    incremental_cosine = float(
+        torch.nn.functional.cosine_similarity(incremental_logits, full_logits, dim=-1).min().item()
+    )
+    incremental_argmax_equal = bool(
+        torch.equal(incremental_logits.argmax(dim=-1), full_logits.argmax(dim=-1))
+    )
+    # BF16 cached single-token attention and full-sequence attention use
+    # different GEMM/SDPA shapes. Judge this low-precision pass semantically;
+    # the strict numerical cache comparison is repeated independently in FP32.
+    if (
+        incremental_max_diff > BF16_INCREMENTAL_MAX_ABS
+        or incremental_cosine < BF16_INCREMENTAL_MIN_COSINE
+        or not incremental_argmax_equal
+    ):
+        raise AssertionError(
+            f"BF16 incremental logits disagree semantically for r={r}: "
+            f"max_diff={incremental_max_diff} mean_diff={incremental_mean_diff} "
+            f"cosine={incremental_cosine} argmax_equal={incremental_argmax_equal} "
+            f"limits=(max={BF16_INCREMENTAL_MAX_ABS}, "
+            f"cosine>={BF16_INCREMENTAL_MIN_COSINE}, argmax_equal=True)"
+        )
+    incremental_slots = [_cache_slot_state(cache, index) for index in range(expected_slots)]
+    if not all(slot["sequence_length"] == prompt_length + 1 and slot["key_nonempty"] and slot["value_nonempty"] for slot in incremental_slots):
+        raise AssertionError(f"invalid incremental cache slots for r={r}: {incremental_slots}")
     mismatch_error = None
     try:
-        model(input_ids=input_ids[:, :1], past_key_values=cache, use_cache=True, middle_loop_count=5 if r != 5 else 4)
+        mismatch_attention_mask = torch.ones(
+            (input_ids.shape[0], prompt_length + 2), dtype=attention_mask.dtype, device=input_ids.device
+        )
+        model(
+            input_ids=input_ids[:, :1],
+            attention_mask=mismatch_attention_mask,
+            past_key_values=cache,
+            use_cache=True,
+            middle_loop_count=5 if r != 5 else 4,
+        )
     except ValueError as exc:
         mismatch_error = str(exc)
     if mismatch_error is None:
         raise AssertionError("cache r mismatch was not rejected")
-    return {"r": r, "expected_slots": expected_slots, "actual_slots": len(cache), "slot_state": slots, "precreated_lazy_cache_ok": True, "incremental_ok": True, "cache_r_mismatch_rejected": True, "cache_r_mismatch_error": mismatch_error, "no_cache_cache_logits_allclose": True}
+    return {
+        "r": r,
+        "expected_slots": expected_slots,
+        "actual_slots": len(cache),
+        "prefill_slot_state": prefill_slots,
+        "precreated_slot_state": precreated_slots,
+        "incremental_slot_state": incremental_slots,
+        "precreated_lazy_cache_ok": True,
+        "incremental_semantic_ok": True,
+        "incremental_max_diff": incremental_max_diff,
+        "incremental_mean_diff": incremental_mean_diff,
+        "incremental_cosine": incremental_cosine,
+        "incremental_argmax_equal": incremental_argmax_equal,
+        "bf16_incremental_max_abs_limit": BF16_INCREMENTAL_MAX_ABS,
+        "bf16_incremental_min_cosine": BF16_INCREMENTAL_MIN_COSINE,
+        "cache_r_mismatch_rejected": True,
+        "cache_r_mismatch_error": mismatch_error,
+        "no_cache_cache_logits_allclose": True,
+        "prefill_max_diff": prefill_max_diff,
+        "prefill_atol": CACHE_ATOL,
+        "prefill_rtol": CACHE_RTOL,
+    }
+
+
+def _fp32_incremental_cache_audit(model: Any, input_ids: torch.Tensor, r: int) -> dict[str, Any]:
+    """Strict cache routing/position audit without BF16 kernel-shape noise."""
+
+    attention_mask = torch.ones_like(input_ids)
+    next_ids = input_ids[:, -1:]
+    extended_attention_mask = torch.cat((attention_mask, torch.ones_like(attention_mask[:, :1])), dim=1)
+    with torch.inference_mode():
+        prefill = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=True,
+            middle_loop_count=r,
+        )
+        incremental = model(
+            input_ids=next_ids,
+            attention_mask=extended_attention_mask,
+            past_key_values=prefill.past_key_values,
+            use_cache=True,
+            middle_loop_count=r,
+        )
+        full = model(
+            input_ids=torch.cat((input_ids, next_ids), dim=1),
+            attention_mask=extended_attention_mask,
+            use_cache=False,
+            middle_loop_count=r,
+        )
+    _require_finite(f"r={r} FP32 incremental logits", incremental.logits)
+    _require_finite(f"r={r} FP32 full-sequence logits", full.logits)
+    incremental_logits = incremental.logits[:, -1]
+    full_logits = full.logits[:, -1]
+    max_diff = float((incremental_logits - full_logits).abs().max().item())
+    if not torch.allclose(
+        incremental_logits,
+        full_logits,
+        atol=FP32_INCREMENTAL_ATOL,
+        rtol=FP32_INCREMENTAL_RTOL,
+    ):
+        raise AssertionError(
+            f"FP32 incremental logits disagree for r={r}: max_diff={max_diff} "
+            f"atol={FP32_INCREMENTAL_ATOL} rtol={FP32_INCREMENTAL_RTOL}"
+        )
+    expected_slots = len(build_5_10xr_5_schedule(r))
+    slots = [_cache_slot_state(prefill.past_key_values, index) for index in range(expected_slots)]
+    expected_length = int(input_ids.shape[1]) + 1
+    if not all(slot["sequence_length"] == expected_length and slot["key_nonempty"] and slot["value_nonempty"] for slot in slots):
+        raise AssertionError(f"invalid FP32 incremental cache slots for r={r}: {slots}")
+    return {
+        "r": r,
+        "max_diff": max_diff,
+        "atol": FP32_INCREMENTAL_ATOL,
+        "rtol": FP32_INCREMENTAL_RTOL,
+        "incremental_cache_slot_state": slots,
+        "ok": True,
+    }
 
 
 def _generation_audit(model: Any, input_ids: torch.Tensor, max_new_tokens: int) -> dict[str, Any]:
     explicit_runs: list[dict[str, Any]] = []
+    attention_mask = torch.ones_like(input_ids)
     with torch.inference_mode():
         for r in range(MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS + 1):
-            generated_r = model.generate(input_ids=input_ids, max_new_tokens=max_new_tokens, do_sample=False, use_cache=True, middle_loop_count=r, eos_token_id=None, pad_token_id=0)
+            generated_r = model.generate(input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=max_new_tokens, do_sample=False, use_cache=True, middle_loop_count=r, eos_token_id=None, pad_token_id=0)
             audit_r = dict(getattr(getattr(model, "model", model), "_last_forward_audit", {}))
             if audit_r.get("middle_loop_count") != r:
                 raise AssertionError(f"generation did not preserve explicit r={r}: {audit_r}")
             if generated_r.ndim != 2 or generated_r.shape[1] <= input_ids.shape[1]:
                 raise AssertionError(f"generation did not append tokens for r={r}")
             explicit_runs.append({"r": r, "output_shape": list(generated_r.shape), "fixed": True})
-        default = model.generate(input_ids=input_ids, max_new_tokens=1, do_sample=False, use_cache=False, eos_token_id=None, pad_token_id=0)
+        default = model.generate(input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=1, do_sample=False, use_cache=False, eos_token_id=None, pad_token_id=0)
     default_audit = dict(getattr(getattr(model, "model", model), "_last_forward_audit", {}))
     if default_audit.get("middle_loop_count") != DEFAULT_INFERENCE_MIDDLE_LOOPS:
         raise AssertionError(f"inference default r is not 7: {default_audit}")
@@ -358,17 +514,35 @@ def main(argv: list[str] | None = None) -> None:
     input_ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long, device=device)
     traces = [_trace_forward(model, input_ids, r) for r in range(4, 11)]
     backwards = [_backward_audit(model, input_ids, r) for r in range(4, 11)]
+    # The last backward audit intentionally leaves real gradients on all 20
+    # physical layers. They are no longer needed and would otherwise double
+    # the transient memory cost of the in-place FP32 audit conversion.
+    model.zero_grad(set_to_none=True)
     caches = [_cache_audit(model, input_ids, r) for r in range(4, 11)]
+    original_dtype = next(model.parameters()).dtype
+    previous_allow_tf32 = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        model.float()
+        fp32_incremental_caches = [
+            _fp32_incremental_cache_audit(model, input_ids, r) for r in range(4, 11)
+        ]
+    finally:
+        model.to(dtype=original_dtype)
+        torch.backends.cuda.matmul.allow_tf32 = previous_allow_tf32
     generation = _generation_audit(model, input_ids, args.max_new_tokens)
     with tempfile.TemporaryDirectory(prefix="rsmol-5-10xr-5-reload-") as temp_dir:
         model.save_pretrained(temp_dir, safe_serialization=False)
-        reloaded = RecursiveLlama5_10xr_5ForCausalLM.from_pretrained(temp_dir, local_files_only=True).to(device).eval()
+        reloaded = RecursiveLlama5_10xr_5ForCausalLM.from_pretrained(
+            temp_dir, local_files_only=True, torch_dtype=original_dtype
+        ).to(device).eval()
         reload_by_r: list[dict[str, Any]] = []
+        attention_mask = torch.ones_like(input_ids)
         with torch.inference_mode():
             for r in range(MIN_MIDDLE_LOOPS, MAX_MIDDLE_LOOPS + 1):
-                before = model(input_ids=input_ids, use_cache=False, middle_loop_count=r).logits.float()
-                after = reloaded(input_ids=input_ids, use_cache=False, middle_loop_count=r).logits.float()
-                cached_after = reloaded(input_ids=input_ids, use_cache=True, middle_loop_count=r).logits.float()
+                before = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False, middle_loop_count=r).logits.float()
+                after = reloaded(input_ids=input_ids, attention_mask=attention_mask, use_cache=False, middle_loop_count=r).logits.float()
+                cached_after = reloaded(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, middle_loop_count=r).logits.float()
                 if not torch.allclose(before, after, atol=1e-5, rtol=1e-4):
                     raise AssertionError(f"save/reload logits mismatch for r={r}")
                 if not torch.allclose(before, cached_after, atol=1e-5, rtol=1e-4):
@@ -381,6 +555,7 @@ def main(argv: list[str] | None = None) -> None:
         "fixed_parameter_gradient_tail_loops": 4, "physical_module_unique": True,
         "parameter_audit": parameter_audit(model), "forward_trace_audit": traces,
         "backward_trace_audit": backwards, "cache_audit": caches,
+        "incremental_fp32_cache_audit": fp32_incremental_caches,
         "generation_audit": generation, "save_reload_audit": {"ok": True, "all_supported_r": reload_by_r},
         "transformers": package_version("transformers"), "torch": torch.__version__,
     }
