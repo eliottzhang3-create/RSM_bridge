@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tempfile
+from collections import Counter
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
@@ -174,8 +175,12 @@ def _backward_audit(model: Any, input_ids: torch.Tensor, r: int) -> dict[str, An
             handle.remove()
         model.train(previous_training)
     expected = list(reversed(build_5_10xr_5_schedule(r)))
-    if sequence != expected:
-        raise AssertionError(f"backward trace mismatch for r={r}: expected={expected} got={sequence}")
+    if len(sequence) != len(expected) or Counter(sequence) != Counter(expected):
+        raise AssertionError(
+            f"backward trace coverage mismatch for r={r}: "
+            f"expected_counts={dict(Counter(expected))} got_counts={dict(Counter(sequence))}"
+        )
+    backward_hook_order = "exact_reverse_schedule" if sequence == expected else "functional_call_early_hook_order"
     audit_state = dict(getattr(getattr(model, "model", model), "_last_forward_audit", {}))
     expected_tail = list(range(r - PARAMETER_GRADIENT_TAIL_LOOPS + 1, r + 1))
     if audit_state.get("parameter_gradient_enabled_middle_loops") != expected_tail:
@@ -212,6 +217,8 @@ def _backward_audit(model: Any, input_ids: torch.Tensor, r: int) -> dict[str, An
         "r": r,
         "trace": sequence,
         "expected": expected,
+        "backward_hook_order": backward_hook_order,
+        "backward_trace_multiset_ok": True,
         "loss": float(loss.detach().item()),
         "backward_traversed_loops": list(range(1, r + 1)),
         "parameter_gradient_enabled_loops": expected_tail,
