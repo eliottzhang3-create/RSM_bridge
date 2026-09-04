@@ -1487,6 +1487,11 @@ def _all_r_backward_audit(
                 )
                 loss_sum, _valid_count = _causal_loss_sum(result.logits, labels)
             recursive_base._collect_middle_gradient_audit = False
+            # _selective_middle_gradient_audit uses autograd.grad probes,
+            # which fire the registered module backward hooks.  Those probe
+            # callbacks are not part of the loss.backward trace under audit.
+            probe_backward_hook_count = len(backward_sequence)
+            backward_sequence.clear()
             loss_sum.backward()
         finally:
             recursive_base._collect_middle_gradient_audit = False
@@ -1522,6 +1527,7 @@ def _all_r_backward_audit(
                     else "functional_call_early_hook_order"
                 ),
                 "backward_trace_coverage_ok": True,
+                "probe_backward_hook_count_excluded": probe_backward_hook_count,
                 "selective_middle_gradient_audit": selective,
             }
         )
@@ -1603,6 +1609,9 @@ def _synthetic_gate_a(model: Any, *, device: Any, config: Stage4Config, rank: in
                 selective_gradient_audit = _selective_middle_gradient_audit(
                     recursive_base, middle_loop_count=micro_tmax
                 )
+                # Exclude partial autograd.grad probe callbacks from the
+                # accumulated loss.backward hook trace.
+                backward_sequence.clear()
         recursive_base._collect_middle_gradient_audit = False
         loss_sum, valid_count = _causal_loss_sum(result.logits, labels)
         if not torch.isfinite(loss_sum):

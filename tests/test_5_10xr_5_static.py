@@ -113,6 +113,8 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
         self.assertIn("zip(backward_chunks, backward_expected)", self.stage4_text)
         self.assertIn("_backward_trace_coverage_matches", self.stage4_text)
         self.assertIn("Counter(sequence) != Counter(expected)", self.smoke_text)
+        self.assertIn("probe_backward_hook_count_excluded", self.smoke_text)
+        self.assertIn("backward_sequence.clear()", self.stage4_text)
 
     def test_model_selective_bptt_contract(self):
         for marker in (

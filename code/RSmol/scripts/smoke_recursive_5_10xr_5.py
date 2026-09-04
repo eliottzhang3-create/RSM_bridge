@@ -163,6 +163,13 @@ def _backward_audit(model: Any, input_ids: torch.Tensor, r: int) -> dict[str, An
                             f"early middle loop {key} unexpectedly has parameter-gradient edges"
                         )
                     early_hidden_gradient_norms[key] = float(input_grad.norm().item())
+            # The autograd.grad probes above intentionally execute partial
+            # backward traversals and therefore fire module backward hooks.
+            # They are audit traffic, not part of the subsequent loss.backward
+            # trace.  Keep their count for the report, then isolate the formal
+            # backward trace by clearing the hook buffer.
+            probe_backward_hook_count = len(sequence)
+            sequence.clear()
             labels = input_ids.clone()
             logits = result.logits.float()
             loss = torch.nn.functional.cross_entropy(logits[:, :-1].reshape(-1, logits.shape[-1]), labels[:, 1:].reshape(-1), reduction="mean")
@@ -219,6 +226,7 @@ def _backward_audit(model: Any, input_ids: torch.Tensor, r: int) -> dict[str, An
         "expected": expected,
         "backward_hook_order": backward_hook_order,
         "backward_trace_multiset_ok": True,
+        "probe_backward_hook_count_excluded": probe_backward_hook_count,
         "loss": float(loss.detach().item()),
         "backward_traversed_loops": list(range(1, r + 1)),
         "parameter_gradient_enabled_loops": expected_tail,
