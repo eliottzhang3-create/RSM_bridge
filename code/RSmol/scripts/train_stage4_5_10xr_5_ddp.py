@@ -3279,96 +3279,118 @@ def _dataset_preaudit(
     import torch.distributed as dist
 
     if rank == 0:
-        if world_size > 1 and config.audit_report is None:
-            raise RuntimeError(
-                "Gate C/D multi-card startup requires --audit-report from Gate B; "
-                "rank 0 is forbidden from scanning the full corpus as a training preflight"
-            )
-        if config.audit_report is not None:
-            # Prefer the standalone Gate B artifact.  This avoids a second
-            # full-corpus scan before a multi-card pilot while retaining all
-            # footer/content evidence in the report consumed here.
-            audit_bundle = json.loads(config.audit_report.expanduser().read_text(encoding="utf-8"))
-            audit = dict(audit_bundle.get("dataset_audit", audit_bundle.get("audit", audit_bundle)))
-            manifest = dict(audit_bundle.get("manifest", {}))
-            if not manifest:
+        try:
+            if world_size > 1 and config.audit_report is None:
+                raise RuntimeError(
+                    "Gate C/D/FORMAL multi-card startup requires --audit-report from Gate B; "
+                    "rank 0 is forbidden from scanning the full corpus as a training preflight"
+                )
+            if config.audit_report is not None:
+                # Validate before parsing so a missing/mis-mounted external
+                # report produces a useful collective error on every rank.
+                report_path = config.audit_report.expanduser().resolve()
+                if not report_path.is_file():
+                    raise FileNotFoundError(
+                        f"Gate B audit report does not exist on rank 0: {report_path}"
+                    )
+                # Prefer the standalone Gate B artifact.  This avoids a second
+                # full-corpus scan before a multi-card pilot while retaining all
+                # footer/content evidence in the report consumed here.
+                audit_bundle = json.loads(report_path.read_text(encoding="utf-8"))
+                audit = dict(audit_bundle.get("dataset_audit", audit_bundle.get("audit", audit_bundle)))
+                manifest = dict(audit_bundle.get("manifest", {}))
+                if not manifest:
+                    files = discover_parquet_files(config.data_dir)
+                    manifest = assign_shards(files, world_size=world_size, seed=config.seed)
+            else:
+                files = discover_parquet_files(config.data_dir)
+                audit = audit_parquet_shards(
+                    files,
+                    tokenizer=tokenizer,
+                    context_length=config.context_length,
+                    content=require_full_content,
+                )
+                manifest = assign_shards(files, world_size=world_size, seed=config.seed)
+            # A Gate B manifest may have been produced with world_size=1. Never
+            # silently reuse that assignment for a different DDP topology.
+            if int(manifest.get("world_size", world_size)) != world_size:
                 files = discover_parquet_files(config.data_dir)
                 manifest = assign_shards(files, world_size=world_size, seed=config.seed)
-        else:
-            files = discover_parquet_files(config.data_dir)
-            audit = audit_parquet_shards(
-                files,
-                tokenizer=tokenizer,
-                context_length=config.context_length,
-                content=require_full_content,
-            )
-            manifest = assign_shards(files, world_size=world_size, seed=config.seed)
-        # A Gate B manifest may have been produced with world_size=1.  Never
-        # silently reuse that assignment for a different DDP topology.
-        if int(manifest.get("world_size", world_size)) != world_size:
-            files = discover_parquet_files(config.data_dir)
-            manifest = assign_shards(files, world_size=world_size, seed=config.seed)
-        by_name = {item["name"]: item for item in audit["shards"]}
-        full_content = bool(
-            audit.get(
-                "content_is_full_corpus",
-                audit.get("content_audit") and not audit.get("footer_only"),
-            )
-        )
-        rank_valid: dict[str, int | None] = {}
-        for rank_key, shard_paths in manifest["rank_shards"].items():
-            rank_valid[rank_key] = (
-                sum(
-                    int(by_name[Path(path).name].get("content", {}).get("valid_trainable_rows", 0))
-                    for path in shard_paths
+            by_name = {item["name"]: item for item in audit["shards"]}
+            full_content = bool(
+                audit.get(
+                    "content_is_full_corpus",
+                    audit.get("content_audit") and not audit.get("footer_only"),
                 )
-                if full_content
-                else None
             )
-        manifest["rank_raw_rows"] = {
-            rank_key: sum(int(by_name[Path(path).name]["num_rows"]) for path in shard_paths)
-            for rank_key, shard_paths in manifest["rank_shards"].items()
-        }
-        manifest["rank_valid_trainable_rows"] = rank_valid
-        manifest["rank_effective_rows_scope"] = (
-            "full_corpus" if full_content else "unavailable_sample_only"
-        )
-        target_samples_per_rank = (
-            int(config.max_optimizer_steps)
-            * config.gradient_accumulation_steps
-            * config.micro_batch_size
-        )
-        manifest["target_optimizer_steps"] = int(config.max_optimizer_steps)
-        manifest["target_samples_per_rank"] = target_samples_per_rank
-        manifest["formal_optimizer_steps"] = int(config.formal_optimizer_steps)
-        manifest["rank_has_target_samples"] = {
-            rank_key: (value >= target_samples_per_rank if value is not None else None)
-            for rank_key, value in rank_valid.items()
-        }
-        manifest["rank_has_raw_capacity"] = {
-            rank_key: value >= target_samples_per_rank
-            for rank_key, value in manifest["rank_raw_rows"].items()
-        }
-        manifest["raw_rows"] = int(audit["total_rows"])
-        manifest["effective_trainable_rows"] = (
-            int(audit["content"]["valid_trainable_rows"]) if full_content else None
-        )
-        manifest["effective_rows_scope"] = (
-            "full_corpus" if full_content else "unavailable_sample_only"
-        )
-        manifest["formal_global_samples"] = int(
-            config.formal_optimizer_steps
-            * config.gradient_accumulation_steps
-            * config.micro_batch_size
-            * world_size
-        )
-        manifest["formal_remaining_raw_rows"] = int(
-            audit["total_rows"] - manifest["formal_global_samples"]
-        )
-        bundle = {"audit": audit, "manifest": manifest}
+            rank_valid: dict[str, int | None] = {}
+            for rank_key, shard_paths in manifest["rank_shards"].items():
+                rank_valid[rank_key] = (
+                    sum(
+                        int(by_name[Path(path).name].get("content", {}).get("valid_trainable_rows", 0))
+                        for path in shard_paths
+                    )
+                    if full_content
+                    else None
+                )
+            manifest["rank_raw_rows"] = {
+                rank_key: sum(int(by_name[Path(path).name]["num_rows"]) for path in shard_paths)
+                for rank_key, shard_paths in manifest["rank_shards"].items()
+            }
+            manifest["rank_valid_trainable_rows"] = rank_valid
+            manifest["rank_effective_rows_scope"] = (
+                "full_corpus" if full_content else "unavailable_sample_only"
+            )
+            target_samples_per_rank = (
+                int(config.max_optimizer_steps)
+                * config.gradient_accumulation_steps
+                * config.micro_batch_size
+            )
+            manifest["target_optimizer_steps"] = int(config.max_optimizer_steps)
+            manifest["target_samples_per_rank"] = target_samples_per_rank
+            manifest["formal_optimizer_steps"] = int(config.formal_optimizer_steps)
+            manifest["rank_has_target_samples"] = {
+                rank_key: (value >= target_samples_per_rank if value is not None else None)
+                for rank_key, value in rank_valid.items()
+            }
+            manifest["rank_has_raw_capacity"] = {
+                rank_key: value >= target_samples_per_rank
+                for rank_key, value in manifest["rank_raw_rows"].items()
+            }
+            manifest["raw_rows"] = int(audit["total_rows"])
+            manifest["effective_trainable_rows"] = (
+                int(audit["content"]["valid_trainable_rows"]) if full_content else None
+            )
+            manifest["effective_rows_scope"] = (
+                "full_corpus" if full_content else "unavailable_sample_only"
+            )
+            manifest["formal_global_samples"] = int(
+                config.formal_optimizer_steps
+                * config.gradient_accumulation_steps
+                * config.micro_batch_size
+                * world_size
+            )
+            manifest["formal_remaining_raw_rows"] = int(
+                audit["total_rows"] - manifest["formal_global_samples"]
+            )
+            bundle = {"audit": audit, "manifest": manifest}
+        except Exception as exc:
+            bundle = {
+                "__stage4_rank0_error__": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "traceback": traceback.format_exc(),
+                }
+            }
     else:
         bundle = None
     bundle = _broadcast_object(bundle, rank=rank)
+    if isinstance(bundle, Mapping) and "__stage4_rank0_error__" in bundle:
+        details = bundle["__stage4_rank0_error__"]
+        raise RuntimeError(
+            "Stage 4 dataset preaudit failed on rank 0 before broadcast: "
+            f"{details.get('type')}: {details.get('message')}\n{details.get('traceback', '')}"
+        )
     if not bundle or "audit" not in bundle or "manifest" not in bundle:
         raise RuntimeError("Failed to broadcast Stage 4 dataset audit/manifest")
     audit, manifest = bundle["audit"], bundle["manifest"]

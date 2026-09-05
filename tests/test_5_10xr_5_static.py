@@ -184,6 +184,7 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
             "suffix_layers_with_grad", "suffix_all_receive_finite_nonzero_grad",
             "sample_middle_loop_counts",
             "_validate_exact_sampling_contract", "Resume checkpoint_complete.json",
+            "__stage4_rank0_error__", "failed on rank 0 before broadcast",
             "sha256", "torch.multinomial", "per local sequence",
         ):
             self.assertIn(marker, self.stage4_text)
@@ -197,6 +198,7 @@ class DynamicVariantStaticContractTest(unittest.TestCase):
         self.assertIn("-c 8 -m 32G -g 1", self.smoke_submit_text)
         self.assertIn("9244", self.stage4_runtime_text)
         self.assertIn("463", self.stage4_runtime_text)
+        self.assertIn("Gate-B audit report does not exist", self.stage4_runtime_text)
 
     def test_formal_sample_contract(self):
         self.assertEqual(9244 * 8 * 64 * 2, 9_465_856)

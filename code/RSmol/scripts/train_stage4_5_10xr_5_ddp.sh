@@ -33,8 +33,12 @@ if [[ "$GATE" != "A" && -z "$RESUME_PATH" && ! -d "$MODEL_PATH" ]]; then
   echo "Missing external 5-10xr-5 model directory: $MODEL_PATH" >&2
   exit 2
 fi
-if [[ "$GATE" == "D" && -z "$AUDIT_REPORT" && "${RSMOL_5_10XR_5_DRY_RUN:-0}" != "1" ]]; then
-  echo "Gate D requires RSMOL_5_10XR_5_AUDIT_REPORT from the existing Gate B audit" >&2
+if [[ ("$GATE" == "D" || "$GATE" == "FORMAL") && -z "$RESUME_PATH" && -z "$AUDIT_REPORT" && "${RSMOL_5_10XR_5_DRY_RUN:-0}" != "1" ]]; then
+  echo "$GATE requires RSMOL_5_10XR_5_AUDIT_REPORT from the existing Gate B audit (unless resuming)" >&2
+  exit 2
+fi
+if [[ ("$GATE" == "D" || "$GATE" == "FORMAL") && -n "$AUDIT_REPORT" && ! -f "$AUDIT_REPORT" && "${RSMOL_5_10XR_5_DRY_RUN:-0}" != "1" ]]; then
+  echo "$GATE Gate-B audit report does not exist: $AUDIT_REPORT" >&2
   exit 2
 fi
 
