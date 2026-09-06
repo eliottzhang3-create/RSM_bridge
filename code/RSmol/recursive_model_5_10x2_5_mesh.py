@@ -212,6 +212,12 @@ def _call_layer(layer: nn.Module, hidden: torch.Tensor, *, attention_mask: torch
 
 
 def _init_router(router: nn.Linear) -> None:
+    # ``from_pretrained`` constructs modules under an empty/meta-weight
+    # context before materializing checkpoint tensors.  Data-dependent
+    # initialization (notably the finite check below) is invalid there; the
+    # real router values are loaded from the checkpoint immediately after.
+    if router.weight.is_meta or (router.bias is not None and router.bias.is_meta):
+        return
     std = math.sqrt(2.0 / (MEMORY_SLOT_COUNT * router.in_features))
     with torch.no_grad():
         values = torch.empty_like(router.weight)

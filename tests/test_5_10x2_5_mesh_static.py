@@ -71,6 +71,15 @@ class MeshStaticContractTest(unittest.TestCase):
         self.assertNotIn("Poisson", self.model + self.converter + self.train)
         self.assertNotIn("dynamic depth", self.model.lower() + self.train.lower())
 
+    def test_router_initialization_is_meta_device_safe(self):
+        function_start = self.model.index("def _init_router")
+        function_end = self.model.index("\n\nclass MeshLlamaModel", function_start)
+        function = self.model[function_start:function_end]
+        self.assertIn("router.weight.is_meta", function)
+        self.assertIn("router.bias.is_meta", function)
+        self.assertLess(function.index("router.weight.is_meta"), function.index("torch.no_grad()"))
+        self.assertLess(function.index("router.weight.is_meta"), function.index("torch.isfinite(values).all()"))
+
     def test_converter_clean_source_and_atomic_contract(self):
         for marker in ("TRAINING_MARKERS", "mesh_checkpoint_metadata.json", "checkpoint_complete.json", "detect_source", "conversion_only_5_10_5", "original_smolLM2_30_layer", "reject_forbidden_output", "tempfile.mkdtemp", "staging.replace(output)", "allow-overwrite", "mesh_conversion_metadata.json", "source_kind"):
             self.assertIn(marker, self.converter)
