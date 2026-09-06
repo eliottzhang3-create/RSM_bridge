@@ -511,8 +511,19 @@ def validate_semantics_and_gradient_metadata(model: Any) -> dict[str, Any]:
         expected = h * decay + dt * torch.matmul(e, injection.B.transpose(-1, -2))
         if not torch.allclose(actual, expected, rtol=1e-5, atol=1e-6):
             raise RuntimeError("Parcae A/B additive injection formula mismatch")
-        if not torch.allclose(injection.B.detach(), torch.eye(injection.B.shape[0], device=injection.B.device, dtype=injection.B.dtype)):
-            raise RuntimeError("Parcae B is not identity initialized")
+        # ``recursive_B_init=identity`` is an initialization contract, not an
+        # invariant of a trained checkpoint.  The formal Stage 4 checkpoint
+        # is expected to have updated B during optimization, so auditing the
+        # current value against I would reject a valid trained model.  Check
+        # the serialized contract (above), then require the learned matrix
+        # used by the forward path to be finite, square, and shape-compatible.
+        B = injection.B.detach()
+        if B.ndim != 2 or B.shape[0] != B.shape[1] or B.shape[0] != h.shape[-1]:
+            raise RuntimeError(f"Parcae B shape mismatch: B={tuple(B.shape)} hidden={h.shape[-1]}")
+        if not torch.isfinite(B.float()).all().item():
+            raise RuntimeError("Parcae B contains non-finite values")
+        identity = torch.eye(B.shape[0], device=B.device, dtype=B.dtype)
+        b_identity_deviation = float((B - identity).abs().max().item())
         recurrent_parameters = [(name, parameter) for name, parameter in recursive_model.named_parameters() if "recurrent.injection" in name or "recurrent.middle" in name]
         loss = outputs.logits.float().square().mean()
         early_hidden_norms = []
@@ -549,7 +560,7 @@ def validate_semantics_and_gradient_metadata(model: Any) -> dict[str, Any]:
         prefix_layers_with_grad = _layer_gradients("prefix_layers")
         middle_layers_with_grad = _layer_gradients("recurrent.middle.layers")
         suffix_layers_with_grad = _layer_gradients("suffix_layers")
-        return {"state_init": "like-init", "state_shape": list(state.shape), "state_nonzero": True, "prelude_norm": "LlamaRMSNorm", "pn_single_compute_reused": True, "injection_formula_match": True, "B_identity": True, "parameter_gradient_tail_loops": 4, "exact_parameter_gradient_tail": 4, "early_hidden_gradient_norms": early_hidden_norms, "early_parameter_gradient_edges_absent": True, "last_four_injection_middle_parameter_grads": True, "injection_gradient_audit": recurrent_gradient_audit, "prefix_layers_with_grad": prefix_layers_with_grad, "middle_layers_with_grad": middle_layers_with_grad, "suffix_layers_with_grad": suffix_layers_with_grad, "prefix_suffix_gradients_finite_nonzero": True, "forward_audit": audit}
+        return {"state_init": "like-init", "state_shape": list(state.shape), "state_nonzero": True, "prelude_norm": "LlamaRMSNorm", "pn_single_compute_reused": True, "injection_formula_match": True, "B_identity_initialization_contract": True, "B_current_finite": True, "B_current_shape": list(B.shape), "B_current_max_abs_deviation_from_identity": b_identity_deviation, "parameter_gradient_tail_loops": 4, "exact_parameter_gradient_tail": 4, "early_hidden_gradient_norms": early_hidden_norms, "early_parameter_gradient_edges_absent": True, "last_four_injection_middle_parameter_grads": True, "injection_gradient_audit": recurrent_gradient_audit, "prefix_layers_with_grad": prefix_layers_with_grad, "middle_layers_with_grad": middle_layers_with_grad, "suffix_layers_with_grad": suffix_layers_with_grad, "prefix_suffix_gradients_finite_nonzero": True, "forward_audit": audit}
     finally:
         recursive_model._collect_middle_gradient_audit = False
         model.eval()
