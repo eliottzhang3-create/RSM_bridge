@@ -15,6 +15,7 @@ import json
 import math
 import os
 import random
+import socket
 import shutil
 import sys
 import time
@@ -52,6 +53,7 @@ DEFAULT_MIN_LR = 8e-5
 DEFAULT_SAVE_EVERY = 500
 DEFAULT_CHECKPOINT_RETENTION = 3
 DEFAULT_LOG_INTERVAL_STEPS = 10
+DEFAULT_HEARTBEAT_MICRO_INTERVAL = 8
 DEFAULT_ADAMW_BETAS = (0.9, 0.95)
 DEFAULT_ADAMW_WEIGHT_DECAY = 0.1
 DEFAULT_ADAMW_EPS = 1e-8
@@ -256,6 +258,103 @@ def _runtime_memory_stats(device: torch.device) -> dict[str, float | None]:
     }
 
 
+def _diagnostic_dir(config: Stage4Config) -> Path:
+    path = config.output_dir / "ddp_diagnostics"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _heartbeat(config: Stage4Config, *, rank: int, device: torch.device, optimizer_step: int, phase: str, micro: int | None = None, detail: dict[str, Any] | None = None) -> None:
+    """Atomically publish the last phase reached by each rank.
+
+    This is deliberately a per-rank file rather than a distributed collective:
+    if one rank hangs, the other ranks must still be able to leave diagnostics.
+    """
+
+    payload: dict[str, Any] = {
+        "timestamp": time.time(),
+        "hostname": socket.gethostname(),
+        "pid": os.getpid(),
+        "rank": rank,
+        "local_rank": int(os.environ.get("LOCAL_RANK", rank)),
+        "optimizer_step": int(optimizer_step),
+        "micro": None if micro is None else int(micro),
+        "phase": phase,
+        "device": str(device),
+        "cuda_device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+        "memory": _runtime_memory_stats(device),
+        "detail": detail or {},
+    }
+    target = _diagnostic_dir(config) / f"rank{rank}.heartbeat.json"
+    temporary = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+    temporary.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+    temporary.replace(target)
+
+
+def _failure_diagnostic(config: Stage4Config, *, rank: int, device: torch.device, exc: BaseException) -> None:
+    payload = {
+        "timestamp": time.time(),
+        "hostname": socket.gethostname(),
+        "pid": os.getpid(),
+        "rank": rank,
+        "local_rank": int(os.environ.get("LOCAL_RANK", rank)),
+        "device": str(device),
+        "error": repr(exc),
+        "traceback": traceback.format_exc(),
+        "nccl_environment": {name: os.environ.get(name) for name in ("NCCL_DEBUG", "NCCL_DEBUG_SUBSYS", "TORCH_NCCL_ASYNC_ERROR_HANDLING", "TORCH_NCCL_DUMP_ON_TIMEOUT", "TORCH_NCCL_TRACE_BUFFER_SIZE", "TORCH_DISTRIBUTED_DEBUG")},
+    }
+    target = _diagnostic_dir(config) / f"rank{rank}.failure.json"
+    target.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+
+
+def _startup_diagnostics(config: Stage4Config, *, rank: int, world_size: int, device: torch.device) -> None:
+    local = {
+        "rank": rank,
+        "world_size": world_size,
+        "hostname": socket.gethostname(),
+        "pid": os.getpid(),
+        "local_rank": int(os.environ.get("LOCAL_RANK", rank)),
+        "device": str(device),
+        "cuda_device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+        "cuda_device_index": device.index if device.type == "cuda" else None,
+        "nccl_environment": {name: os.environ.get(name) for name in ("NCCL_DEBUG", "NCCL_DEBUG_SUBSYS", "NCCL_P2P_DISABLE", "NCCL_IB_DISABLE", "TORCH_NCCL_ASYNC_ERROR_HANDLING", "TORCH_NCCL_DUMP_ON_TIMEOUT", "TORCH_NCCL_TRACE_BUFFER_SIZE", "TORCH_DISTRIBUTED_DEBUG")},
+    }
+    _diagnostic_dir(config).joinpath(f"rank{rank}.startup.json").write_text(json.dumps(local, indent=2, default=str) + "\n", encoding="utf-8")
+    if world_size > 1:
+        gathered: list[Any] = [None for _ in range(world_size)]
+        dist.all_gather_object(gathered, local)
+        if rank == 0:
+            _diagnostic_dir(config).joinpath("world_startup.json").write_text(json.dumps(gathered, indent=2, default=str) + "\n", encoding="utf-8")
+
+
+def _validate_router_stats(router_stats: dict[str, dict[str, float]]) -> str | None:
+    expected_names = {"write_pre", "read_pre", "write_0", "read_0", "write_1", "read_1"}
+    if set(router_stats) != expected_names:
+        return "six router statistics were not produced"
+    for router_name, router_stat in router_stats.items():
+        probabilities = torch.tensor(router_stat.get("slot_probabilities", []), dtype=torch.float64)
+        entropy = float(router_stat.get("mean_entropy", float("nan")))
+        if probabilities.numel() != MEMORY_SLOT_COUNT or not torch.isfinite(probabilities).all() or not math.isfinite(entropy) or not math.isclose(float(probabilities.sum()), 1.0, rel_tol=1e-4, abs_tol=1e-4):
+            return f"nonfinite or invalid routing statistics for {router_name}"
+        if float(probabilities.max()) >= 0.9999 and entropy <= 1e-3:
+            return f"router collapse detected for {router_name}"
+    return None
+
+
+def _distributed_router_audit(*, router_stats: dict[str, dict[str, float]], rank: int, world_size: int) -> tuple[bool, str | None, list[dict[str, Any]]]:
+    local_error = _validate_router_stats(router_stats)
+    payload = {"rank": rank, "error": local_error, "routers": router_stats}
+    gathered: list[Any] = [payload]
+    if world_size > 1:
+        gathered = [None for _ in range(world_size)]
+        dist.all_gather_object(gathered, payload)
+    failures = [item for item in gathered if item and item.get("error")]
+    if failures:
+        first = failures[0]
+        return False, f"rank {first.get('rank')}: {first.get('error')}", gathered
+    return True, None, gathered
+
+
 def _optimizer(model: torch.nn.Module, config: Stage4Config) -> tuple[torch.optim.Optimizer, dict[str, Any]]:
     decay, no_decay = [], []
     for name, parameter in model.named_parameters():
@@ -310,6 +409,29 @@ def _checkpoint(model: torch.nn.Module, tokenizer: Any, optimizer: torch.optim.O
     return destination
 
 
+def _checkpoint_synchronized(model: torch.nn.Module, tokenizer: Any, optimizer: torch.optim.Optimizer, scheduler_step: int, config: Stage4Config, rank: int, world_size: int, device: torch.device, state: dict[str, Any]) -> Path | None:
+    """Save only on rank 0 while keeping every rank in the same phase."""
+
+    if world_size > 1:
+        dist.barrier()
+    saved: Path | None = None
+    error_text: str | None = None
+    if rank == 0:
+        try:
+            saved = _checkpoint(model, tokenizer, optimizer, scheduler_step, config, rank, state)
+        except Exception:
+            error_text = traceback.format_exc()
+            _diagnostic_dir(config).joinpath("checkpoint.failure.json").write_text(json.dumps({"optimizer_step": scheduler_step, "traceback": error_text}, indent=2) + "\n", encoding="utf-8")
+    status = torch.tensor([1 if error_text else 0], dtype=torch.int32, device=device)
+    if world_size > 1:
+        dist.broadcast(status, src=0)
+    if int(status.item()) != 0:
+        raise RuntimeError(f"rank 0 checkpoint save failed:\n{error_text or 'see checkpoint.failure.json'}")
+    if world_size > 1:
+        dist.barrier()
+    return saved
+
+
 def _load_checkpoint_state(path: Path) -> dict[str, Any]:
     _validate_checkpoint_complete(path)
     return torch.load(path / "training_state.pt", map_location="cpu", weights_only=False)
@@ -339,8 +461,10 @@ def _validate_checkpoint_complete(path: Path) -> None:
 def run_training(config: Stage4Config) -> dict[str, Any]:
     rank, world_size, device = _dist_setup(config)
     _seed(config.seed, rank)
-    report: dict[str, Any] = {"status": "FAIL", "gate": config.gate, "configuration": asdict(config), "architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "world_size": world_size, "rank": rank, "device": str(device), "checks": [], "hard_failures": []}
+    report: dict[str, Any] = {"status": "FAIL", "gate": config.gate, "configuration": asdict(config), "architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "world_size": world_size, "rank": rank, "device": str(device), "diagnostics_dir": str(config.output_dir / "ddp_diagnostics"), "checks": [], "hard_failures": []}
     try:
+        _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
+        _heartbeat(config, rank=rank, device=device, optimizer_step=0, phase="startup_complete")
         model_path = config.resume_from or config.model_path
         if model_path is None:
             raise ValueError("Stage 4 requires --model-path or --resume-from")
@@ -367,7 +491,11 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 saved_rng = resume_state.get("rng_state")
             if saved_rng is not None:
                 torch.set_rng_state(saved_rng)
-        ddp_model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device.index] if device.type == "cuda" and world_size > 1 else None, find_unused_parameters=False) if world_size > 1 else model
+        # MeSH has no mutable forward buffers that need rank-0 broadcast.  The
+        # router state is stored in Parameters, not buffers.  Disabling this
+        # redundant pre-forward collective makes any real rank skew easier to
+        # localize and avoids stalling on the rotary buffer broadcast.
+        ddp_model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device.index] if device.type == "cuda" and world_size > 1 else None, broadcast_buffers=False, find_unused_parameters=False) if world_size > 1 else model
         manifest = _manifest(config.data_dir) if config.gate != "A" else []
         stream_obj = DistributedParquetStream(manifest, tokenizer, rank=rank, world_size=world_size, batch_size=config.micro_batch_size, context_length=config.context_length, pad_token_id=int(tokenizer.pad_token_id), seed=config.seed) if manifest else None
         if resume_state and stream_obj is not None:
@@ -376,6 +504,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         metrics: list[dict[str, Any]] = []
         last_checkpoint: str | None = None
         while optimizer_step < config.max_optimizer_steps:
+            _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="optimizer_step_start")
             if device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(device)
                 torch.cuda.synchronize(device)
@@ -387,8 +516,14 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
             for micro in range(config.gradient_accumulation_steps):
                 if config.max_microbatches is not None and stream_obj is not None and stream_obj.microbatches_seen >= config.max_microbatches:
                     break
+                heartbeat_micro_interval = max(1, int(os.environ.get("RSMOL_5_10X2_5_MESH_HEARTBEAT_MICRO_INTERVAL", DEFAULT_HEARTBEAT_MICRO_INTERVAL)))
+                heartbeat_due = micro % heartbeat_micro_interval == 0 or micro == config.gradient_accumulation_steps - 1
+                if heartbeat_due:
+                    _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, micro=micro, phase="before_batch")
                 batch = next(stream)
                 last_batch = batch
+                if heartbeat_due:
+                    _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, micro=micro, phase="batch_ready", detail={"batch_shape": list(batch["input_ids"].shape)})
                 ids = batch["input_ids"].to(device)
                 mask = batch["attention_mask"].to(device)
                 labels = batch["labels"].to(device)
@@ -396,19 +531,27 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 amp = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else contextlib.nullcontext()
                 sync = contextlib.nullcontext() if not hasattr(ddp_model, "no_sync") or micro == config.gradient_accumulation_steps - 1 else ddp_model.no_sync()
                 with sync, amp:
+                    if heartbeat_due:
+                        _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, micro=micro, phase="before_forward")
                     out = ddp_model(input_ids=ids, attention_mask=mask, use_cache=False)
+                    if heartbeat_due:
+                        _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, micro=micro, phase="after_forward")
                     logits = out.logits
                     token_losses = F.cross_entropy(logits[:, :-1].float().reshape(-1, logits.shape[-1]), labels[:, 1:].reshape(-1), reduction="none").reshape_as(valid)
                     loss_sum = token_losses.masked_select(valid).sum()
                     token_count = valid.sum().to(torch.float64)
                     (loss_sum / config.gradient_accumulation_steps).backward()
+                    if heartbeat_due:
+                        _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, micro=micro, phase="after_backward")
                 total_loss += loss_sum.detach().double()
                 total_tokens += token_count
             if last_batch is None:
                 raise RuntimeError("no batch available for accumulation window")
             global_tokens = total_tokens.clone()
+            _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="before_global_token_allreduce")
             if world_size > 1:
                 dist.all_reduce(global_tokens, op=dist.ReduceOp.SUM)
+            _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="after_global_token_allreduce")
             scale = token_weighted_gradient_scale(world_size=world_size, global_window_tokens=int(global_tokens.item()), gradient_accumulation_steps=config.gradient_accumulation_steps)
             for parameter in ddp_model.parameters():
                 if parameter.grad is not None:
@@ -418,9 +561,12 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 raise RuntimeError("nonfinite gradient norm")
             optimizer_step += 1
             _set_lr(optimizer, _cosine_lr(optimizer_step - 1, config))
+            _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="before_optimizer_step")
             optimizer.step()
+            _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="after_optimizer_step")
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
+            _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="optimizer_step_complete")
             step_time_seconds = max(time.perf_counter() - step_start_time, 1e-9)
             memory_stats = _runtime_memory_stats(device)
             tokens_per_second = float(global_tokens.item()) / step_time_seconds
@@ -429,25 +575,12 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
             routing_audit_due = optimizer_step == 1 or optimizer_step % 10 == 0 or optimizer_step == config.max_optimizer_steps
             routing_audit_ok = True
             routing_audit_error = None
+            routing_audit_ranks: list[dict[str, Any]] = []
             if routing_audit_due:
-                if set(router_stats) != {"write_pre", "read_pre", "write_0", "read_0", "write_1", "read_1"}:
-                    routing_audit_ok = False
-                    routing_audit_error = "six router statistics were not produced"
-                else:
-                    for router_name, router_stat in router_stats.items():
-                        probabilities = torch.tensor(router_stat.get("slot_probabilities", []), dtype=torch.float64)
-                        entropy = float(router_stat.get("mean_entropy", float("nan")))
-                        if probabilities.numel() != MEMORY_SLOT_COUNT or not torch.isfinite(probabilities).all() or not math.isfinite(entropy) or not math.isclose(float(probabilities.sum()), 1.0, rel_tol=1e-4, abs_tol=1e-4):
-                            routing_audit_ok = False
-                            routing_audit_error = f"nonfinite or invalid routing statistics for {router_name}"
-                            break
-                        if float(probabilities.max()) >= 0.9999 and entropy <= 1e-3:
-                            routing_audit_ok = False
-                            routing_audit_error = f"router collapse detected for {router_name}"
-                            break
+                routing_audit_ok, routing_audit_error, routing_audit_ranks = _distributed_router_audit(router_stats=router_stats, rank=rank, world_size=world_size)
                 if not routing_audit_ok:
                     raise RuntimeError(routing_audit_error or "routing audit failed")
-            local_report = {"optimizer_step": optimizer_step, "loss": float(total_loss.item() / max(1, total_tokens.item())), "local_valid_tokens": int(total_tokens.item()), "global_valid_tokens": int(global_tokens.item()), "learning_rate": float(optimizer.param_groups[0]["lr"]), "grad_norm": float(grad_norm.item()), "step_time_seconds": step_time_seconds, "tokens_per_second": tokens_per_second, **memory_stats, "router_parameters_in_optimizer": bool(optimizer_group_audit["router_parameters_in_optimizer"]), "routing_stats": {"memory_slots": MEMORY_SLOT_COUNT, "loss_auxiliary": False, "audit_due": routing_audit_due, "audit_passed": routing_audit_ok if routing_audit_due else None, "routers": router_stats}}
+            local_report = {"optimizer_step": optimizer_step, "loss": float(total_loss.item() / max(1, total_tokens.item())), "local_valid_tokens": int(total_tokens.item()), "global_valid_tokens": int(global_tokens.item()), "learning_rate": float(optimizer.param_groups[0]["lr"]), "grad_norm": float(grad_norm.item()), "step_time_seconds": step_time_seconds, "tokens_per_second": tokens_per_second, **memory_stats, "router_parameters_in_optimizer": bool(optimizer_group_audit["router_parameters_in_optimizer"]), "routing_stats": {"memory_slots": MEMORY_SLOT_COUNT, "loss_auxiliary": False, "audit_due": routing_audit_due, "audit_passed": routing_audit_ok if routing_audit_due else None, "routers": router_stats, "rank_audits": routing_audit_ranks if routing_audit_due and rank == 0 else []}}
             metrics.append(local_report)
             log_due = optimizer_step % DEFAULT_LOG_INTERVAL_STEPS == 0 or optimizer_step == config.max_optimizer_steps
             if rank == 0 and log_due:
@@ -467,6 +600,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                     flush=True,
                 )
             if optimizer_step % config.save_every == 0 or optimizer_step == config.max_optimizer_steps:
+                _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="checkpoint_prepare")
                 cursors = {str(rank): stream_obj.cursor()} if stream_obj is not None else {str(rank): {"synthetic": True}}
                 if world_size > 1:
                     gathered: list[Any] = [None for _ in range(world_size)]
@@ -477,16 +611,22 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                     gathered_rng: list[Any] = [None for _ in range(world_size)]
                     dist.all_gather_object(gathered_rng, torch.get_rng_state())
                     rng_states = {str(i): value for i, value in enumerate(gathered_rng)}
-                last_checkpoint_path = _checkpoint(ddp_model, tokenizer, optimizer, optimizer_step, config, rank, {"manifest": [str(p) for p in manifest], "data_cursors_by_rank": cursors, "rng_states_by_rank": rng_states})
+                last_checkpoint_path = _checkpoint_synchronized(ddp_model, tokenizer, optimizer, optimizer_step, config, rank, world_size, device, {"manifest": [str(p) for p in manifest], "data_cursors_by_rank": cursors, "rng_states_by_rank": rng_states})
+                _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="checkpoint_complete", detail={"checkpoint": str(last_checkpoint_path) if last_checkpoint_path else None})
                 if last_checkpoint_path is not None:
                     last_checkpoint = str(last_checkpoint_path)
             if config.gate in {"D", "E"} and optimizer_step >= config.max_optimizer_steps:
                 break
         if config.gate == "FORMAL" and optimizer_step != DEFAULT_FORMAL_OPTIMIZER_STEPS:
             raise RuntimeError(f"FORMAL stopped at {optimizer_step}, expected {DEFAULT_FORMAL_OPTIMIZER_STEPS}")
-        report.update({"status": "PASS", "configuration": asdict(config), "optimizer_steps": optimizer_step, "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS, "warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS, "metrics": metrics, "manifest": [str(p) for p in manifest], "data_cursors_by_rank": {str(rank): stream_obj.cursor() if stream_obj is not None else {"synthetic": True}}, "optimizer_group_audit": optimizer_group_audit, "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest", "checkpoint_retention": config.checkpoint_retention, "final_checkpoint": last_checkpoint, "logical_to_physical": list(LOGICAL_TO_PHYSICAL), "memory_slots": MEMORY_SLOT_COUNT, "use_cache": False})
+        report.update({"status": "PASS", "configuration": asdict(config), "optimizer_steps": optimizer_step, "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS, "warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS, "metrics": metrics, "manifest": [str(p) for p in manifest], "data_cursors_by_rank": {str(rank): stream_obj.cursor() if stream_obj is not None else {"synthetic": True}}, "optimizer_group_audit": optimizer_group_audit, "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest", "checkpoint_retention": config.checkpoint_retention, "final_checkpoint": last_checkpoint, "logical_to_physical": list(LOGICAL_TO_PHYSICAL), "memory_slots": MEMORY_SLOT_COUNT, "use_cache": False, "ddp_broadcast_buffers": False, "diagnostics_dir": str(_diagnostic_dir(config))})
     except Exception as exc:
         report["hard_failures"].append({"error": repr(exc), "traceback": traceback.format_exc()})
+        try:
+            _failure_diagnostic(config, rank=rank, device=device, exc=exc)
+            _heartbeat(config, rank=rank, device=device, optimizer_step=locals().get("optimizer_step", 0), phase="failure", detail={"error": repr(exc)})
+        except Exception:
+            pass
     finally:
         if dist.is_initialized():
             dist.destroy_process_group()
