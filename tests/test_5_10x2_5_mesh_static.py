@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -133,6 +134,28 @@ class MeshStaticContractTest(unittest.TestCase):
         self.assertIn("docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1", self.shell)
         self.assertIn("-c 32 -m 256G -g 8", self.shell)
         self.assertIn("stage4_5_10x2_5_mesh", self.shell)
+
+    def test_stage4_parquet_directory_contract(self):
+        expected = "/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data"
+        self.assertIn(f'DATA_ROOT_DEFAULT = Path("{expected}")', self.train)
+        self.assertIn(expected, self.shell)
+        self.assertIn('nested_data = data_dir / "data"', self.train)
+        self.assertIn('candidate.glob("*.parquet")', self.train)
+        self.assertIn("no parquet shards found; checked:", self.train)
+
+        tree = ast.parse(self.train)
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_manifest")
+        namespace = {"Path": Path}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(TRAIN), "exec"), namespace)
+        manifest = namespace["_manifest"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = root / "data"
+            nested.mkdir()
+            shard = nested / "000.parquet"
+            shard.touch()
+            self.assertEqual(manifest(root), [shard])
+            self.assertEqual(manifest(nested), [shard])
 
 
 if __name__ == "__main__":

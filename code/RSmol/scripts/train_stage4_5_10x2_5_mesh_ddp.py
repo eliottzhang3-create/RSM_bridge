@@ -39,7 +39,7 @@ from recursive_model_5_10x2_5_mesh import (  # noqa: E402
 )
 
 MODEL_ARCHITECTURE_CONTRACT = "logical_30_physical_20_5_10x2_5_mesh"
-DATA_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset")
+DATA_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data")
 OUTPUT_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh")
 DEFAULT_WORLD_SIZE = 8
 DEFAULT_MICRO_BATCH_SIZE = 8
@@ -152,9 +152,23 @@ def _seed(seed: int, rank: int) -> None:
 
 
 def _manifest(data_dir: Path) -> list[Path]:
-    paths = sorted(data_dir.glob("*.parquet"))
+    candidates = [data_dir]
+    nested_data = data_dir / "data"
+    if nested_data != data_dir:
+        candidates.append(nested_data)
+    selected_dir: Path | None = None
+    paths: list[Path] = []
+    for candidate in candidates:
+        candidate_paths = sorted(candidate.glob("*.parquet"))
+        if candidate_paths:
+            selected_dir = candidate
+            paths = candidate_paths
+            break
     if not paths:
-        raise FileNotFoundError(f"no parquet shards under {data_dir}")
+        checked = ", ".join(str(path) for path in candidates)
+        raise FileNotFoundError(f"no parquet shards found; checked: {checked}")
+    if selected_dir is None:
+        raise AssertionError("manifest selected directory was not recorded")
     return paths
 
 

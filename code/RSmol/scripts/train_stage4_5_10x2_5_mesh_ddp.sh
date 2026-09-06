@@ -10,7 +10,7 @@ export PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false HF_HUB_OFFLINE=1 TRANSFOR
 GATE="${RSMOL_5_10X2_5_MESH_STAGE4_GATE:-D}"
 WORLD_SIZE="${RSMOL_5_10X2_5_MESH_WORLD_SIZE:-8}"
 MODEL="${RSMOL_5_10X2_5_MESH_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x2-5-mesh}"
-DATA="${RSMOL_5_10X2_5_MESH_DATA_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset}"
+DATA="${RSMOL_5_10X2_5_MESH_DATA_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data}"
 OUTPUT="${RSMOL_5_10X2_5_MESH_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/$(date +%Y%m%d_%H%M%S)}"
 if [[ "$GATE" == "FORMAL" && "$WORLD_SIZE" != "8" ]]; then echo "FORMAL requires WORLD_SIZE=8" >&2; exit 2; fi
 if [[ "$GATE" == "FORMAL" ]]; then
