@@ -134,6 +134,9 @@ class MeshStaticContractTest(unittest.TestCase):
         self.assertIn("docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1", self.shell)
         self.assertIn("-c 32 -m 256G -g 8", self.shell)
         self.assertIn("stage4_5_10x2_5_mesh", self.shell)
+        submit_wrapper = (ROOT / "code" / "RSmol" / "run_stage4_5_10x2_5_mesh_3090.sh").read_text(encoding="utf-8")
+        for marker in ("REMOTE_CMD", "vc submit", "RSMOL_5_10X2_5_MESH_STAGE4_GATE", "RSMOL_5_10X2_5_MESH_RESUME_FROM", 'printf -v quoted_value \'%q\''):
+            self.assertIn(marker, submit_wrapper)
 
     def test_stage4_parquet_directory_contract(self):
         expected = "/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data"
