@@ -51,6 +51,7 @@ DEFAULT_MAX_LR = 8e-4
 DEFAULT_MIN_LR = 8e-5
 DEFAULT_SAVE_EVERY = 500
 DEFAULT_CHECKPOINT_RETENTION = 3
+DEFAULT_LOG_INTERVAL_STEPS = 10
 DEFAULT_ADAMW_BETAS = (0.9, 0.95)
 DEFAULT_ADAMW_WEIGHT_DECAY = 0.1
 DEFAULT_ADAMW_EPS = 1e-8
@@ -238,6 +239,23 @@ def _set_lr(optimizer: torch.optim.Optimizer, value: float) -> None:
         group["lr"] = value
 
 
+def _runtime_memory_stats(device: torch.device) -> dict[str, float | None]:
+    if device.type != "cuda":
+        return {
+            "gpu_memory_allocated_gib": None,
+            "gpu_memory_reserved_gib": None,
+            "gpu_max_memory_allocated_gib": None,
+            "gpu_max_memory_reserved_gib": None,
+        }
+    gib = float(1024 ** 3)
+    return {
+        "gpu_memory_allocated_gib": float(torch.cuda.memory_allocated(device) / gib),
+        "gpu_memory_reserved_gib": float(torch.cuda.memory_reserved(device) / gib),
+        "gpu_max_memory_allocated_gib": float(torch.cuda.max_memory_allocated(device) / gib),
+        "gpu_max_memory_reserved_gib": float(torch.cuda.max_memory_reserved(device) / gib),
+    }
+
+
 def _optimizer(model: torch.nn.Module, config: Stage4Config) -> tuple[torch.optim.Optimizer, dict[str, Any]]:
     decay, no_decay = [], []
     for name, parameter in model.named_parameters():
@@ -358,6 +376,10 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         metrics: list[dict[str, Any]] = []
         last_checkpoint: str | None = None
         while optimizer_step < config.max_optimizer_steps:
+            if device.type == "cuda":
+                torch.cuda.reset_peak_memory_stats(device)
+                torch.cuda.synchronize(device)
+            step_start_time = time.perf_counter()
             optimizer.zero_grad(set_to_none=True)
             total_tokens = torch.zeros((), dtype=torch.float64, device=device)
             total_loss = torch.zeros((), dtype=torch.float64, device=device)
@@ -397,6 +419,11 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
             optimizer_step += 1
             _set_lr(optimizer, _cosine_lr(optimizer_step - 1, config))
             optimizer.step()
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            step_time_seconds = max(time.perf_counter() - step_start_time, 1e-9)
+            memory_stats = _runtime_memory_stats(device)
+            tokens_per_second = float(global_tokens.item()) / step_time_seconds
             routing_owner = ddp_model.module.model if hasattr(ddp_model, "module") else ddp_model.model
             router_stats = routing_owner.last_routing_stats
             routing_audit_due = optimizer_step == 1 or optimizer_step % 10 == 0 or optimizer_step == config.max_optimizer_steps
@@ -420,8 +447,25 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                             break
                 if not routing_audit_ok:
                     raise RuntimeError(routing_audit_error or "routing audit failed")
-            local_report = {"optimizer_step": optimizer_step, "loss": float(total_loss.item() / max(1, total_tokens.item())), "local_valid_tokens": int(total_tokens.item()), "global_valid_tokens": int(global_tokens.item()), "learning_rate": float(optimizer.param_groups[0]["lr"]), "grad_norm": float(grad_norm.item()), "router_parameters_in_optimizer": bool(optimizer_group_audit["router_parameters_in_optimizer"]), "routing_stats": {"memory_slots": MEMORY_SLOT_COUNT, "loss_auxiliary": False, "audit_due": routing_audit_due, "audit_passed": routing_audit_ok if routing_audit_due else None, "routers": router_stats}}
+            local_report = {"optimizer_step": optimizer_step, "loss": float(total_loss.item() / max(1, total_tokens.item())), "local_valid_tokens": int(total_tokens.item()), "global_valid_tokens": int(global_tokens.item()), "learning_rate": float(optimizer.param_groups[0]["lr"]), "grad_norm": float(grad_norm.item()), "step_time_seconds": step_time_seconds, "tokens_per_second": tokens_per_second, **memory_stats, "router_parameters_in_optimizer": bool(optimizer_group_audit["router_parameters_in_optimizer"]), "routing_stats": {"memory_slots": MEMORY_SLOT_COUNT, "loss_auxiliary": False, "audit_due": routing_audit_due, "audit_passed": routing_audit_ok if routing_audit_due else None, "routers": router_stats}}
             metrics.append(local_report)
+            log_due = optimizer_step % DEFAULT_LOG_INTERVAL_STEPS == 0 or optimizer_step == config.max_optimizer_steps
+            if rank == 0 and log_due:
+                print(
+                    "[train] "
+                    f"step={optimizer_step} "
+                    f"loss={local_report['loss']:.6f} "
+                    f"lr={local_report['learning_rate']:.8g} "
+                    f"global_tokens={local_report['global_valid_tokens']} "
+                    f"tok/s={local_report['tokens_per_second']:.2f} "
+                    f"step_s={local_report['step_time_seconds']:.3f} "
+                    f"grad_norm={local_report['grad_norm']:.4f} "
+                    f"gpu_alloc_gib={memory_stats['gpu_memory_allocated_gib'] if memory_stats['gpu_memory_allocated_gib'] is not None else 'NA'} "
+                    f"gpu_reserved_gib={memory_stats['gpu_memory_reserved_gib'] if memory_stats['gpu_memory_reserved_gib'] is not None else 'NA'} "
+                    f"gpu_max_alloc_gib={memory_stats['gpu_max_memory_allocated_gib'] if memory_stats['gpu_max_memory_allocated_gib'] is not None else 'NA'} "
+                    f"gpu_max_reserved_gib={memory_stats['gpu_max_memory_reserved_gib'] if memory_stats['gpu_max_memory_reserved_gib'] is not None else 'NA'}",
+                    flush=True,
+                )
             if optimizer_step % config.save_every == 0 or optimizer_step == config.max_optimizer_steps:
                 cursors = {str(rank): stream_obj.cursor()} if stream_obj is not None else {str(rank): {"synthetic": True}}
                 if world_size > 1:
