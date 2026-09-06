@@ -186,6 +186,33 @@ def _remap_key(key: str, source_kind: str, source_to_target: dict[int, int]) -> 
     return key if (key.startswith("model.") or key.startswith("lm_head.")) else None
 
 
+def _restore_tied_weight_aliases(remapped: dict[str, Any], target_state: dict[str, Any], source_config: Any) -> list[str]:
+    """Restore shared tensor aliases omitted by safe serialization."""
+
+    if not bool(getattr(source_config, "tie_word_embeddings", False)):
+        return []
+    embedding_key = "model.embed_tokens.weight"
+    lm_head_key = "lm_head.weight"
+    present_key: str | None = None
+    missing_key: str | None = None
+    if embedding_key in remapped and lm_head_key not in remapped:
+        present_key, missing_key = embedding_key, lm_head_key
+    elif lm_head_key in remapped and embedding_key not in remapped:
+        present_key, missing_key = lm_head_key, embedding_key
+    if present_key is None or missing_key is None:
+        return []
+    if present_key not in target_state or missing_key not in target_state:
+        raise ValueError("tied embedding/LM-head keys are absent from the target model")
+    source_tensor = remapped[present_key]
+    if tuple(source_tensor.shape) != tuple(target_state[missing_key].shape):
+        raise ValueError(
+            f"cannot restore tied weight {missing_key}: source shape={tuple(source_tensor.shape)} "
+            f"target shape={tuple(target_state[missing_key].shape)}"
+        )
+    remapped[missing_key] = source_tensor
+    return [missing_key]
+
+
 def _copy_tokenizer(source: Path, target: Path) -> list[str]:
     copied: list[str] = []
     for path in source.iterdir():
@@ -253,6 +280,7 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
         new_key = _remap_key(str(key), info["kind"], source_to_target)
         if new_key is not None and new_key in target_state:
             remapped[new_key] = value
+    restored_tied_weight_aliases = _restore_tied_weight_aliases(remapped, target_state, source_config)
     required_inherited = [key for key in target_state if not ("write_routers." in key or "read_routers." in key)]
     missing = sorted(set(required_inherited) - set(remapped))
     if missing:
@@ -274,6 +302,7 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
             "memory_slots": MEMORY_SLOT_COUNT, "router_parameter_count": ROUTER_PARAMETER_COUNT, "transition_query": "prefix_output", "embedding_scale": "disabled",
             "router_init": "truncated_normal_std_sqrt_2_over_5d_clamped_3std_bias_zero", "memory_persistent": False, "architectures": list(target_config.architectures),
             "parameter_audit": audit, "copied_tokenizer_files": copied, "seed": args.seed, "code_commit": git_commit(), "python": sys.version,
+            "restored_tied_weight_aliases": restored_tied_weight_aliases,
             "platform": platform.platform(), "torch": torch.__version__, "transformers": _package_version("transformers"), "conversion_time_utc": datetime.now(timezone.utc).isoformat(),
         }
         (staging / "mesh_conversion_metadata.json").write_text(json.dumps(_json_safe(metadata), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

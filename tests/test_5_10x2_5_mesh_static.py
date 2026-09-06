@@ -77,6 +77,41 @@ class MeshStaticContractTest(unittest.TestCase):
         self.assertIn("DEFAULT_OUTPUT_DIR = Path(\"/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x2-5-mesh\")", self.converter)
         self.assertIn("safe_serialization=True", self.converter)
 
+    def test_converter_restores_only_declared_tied_weight_aliases(self):
+        for marker in ("_restore_tied_weight_aliases", "tie_word_embeddings", "model.embed_tokens.weight", "lm_head.weight", "restored_tied_weight_aliases"):
+            self.assertIn(marker, self.converter)
+        self.assertIn('if not bool(getattr(source_config, "tie_word_embeddings", False)):', self.converter)
+        self.assertIn("if tuple(source_tensor.shape) != tuple(target_state[missing_key].shape):", self.converter)
+
+        tree = ast.parse(self.converter)
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_restore_tied_weight_aliases")
+        namespace = {"Any": object}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(CONVERTER), "exec"), namespace)
+        restore = namespace["_restore_tied_weight_aliases"]
+
+        class Tensor:
+            def __init__(self, shape):
+                self.shape = shape
+
+        class Config:
+            tie_word_embeddings = True
+
+        embedding = Tensor((16, 8))
+        target = {"model.embed_tokens.weight": Tensor((16, 8)), "lm_head.weight": Tensor((16, 8))}
+        remapped = {"model.embed_tokens.weight": embedding}
+        self.assertEqual(restore(remapped, target, Config()), ["lm_head.weight"])
+        self.assertIs(remapped["lm_head.weight"], embedding)
+
+        Config.tie_word_embeddings = False
+        untied = {"model.embed_tokens.weight": embedding}
+        self.assertEqual(restore(untied, target, Config()), [])
+        self.assertNotIn("lm_head.weight", untied)
+
+        Config.tie_word_embeddings = True
+        mismatched_target = {"model.embed_tokens.weight": Tensor((16, 8)), "lm_head.weight": Tensor((17, 8))}
+        with self.assertRaisesRegex(ValueError, "cannot restore tied weight"):
+            restore({"model.embed_tokens.weight": embedding}, mismatched_target, Config())
+
     def test_stage1_contract(self):
         self.assertIn("torch.cuda.is_available", self.audit)
         for marker in ("memory_shape", "six_router_outputs", "slot_sum_one", "physical_trace_5_10_10_5", "logical_cache_slots_0_29", "prefill_incremental_logits_close", "six_router_gradients", "save_reload_logits_close", "memory_not_serialized", "report_path"):
