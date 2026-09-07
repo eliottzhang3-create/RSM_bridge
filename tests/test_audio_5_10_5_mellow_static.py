@@ -92,6 +92,61 @@ class AudioMellowStaticContractTest(unittest.TestCase):
             self.assertEqual(row["caption2"], "two")
             self.assertIn("cross_root_duplicate_basenames", report["index"])
 
+    def test_clotho_v21_normalized_filename_mapping_is_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # Simulate the v2.1 filesystem-safe spelling of a historical AQA
+            # filename containing punctuation.  The resolver must accept the
+            # normalized one-to-one match only for a Clotho task.
+            audio = root / "development" / "steel_works_far.wav"
+            audio.parent.mkdir(parents=True)
+            audio.write_bytes(b"x")
+            splits = {}
+            for split in ("train", "val", "test"):
+                source = root / f"{split}.json"
+                source.write_text(
+                    json.dumps(
+                        [{
+                            "filepath1": "ClothoAQA\\audio_files\\steel:works far.wav",
+                            "filepath2": "",
+                            "taskname": "clotho_aqa_train",
+                        }]
+                    ),
+                    encoding="utf-8",
+                )
+                splits[split] = source
+            manifests, report = self.manifest.build_reasonaqa_manifests(
+                splits, (root,), allow_missing=False
+            )
+            row = manifests["train"][0]
+            self.assertEqual(row["audio1_path"], str(audio.resolve()))
+            self.assertEqual(row["audio1_resolution"]["method"], "clotho_v21_normalized_basename")
+            self.assertEqual(report["status"], "PASS")
+
+    def test_clotho_v21_split_path_alias_resolves_unique_split(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "clotho_v2_1"
+            audio = root / "development" / "City Ambience w_ Car Passing_1-2.wav"
+            audio.parent.mkdir(parents=True)
+            audio.write_bytes(b"x")
+            splits = {}
+            for split in ("train", "val", "test"):
+                source = Path(temporary) / f"{split}.json"
+                source.write_text(
+                    json.dumps([{
+                        "filepath1": "ClothoV21/development/City Ambience w_ Car Passing_1-2.wav",
+                        "filepath2": "",
+                        "taskname": "clotho_v21",
+                    }]),
+                    encoding="utf-8",
+                )
+                splits[split] = source
+            manifests, report = self.manifest.build_reasonaqa_manifests(
+                splits, (root,), allow_missing=False
+            )
+            self.assertEqual(manifests["train"][0]["audio1_path"], str(audio.resolve()))
+            self.assertEqual(report["status"], "PASS")
+
     def test_source_contracts_are_isolated_and_cpu_or_cuda_explicit(self) -> None:
         for source in (STAGE0, PREPARE, STAGE1, STAGE2):
             self.assertIn("5_10_5_mellow", source.name)

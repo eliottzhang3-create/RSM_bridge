@@ -25,7 +25,7 @@ from audio_5_10_5_mellow.manifest import (  # noqa: E402
 
 DEFAULT_REASONAQA_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/reasonaqa"
 DEFAULT_AUDIOCAPS_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2"
-DEFAULT_CLOTHO_AUDIO_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2/audio"
+DEFAULT_CLOTHO_AUDIO_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

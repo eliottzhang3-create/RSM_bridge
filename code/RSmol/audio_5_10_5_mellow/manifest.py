@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -103,6 +104,30 @@ def _path_key(path: Path) -> str:
     return str(path).replace("\\", "/").lower()
 
 
+def _clotho_filename_key(value: Any) -> str:
+    """Return a deterministic Clotho-v2.1-compatible basename key.
+
+    Clotho-AQA annotations retain the historical ``ClothoAQA/audio_files``
+    namespace, while Clotho v2.1 repaired some Unicode and filesystem-illegal
+    punctuation.  This key is intentionally conservative and is accepted only
+    when it selects exactly one file; it is not a fuzzy similarity match.
+    """
+
+    text = str(value).replace("\\", "/").rsplit("/", 1)[-1].strip()
+    text = unicodedata.normalize("NFKC", text).casefold()
+    suffix = Path(text).suffix.casefold()
+    stem = text[: -len(suffix)] if suffix else text
+    # Ignore separator style altogether.  The v2.1 archives and historical
+    # Clotho-AQA annotations differ in spaces/underscores/punctuation for some
+    # filenames (for example ``steel:works far`` vs ``steel_works_far``).
+    stem = re.sub(r"[^a-z0-9]+", "", stem)
+    return f"{stem}{suffix}"
+
+
+def _path_component_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).casefold())
+
+
 def build_audio_index(roots: Sequence[Path]) -> dict[str, Any]:
     """Build exact, basename, and stem indexes with deterministic ordering."""
 
@@ -124,12 +149,14 @@ def build_audio_index(roots: Sequence[Path]) -> dict[str, Any]:
     by_basename: dict[str, list[str]] = {}
     by_stem: dict[str, list[str]] = {}
     by_name: dict[str, list[str]] = {}
+    by_clotho_filename: dict[str, list[str]] = {}
     path_roots: dict[str, str] = {}
     for path in files:
         path_string = str(path)
         by_basename.setdefault(path.name.lower(), []).append(path_string)
         by_stem.setdefault(path.stem.lower(), []).append(path_string)
         by_name.setdefault(path.name.lower(), []).append(path_string)
+        by_clotho_filename.setdefault(_clotho_filename_key(path.name), []).append(path_string)
         owners = [str(root) for root in roots if _path_key(path).startswith(_path_key(Path(root).resolve()) + "/")]
         path_roots[path_string] = owners[0] if owners else "<unknown>"
     duplicates = {
@@ -143,6 +170,7 @@ def build_audio_index(roots: Sequence[Path]) -> dict[str, Any]:
         "by_basename": by_basename,
         "by_stem": by_stem,
         "by_name": by_name,
+        "by_clotho_filename": by_clotho_filename,
         "path_roots": path_roots,
         "duplicate_basenames": duplicates,
         "cross_root_duplicate_basenames": {
@@ -199,6 +227,14 @@ def _suffix_match(requested: str, candidate: Path) -> bool:
     return candidate_text == request or candidate_text.endswith("/" + request)
 
 
+def _clotho_suffix_match(requested: str, candidate: Path) -> bool:
+    request_parts = [_path_component_key(part) for part in requested.replace("\\", "/").split("/") if part]
+    candidate_parts = [_path_component_key(part) for part in str(candidate).replace("\\", "/").split("/") if part]
+    if not request_parts or len(candidate_parts) < len(request_parts):
+        return False
+    return candidate_parts[-len(request_parts):] == request_parts
+
+
 def resolve_audio_path(raw_value: Any, index: Mapping[str, Any], *, preferred_tokens: Sequence[str] = ()) -> dict[str, Any]:
     """Resolve one filepath deterministically, retaining all ambiguity detail."""
 
@@ -225,6 +261,22 @@ def resolve_audio_path(raw_value: Any, index: Mapping[str, Any], *, preferred_to
         return {"status": "resolved", "raw": requested, "path": str(exact_suffix[0]), "method": "relative_suffix"}
     if len(exact_suffix) > 1:
         return {"status": "ambiguous", "raw": requested, "candidates": [str(item) for item in exact_suffix], "method": "relative_suffix"}
+    if any(token == "clotho" for token in preferred):
+        normalized_suffix = [item for item in basename_candidates if _clotho_suffix_match(requested, item)]
+        if len(normalized_suffix) == 1:
+            return {
+                "status": "resolved",
+                "raw": requested,
+                "path": str(normalized_suffix[0]),
+                "method": "clotho_v21_normalized_relative_suffix",
+            }
+        if len(normalized_suffix) > 1:
+            return {
+                "status": "ambiguous",
+                "raw": requested,
+                "candidates": [str(item) for item in normalized_suffix],
+                "method": "clotho_v21_normalized_relative_suffix",
+            }
     if len(basename_candidates) == 1:
         return {"status": "resolved", "raw": requested, "path": str(basename_candidates[0]), "method": "basename"}
     if len(basename_candidates) > 1:
@@ -232,6 +284,30 @@ def resolve_audio_path(raw_value: Any, index: Mapping[str, Any], *, preferred_to
         if len(stem_candidates) == 1:
             return {"status": "resolved", "raw": requested, "path": str(stem_candidates[0]), "method": "unique_stem_after_duplicate_basename"}
         return {"status": "ambiguous", "raw": requested, "candidates": [str(item) for item in basename_candidates], "method": "basename"}
+    # ReasonAQA's Clotho-AQA rows retain historical filenames.  Clotho v2.1
+    # repaired a small number of Unicode/filesystem-illegal characters, so an
+    # exact basename lookup can miss the same clip.  Resolve through the
+    # normalized v2.1 key only for Clotho tasks, and never choose among two
+    # candidates silently.
+    if any(token == "clotho" for token in preferred):
+        clotho_key = _clotho_filename_key(requested)
+        compat_candidates = prefer(
+            [Path(item) for item in index.get("by_clotho_filename", {}).get(clotho_key, [])]
+        )
+        if len(compat_candidates) == 1:
+            return {
+                "status": "resolved",
+                "raw": requested,
+                "path": str(compat_candidates[0]),
+                "method": "clotho_v21_normalized_basename",
+            }
+        if len(compat_candidates) > 1:
+            return {
+                "status": "ambiguous",
+                "raw": requested,
+                "candidates": [str(item) for item in compat_candidates],
+                "method": "clotho_v21_normalized_basename",
+            }
     stem_candidates = prefer([Path(item) for item in index.get("by_stem", {}).get(stem, [])])
     if len(stem_candidates) == 1:
         return {"status": "resolved", "raw": requested, "path": str(stem_candidates[0]), "method": "stem"}
@@ -298,7 +374,11 @@ def build_reasonaqa_manifests(
         "stage": "stage1_reasonaqa_manifest_5_10_5_mellow",
         "status": "PASS",
         "allow_missing": bool(allow_missing),
-        "index": {key: value for key, value in index.items() if key not in {"files", "by_basename", "by_stem", "by_name"}},
+        "index": {
+            key: value
+            for key, value in index.items()
+            if key not in {"files", "by_basename", "by_stem", "by_name", "by_clotho_filename"}
+        },
         "splits": {},
         "counts": {"records": 0, "resolved": 0, "missing": 0, "ambiguous": 0, "invalid": 0, "duplicate_audio2": 0, "audio2_reused": 0},
         "task_distribution": {},

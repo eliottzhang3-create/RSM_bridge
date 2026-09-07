@@ -25,7 +25,7 @@ fail unless `--allow-missing` is explicitly supplied:
 python code/RSmol/scripts/prepare_reasonaqa_manifest_5_10_5_mellow.py \
   --reasonaqa-root /hpc_stor03/sjtu_home/jinwei.zhang/data/reasonaqa \
   --audiocaps-root /hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2 \
-  --clotho-audio-root /hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2/audio \
+  --clotho-audio-root /hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1 \
   --output-dir /tmp/reasonaqa-manifest
 ```
 
