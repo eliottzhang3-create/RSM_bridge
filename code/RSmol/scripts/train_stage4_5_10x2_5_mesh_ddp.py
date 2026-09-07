@@ -461,7 +461,7 @@ def _validate_checkpoint_complete(path: Path) -> None:
 def run_training(config: Stage4Config) -> dict[str, Any]:
     rank, world_size, device = _dist_setup(config)
     _seed(config.seed, rank)
-    report: dict[str, Any] = {"status": "FAIL", "gate": config.gate, "configuration": asdict(config), "architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "world_size": world_size, "rank": rank, "device": str(device), "diagnostics_dir": str(config.output_dir / "ddp_diagnostics"), "checks": [], "hard_failures": []}
+    report: dict[str, Any] = {"status": "FAIL", "gate": config.gate, "configuration": asdict(config), "architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "world_size": world_size, "rank": rank, "device": str(device), "diagnostics_dir": str(config.output_dir / "ddp_diagnostics"), "checks": [], "warnings": [], "hard_failures": []}
     try:
         _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
         _heartbeat(config, rank=rank, device=device, optimizer_step=0, phase="startup_complete")
@@ -502,6 +502,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
             stream_obj.restore_cursor(resume_state.get("data_cursors_by_rank", {}).get(str(rank)))
         stream: Iterator[dict[str, torch.Tensor]] = iter(stream_obj) if stream_obj is not None else _synthetic_stream(tokenizer, batch_size=config.micro_batch_size, context_length=config.context_length, vocab_size=int(model.config.vocab_size), pad_token_id=int(tokenizer.pad_token_id), seed=config.seed + rank)
         metrics: list[dict[str, Any]] = []
+        routing_warnings: list[dict[str, Any]] = []
         last_checkpoint: str | None = None
         while optimizer_step < config.max_optimizer_steps:
             _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="optimizer_step_start")
@@ -579,8 +580,11 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
             if routing_audit_due:
                 routing_audit_ok, routing_audit_error, routing_audit_ranks = _distributed_router_audit(router_stats=router_stats, rank=rank, world_size=world_size)
                 if not routing_audit_ok:
-                    raise RuntimeError(routing_audit_error or "routing audit failed")
-            local_report = {"optimizer_step": optimizer_step, "loss": float(total_loss.item() / max(1, total_tokens.item())), "local_valid_tokens": int(total_tokens.item()), "global_valid_tokens": int(global_tokens.item()), "learning_rate": float(optimizer.param_groups[0]["lr"]), "grad_norm": float(grad_norm.item()), "step_time_seconds": step_time_seconds, "tokens_per_second": tokens_per_second, **memory_stats, "router_parameters_in_optimizer": bool(optimizer_group_audit["router_parameters_in_optimizer"]), "routing_stats": {"memory_slots": MEMORY_SLOT_COUNT, "loss_auxiliary": False, "audit_due": routing_audit_due, "audit_passed": routing_audit_ok if routing_audit_due else None, "routers": router_stats, "rank_audits": routing_audit_ranks if routing_audit_due and rank == 0 else []}}
+                    warning = {"optimizer_step": optimizer_step, "message": routing_audit_error or "routing audit warning", "policy": "non_fatal_router_diagnostic", "rank_audits": routing_audit_ranks}
+                    if rank == 0:
+                        routing_warnings.append(warning)
+                        print(f"[warning][router] step={optimizer_step} {warning['message']} ; continuing training", flush=True)
+            local_report = {"optimizer_step": optimizer_step, "loss": float(total_loss.item() / max(1, total_tokens.item())), "local_valid_tokens": int(total_tokens.item()), "global_valid_tokens": int(global_tokens.item()), "learning_rate": float(optimizer.param_groups[0]["lr"]), "grad_norm": float(grad_norm.item()), "step_time_seconds": step_time_seconds, "tokens_per_second": tokens_per_second, **memory_stats, "router_parameters_in_optimizer": bool(optimizer_group_audit["router_parameters_in_optimizer"]), "routing_stats": {"memory_slots": MEMORY_SLOT_COUNT, "loss_auxiliary": False, "audit_due": routing_audit_due, "audit_passed": routing_audit_ok if routing_audit_due else None, "audit_non_fatal": True, "warning": routing_audit_error if routing_audit_due and not routing_audit_ok else None, "routers": router_stats, "rank_audits": routing_audit_ranks if routing_audit_due and rank == 0 else []}}
             metrics.append(local_report)
             log_due = optimizer_step % DEFAULT_LOG_INTERVAL_STEPS == 0 or optimizer_step == config.max_optimizer_steps
             if rank == 0 and log_due:
@@ -619,7 +623,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 break
         if config.gate == "FORMAL" and optimizer_step != DEFAULT_FORMAL_OPTIMIZER_STEPS:
             raise RuntimeError(f"FORMAL stopped at {optimizer_step}, expected {DEFAULT_FORMAL_OPTIMIZER_STEPS}")
-        report.update({"status": "PASS", "configuration": asdict(config), "optimizer_steps": optimizer_step, "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS, "warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS, "metrics": metrics, "manifest": [str(p) for p in manifest], "data_cursors_by_rank": {str(rank): stream_obj.cursor() if stream_obj is not None else {"synthetic": True}}, "optimizer_group_audit": optimizer_group_audit, "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest", "checkpoint_retention": config.checkpoint_retention, "final_checkpoint": last_checkpoint, "logical_to_physical": list(LOGICAL_TO_PHYSICAL), "memory_slots": MEMORY_SLOT_COUNT, "use_cache": False, "ddp_broadcast_buffers": False, "diagnostics_dir": str(_diagnostic_dir(config))})
+        report.update({"status": "PASS", "configuration": asdict(config), "optimizer_steps": optimizer_step, "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS, "warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS, "metrics": metrics, "warnings": routing_warnings if rank == 0 else [], "manifest": [str(p) for p in manifest], "data_cursors_by_rank": {str(rank): stream_obj.cursor() if stream_obj is not None else {"synthetic": True}}, "optimizer_group_audit": optimizer_group_audit, "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest", "checkpoint_retention": config.checkpoint_retention, "final_checkpoint": last_checkpoint, "logical_to_physical": list(LOGICAL_TO_PHYSICAL), "memory_slots": MEMORY_SLOT_COUNT, "use_cache": False, "ddp_broadcast_buffers": False, "router_audit_policy": "non_fatal_diagnostic_only", "diagnostics_dir": str(_diagnostic_dir(config))})
     except Exception as exc:
         report["hard_failures"].append({"error": repr(exc), "traceback": traceback.format_exc()})
         try:

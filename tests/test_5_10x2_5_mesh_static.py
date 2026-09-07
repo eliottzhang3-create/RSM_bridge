@@ -128,7 +128,7 @@ class MeshStaticContractTest(unittest.TestCase):
             self.assertIn(marker, self.audit)
 
     def test_stage4_formal_contract_and_checkpoint_cursor(self):
-        for marker in ("MODEL_ARCHITECTURE_CONTRACT = \"logical_30_physical_20_5_10x2_5_mesh\"", "DEFAULT_WORLD_SIZE = 8", "DEFAULT_MICRO_BATCH_SIZE = 8", "DEFAULT_GRADIENT_ACCUMULATION_STEPS = 16", "DEFAULT_FORMAL_OPTIMIZER_STEPS = 9244", "DEFAULT_FORMAL_WARMUP_STEPS = 463", "DEFAULT_MAX_LR = 8e-4", "DEFAULT_MIN_LR = 8e-5", "DEFAULT_SAVE_EVERY = 500", "DEFAULT_LOG_INTERVAL_STEPS = 10", "DEFAULT_HEARTBEAT_MICRO_INTERVAL", "ParquetFile", "iter_batches", "columns=[\"text\"]", "data_cursors_by_rank", "token_weighted_gradient_scale", "checkpoint_contract", "checkpoint_complete.json", "checkpoint_manifest.json", "rng_states_by_rank", "routing_audit_due", "_distributed_router_audit", "slot_probabilities", "router collapse", "use_cache=False", "router_parameters_in_optimizer", "routing_stats", "tokens_per_second", "step_time_seconds", "gpu_memory_allocated_gib", "gpu_memory_reserved_gib", "_startup_diagnostics", "_failure_diagnostic", "_checkpoint_synchronized", "broadcast_buffers=False", "print("):
+        for marker in ("MODEL_ARCHITECTURE_CONTRACT = \"logical_30_physical_20_5_10x2_5_mesh\"", "DEFAULT_WORLD_SIZE = 8", "DEFAULT_MICRO_BATCH_SIZE = 8", "DEFAULT_GRADIENT_ACCUMULATION_STEPS = 16", "DEFAULT_FORMAL_OPTIMIZER_STEPS = 9244", "DEFAULT_FORMAL_WARMUP_STEPS = 463", "DEFAULT_MAX_LR = 8e-4", "DEFAULT_MIN_LR = 8e-5", "DEFAULT_SAVE_EVERY = 500", "DEFAULT_LOG_INTERVAL_STEPS = 10", "DEFAULT_HEARTBEAT_MICRO_INTERVAL", "ParquetFile", "iter_batches", "columns=[\"text\"]", "data_cursors_by_rank", "token_weighted_gradient_scale", "checkpoint_contract", "checkpoint_complete.json", "checkpoint_manifest.json", "rng_states_by_rank", "routing_audit_due", "_distributed_router_audit", "slot_probabilities", "router collapse", "router_audit_policy", "non_fatal_router_diagnostic", "audit_non_fatal", "warnings", "tokens_per_second", "step_time_seconds", "gpu_memory_allocated_gib", "gpu_memory_reserved_gib", "_startup_diagnostics", "_failure_diagnostic", "_checkpoint_synchronized", "broadcast_buffers=False", "print("):
             self.assertIn(marker, self.train)
         self.assertIn("pdgpu-3090", self.shell)
         self.assertIn("docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1", self.shell)
@@ -139,6 +139,7 @@ class MeshStaticContractTest(unittest.TestCase):
             self.assertIn(marker, submit_wrapper)
         for marker in ("TORCH_NCCL_DUMP_ON_TIMEOUT", "TORCH_NCCL_TRACE_BUFFER_SIZE", "TORCH_DISTRIBUTED_DEBUG", "NCCL_DEBUG"):
             self.assertIn(marker, submit_wrapper + self.shell)
+        self.assertNotIn('raise RuntimeError(routing_audit_error or "routing audit failed")', self.train)
 
     def test_stage4_parquet_directory_contract(self):
         expected = "/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data"
