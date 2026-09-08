@@ -134,6 +134,28 @@ def _module_candidates(root: Path, implementation: str) -> list[tuple[str, Path 
     return result
 
 
+def _module_is_within(module: types.ModuleType, root: Path) -> bool:
+    source = getattr(module, "__file__", None)
+    if not source:
+        return False
+    try:
+        Path(source).resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _evict_foreign_module(import_name: str, root: Path) -> None:
+    """Remove cached import aliases that resolve outside the requested tree."""
+
+    parts = import_name.split(".")
+    names = [".".join(parts[:index]) for index in range(1, len(parts) + 1)]
+    for name in reversed(names):
+        cached = sys.modules.get(name)
+        if cached is not None and not _module_is_within(cached, root):
+            del sys.modules[name]
+
+
 def _import_module(root: Path, name: str, path: Path | None) -> tuple[types.ModuleType, str]:
     root_string = str(root.resolve())
     if root_string not in sys.path:
@@ -146,7 +168,14 @@ def _import_module(root: Path, name: str, path: Path | None) -> tuple[types.Modu
     import_names = [name, name.lower(), f"model.{name.lower()}", f"models.{name.lower()}", f"mellow.{name.lower()}"]
     for import_name in import_names:
         try:
+            _evict_foreign_module(import_name, root)
+            importlib.invalidate_caches()
             module = importlib.import_module(import_name)
+            if not _module_is_within(module, root):
+                raise ImportError(
+                    f"resolved outside requested root {root}: "
+                    f"{getattr(module, '__file__', '<unknown>')}"
+                )
             return module, str(getattr(module, "__file__", import_name))
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{import_name}: {type(exc).__name__}: {exc}")
@@ -159,6 +188,11 @@ def _import_module(root: Path, name: str, path: Path | None) -> tuple[types.Modu
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
             spec.loader.exec_module(module)
+            if not _module_is_within(module, root):
+                raise ImportError(
+                    f"loaded path outside requested root {root}: "
+                    f"{getattr(module, '__file__', '<unknown>')}"
+                )
             return module, str(path)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{path}: {type(exc).__name__}: {exc}")
@@ -241,8 +275,16 @@ def _construct_mellow_wrapper(wrapper_cls: type[Any], backbone_cls: type[Any] | 
     """Build the explicit Mellow wrapper and its configured HTSAT child."""
 
     config = _htsat_config()
-    backbone = _construct_official_model(backbone_cls) if backbone_cls is not None else None
     signature = inspect.signature(wrapper_cls)
+    injectable_backbone_names = {"htsat", "sed_model", "backbone"}
+    needs_injected_backbone = any(
+        name in signature.parameters for name in injectable_backbone_names
+    )
+    backbone = (
+        _construct_official_model(backbone_cls)
+        if backbone_cls is not None and needs_injected_backbone
+        else None
+    )
     values: dict[str, Any] = {
         "htsat": backbone, "sed_model": backbone, "backbone": backbone,
         "config": config, "dataset": None,
@@ -260,7 +302,14 @@ def _construct_mellow_wrapper(wrapper_cls: type[Any], backbone_cls: type[Any] | 
         child = getattr(wrapper, "backbone", None)
     if child is None:
         raise AttributeError("HTSATWrapper has no htsat/sed_model/backbone child")
-    return wrapper, {"config": vars(config), "backbone_constructor": backbone_cls.__name__ if backbone_cls is not None else None, "wrapper_constructor_kwargs": sorted(kwargs)}
+    return wrapper, {
+        "config": vars(config),
+        "backbone_constructor": (
+            backbone_cls.__name__ if backbone_cls is not None and needs_injected_backbone else None
+        ),
+        "wrapper_constructor_kwargs": sorted(kwargs),
+        "wrapper_constructs_own_backbone": not needs_injected_backbone,
+    }
 
 
 def _state_dict(payload: Any) -> dict[str, Any]:

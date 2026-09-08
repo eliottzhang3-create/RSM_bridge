@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,10 +28,20 @@ def load_manifest():
     return module
 
 
+def load_stage2():
+    spec = importlib.util.spec_from_file_location("audio_stage2_static", STAGE2)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load Stage 2 module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class AudioMellowStaticContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.manifest = load_manifest()
+        cls.stage2 = load_stage2()
         cls.stage0_text = STAGE0.read_text(encoding="utf-8")
         cls.prepare_text = PREPARE.read_text(encoding="utf-8")
         cls.stage1_text = STAGE1.read_text(encoding="utf-8")
@@ -196,6 +207,56 @@ class AudioMellowStaticContractTest(unittest.TestCase):
         self.assertNotIn("random.choice", self.prepare_text + self.stage1_text)
         combined = self.stage0_text + self.prepare_text + self.stage1_text + self.stage2_text
         self.assertNotIn("recursive_model_5_10x2_5_mesh", combined)
+
+    def test_no_arg_mellow_wrapper_does_not_preconstruct_unused_backbone(self) -> None:
+        class ExplodingBackbone:
+            def __init__(self, **_kwargs):
+                raise AssertionError("unused backbone must not be constructed")
+
+        class Wrapper:
+            def __init__(self):
+                self.htsat = object()
+
+        wrapper, constructor = self.stage2._construct_mellow_wrapper(
+            Wrapper, ExplodingBackbone
+        )
+        self.assertIsNotNone(wrapper.htsat)
+        self.assertIsNone(constructor["backbone_constructor"])
+        self.assertTrue(constructor["wrapper_constructs_own_backbone"])
+
+    def test_foreign_cached_official_alias_is_evicted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            mellow_root = base / "mellow"
+            official_root = base / "official"
+            for root, origin in ((mellow_root, "mellow"), (official_root, "official")):
+                package = root / "model"
+                package.mkdir(parents=True)
+                (package / "__init__.py").write_text("", encoding="utf-8")
+                (package / "htsat.py").write_text(
+                    f"ORIGIN = {origin!r}\n", encoding="utf-8"
+                )
+
+            original_path = list(sys.path)
+            saved_modules = {
+                name: sys.modules.get(name) for name in ("model", "model.htsat")
+            }
+            try:
+                sys.path.insert(0, str(mellow_root))
+                foreign = __import__("model.htsat", fromlist=["*"])
+                self.assertEqual(foreign.ORIGIN, "mellow")
+                module, source = self.stage2._import_module(
+                    official_root, "model.htsat", official_root / "model" / "htsat.py"
+                )
+                self.assertEqual(module.ORIGIN, "official")
+                self.assertTrue(self.stage2._module_is_within(module, official_root))
+                self.assertTrue(str(official_root) in source)
+            finally:
+                sys.path[:] = original_path
+                for name, saved in saved_modules.items():
+                    sys.modules.pop(name, None)
+                    if saved is not None:
+                        sys.modules[name] = saved
 
     def test_cli_flags_and_reports_are_machine_readable(self) -> None:
         for source in (STAGE0, PREPARE, STAGE1, STAGE2):
