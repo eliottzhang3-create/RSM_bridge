@@ -41,10 +41,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", "--output_dir", type=Path, required=True)
     parser.add_argument("--report-path", "--report_path", type=Path)
     parser.add_argument("--manifest-path", "--manifest_path", type=Path, help="Optional combined JSONL path")
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", "--audit-only", action="store_true", help="Audit and hash, but do not write JSONL")
-    mode.add_argument("--write-manifest", action="store_true", help="Write split JSONL manifests (default when not dry-run)")
-    parser.add_argument("--allow-missing", action="store_true", help="Keep unresolved rows as warnings; default is fail-closed")
+    output_mode = parser.add_mutually_exclusive_group()
+    output_mode.add_argument("--dry-run", "--audit-only", action="store_true", help="Audit and hash, but do not write JSONL")
+    output_mode.add_argument("--write-manifest", action="store_true", help="Write split JSONL manifests (default when not dry-run)")
+    unresolved_mode = parser.add_mutually_exclusive_group()
+    unresolved_mode.add_argument("--allow-missing", action="store_true", help="Write unresolved rows with empty paths and report warnings")
+    unresolved_mode.add_argument("--drop-unresolved", action="store_true", help="Omit unresolved rows from manifests and report them as warnings")
     return parser.parse_args(argv)
 
 
@@ -86,6 +88,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "clotho_audio_root": str(args.clotho_audio_root),
             "clotho_aqa_audio_root": str(args.clotho_aqa_audio_root),
             "allow_missing": bool(args.allow_missing),
+            "drop_unresolved": bool(args.drop_unresolved),
             "waveform_loaded": False,
             "formal_world_size": 8,
             "formal_micro_batch_per_gpu": 4,
@@ -98,6 +101,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             _split_paths(args),
             (args.audiocaps_root, args.clotho_audio_root, args.clotho_aqa_audio_root),
             allow_missing=args.allow_missing,
+            drop_unresolved=args.drop_unresolved,
         )
         report.update(audit)
         report["status"] = audit["status"]

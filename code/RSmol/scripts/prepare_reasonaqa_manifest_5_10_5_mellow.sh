@@ -15,5 +15,9 @@ ARGS=(--output-dir "$OUTPUT_DIR")
 [[ -n "${RSMOL_REASONAQA_REPORT:-}" ]] && ARGS+=(--report-path "$RSMOL_REASONAQA_REPORT")
 [[ -n "${RSMOL_REASONAQA_COMBINED_MANIFEST:-}" ]] && ARGS+=(--manifest-path "$RSMOL_REASONAQA_COMBINED_MANIFEST")
 [[ "${RSMOL_REASONAQA_DRY_RUN:-0}" == "1" ]] && ARGS+=(--dry-run)
-[[ "${RSMOL_REASONAQA_ALLOW_MISSING:-0}" == "1" ]] && ARGS+=(--allow-missing)
+if [[ "${RSMOL_REASONAQA_ALLOW_MISSING:-0}" == "1" ]]; then
+  ARGS+=(--allow-missing)
+elif [[ "${RSMOL_REASONAQA_DROP_UNRESOLVED:-1}" == "1" ]]; then
+  ARGS+=(--drop-unresolved)
+fi
 python -u code/RSmol/scripts/prepare_reasonaqa_manifest_5_10_5_mellow.py "${ARGS[@]}"

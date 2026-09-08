@@ -18,8 +18,11 @@ python code/RSmol/scripts/audit_audio_stage0_5_10_5_mellow.py \
 Stage 1 builds deterministic JSONL manifests. An empty `filepath2` is always
 represented by the same resolved `filepath1`; each such row has
 `audio2_reused=true`, `audio2_source=filepath1_duplicate`, and
-`is_duplicate=true`. No random sampling is used. Missing or ambiguous paths
-fail unless `--allow-missing` is explicitly supplied:
+`is_duplicate=true`. No random sampling is used. The shell entry point uses
+`--drop-unresolved` by default: a row containing any unresolved audio path is
+omitted from every generated manifest and retained as a warning in the audit
+report. Direct Python invocation remains fail-closed unless
+`--drop-unresolved` or `--allow-missing` is explicitly supplied:
 
 ```bash
 python code/RSmol/scripts/prepare_reasonaqa_manifest_5_10_5_mellow.py \

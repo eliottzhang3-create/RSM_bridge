@@ -326,8 +326,12 @@ def build_reasonaqa_manifests(
     audio_roots: Sequence[Path],
     *,
     allow_missing: bool = False,
+    drop_unresolved: bool = False,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
     """Prepare all splits and return rows plus a detailed audit report."""
+
+    if allow_missing and drop_unresolved:
+        raise ManifestAuditError("allow_missing and drop_unresolved are mutually exclusive")
 
     index = build_audio_index(audio_roots)
     manifests: dict[str, list[dict[str, Any]]] = {}
@@ -335,13 +339,14 @@ def build_reasonaqa_manifests(
         "stage": "stage1_reasonaqa_manifest_5_10_5_mellow",
         "status": "PASS",
         "allow_missing": bool(allow_missing),
+        "drop_unresolved": bool(drop_unresolved),
         "index": {
             key: value
             for key, value in index.items()
             if key not in {"files", "by_basename", "by_stem", "by_name"}
         },
         "splits": {},
-        "counts": {"records": 0, "resolved": 0, "missing": 0, "ambiguous": 0, "invalid": 0, "duplicate_audio2": 0, "audio2_reused": 0},
+        "counts": {"records": 0, "written_records": 0, "dropped_records": 0, "resolved": 0, "missing": 0, "ambiguous": 0, "invalid": 0, "duplicate_audio2": 0, "audio2_reused": 0},
         "task_distribution": {},
         "subtype_distribution": {},
         "hard_failures": [],
@@ -356,7 +361,6 @@ def build_reasonaqa_manifests(
         split_stats: Counter[str] = Counter()
         for row_index, record in enumerate(records):
             row, details = _manifest_record(record, split=split, row_index=row_index, index=index, allow_missing=allow_missing)
-            rows.append(row)
             report["counts"]["records"] += 1
             split_stats["records"] += 1
             if row["audio2_reused"]:
@@ -374,10 +378,17 @@ def build_reasonaqa_manifests(
                 report["counts"][kind] += 1
                 split_stats[kind] += 1
                 item = {"split": split, "row_index": row_index, **failure}
-                if allow_missing:
+                if allow_missing or drop_unresolved:
                     report["warnings"].append(item)
                 else:
                     report["hard_failures"].append(item)
+            if details["failures"] and drop_unresolved:
+                report["counts"]["dropped_records"] += 1
+                split_stats["dropped_records"] += 1
+            else:
+                rows.append(row)
+                report["counts"]["written_records"] += 1
+                split_stats["written_records"] += 1
             if not details["failures"]:
                 report["counts"]["resolved"] += 1
                 split_stats["resolved"] += 1
@@ -389,6 +400,8 @@ def build_reasonaqa_manifests(
         report["status"] = "PASS_WITH_WARNINGS"
     report["summary"] = {
         "records": report["counts"]["records"],
+        "written_records": report["counts"]["written_records"],
+        "dropped_records": report["counts"]["dropped_records"],
         "resolved": report["counts"]["resolved"],
         "missing": report["counts"]["missing"],
         "ambiguous": report["counts"]["ambiguous"],

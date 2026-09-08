@@ -71,6 +71,29 @@ class AudioMellowStaticContractTest(unittest.TestCase):
             self.assertEqual(report["status"], "FAIL")
             self.assertGreaterEqual(len(report["hard_failures"]), 1)
 
+    def test_drop_unresolved_omits_whole_record_and_reports_slot_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            splits = {}
+            for split in ("train", "val", "test"):
+                source = root / f"{split}.json"
+                source.write_text(
+                    json.dumps([{"filepath1": "missing.wav", "filepath2": ""}]),
+                    encoding="utf-8",
+                )
+                splits[split] = source
+            manifests, report = self.manifest.build_reasonaqa_manifests(
+                splits, (root,), drop_unresolved=True
+            )
+            self.assertEqual(report["status"], "PASS_WITH_WARNINGS")
+            self.assertEqual(report["summary"]["records"], 3)
+            self.assertEqual(report["summary"]["written_records"], 0)
+            self.assertEqual(report["summary"]["dropped_records"], 3)
+            self.assertEqual(report["summary"]["missing"], 6)
+            self.assertEqual(report["summary"]["hard_failures"], 0)
+            self.assertEqual(report["summary"]["warnings"], 6)
+            self.assertTrue(all(not rows for rows in manifests.values()))
+
     def test_task_preference_and_caption_fields_are_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
