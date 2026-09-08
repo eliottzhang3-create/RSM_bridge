@@ -35,12 +35,15 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         text = (PKG / "model.py").read_text(encoding="utf-8")
         self.assertIn("torch.full", text)
         self.assertIn("-100", text)
-        self.assertIn("non-answer prefix participates in loss", text)
+        self.assertIn("non-answer multimodal prefix participates in loss", text)
         self.assertIn("answer supervision count mismatch", text)
         self.assertIn("separator = _find_embedding", text)
         self.assertNotIn("self._find_embedding", text)
         self.assertIn("prefix_mask = torch.ones", text)
         self.assertIn("attention mask/embedding shape mismatch", text)
+        self.assertIn("text_ids", text)
+        self.assertIn("prompt_lengths", text)
+        self.assertIn("answer_lengths", text)
 
     def test_audio_contract_and_reuse(self) -> None:
         data = (PKG / "data.py").read_text(encoding="utf-8")
@@ -51,6 +54,9 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn("audio2 = _path(row, False)", data)
         self.assertIn("audio2 = audio2 or audio1", data)
         self.assertIn("audio2_reused_mask", data + model)
+        self.assertIn("padding=False", data)
+        self.assertIn("text_rows = [p_row + a_row", data)
+        self.assertIn("text_attention_mask", data)
 
     def test_formal_schedule(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
@@ -70,6 +76,8 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn("progress_percent", text)
         self.assertIn("step={optimizer_step}/{max_steps}", text)
         self.assertIn('"--num-workers"', text)
+        self.assertIn("DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True", text)
+        self.assertIn("sampler.set_epoch(epoch)", text)
 
     def test_gpu_stages_have_submission_wrappers(self) -> None:
         for wrapper in SUBMIT_WRAPPERS:

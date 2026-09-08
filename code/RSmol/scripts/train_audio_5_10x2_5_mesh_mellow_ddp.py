@@ -227,9 +227,20 @@ def _actual_resume_audit(path: Path, args: argparse.Namespace, batch_cpu: dict[s
             raise RuntimeError("reloaded checkpoint produced a nonfinite loss")
         labels = reload_model.last_labels
         prefix_length = int(reload_model.last_prefix_length or 0)
-        prompt_length = int(moved["prompt_ids"].shape[1])
-        if labels is None or bool((labels[:, :prefix_length + prompt_length] != -100).any()):
-            raise RuntimeError("reloaded checkpoint violated answer-only label mask")
+        text_ids = moved["text_ids"]
+        prompt_lengths = moved["prompt_lengths"]
+        answer_lengths = moved["answer_lengths"]
+        if labels is None:
+            raise RuntimeError("reloaded checkpoint did not expose labels")
+        for row_index in range(text_ids.shape[0]):
+            prompt_length = int(prompt_lengths[row_index].item())
+            answer_length = int(answer_lengths[row_index].item())
+            answer_start = prefix_length + prompt_length
+            answer_end = answer_start + answer_length
+            if bool((labels[row_index, :answer_start] != -100).any()) or bool((labels[row_index, answer_end:] != -100).any()):
+                raise RuntimeError("reloaded checkpoint violated answer-only label mask")
+            if not torch.equal(labels[row_index, answer_start:answer_end], text_ids[row_index, prompt_length:prompt_length + answer_length]):
+                raise RuntimeError("reloaded checkpoint answer labels are misaligned with unified text")
         output.loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(reload_model.parameters(), 0.5, error_if_nonfinite=True)
         if not torch.isfinite(grad_norm):
@@ -251,7 +262,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(f"world size mismatch: launcher={world} requested={args.world_size}")
         model, tokenizer = _load_model(args, device)
         dataset = ReasonAQADataset(args.train_manifest, tokenizer)
-        sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=False, drop_last=True)
+        # Shuffle deterministically per epoch; set_epoch(epoch) below changes
+        # the permutation while DistributedSampler keeps rank partitions
+        # disjoint and equally sized.
+        sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, drop_last=True)
         loader = DataLoader(dataset, batch_size=args.micro_batch_size, sampler=sampler, num_workers=args.num_workers, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
         steps_epoch = math.ceil(len(loader) / args.gradient_accumulation_steps)
         formal_steps = steps_epoch * args.epochs

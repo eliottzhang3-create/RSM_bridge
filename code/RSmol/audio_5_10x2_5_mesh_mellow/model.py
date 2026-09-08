@@ -220,17 +220,30 @@ def _find_embedding(model: nn.Module, ids: torch.Tensor) -> torch.Tensor:
     return model.get_input_embeddings()(ids)
 
 
-def build_labels(*, answer_ids: torch.Tensor, answer_attention_mask: torch.Tensor, prefix_length: int, prompt_length: int) -> torch.Tensor:
-    """Build labels with a hard answer-only supervision contract."""
-    if answer_ids.ndim != 2 or answer_attention_mask.shape != answer_ids.shape:
-        raise ValueError("answer ids/mask shape mismatch")
-    labels = torch.full((answer_ids.shape[0], prefix_length + prompt_length + answer_ids.shape[1]), -100, dtype=torch.long, device=answer_ids.device)
-    labels[:, prefix_length + prompt_length:] = answer_ids.masked_fill(answer_attention_mask == 0, -100)
-    prefix = labels[:, :prefix_length + prompt_length]
-    if bool((prefix != -100).any()):
-        raise AssertionError("non-answer prefix participates in loss")
-    valid = int((labels[:, prefix_length + prompt_length:] != -100).sum().item())
-    expected = int(answer_attention_mask.bool().sum().item())
+def build_labels(*, text_ids: torch.Tensor, prompt_lengths: torch.Tensor, answer_lengths: torch.Tensor, prefix_length: int) -> torch.Tensor:
+    """Build labels for a unified ``prompt + answer`` text sequence.
+
+    ``text_ids`` is already right-padded at the batch level.  Only the real
+    answer interval of each row is supervised; multimodal prefix, prompt,
+    and trailing batch padding are all ``-100``.  The causal LM implementation
+    performs its normal one-token shift, so the first answer target is
+    predicted from the immediately preceding real prompt token (or prefix
+    token when the prompt is empty).
+    """
+    if text_ids.ndim != 2 or prompt_lengths.ndim != 1 or answer_lengths.ndim != 1:
+        raise ValueError("unified text/length tensors have invalid rank")
+    if prompt_lengths.shape != answer_lengths.shape or prompt_lengths.shape[0] != text_ids.shape[0]:
+        raise ValueError("unified text/length batch mismatch")
+    if bool((prompt_lengths < 0).any()) or bool((answer_lengths <= 0).any()) or bool((prompt_lengths + answer_lengths > text_ids.shape[1]).any()):
+        raise ValueError("unified text contains an invalid prompt/answer boundary")
+    labels = torch.full((text_ids.shape[0], prefix_length + text_ids.shape[1]), -100, dtype=torch.long, device=text_ids.device)
+    text_positions = torch.arange(text_ids.shape[1], device=text_ids.device).unsqueeze(0)
+    answer_mask = (text_positions >= prompt_lengths.to(text_ids.device).unsqueeze(1)) & (text_positions < (prompt_lengths + answer_lengths).to(text_ids.device).unsqueeze(1))
+    labels[:, prefix_length:] = text_ids.masked_fill(~answer_mask, -100)
+    if bool((labels[:, :prefix_length] != -100).any()):
+        raise AssertionError("non-answer multimodal prefix participates in loss")
+    expected = int(answer_lengths.sum().item())
+    valid = int((labels != -100).sum().item())
     if valid != expected:
         raise AssertionError(f"answer supervision count mismatch: valid={valid} expected={expected}")
     return labels
@@ -319,18 +332,17 @@ class AudioMeshModel(nn.Module):
             second = self._waveform_embedding(audio2)
         return self.bridge(first), self.bridge(second)
 
-    def forward(self, *, audio1: torch.Tensor, audio2: torch.Tensor | None, prompt_ids: torch.Tensor, prompt_attention_mask: torch.Tensor, answer_ids: torch.Tensor, answer_attention_mask: torch.Tensor, audio2_reused_mask: torch.Tensor | None = None) -> Any:
+    def forward(self, *, audio1: torch.Tensor, audio2: torch.Tensor | None, text_ids: torch.Tensor, text_attention_mask: torch.Tensor, prompt_lengths: torch.Tensor, answer_lengths: torch.Tensor, answer_attention_mask: torch.Tensor | None = None, audio2_reused_mask: torch.Tensor | None = None) -> Any:
         audio_prefix1, audio_prefix2 = self.encode_audio(audio1, audio2, audio2_reused_mask)
-        prompt_embeds = _find_embedding(self.mesh_model, prompt_ids)
-        answer_embeds = _find_embedding(self.mesh_model, answer_ids)
-        separator = _find_embedding(self.mesh_model, torch.full((prompt_ids.shape[0], 1), self.separator_token_id, dtype=torch.long, device=prompt_ids.device))
-        inputs_embeds = torch.cat((audio_prefix1, separator, audio_prefix2, separator, prompt_embeds, answer_embeds), dim=1)
+        text_embeds = _find_embedding(self.mesh_model, text_ids)
+        separator = _find_embedding(self.mesh_model, torch.full((text_ids.shape[0], 1), self.separator_token_id, dtype=torch.long, device=text_ids.device))
+        inputs_embeds = torch.cat((audio_prefix1, separator, audio_prefix2, separator, text_embeds), dim=1)
         prefix_length = int(audio_prefix1.shape[1] + 1 + audio_prefix2.shape[1] + 1)
-        labels = build_labels(answer_ids=answer_ids, answer_attention_mask=answer_attention_mask, prefix_length=prefix_length, prompt_length=prompt_ids.shape[1])
+        labels = build_labels(text_ids=text_ids, prompt_lengths=prompt_lengths, answer_lengths=answer_lengths, prefix_length=prefix_length)
         self.last_labels = labels.detach()
         self.last_prefix_length = prefix_length
         prefix_mask = torch.ones((inputs_embeds.shape[0], prefix_length), dtype=torch.long, device=inputs_embeds.device)
-        attention_mask = torch.cat((prefix_mask, prompt_attention_mask, answer_attention_mask), dim=1)
+        attention_mask = torch.cat((prefix_mask, text_attention_mask), dim=1)
         if tuple(attention_mask.shape) != tuple(inputs_embeds.shape[:2]):
             raise AssertionError(f"attention mask/embedding shape mismatch: mask={tuple(attention_mask.shape)} embeds={tuple(inputs_embeds.shape[:2])}")
         if labels.shape[1] != inputs_embeds.shape[1]:

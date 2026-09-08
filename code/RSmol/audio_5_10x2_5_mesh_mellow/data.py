@@ -97,12 +97,61 @@ def collate_reasonaqa(items: list[dict[str, Any]], tokenizer: Any, *, max_prompt
         raise ValueError("empty batch")
     prompts = [item["prompt"] for item in items]
     answers = [item["answer"] for item in items]
-    # Pad only to the longest item in this batch. Per-field caps prevent
-    # pathological records from exceeding the multimodal context budget.
-    prompt = tokenizer(prompts, max_length=max_prompt_tokens, truncation=True, padding=True, return_tensors="pt", add_special_tokens=True)
-    answer = tokenizer(answers, max_length=max_answer_tokens, truncation=True, padding=True, return_tensors="pt", add_special_tokens=False)
+    # Tokenize each field without padding first.  The important contract here
+    # is that every sample is ``real_prompt + real_answer``; padding is added
+    # only after that concatenation, across the complete text sequence in the
+    # current batch.  Padding prompt and answer independently would insert
+    # artificial pad tokens between the prompt and answer and would break the
+    # causal next-token relationship at the answer boundary.
+    prompt = tokenizer(prompts, max_length=max_prompt_tokens, truncation=True, padding=False, return_tensors=None, add_special_tokens=True)
+    answer = tokenizer(answers, max_length=max_answer_tokens, truncation=True, padding=False, return_tensors=None, add_special_tokens=False)
+
+    def _rows(value: Any) -> list[list[int]]:
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().tolist()
+        return [list(row) for row in value]
+
+    prompt_rows = _rows(prompt["input_ids"])
+    answer_rows = _rows(answer["input_ids"])
+    if len(prompt_rows) != len(items) or len(answer_rows) != len(items):
+        raise ValueError("tokenizer returned a batch with the wrong number of rows")
+    prompt_lengths = [len(row) for row in prompt_rows]
+    answer_lengths = [len(row) for row in answer_rows]
+    text_rows = [p_row + a_row for p_row, a_row in zip(prompt_rows, answer_rows)]
+    text_lengths = [len(row) for row in text_rows]
+    max_text_length = max(text_lengths, default=0)
+    pad_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_id is None:
+        pad_id = getattr(tokenizer, "eos_token_id", None)
+    if pad_id is None:
+        raise ValueError("tokenizer must define pad_token_id or eos_token_id")
+    text_ids = torch.full((len(items), max_text_length), int(pad_id), dtype=torch.long)
+    text_attention_mask = torch.zeros((len(items), max_text_length), dtype=torch.long)
+    for row_index, row in enumerate(text_rows):
+        if row:
+            text_ids[row_index, :len(row)] = torch.tensor(row, dtype=torch.long)
+            text_attention_mask[row_index, :len(row)] = 1
+
+    # This answer-only mask is retained for token accounting/logging.  The
+    # model's actual labels are built from the exact prompt/answer boundaries
+    # above, so this auxiliary mask can never introduce a loss-bearing pad.
+    max_answer_length = max(answer_lengths, default=0)
+    answer_attention_mask = torch.zeros((len(items), max_answer_length), dtype=torch.long)
+    for row_index, length in enumerate(answer_lengths):
+        answer_attention_mask[row_index, :length] = 1
     audio1 = torch.stack([item["audio1"] for item in items])
     reused_mask = torch.tensor([item["audio2"] is None for item in items], dtype=torch.bool)
     reused = bool(reused_mask.all())
     audio2 = None if reused else torch.stack([item["audio1"] if item["audio2"] is None else item["audio2"] for item in items])
-    return {"audio1": audio1, "audio2": audio2, "audio2_reused_mask": reused_mask, "prompt_ids": prompt["input_ids"], "prompt_attention_mask": prompt.get("attention_mask", prompt["input_ids"].ne(int(tokenizer.pad_token_id))).long(), "answer_ids": answer["input_ids"], "answer_attention_mask": answer.get("attention_mask", answer["input_ids"].ne(int(tokenizer.pad_token_id))).long(), "row_indices": [item["row_index"] for item in items], "audio2_reused": reused}
+    return {
+        "audio1": audio1,
+        "audio2": audio2,
+        "audio2_reused_mask": reused_mask,
+        "text_ids": text_ids,
+        "text_attention_mask": text_attention_mask,
+        "prompt_lengths": torch.tensor(prompt_lengths, dtype=torch.long),
+        "answer_lengths": torch.tensor(answer_lengths, dtype=torch.long),
+        "answer_attention_mask": answer_attention_mask,
+        "row_indices": [item["row_index"] for item in items],
+        "audio2_reused": reused,
+    }

@@ -54,12 +54,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         prefix_length = int(model.last_prefix_length or 0)
         if labels is None or prefix_length <= 0:
             raise RuntimeError("model did not expose labels/prefix length for loss audit")
-        prefix_labels = labels[:, :prefix_length + int(moved["prompt_ids"].shape[1])]
-        answer_labels = labels[:, prefix_length + int(moved["prompt_ids"].shape[1]):]
+        text_ids = moved["text_ids"]
+        prompt_lengths = moved["prompt_lengths"]
+        answer_lengths = moved["answer_lengths"]
+        prefix_labels = labels[:, :prefix_length]
         if bool((prefix_labels != -100).any()):
-            raise RuntimeError("answer-only audit failed: prefix labels are supervised")
-        expected_answer_tokens = int(moved["answer_attention_mask"].sum().item())
-        actual_answer_tokens = int((answer_labels != -100).sum().item())
+            raise RuntimeError("answer-only audit failed: multimodal prefix labels are supervised")
+        expected_answer_tokens = int(answer_lengths.sum().item())
+        actual_answer_tokens = 0
+        for row_index in range(text_ids.shape[0]):
+            prompt_length = int(prompt_lengths[row_index].item())
+            answer_length = int(answer_lengths[row_index].item())
+            answer_start = prefix_length + prompt_length
+            answer_end = answer_start + answer_length
+            if bool((labels[row_index, :answer_start] != -100).any()) or bool((labels[row_index, answer_end:] != -100).any()):
+                raise RuntimeError(f"answer-only audit failed: non-answer label at row {row_index}")
+            expected = text_ids[row_index, prompt_length:prompt_length + answer_length]
+            if not torch.equal(labels[row_index, answer_start:answer_end], expected):
+                raise RuntimeError(f"answer-only audit failed: answer token mismatch at row {row_index}")
+            actual_answer_tokens += answer_length
         if actual_answer_tokens != expected_answer_tokens:
             raise RuntimeError(f"answer-only audit failed: actual={actual_answer_tokens} expected={expected_answer_tokens}")
         loss = output.loss
@@ -73,7 +86,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         c2l_grad = c2l is not None and any(p.grad is not None and torch.isfinite(p.grad).all() for p in c2l.parameters())
         if not c2l_grad:
             raise RuntimeError("c2l received no finite gradient")
-        report.update({"status": "PASS", "device": str(device), "loss": float(loss.detach().cpu()), "logits_shape": list(output.logits.shape), "parameter_audit": parameter_audit(model.mesh_model), "trainable_audit": audit, "c2l_gradient": True, "audio2_reused": bool(moved.get("audio2") is None), "label_audit": {"prefix_length": prefix_length, "prefix_non_ignore_count": int((prefix_labels != -100).sum().item()), "answer_supervised_tokens": actual_answer_tokens, "expected_answer_tokens": expected_answer_tokens}, "checks": [{"name": "cuda_available", "passed": True}, {"name": "forward_loss_finite", "passed": True}, {"name": "answer_only_labels", "passed": True, "detail": "verified from model.last_labels: prefix_non_ignore_count=0"}, {"name": "backward_gradients", "passed": True}]})
+        report.update({"status": "PASS", "device": str(device), "loss": float(loss.detach().cpu()), "logits_shape": list(output.logits.shape), "parameter_audit": parameter_audit(model.mesh_model), "trainable_audit": audit, "c2l_gradient": True, "audio2_reused": bool(moved.get("audio2") is None), "label_audit": {"unified_text_padding": True, "prefix_length": prefix_length, "prefix_non_ignore_count": int((prefix_labels != -100).sum().item()), "answer_supervised_tokens": actual_answer_tokens, "expected_answer_tokens": expected_answer_tokens}, "checks": [{"name": "cuda_available", "passed": True}, {"name": "forward_loss_finite", "passed": True}, {"name": "unified_text_padding", "passed": True, "detail": "prompt and answer were concatenated before batch padding"}, {"name": "answer_only_labels", "passed": True, "detail": "verified exact answer intervals from model.last_labels"}, {"name": "backward_gradients", "passed": True}]})
     except Exception as exc:
         report["hard_failures"].append({"name": "stage4_exception", "detail": repr(exc), "traceback": traceback.format_exc()})
     report["summary"] = {"checks": len(report["checks"]), "warnings": len(report["warnings"]), "hard_failures": len(report["hard_failures"])}

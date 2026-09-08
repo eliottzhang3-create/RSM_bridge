@@ -11,8 +11,12 @@ the projection/downsampling bridge, MeSH, and routers are trainable.
 
 The formal route is 8 GPUs, microbatch 4 per GPU, GA 1, 3 epochs, max LR
 1e-3, cosine schedule, warmup `ceil(total_optimizer_steps * 0.05)`, and
-gradient clipping 0.5.  Only answer tokens have labels; all audio, separator,
-prompt, and answer padding labels are `-100`.
+gradient clipping 0.5.  Each sample is tokenized as `prompt + answer` before
+the batch is right-padded to its longest complete text sequence.  Only the
+real answer interval has labels; all audio, separator, prompt, and trailing
+batch-padding positions are `-100`.  The standard causal-LM shift therefore
+predicts the first answer token from the immediately preceding real prompt
+token without inserting padding between prompt and answer.
 
 GPU execution must go through the repository-level `vc submit` wrappers; do
 not run the CUDA Python/torchrun scripts directly on a login node:
