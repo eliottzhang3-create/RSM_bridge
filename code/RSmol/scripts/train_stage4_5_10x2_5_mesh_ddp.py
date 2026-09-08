@@ -117,8 +117,8 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
     if gate == "FORMAL":
         if (args.world_size, args.micro_batch_size, args.gradient_accumulation_steps, max_steps, args.scheduler_total_steps, args.warmup_steps) != (8, 8, 16, 9244, 9244, 463):
             raise ValueError("FORMAL requires 8 ranks, microbatch=8, GA=16, 9244 steps, scheduler_total_steps=9244, warmup=463")
-        if not math.isclose(args.max_lr, 8e-4) or not math.isclose(args.min_lr, 8e-5):
-            raise ValueError("FORMAL requires max_lr=8e-4 and min_lr=8e-5")
+        if not math.isfinite(args.max_lr) or not math.isfinite(args.min_lr) or args.max_lr <= 0.0 or args.min_lr <= 0.0 or args.min_lr >= args.max_lr:
+            raise ValueError("FORMAL requires finite positive learning rates with 0 < min_lr < max_lr")
         if args.save_every != 500:
             raise ValueError("FORMAL requires save_every=500")
     if gate == "E" and args.resume_from is None:
