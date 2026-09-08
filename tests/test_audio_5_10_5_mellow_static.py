@@ -92,13 +92,12 @@ class AudioMellowStaticContractTest(unittest.TestCase):
             self.assertEqual(row["caption2"], "two")
             self.assertIn("cross_root_duplicate_basenames", report["index"])
 
-    def test_clotho_v21_normalized_filename_mapping_is_deterministic(self) -> None:
+    def test_clotho_aqa_official_audio_root_is_used(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            # Simulate the v2.1 filesystem-safe spelling of a historical AQA
-            # filename containing punctuation.  The resolver must accept the
-            # normalized one-to-one match only for a Clotho task.
-            audio = root / "development" / "steel_works_far.wav"
+            root = Path(temporary) / "clotho_aqa_audio"
+            # Clotho-AQA is resolved from its official audio_files package,
+            # not through a Clotho-v2.1 filename rewrite.
+            audio = root / "audio_files" / "steel works far.wav"
             audio.parent.mkdir(parents=True)
             audio.write_bytes(b"x")
             splits = {}
@@ -107,7 +106,7 @@ class AudioMellowStaticContractTest(unittest.TestCase):
                 source.write_text(
                     json.dumps(
                         [{
-                            "filepath1": "ClothoAQA\\audio_files\\steel:works far.wav",
+                            "filepath1": "ClothoAQA\\audio_files\\steel works far.wav",
                             "filepath2": "",
                             "taskname": "clotho_aqa_train",
                         }]
@@ -120,15 +119,18 @@ class AudioMellowStaticContractTest(unittest.TestCase):
             )
             row = manifests["train"][0]
             self.assertEqual(row["audio1_path"], str(audio.resolve()))
-            self.assertEqual(row["audio1_resolution"]["method"], "clotho_v21_normalized_basename")
+            self.assertEqual(row["audio1_resolution"]["method"], "basename")
             self.assertEqual(report["status"], "PASS")
 
     def test_clotho_v21_split_path_alias_resolves_unique_split(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "clotho_v2_1"
             audio = root / "development" / "City Ambience w_ Car Passing_1-2.wav"
+            duplicate = root / "validation" / "City Ambience w_ Car Passing_1-2.wav"
             audio.parent.mkdir(parents=True)
+            duplicate.parent.mkdir(parents=True)
             audio.write_bytes(b"x")
+            duplicate.write_bytes(b"y")
             splits = {}
             for split in ("train", "val", "test"):
                 source = Path(temporary) / f"{split}.json"
@@ -154,6 +156,7 @@ class AudioMellowStaticContractTest(unittest.TestCase):
         self.assertIn("map_location=\"cpu\"", self.stage0_text)
         self.assertNotIn(".cuda(", self.stage0_text + self.prepare_text + self.stage1_text)
         self.assertIn("--mellow-root", self.stage0_text)
+        self.assertIn("--clotho-aqa-audio-root", self.prepare_text)
         self.assertIn("--htsat-root", self.stage2_text)
         self.assertIn("--htsat-checkpoint", self.stage2_text)
         self.assertIn("--audio-path", self.stage2_text)

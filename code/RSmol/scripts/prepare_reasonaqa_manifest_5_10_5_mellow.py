@@ -26,6 +26,7 @@ from audio_5_10_5_mellow.manifest import (  # noqa: E402
 DEFAULT_REASONAQA_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/reasonaqa"
 DEFAULT_AUDIOCAPS_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2"
 DEFAULT_CLOTHO_AUDIO_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1"
+DEFAULT_CLOTHO_AQA_AUDIO_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_aqa_audio"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -36,6 +37,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--test-json", "--test_json", type=Path)
     parser.add_argument("--audiocaps-root", "--audiocaps_root", type=Path, default=Path(DEFAULT_AUDIOCAPS_ROOT))
     parser.add_argument("--clotho-audio-root", "--clotho_audio_root", "--clotho-root", "--clotho_root", type=Path, default=Path(DEFAULT_CLOTHO_AUDIO_ROOT))
+    parser.add_argument("--clotho-aqa-audio-root", "--clotho_aqa_audio_root", type=Path, default=Path(DEFAULT_CLOTHO_AQA_AUDIO_ROOT))
     parser.add_argument("--output-dir", "--output_dir", type=Path, required=True)
     parser.add_argument("--report-path", "--report_path", type=Path)
     parser.add_argument("--manifest-path", "--manifest_path", type=Path, help="Optional combined JSONL path")
@@ -82,6 +84,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "reasonaqa_root": str(args.reasonaqa_root),
             "audiocaps_root": str(args.audiocaps_root),
             "clotho_audio_root": str(args.clotho_audio_root),
+            "clotho_aqa_audio_root": str(args.clotho_aqa_audio_root),
             "allow_missing": bool(args.allow_missing),
             "waveform_loaded": False,
             "formal_world_size": 8,
@@ -93,7 +96,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         manifests, audit = build_reasonaqa_manifests(
             _split_paths(args),
-            (args.audiocaps_root, args.clotho_audio_root),
+            (args.audiocaps_root, args.clotho_audio_root, args.clotho_aqa_audio_root),
             allow_missing=args.allow_missing,
         )
         report.update(audit)

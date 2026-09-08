@@ -26,8 +26,13 @@ python code/RSmol/scripts/prepare_reasonaqa_manifest_5_10_5_mellow.py \
   --reasonaqa-root /hpc_stor03/sjtu_home/jinwei.zhang/data/reasonaqa \
   --audiocaps-root /hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2 \
   --clotho-audio-root /hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1 \
+  --clotho-aqa-audio-root /hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_aqa_audio \
   --output-dir /tmp/reasonaqa-manifest
 ```
+
+Clotho-AQA rows are resolved exclusively from the official
+`clotho_aqa_audio/audio_files` tree.  They are not mapped to Clotho v2.1 by
+basename normalization, and a missing AQA file remains a hard failure.
 
 Stage 2 must be submitted on a CUDA node. It prefers the explicit Mellow
 `mellow.model.htsat.HTSATWrapper` path, strictly loads the HTSAT backbone
