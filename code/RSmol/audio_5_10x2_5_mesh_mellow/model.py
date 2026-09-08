@@ -32,6 +32,7 @@ class AudioMeshConfig:
     downsample_kernel: int = 8
     max_prompt_tokens: int = 129
     max_answer_tokens: int = 250
+    max_context_length: int = 768
     separator_token_id: int | None = None
     architecture_contract: str = "logical_30_physical_20_5_10x2_5_mesh_audio_mellow"
 
@@ -334,6 +335,11 @@ class AudioMeshModel(nn.Module):
             raise AssertionError(f"attention mask/embedding shape mismatch: mask={tuple(attention_mask.shape)} embeds={tuple(inputs_embeds.shape[:2])}")
         if labels.shape[1] != inputs_embeds.shape[1]:
             raise AssertionError("labels and multimodal embeddings have different lengths")
+        if inputs_embeds.shape[1] > int(self.config_audio.max_context_length):
+            raise AssertionError(
+                f"multimodal sequence length {inputs_embeds.shape[1]} exceeds "
+                f"max_context_length={self.config_audio.max_context_length}"
+            )
         return self.mesh_model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels, use_cache=False, return_dict=True)
 
     def trainable_parameter_audit(self) -> dict[str, Any]:

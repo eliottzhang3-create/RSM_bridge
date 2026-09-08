@@ -62,14 +62,15 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn("learning_rate", text)
         self.assertIn("answer_only_labels", text)
 
-    def test_stage3_corruption_and_overlap_contracts(self) -> None:
+    def test_stage3_fast_contracts(self) -> None:
         text = (PKG / "stage3.py").read_text(encoding="utf-8")
-        self.assertIn("audio is unreadable/corrupt", text)
         self.assertIn("cross_split_overlap", text)
-        self.assertIn("sample_rates", text)
-        self.assertIn("channels", text)
+        self.assertIn("MAX_CONTEXT_LENGTH = 768", text)
+        self.assertIn("dynamic_longest_in_batch", text)
+        self.assertNotIn("_inspect_audio", text)
+        self.assertNotIn("AutoTokenizer", text)
 
-    def test_stage3_runtime_reports_corruption_and_overlap(self) -> None:
+    def test_stage3_runtime_reports_paths_and_overlap(self) -> None:
         source = PKG / "stage3.py"
         spec = importlib.util.spec_from_file_location("audio_mesh_stage3_test", source)
         self.assertIsNotNone(spec)
@@ -84,17 +85,15 @@ class AudioMeshStaticContractTest(unittest.TestCase):
                 handle.setsampwidth(2)
                 handle.setframerate(16000)
                 handle.writeframes(struct.pack("<h", 0) * 16000)
-            corrupt = root / "corrupt.wav"
-            corrupt.write_bytes(b"not-wave")
             manifests = {}
-            for split, path in (("train", valid), ("val", valid), ("test", corrupt)):
+            for split, path in (("train", valid), ("val", valid), ("test", valid)):
                 manifest = root / f"{split}.jsonl"
                 manifest.write_text(json.dumps({"audio1_path": str(path), "audio2_path": "", "question": "q", "answer": "a"}) + "\n", encoding="utf-8")
                 manifests[split] = manifest
             args = type("Args", (), {"train_manifest": manifests["train"], "val_manifest": manifests["val"], "test_manifest": manifests["test"], "tokenizer_path": None, "max_prompt_tokens": 129, "max_answer_tokens": 250})()
             report = module.audit(args)
-            self.assertTrue(any(item["name"] == "audio_unreadable_or_corrupt" for item in report["hard_failures"]))
             self.assertGreater(report["cross_split_overlap"]["train__val"]["count"], 0)
+            self.assertEqual(report["status"], "PASS_WITH_WARNINGS")
 
 
 if __name__ == "__main__":

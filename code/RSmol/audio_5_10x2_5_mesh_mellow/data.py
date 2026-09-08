@@ -97,8 +97,10 @@ def collate_reasonaqa(items: list[dict[str, Any]], tokenizer: Any, *, max_prompt
         raise ValueError("empty batch")
     prompts = [item["prompt"] for item in items]
     answers = [item["answer"] for item in items]
-    prompt = tokenizer(prompts, max_length=max_prompt_tokens, truncation=True, padding="max_length", return_tensors="pt", add_special_tokens=True)
-    answer = tokenizer(answers, max_length=max_answer_tokens, truncation=True, padding="max_length", return_tensors="pt", add_special_tokens=False)
+    # Pad only to the longest item in this batch. Per-field caps prevent
+    # pathological records from exceeding the multimodal context budget.
+    prompt = tokenizer(prompts, max_length=max_prompt_tokens, truncation=True, padding=True, return_tensors="pt", add_special_tokens=True)
+    answer = tokenizer(answers, max_length=max_answer_tokens, truncation=True, padding=True, return_tensors="pt", add_special_tokens=False)
     audio1 = torch.stack([item["audio1"] for item in items])
     reused_mask = torch.tensor([item["audio2"] is None for item in items], dtype=torch.bool)
     reused = bool(reused_mask.all())
