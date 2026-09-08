@@ -228,7 +228,8 @@ def resolve_audio_path(
     if len(values) > 1:
         return {"status": "invalid", "raw": raw_value, "candidates": values, "reason": "multiple paths"}
     requested = values[0]
-    direct = Path(requested).expanduser()
+    normalized_requested = requested.replace("\\", "/")
+    direct = Path(normalized_requested).expanduser()
     if direct.is_file():
         return {"status": "resolved", "raw": requested, "path": str(direct.resolve()), "method": "direct"}
     preferred = [str(token).lower() for token in preferred_tokens if token]
@@ -237,8 +238,8 @@ def resolve_audio_path(
             return items
         selected = [item for item in items if any(token in index.get("path_roots", {}).get(str(item), "").lower() for token in preferred)]
         return selected if selected or strict_preferred else items
-    basename = Path(requested).name.lower()
-    stem = Path(requested).stem.lower()
+    basename = Path(normalized_requested).name.lower()
+    stem = Path(normalized_requested).stem.lower()
     basename_candidates = prefer([Path(item) for item in index.get("by_basename", {}).get(basename, [])])
     exact_suffix = [item for item in basename_candidates if _suffix_match(requested, item)]
     if len(exact_suffix) == 1:
