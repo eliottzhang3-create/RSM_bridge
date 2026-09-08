@@ -14,11 +14,13 @@ PKG = ROOT / "code" / "RSmol" / "audio_5_10x2_5_mesh_mellow"
 STAGE3 = ROOT / "code" / "RSmol" / "scripts" / "audit_audio_stage3_5_10x2_5_mesh_mellow.py"
 STAGE4 = ROOT / "code" / "RSmol" / "scripts" / "audit_audio_stage4_5_10x2_5_mesh_mellow.py"
 TRAIN = ROOT / "code" / "RSmol" / "scripts" / "train_audio_5_10x2_5_mesh_mellow_ddp.py"
+FORMAL_SH = ROOT / "code" / "RSmol" / "scripts" / "train_audio_formal_5_10x2_5_mesh_mellow_ddp.sh"
 SUBMIT_WRAPPERS = tuple(ROOT / "code" / "RSmol" / name for name in (
     "run_audio_stage4_5_10x2_5_mesh_mellow_5090.sh",
     "run_audio_stage5_5_10x2_5_mesh_mellow_5090.sh",
     "run_audio_stage7_5_10x2_5_mesh_mellow_5090.sh",
     "run_audio_formal_5_10x2_5_mesh_mellow_5090.sh",
+    "run_audio_checkpoint_audit_5_10x2_5_mesh_mellow_5090.sh",
 ))
 
 
@@ -79,13 +81,14 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn("DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True", text)
         self.assertIn("sampler.set_epoch(epoch)", text)
         self.assertIn('"--model-path", "--mesh-checkpoint"', text)
+        self.assertIn("--gradient-accumulation-steps 4", FORMAL_SH.read_text(encoding="utf-8"))
 
     def test_gpu_stages_have_submission_wrappers(self) -> None:
         for wrapper in SUBMIT_WRAPPERS:
             self.assertTrue(wrapper.is_file(), wrapper)
             text = wrapper.read_text(encoding="utf-8")
             self.assertIn("vc submit", text)
-            self.assertIn("-g 1" if "stage4" in wrapper.name else "-g 8", text)
+            self.assertIn("-g 1" if ("stage4" in wrapper.name or "checkpoint_audit" in wrapper.name) else "-g 8", text)
             self.assertIn("docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1", text)
 
     def test_stage3_fast_contracts(self) -> None:
