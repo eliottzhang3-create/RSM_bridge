@@ -270,7 +270,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         # disjoint and equally sized.
         sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, drop_last=True)
         loader = DataLoader(dataset, batch_size=args.micro_batch_size, sampler=sampler, num_workers=args.num_workers, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
-        steps_epoch = math.ceil(len(loader) / args.gradient_accumulation_steps)
+        if args.gradient_accumulation_steps <= 0:
+            raise ValueError("gradient_accumulation_steps must be positive")
+        # Only complete accumulation windows become optimizer steps.  This
+        # keeps every optimizer step at the configured effective batch size;
+        # a short tail of micro-batches is intentionally dropped at the epoch
+        # boundary and will be reshuffled into the next epoch.
+        steps_epoch = len(loader) // args.gradient_accumulation_steps
+        dropped_microbatches = len(loader) % args.gradient_accumulation_steps
+        if steps_epoch <= 0:
+            raise ValueError(f"loader has {len(loader)} batches, fewer than one accumulation window of {args.gradient_accumulation_steps}")
         formal_steps = steps_epoch * args.epochs
         max_steps = args.max_steps or (2 if args.gate == "STAGE5" else 10 if args.gate == "STAGE7" else formal_steps)
         total_steps = formal_steps if args.gate == "FORMAL" else max_steps
@@ -286,6 +295,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             start_step = int(state["global_step"])
             start_epoch = int(state.get("epoch", 0))
             start_batch_in_epoch = int(state.get("batch_in_epoch", 0))
+            if start_batch_in_epoch % args.gradient_accumulation_steps != 0:
+                raise RuntimeError("resume batch cursor is not aligned to the requested gradient accumulation steps")
             rank_rng = state.get("rng_states_by_rank", {}).get(str(rank)) or state.get("rng_states_by_rank", {}).get("0")
             _restore_rng_state(rank_rng, device)
         ddp = DDP(model, device_ids=[device.index], broadcast_buffers=False, find_unused_parameters=False) if world > 1 else model
@@ -300,7 +311,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             sampler.set_epoch(epoch)
             data_iter = iter(loader)
             _skip_batches(data_iter, batch_in_epoch)
-            for _ in range(batch_in_epoch, steps_epoch):
+            completed_optimizer_steps = batch_in_epoch // args.gradient_accumulation_steps
+            for _ in range(completed_optimizer_steps, steps_epoch):
                 if optimizer_step >= max_steps:
                     break
                 step_started = time.perf_counter()
@@ -354,10 +366,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         break
                 if optimizer_step >= max_steps:
                     break
-            if batch_in_epoch >= len(loader):
-                epoch += batch_in_epoch // len(loader)
-                batch_in_epoch = batch_in_epoch % len(loader)
-        report.update({"status": "PASS", "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
+            if batch_in_epoch >= steps_epoch * args.gradient_accumulation_steps:
+                epoch += 1
+                batch_in_epoch = 0
+        report.update({"status": "PASS", "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "dropped_microbatches_per_epoch": dropped_microbatches, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "effective_global_batch_size": int(args.micro_batch_size * world * args.gradient_accumulation_steps), "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
     except Exception as exc:
         report["hard_failures"].append({"error": repr(exc), "traceback": traceback.format_exc()})
     finally:

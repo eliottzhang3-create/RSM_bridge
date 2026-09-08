@@ -9,8 +9,8 @@ first 10 seconds or right-padding.  Empty audio2 rows reuse audio1 and, when
 possible, the same encoded prefix.  HTSAT is frozen; Mellow c2l (527 to 768),
 the projection/downsampling bridge, MeSH, and routers are trainable.
 
-The formal route is 8 GPUs, microbatch 4 per GPU, GA 4 (effective global
-batch 128), 3 epochs, max LR 1e-3, cosine schedule, warmup
+The formal route is 8 GPUs, microbatch 8 per GPU, GA 4 (effective global
+batch 256), 3 epochs, max LR 1e-3, cosine schedule, warmup
 `ceil(total_optimizer_steps * 0.05)`, and
 gradient clipping 0.5.  Each sample is tokenized as `prompt + answer` before
 the batch is right-padded to its longest complete text sequence.  Only the

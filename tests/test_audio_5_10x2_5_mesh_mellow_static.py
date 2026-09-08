@@ -82,6 +82,10 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn("sampler.set_epoch(epoch)", text)
         self.assertIn('"--model-path", "--mesh-checkpoint"', text)
         self.assertIn("--gradient-accumulation-steps 4", FORMAL_SH.read_text(encoding="utf-8"))
+        self.assertIn("--micro-batch-size 8", FORMAL_SH.read_text(encoding="utf-8"))
+        self.assertIn("dropped_microbatches", text)
+        self.assertIn("effective_global_batch_size", text)
+        self.assertIn("completed_optimizer_steps = batch_in_epoch // args.gradient_accumulation_steps", text)
 
     def test_gpu_stages_have_submission_wrappers(self) -> None:
         for wrapper in SUBMIT_WRAPPERS:
