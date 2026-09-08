@@ -13,3 +13,16 @@ The formal route is 8 GPUs, microbatch 4 per GPU, GA 1, 3 epochs, max LR
 1e-3, cosine schedule, warmup `ceil(total_optimizer_steps * 0.05)`, and
 gradient clipping 0.5.  Only answer tokens have labels; all audio, separator,
 prompt, and answer padding labels are `-100`.
+
+GPU execution must go through the repository-level `vc submit` wrappers; do
+not run the CUDA Python/torchrun scripts directly on a login node:
+
+```text
+run_audio_stage4_5_10x2_5_mesh_mellow_5090.sh  # 1-GPU forward/backward audit
+run_audio_stage5_5_10x2_5_mesh_mellow_5090.sh  # 8-GPU topology smoke
+run_audio_stage7_5_10x2_5_mesh_mellow_5090.sh  # 8-GPU 10-step/reload smoke
+run_audio_formal_5_10x2_5_mesh_mellow_5090.sh  # 8-GPU formal 3-epoch training
+```
+
+The wrappers accept the same arguments as their underlying runtime scripts and
+submit them inside the project GPU image.
