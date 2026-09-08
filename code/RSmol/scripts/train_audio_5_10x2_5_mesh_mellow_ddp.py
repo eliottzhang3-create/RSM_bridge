@@ -39,7 +39,10 @@ DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--gate", choices=("STAGE5", "STAGE7", "FORMAL"), default="STAGE5")
-    p.add_argument("--model-path", type=Path, default=Path(DEFAULT_MESH))
+    # ``--mesh-checkpoint`` is the public name used by the repository
+    # submission wrappers and operator commands; keep ``--model-path`` as a
+    # backward-compatible alias for older invocations.
+    p.add_argument("--model-path", "--mesh-checkpoint", dest="model_path", type=Path, default=Path(DEFAULT_MESH))
     p.add_argument("--resume-from", type=Path)
     p.add_argument("--tokenizer-path", type=Path)
     p.add_argument("--htsat-checkpoint", type=Path, default=Path(DEFAULT_HTSAT))

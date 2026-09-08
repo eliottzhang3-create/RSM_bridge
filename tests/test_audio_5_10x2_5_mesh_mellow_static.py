@@ -78,6 +78,7 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn('"--num-workers"', text)
         self.assertIn("DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True", text)
         self.assertIn("sampler.set_epoch(epoch)", text)
+        self.assertIn('"--model-path", "--mesh-checkpoint"', text)
 
     def test_gpu_stages_have_submission_wrappers(self) -> None:
         for wrapper in SUBMIT_WRAPPERS:
