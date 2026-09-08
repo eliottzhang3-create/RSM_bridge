@@ -101,6 +101,15 @@ class MeshStage3StaticTest(unittest.TestCase):
 
     def test_router_collapse_is_warning_only_and_report_contract_is_present(self):
         self.assertIn("router collapse/slot imbalance diagnostic (non-fatal)", self.source)
+        # The backbone must be resolved before router_modules is accessed.
+        # This catches the runtime UnboundLocalError that otherwise appears
+        # only after loading a real CUDA checkpoint.
+        runtime_source = self.source.split("def _runtime_audit(", 1)[1].split(
+            "def recursive_runtime_audit_5_10x2_5_mesh", 1
+        )[0]
+        backbone_pos = runtime_source.index('recursive_model = getattr(model, "model", model)')
+        router_pos = runtime_source.index("router_modules = list(getattr(recursive_model", backbone_pos)
+        self.assertLess(backbone_pos, router_pos)
         self.assertIn('"checks": checks', self.source)
         self.assertIn('"warnings": warnings', self.source)
         self.assertIn('"hard_failures": hard_failures', self.source)

@@ -550,13 +550,16 @@ def _runtime_audit(model: Any, tokenizer: Any, model_path: Path, *, output_dir: 
         raise RuntimeError("MeSH parameter audit schedule/source mapping disagrees with the model contract")
     if any(parameter_audit.get(key) != value for key, value in (("logical_layer_count", LOGICAL_LAYER_COUNT), ("physical_layer_count", PHYSICAL_LAYER_COUNT), ("logical_cache_slot_count", LOGICAL_LAYER_COUNT), ("recursive_loops", RECURSIVE_LOOPS), ("memory_slots", MEMORY_SLOT_COUNT), ("router_count", ROUTER_COUNT), ("transition_query", TRANSITION_QUERY))):
         raise RuntimeError(f"MeSH parameter audit contract mismatch: {parameter_audit}")
+    # Resolve the recursive backbone before inspecting its router modules.
+    # This assignment used to appear below the router audit, which caused
+    # ``UnboundLocalError`` on every real checkpoint before the forward audit.
+    recursive_model = getattr(model, "model", model)
     router_modules = list(getattr(recursive_model, "write_routers", ())) + list(getattr(recursive_model, "read_routers", ()))
     names = [name for name, _ in model.named_parameters(remove_duplicate=False) if ".write_routers." in name or ".read_routers." in name]
     if len(router_modules) != ROUTER_COUNT or len(names) != ROUTER_COUNT * 2:
         raise RuntimeError(f"MeSH router parameter audit expected 6 router modules/12 tensors: modules={len(router_modules)} tensors={len(names)}")
     if not all(torch.isfinite(parameter.detach().float()).all() for name, parameter in model.named_parameters() if name in names):
         raise RuntimeError(f"MeSH router parameters are not finite: {names}")
-    recursive_model = getattr(model, "model", model)
     recursive_model.audit_mode = True
     recursive_model.routing_stats_mode = True
     input_ids = _prompt(model)
