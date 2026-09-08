@@ -58,6 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--warmup-steps", type=int)
     p.add_argument("--save-every", type=int, default=10)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--num-workers", type=int, default=0, help="DataLoader workers per DDP rank; 0 keeps loading in the rank process")
     return p.parse_args(argv)
 
 
@@ -251,7 +252,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         model, tokenizer = _load_model(args, device)
         dataset = ReasonAQADataset(args.train_manifest, tokenizer)
         sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=False, drop_last=True)
-        loader = DataLoader(dataset, batch_size=args.micro_batch_size, sampler=sampler, num_workers=0, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
+        loader = DataLoader(dataset, batch_size=args.micro_batch_size, sampler=sampler, num_workers=args.num_workers, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
         steps_epoch = math.ceil(len(loader) / args.gradient_accumulation_steps)
         formal_steps = steps_epoch * args.epochs
         max_steps = args.max_steps or (2 if args.gate == "STAGE5" else 10 if args.gate == "STAGE7" else formal_steps)
@@ -310,12 +311,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 answer_tokens = torch.tensor(int(batch["answer_attention_mask"].sum().item()), dtype=torch.long, device=device)
                 if world > 1:
                     dist.all_reduce(answer_tokens, op=dist.ReduceOp.SUM)
-                item = {"step": optimizer_step, "loss": float(output.loss.detach().cpu()), "lr": float(optimizer.param_groups[0]["lr"]), "grad_norm": float(grad_norm), "effective_answer_tokens": int(answer_tokens.item()), "step_time_seconds": elapsed, "samples_per_second": global_samples / elapsed, "audio_seconds_per_second": global_samples * 20.0 / elapsed, "gpu_memory_allocated_gib": float(torch.cuda.memory_allocated(device) / 1024**3), "gpu_memory_reserved_gib": float(torch.cuda.memory_reserved(device) / 1024**3), "gpu_memory_max_allocated_gib": float(torch.cuda.max_memory_allocated(device) / 1024**3), "gpu_memory_max_reserved_gib": float(torch.cuda.max_memory_reserved(device) / 1024**3), "router_stats": _router_stats(owner)}
+                item = {"step": optimizer_step, "total_steps": max_steps, "progress_percent": 100.0 * optimizer_step / max(1, max_steps), "epoch": epoch, "batch_in_epoch": batch_in_epoch, "steps_per_epoch": steps_epoch, "loss": float(output.loss.detach().cpu()), "lr": float(optimizer.param_groups[0]["lr"]), "grad_norm": float(grad_norm), "effective_answer_tokens": int(answer_tokens.item()), "step_time_seconds": elapsed, "samples_per_second": global_samples / elapsed, "audio_seconds_per_second": global_samples * 20.0 / elapsed, "gpu_memory_allocated_gib": float(torch.cuda.memory_allocated(device) / 1024**3), "gpu_memory_reserved_gib": float(torch.cuda.memory_reserved(device) / 1024**3), "gpu_memory_max_allocated_gib": float(torch.cuda.max_memory_allocated(device) / 1024**3), "gpu_memory_max_reserved_gib": float(torch.cuda.max_memory_reserved(device) / 1024**3), "router_stats": _router_stats(owner)}
                 metrics.append(item)
                 batch_in_epoch += args.gradient_accumulation_steps
                 if rank == 0 and (optimizer_step % 10 == 0 or optimizer_step == max_steps):
                     memory = torch.cuda.memory_allocated(device) / 1024**3
-                    print(f"[audio-train] step={optimizer_step} loss={item['loss']:.6f} lr={item['lr']:.8g} step_s={item['step_time_seconds']:.3f} samples/s={item['samples_per_second']:.2f} audio_s/s={item['audio_seconds_per_second']:.2f} answer_tokens={item['effective_answer_tokens']} gpu_alloc_gib={item['gpu_memory_allocated_gib']:.3f} gpu_reserved_gib={item['gpu_memory_reserved_gib']:.3f} gpu_max_alloc_gib={item['gpu_memory_max_allocated_gib']:.3f} gpu_max_reserved_gib={item['gpu_memory_max_reserved_gib']:.3f} router_stats={item['router_stats']}", flush=True)
+                    print(f"[audio-train] step={optimizer_step}/{max_steps} progress={item['progress_percent']:.2f}% epoch={epoch + 1}/{args.epochs if args.gate == 'FORMAL' else '?'} batch={batch_in_epoch}/{len(loader)} loss={item['loss']:.6f} lr={item['lr']:.8g} step_s={item['step_time_seconds']:.3f} samples/s={item['samples_per_second']:.2f} audio_s/s={item['audio_seconds_per_second']:.2f} answer_tokens={item['effective_answer_tokens']} gpu_alloc_gib={item['gpu_memory_allocated_gib']:.3f} gpu_reserved_gib={item['gpu_memory_reserved_gib']:.3f} gpu_max_alloc_gib={item['gpu_memory_max_allocated_gib']:.3f} gpu_max_reserved_gib={item['gpu_memory_max_reserved_gib']:.3f} router_stats={item['router_stats']}", flush=True)
                 save_due = (args.gate == "FORMAL" and (optimizer_step % max(1, args.save_every) == 0 or optimizer_step == max_steps)) or (args.gate == "STAGE7" and optimizer_step >= 10)
                 if save_due:
                     out = args.output_dir / f"checkpoint-{optimizer_step:06d}"

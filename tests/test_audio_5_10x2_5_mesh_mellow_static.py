@@ -67,6 +67,9 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn("args.save_every", text)
         self.assertIn("learning_rate", text)
         self.assertIn("answer_only_labels", text)
+        self.assertIn("progress_percent", text)
+        self.assertIn("step={optimizer_step}/{max_steps}", text)
+        self.assertIn('"--num-workers"', text)
 
     def test_gpu_stages_have_submission_wrappers(self) -> None:
         for wrapper in SUBMIT_WRAPPERS:

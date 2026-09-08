@@ -44,7 +44,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         model, tokenizer = _load(args, device)
         model.train()
         dataset = ReasonAQADataset(args.manifest, tokenizer)
-        loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
+        loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
         batch = next(iter(loader))
         moved = {key: (value.to(device) if torch.is_tensor(value) else value) for key, value in batch.items()}
         output = model(**{key: value for key, value in moved.items() if key not in {"row_indices", "audio2_reused"}})
@@ -90,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mellow-root", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--report-path", required=True, type=Path)
     args = parser.parse_args(argv)
     report = run(args)
