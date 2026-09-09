@@ -255,6 +255,9 @@ class MeshLlamaModel(LlamaPreTrainedModel):
             _init_router(router)
         self.gradient_checkpointing = False
         self.audit_mode = False
+        # Optional one-forward gradient audit.  It retains only the two loop
+        # boundary tensors; normal training leaves this disabled.
+        self.gradient_audit_mode = False
         self.routing_stats_mode = False
         self.last_forward_trace: list[dict[str, int]] = []
         self.last_memory_shape: tuple[int, ...] | None = None
@@ -263,6 +266,8 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         self.last_prefix_output: torch.Tensor | None = None
         self.last_core_inputs: list[torch.Tensor] = []
         self.last_core_outputs: list[torch.Tensor] = []
+        self.last_core_input_refs: list[torch.Tensor] = []
+        self.last_core_output_refs: list[torch.Tensor] = []
         self.last_initial_memory: torch.Tensor | None = None
         self.last_memory_write_history: list[torch.Tensor] = []
         self.last_routing_stats: dict[str, dict[str, float]] = {}
@@ -348,6 +353,8 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         self.last_prefix_output = None
         self.last_core_inputs = []
         self.last_core_outputs = []
+        self.last_core_input_refs = []
+        self.last_core_output_refs = []
         self.last_initial_memory = None
         self.last_memory_write_history = []
         self.last_routing_stats = {}
@@ -374,9 +381,15 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         if output_hidden_states:
             hidden_states.append(hidden)
         for loop in range(2):
+            if self.gradient_audit_mode and hidden.requires_grad:
+                hidden.retain_grad()
+                self.last_core_input_refs.append(hidden)
             if self.audit_mode:
                 self.last_core_inputs.append(hidden.detach().cpu())
             core = self._run_stack(hidden, range(5, 15), 5 + loop * 10, attention_mask=mask, position_ids=position_ids, cache=cache, use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings, output_attentions=output_attentions, all_attentions=attentions)
+            if self.gradient_audit_mode and core.requires_grad:
+                core.retain_grad()
+                self.last_core_output_refs.append(core)
             if self.audit_mode:
                 self.last_core_outputs.append(core.detach().cpu())
             write = self._route(self.write_routers[loop + 1], hidden, f"write_{loop}")

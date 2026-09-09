@@ -20,6 +20,7 @@ from train_audio_5_10x2_5_mesh_mellow_ddp import (  # noqa: E402
     _audit_saved_checkpoint,
     _load_model,
     _load_training_state,
+    _mesh_runtime_gradient_audit,
     _make_scheduler,
 )
 
@@ -61,6 +62,15 @@ def _artifact_contract(path: Path) -> dict[str, Any]:
     if marker.get("status") != "complete":
         raise RuntimeError(f"checkpoint completion marker is invalid: {marker}")
     config = _json(path / "audio_mesh_config.json")
+    for key in ("architecture_contract", "mapper_contract", "mesh_hidden_size", "audio_tokens_per_clip", "audio_prefix_tokens_with_separators", "mellow_root", "mellow_provenance"):
+        if key not in config:
+            raise RuntimeError(f"audio_mesh_config.json missing {key}")
+    if config["architecture_contract"] != "logical_30_physical_20_5_10x2_5_mesh_audio_mellow":
+        raise RuntimeError("checkpoint architecture contract mismatch")
+    if config["mapper_contract"] != "mellow_c2l_527x768__concat_cls_frames__projection_768x576x576_biasfree_dropout0.5__cls_preserving_avgpool8":
+        raise RuntimeError("checkpoint mapper contract mismatch")
+    if int(config["mesh_hidden_size"]) != 576 or int(config["audio_tokens_per_clip"]) != 129 or int(config["audio_prefix_tokens_with_separators"]) != 260:
+        raise RuntimeError("checkpoint audio shape contract mismatch")
     training = torch.load(path / "training_state.pt", map_location="cpu", weights_only=False)
     audio = torch.load(path / "audio_bridge.pt", map_location="cpu", weights_only=False)
     for key in ("optimizer", "scheduler", "global_step", "epoch", "batch_in_epoch", "rng_states_by_rank"):
@@ -140,6 +150,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         saved_htsat = Path(str(saved_config.get("htsat_checkpoint", "")))
         if not saved_htsat or saved_htsat.resolve() != args.htsat_checkpoint.resolve():
             raise RuntimeError(f"external HTSAT checkpoint mismatch: saved={saved_htsat} requested={args.htsat_checkpoint}")
+        saved_mellow = Path(str(saved_config.get("mellow_root", "")))
+        if not saved_mellow or saved_mellow.resolve() != args.mellow_root.resolve():
+            raise RuntimeError(f"Mellow root mismatch: saved={saved_mellow} requested={args.mellow_root}")
+        if not saved_config.get("mellow_provenance"):
+            raise RuntimeError("checkpoint has no Mellow provenance")
         trainer_artifact = _audit_saved_checkpoint(args.checkpoint)
         artifact = _artifact_contract(args.checkpoint)
         artifact["trainer_artifact_audit"] = trainer_artifact
@@ -157,6 +172,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         model, tokenizer = _load_model(load_args, device)
         model.train()
+        model.mesh_model.model.routing_stats_mode = True
+        model.mesh_model.model.gradient_audit_mode = True
         dataset = ReasonAQADataset(args.manifest, tokenizer)
         loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
         batch = next(iter(loader))
@@ -176,6 +193,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("reloaded checkpoint produced a nonfinite or missing loss")
         label_audit = _audit_labels(model, moved, device)
         output.loss.backward()
+        mesh_runtime_audit = _mesh_runtime_gradient_audit(model)
         trainable = model.trainable_parameter_audit()
         if not trainable["htsat_frozen"] or not trainable["bridge_trainable"] or not trainable["mesh_trainable"]:
             raise RuntimeError(f"trainability contract failed: {trainable}")
@@ -184,7 +202,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         c2l_grad = c2l is not None and any(p.grad is not None and torch.isfinite(p.grad).all() for p in c2l.parameters())
         if not bridge_grad or not c2l_grad:
             raise RuntimeError(f"audio trainable gradients missing: bridge={bridge_grad} c2l={c2l_grad}")
-        report.update({"status": "PASS", "device": str(device), "loss": float(output.loss.detach().cpu()), "logits_shape": list(output.logits.shape), "label_audit": label_audit, "trainable_audit": trainable, "gradient_audit": {"bridge_finite": bridge_grad, "c2l_finite": c2l_grad}, "checks": report["checks"] + [{"name": "forward_backward", "passed": True}, {"name": "answer_only_unified_labels", **label_audit}, {"name": "trainable_gradients", "passed": True}]})
+        report.update({"status": "PASS", "device": str(device), "loss": float(output.loss.detach().cpu()), "logits_shape": list(output.logits.shape), "label_audit": label_audit, "trainable_audit": trainable, "gradient_audit": {"bridge_finite": bridge_grad, "c2l_finite": c2l_grad, "mesh_runtime": mesh_runtime_audit}, "checks": report["checks"] + [{"name": "forward_backward", "passed": True}, {"name": "answer_only_unified_labels", **label_audit}, {"name": "trainable_gradients", "passed": True}, {"name": "mesh_runtime_gradient_audit", **mesh_runtime_audit}]})
     except Exception as exc:
         report["hard_failures"].append({"name": "checkpoint_audit_exception", "detail": repr(exc), "traceback": traceback.format_exc()})
     report["summary"] = {"checks": len(report["checks"]), "hard_failures": len(report["hard_failures"])}

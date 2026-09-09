@@ -95,13 +95,49 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn('"--model-path", "--mesh-checkpoint"', text)
         self.assertIn("formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", text)
         self.assertIn('"mapper_contract"', text)
-        self.assertIn('"audio_tokens_per_clip": 129', text)
+        self.assertIn('"audio_tokens_per_clip": AUDIO_TOKENS_PER_CLIP', text)
         self.assertIn("--gradient-accumulation-steps 4", FORMAL_SH.read_text(encoding="utf-8"))
         self.assertIn("--micro-batch-size 8", FORMAL_SH.read_text(encoding="utf-8"))
         self.assertIn("--save-every 1000 --checkpoint-retention 4", FORMAL_SH.read_text(encoding="utf-8"))
         self.assertIn("dropped_microbatches", text)
         self.assertIn("effective_global_batch_size", text)
         self.assertIn("completed_optimizer_steps = batch_in_epoch // args.gradient_accumulation_steps", text)
+        self.assertIn("FORMAL does not accept --max-steps", text)
+        self.assertIn("bounded smoke --max-steps must be positive", text)
+        self.assertIn("model.train()", text)
+        self.assertIn("routing_stats_mode = True", text)
+        self.assertIn("lr_before_optimizer_step", text)
+        self.assertIn("step + 1 - warmup_steps", text)
+        self.assertIn("mellow_provenance", text)
+        self.assertIn("tempfile.mkdtemp", text)
+        self.assertIn("refusing to overwrite existing checkpoint", text)
+        self.assertIn("resume checkpoint has no RNG state for rank", text)
+        self.assertIn("composite checkpoint missing files", text)
+        self.assertIn("actual_rng != expected_rng", text)
+        self.assertIn("start_step", text)
+        self.assertIn("end_step", text)
+        mesh_text = (ROOT / "code" / "RSmol" / "recursive_model_5_10x2_5_mesh.py").read_text(encoding="utf-8")
+        self.assertIn("last_core_input_refs", mesh_text)
+        self.assertIn("gradient_audit_mode", mesh_text)
+        self.assertIn("both_middle_loops_have_finite_gradients", text)
+        self.assertIn("trace_matches_5_10_10_5", text)
+        self.assertIn(".checkpoint-*.tmp", text)
+        self.assertIn("reloaded checkpoint training mode contract failed", text)
+        self.assertIn("reloaded checkpoint audio gradients failed", text)
+        self.assertIn('"audio_gradients"', text)
+        self.assertIn("--max-steps 20", (ROOT / "code" / "RSmol" / "scripts" / "train_audio_smoke20_5_10x2_5_mesh_mellow_ddp.sh").read_text(encoding="utf-8"))
+        self.assertIn("--max-steps 22", (ROOT / "code" / "RSmol" / "scripts" / "train_audio_resume2_5_10x2_5_mesh_mellow_ddp.sh").read_text(encoding="utf-8"))
+        self.assertIn("microbatch 8/GPU, GA 4", (ROOT / "code" / "RSmol" / "run_audio_formal_5_10x2_5_mesh_mellow_5090.sh").read_text(encoding="utf-8"))
+
+    def test_runtime_shape_and_wrapper_freeze_contracts_are_explicit(self) -> None:
+        text = (PKG / "model.py").read_text(encoding="utf-8")
+        for marker in ("MESH_HIDDEN_SIZE = 576", "AUDIO_TOKENS_PER_CLIP = 129", "AUDIO_PREFIX_TOKENS = 260", "_freeze_wrapper_except_c2l", "unexpected_wrapper_trainable_names", "training_mode_contract", "requires exactly", "total prefix length"):
+            self.assertIn(marker, text)
+
+    def test_checkpoint_audit_requires_full_composite_contract(self) -> None:
+        text = (ROOT / "code" / "RSmol" / "scripts" / "audit_audio_checkpoint_5_10x2_5_mesh_mellow.py").read_text(encoding="utf-8")
+        for marker in ("tokenizer/tokenizer_config.json", "optimizer_state_entries", "rng_states_by_rank", "external_htsat_verified", "forward_backward", "gradient_audit"):
+            self.assertIn(marker, text)
 
     def test_gpu_stages_have_submission_wrappers(self) -> None:
         for wrapper in SUBMIT_WRAPPERS:
@@ -110,6 +146,20 @@ class AudioMeshStaticContractTest(unittest.TestCase):
             self.assertIn("vc submit", text)
             self.assertIn("-g 1" if ("stage4" in wrapper.name or "checkpoint_audit" in wrapper.name) else "-g 8", text)
             self.assertIn("docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1", text)
+
+    def test_twenty_step_smoke_wrappers_are_isolated(self) -> None:
+        smoke = ROOT / "code" / "RSmol" / "run_audio_smoke20_5_10x2_5_mesh_mellow_5090.sh"
+        resume = ROOT / "code" / "RSmol" / "run_audio_resume2_5_10x2_5_mesh_mellow_5090.sh"
+        smoke_inner = ROOT / "code" / "RSmol" / "scripts" / "train_audio_smoke20_5_10x2_5_mesh_mellow_ddp.sh"
+        resume_inner = ROOT / "code" / "RSmol" / "scripts" / "train_audio_resume2_5_10x2_5_mesh_mellow_ddp.sh"
+        for path in (smoke, resume, smoke_inner, resume_inner):
+            self.assertTrue(path.is_file(), path)
+        self.assertIn("vc submit", smoke.read_text(encoding="utf-8"))
+        self.assertIn("vc submit", resume.read_text(encoding="utf-8"))
+        self.assertIn("-g 8", smoke.read_text(encoding="utf-8"))
+        self.assertIn("-g 8", resume.read_text(encoding="utf-8"))
+        self.assertIn("--max-steps 20", smoke_inner.read_text(encoding="utf-8"))
+        self.assertIn("--max-steps 22", resume_inner.read_text(encoding="utf-8"))
 
     def test_stage3_fast_contracts(self) -> None:
         text = (PKG / "stage3.py").read_text(encoding="utf-8")

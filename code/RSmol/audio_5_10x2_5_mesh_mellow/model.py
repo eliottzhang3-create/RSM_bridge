@@ -22,20 +22,34 @@ import torch.nn.functional as F
 from torch import nn
 
 
+# These are runtime invariants of the current Audio MeSH route, not tunable
+# defaults.  Keeping them named makes a bad external Mellow/HTSAT checkout or
+# an accidental non-SmolLM2 checkpoint fail before it can produce a formally
+# mislabeled run.
+MESH_HIDDEN_SIZE = 576
+AUDIO_TOKENS_PER_CLIP = 129
+AUDIO_PREFIX_TOKENS = 260
+MAPPER_CONTRACT = (
+    "mellow_c2l_527x768__concat_cls_frames__projection_768x576x576_"
+    "biasfree_dropout0.5__cls_preserving_avgpool8"
+)
+ARCHITECTURE_CONTRACT = "logical_30_physical_20_5_10x2_5_mesh_audio_mellow"
+
+
 @dataclass
 class AudioMeshConfig:
     sample_rate: int = 32000
     audio_seconds: int = 10
     framewise_classes: int = 527
     encoder_dim: int = 768
-    projection_dim: int | None = None
+    projection_dim: int | None = MESH_HIDDEN_SIZE
     downsample_kernel: int = 8
     projection_dropout: float = 0.5
     max_prompt_tokens: int = 129
     max_answer_tokens: int = 250
     max_context_length: int = 768
     separator_token_id: int | None = None
-    architecture_contract: str = "logical_30_physical_20_5_10x2_5_mesh_audio_mellow"
+    architecture_contract: str = ARCHITECTURE_CONTRACT
 
 
 def _tensor_from_output(value: Any) -> torch.Tensor | None:
@@ -153,7 +167,19 @@ def _load_mellow_wrapper(root: Path, checkpoint: Path, device: torch.device) -> 
         raise ValueError(f"Mellow c2l must be Linear(527, 768), got {c2l}")
     for parameter in c2l.parameters():
         parameter.requires_grad_(True)
-    return wrapper, htsat, {"module": module.__name__, "checkpoint": str(checkpoint), "missing": [], "unexpected": [], "c2l_trainable": True}
+    source = Path(getattr(module, "__file__", root)).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"Mellow HTSAT module source is missing: {source}")
+    return wrapper, htsat, {
+        "module": module.__name__,
+        "mellow_root": str(root),
+        "mellow_htsat_source": str(source),
+        "mellow_htsat_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "checkpoint": str(checkpoint.resolve()),
+        "missing": [],
+        "unexpected": [],
+        "c2l_trainable": True,
+    }
 
 
 def _audio_forward(wrapper: nn.Module, waveform: torch.Tensor) -> torch.Tensor:
@@ -280,20 +306,40 @@ class AudioMeshModel(nn.Module):
         self.htsat_wrapper = htsat_wrapper
         self.htsat_backbone = htsat_backbone
         hidden = int(mesh_model.config.hidden_size)
+        if hidden != MESH_HIDDEN_SIZE:
+            raise ValueError(
+                f"Audio MeSH requires MeSH hidden_size={MESH_HIDDEN_SIZE}, got {hidden}"
+            )
         self.config_audio = config or AudioMeshConfig(projection_dim=hidden)
+        if int(self.config_audio.encoder_dim) != 768:
+            raise ValueError("Audio MeSH requires a 768-dimensional HTSAT/Mellow embedding")
+        if int(self.config_audio.framewise_classes) != 527:
+            raise ValueError("Audio MeSH requires Mellow c2l(527, 768)")
+        if int(self.config_audio.downsample_kernel) != 8:
+            raise ValueError("Audio MeSH requires 8x temporal pooling")
+        if float(self.config_audio.projection_dropout) != 0.5:
+            raise ValueError("Audio MeSH requires projection dropout=0.5")
         self.config_audio.projection_dim = hidden
         self.bridge = AudioBridge(768, hidden, self.config_audio.downsample_kernel, self.config_audio.projection_dropout)
         self.last_labels: torch.Tensor | None = None
         self.last_prefix_length: int | None = None
         self.last_audio_tokens_per_clip: tuple[int, int] | None = None
+        self._freeze_wrapper_except_c2l()
+        self.separator_token_id = self._resolve_separator()
+
+    def _freeze_wrapper_except_c2l(self) -> None:
+        """Keep the complete external wrapper frozen except its c2l adapter."""
+        c2l = getattr(self.htsat_wrapper, "c2l", None)
+        if not isinstance(c2l, nn.Linear) or int(c2l.in_features) != 527 or int(c2l.out_features) != 768:
+            raise ValueError(f"Audio MeSH requires wrapper.c2l = Linear(527, 768), got {c2l}")
+        for parameter in self.htsat_wrapper.parameters():
+            parameter.requires_grad_(False)
         for parameter in self.htsat_backbone.parameters():
             parameter.requires_grad_(False)
+        for parameter in c2l.parameters():
+            parameter.requires_grad_(True)
+        self.htsat_wrapper.eval()
         self.htsat_backbone.eval()
-        frozen_ids = {id(parameter) for parameter in self.htsat_backbone.parameters()}
-        for parameter in self.htsat_wrapper.parameters():
-            if id(parameter) not in frozen_ids:
-                parameter.requires_grad_(True)
-        self.separator_token_id = self._resolve_separator()
 
     def _resolve_separator(self) -> int:
         # SmolLM2's Mellow route uses the vocabulary token ``!`` as the
@@ -318,14 +364,31 @@ class AudioMeshModel(nn.Module):
 
     def train(self, mode: bool = True) -> "AudioMeshModel":
         super().train(mode)
-        # The pretrained HTSAT backbone is frozen and must remain in eval mode
-        # so dropout/batch-statistics cannot change during multimodal training.
+        # The pretrained external wrapper stays in eval mode.  c2l is the only
+        # wrapper module that is trained; the bridge and MeSH LM follow the
+        # requested model mode.
+        self.mesh_model.train(mode)
+        self.bridge.train(mode)
         self.htsat_wrapper.eval()
         c2l = getattr(self.htsat_wrapper, "c2l", None)
         if c2l is not None:
             c2l.train(mode)
         self.htsat_backbone.eval()
+        self._freeze_wrapper_except_c2l()
+        if mode:
+            # _freeze_wrapper_except_c2l() sets wrapper.eval(), which also
+            # affects c2l; restore c2l's intended training mode afterwards.
+            assert c2l is not None
+            c2l.train(True)
+            self._assert_training_contract()
         return self
+
+    def _assert_training_contract(self) -> None:
+        audit = self.trainable_parameter_audit()
+        if not audit["training_mode_contract"]:
+            raise RuntimeError(f"Audio MeSH training mode contract failed: {audit}")
+        if audit["unexpected_wrapper_trainable_names"]:
+            raise RuntimeError(f"unexpected trainable Mellow wrapper parameters: {audit}")
 
     def _waveform_embedding(self, waveform: torch.Tensor) -> torch.Tensor:
         embedding = _audio_forward(self.htsat_wrapper, waveform)
@@ -358,10 +421,22 @@ class AudioMeshModel(nn.Module):
 
     def forward(self, *, audio1: torch.Tensor, audio2: torch.Tensor | None, text_ids: torch.Tensor, text_attention_mask: torch.Tensor, prompt_lengths: torch.Tensor, answer_lengths: torch.Tensor, answer_attention_mask: torch.Tensor | None = None, audio2_reused_mask: torch.Tensor | None = None) -> Any:
         audio_prefix1, audio_prefix2 = self.encode_audio(audio1, audio2, audio2_reused_mask)
+        if int(audio_prefix1.shape[1]) != AUDIO_TOKENS_PER_CLIP or int(audio_prefix2.shape[1]) != AUDIO_TOKENS_PER_CLIP:
+            raise RuntimeError(
+                "Audio MeSH requires exactly "
+                f"{AUDIO_TOKENS_PER_CLIP} tokens per clip, got "
+                f"{tuple(audio_prefix1.shape)} and {tuple(audio_prefix2.shape)}"
+            )
+        if int(audio_prefix1.shape[-1]) != MESH_HIDDEN_SIZE or int(audio_prefix2.shape[-1]) != MESH_HIDDEN_SIZE:
+            raise RuntimeError("Audio MeSH bridge output hidden size violates the 576-dimensional contract")
         text_embeds = _find_embedding(self.mesh_model, text_ids)
         separator = _find_embedding(self.mesh_model, torch.full((text_ids.shape[0], 1), self.separator_token_id, dtype=torch.long, device=text_ids.device))
         inputs_embeds = torch.cat((audio_prefix1, separator, audio_prefix2, separator, text_embeds), dim=1)
         prefix_length = int(audio_prefix1.shape[1] + 1 + audio_prefix2.shape[1] + 1)
+        if prefix_length != AUDIO_PREFIX_TOKENS:
+            raise RuntimeError(
+                f"Audio MeSH requires total prefix length {AUDIO_PREFIX_TOKENS}, got {prefix_length}"
+            )
         self.last_audio_tokens_per_clip = (int(audio_prefix1.shape[1]), int(audio_prefix2.shape[1]))
         labels = build_labels(text_ids=text_ids, prompt_lengths=prompt_lengths, answer_lengths=answer_lengths, prefix_length=prefix_length)
         self.last_labels = labels.detach()
@@ -382,7 +457,45 @@ class AudioMeshModel(nn.Module):
     def trainable_parameter_audit(self) -> dict[str, Any]:
         frozen_htsat = sum(p.numel() for p in self.htsat_backbone.parameters() if not p.requires_grad)
         trainable = [name for name, p in self.named_parameters() if p.requires_grad]
-        return {"trainable_parameter_count": sum(p.numel() for p in self.parameters() if p.requires_grad), "frozen_htsat_parameter_count": frozen_htsat, "htsat_frozen": all(not p.requires_grad for p in self.htsat_backbone.parameters()), "bridge_trainable": any(name.startswith("bridge.") for name in trainable), "mesh_trainable": any(name.startswith("mesh_model.") for name in trainable), "trainable_names_sample": trainable[:20]}
+        wrapper_trainable = [name for name, p in self.htsat_wrapper.named_parameters() if p.requires_grad]
+        unexpected_wrapper = [name for name in wrapper_trainable if not name.startswith("c2l.")]
+        c2l = getattr(self.htsat_wrapper, "c2l", None)
+        c2l_trainable = isinstance(c2l, nn.Module) and any(p.requires_grad for p in c2l.parameters())
+        mesh_trainable = any(name.startswith("mesh_model.") for name in trainable)
+        bridge_trainable = any(name.startswith("bridge.") for name in trainable)
+        modes = {
+            "model_training": bool(self.training),
+            "mesh_training": bool(self.mesh_model.training),
+            "bridge_training": bool(self.bridge.training),
+            "c2l_training": bool(c2l.training) if isinstance(c2l, nn.Module) else False,
+            "htsat_wrapper_training": bool(self.htsat_wrapper.training),
+            "htsat_backbone_training": bool(self.htsat_backbone.training),
+        }
+        training_mode_contract = (
+            modes["model_training"]
+            and modes["mesh_training"]
+            and modes["bridge_training"]
+            and modes["c2l_training"]
+            and not modes["htsat_wrapper_training"]
+            and not modes["htsat_backbone_training"]
+            and c2l_trainable
+            and not unexpected_wrapper
+            and mesh_trainable
+            and bridge_trainable
+        )
+        return {
+            "trainable_parameter_count": sum(p.numel() for p in self.parameters() if p.requires_grad),
+            "frozen_htsat_parameter_count": frozen_htsat,
+            "htsat_frozen": all(not p.requires_grad for p in self.htsat_backbone.parameters()),
+            "bridge_trainable": bridge_trainable,
+            "mesh_trainable": mesh_trainable,
+            "c2l_trainable": c2l_trainable,
+            "wrapper_trainable_names": wrapper_trainable,
+            "unexpected_wrapper_trainable_names": unexpected_wrapper,
+            "training_modes": modes,
+            "training_mode_contract": training_mode_contract,
+            "trainable_names_sample": trainable[:20],
+        }
 
 
 def manifest_sha256(paths: list[Path]) -> str:
