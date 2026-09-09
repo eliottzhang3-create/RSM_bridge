@@ -11,6 +11,7 @@ import json
 import math
 import os
 import random
+import shutil
 import time
 import traceback
 from pathlib import Path
@@ -31,7 +32,7 @@ from audio_5_10x2_5_mesh_mellow.model import AudioMeshConfig, AudioMeshModel, _l
 from recursive_model_5_10x2_5_mesh import RecursiveLlamaForCausalLM, register_auto_class  # noqa: E402
 
 
-DEFAULT_MESH = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_resume_000500_nonfatal_router_20260907_115533/checkpoint-009244"
+DEFAULT_MESH = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244"
 DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
 
@@ -59,7 +60,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-lr", type=float, default=1e-3)
     p.add_argument("--min-lr", type=float, default=0.0)
     p.add_argument("--warmup-steps", type=int)
-    p.add_argument("--save-every", type=int, default=10)
+    p.add_argument("--save-every", type=int, default=1000)
+    p.add_argument("--checkpoint-retention", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--num-workers", type=int, default=0, help="DataLoader workers per DDP rank; 0 keeps loading in the rank process")
     return p.parse_args(argv)
@@ -116,13 +118,34 @@ def _save_checkpoint(path: Path, model: AudioMeshModel, tokenizer: Any, optimize
     tokenizer.save_pretrained(temporary / "tokenizer")
     torch.save(_trainable_state(model), temporary / "audio_bridge.pt")
     torch.save({"optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "global_step": step, "epoch": epoch, "batch_in_epoch": batch_in_epoch, "rng_states_by_rank": rng_states_by_rank}, temporary / "training_state.pt")
-    config = {"architecture_contract": "logical_30_physical_20_5_10x2_5_mesh_audio_mellow", "manifest_sha256": manifest_hash, "htsat_checkpoint": str(args.htsat_checkpoint), "mesh_model_path": str(args.model_path), "epochs": args.epochs, "max_lr": args.max_lr, "min_lr": args.min_lr, "warmup_steps": args.warmup_steps, "total_steps": total_steps, "global_step": step, "epoch": epoch, "batch_in_epoch": batch_in_epoch, "world_size": args.world_size, "micro_batch_size": args.micro_batch_size, "gradient_accumulation_steps": args.gradient_accumulation_steps}
+    config = {"architecture_contract": "logical_30_physical_20_5_10x2_5_mesh_audio_mellow", "mapper_contract": "mellow_c2l_527x768__concat_cls_frames__projection_768x576x576_biasfree_dropout0.5__cls_preserving_avgpool8", "mapper_initialization": "random_c2l_and_xavier_projection", "audio_tokens_per_clip": 129, "audio_prefix_tokens_with_separators": 260, "manifest_sha256": manifest_hash, "htsat_checkpoint": str(args.htsat_checkpoint), "mesh_model_path": str(args.model_path), "epochs": args.epochs, "max_lr": args.max_lr, "min_lr": args.min_lr, "warmup_steps": args.warmup_steps, "total_steps": total_steps, "global_step": step, "epoch": epoch, "batch_in_epoch": batch_in_epoch, "world_size": args.world_size, "micro_batch_size": args.micro_batch_size, "gradient_accumulation_steps": args.gradient_accumulation_steps, "save_every": args.save_every, "checkpoint_retention": args.checkpoint_retention}
     (temporary / "audio_mesh_config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     (temporary / "checkpoint_complete.json").write_text(json.dumps({"status": "complete", "global_step": step, "required": ["mesh_model", "tokenizer", "audio_bridge.pt", "training_state.pt", "audio_mesh_config.json"]}, indent=2) + "\n", encoding="utf-8")
     if path.exists():
-        import shutil
         shutil.rmtree(path)
     temporary.replace(path)
+
+
+def _prune_checkpoints(output_dir: Path, retention: int) -> list[str]:
+    """Keep only the newest complete checkpoints inside this exact run dir."""
+    if retention <= 0:
+        raise ValueError("checkpoint_retention must be positive")
+    output_resolved = output_dir.resolve()
+    complete: list[tuple[int, Path]] = []
+    for candidate in output_dir.glob("checkpoint-*"):
+        suffix = candidate.name.removeprefix("checkpoint-")
+        if not candidate.is_dir() or not suffix.isdigit():
+            continue
+        resolved = candidate.resolve()
+        if resolved.parent != output_resolved:
+            raise RuntimeError(f"refusing to prune checkpoint outside output directory: {resolved}")
+        marker = candidate / "checkpoint_complete.json"
+        if marker.is_file() and json.loads(marker.read_text(encoding="utf-8")).get("status") == "complete":
+            complete.append((int(suffix), candidate))
+    complete.sort(key=lambda item: item[0])
+    for _, stale in complete[:-retention]:
+        shutil.rmtree(stale)
+    return [str(path) for _, path in complete[-retention:]]
 
 
 def _load_training_state(path: Path, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LambdaLR) -> dict[str, Any]:
@@ -263,6 +286,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         if world != args.world_size:
             raise RuntimeError(f"world size mismatch: launcher={world} requested={args.world_size}")
+        if args.save_every <= 0 or args.checkpoint_retention <= 0:
+            raise ValueError("save_every and checkpoint_retention must be positive")
         model, tokenizer = _load_model(args, device)
         dataset = ReasonAQADataset(args.train_manifest, tokenizer)
         # Shuffle deterministically per epoch; set_epoch(epoch) below changes
@@ -360,6 +385,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                             artifact_audit = _audit_saved_checkpoint(out)
                             resume_audit = _actual_resume_audit(out, args, batch_cpu, device, optimizer_step, float(optimizer.param_groups[0]["lr"]), rank)
                             report["checkpoint_reload_audit"] = {"artifact": artifact_audit, "actual_resume": resume_audit}
+                        elif args.gate == "FORMAL":
+                            report["checkpoints"] = _prune_checkpoints(args.output_dir, args.checkpoint_retention)
                     if world > 1:
                         dist.barrier()
                     if optimizer_step >= max_steps:

@@ -30,6 +30,7 @@ class AudioMeshConfig:
     encoder_dim: int = 768
     projection_dim: int | None = None
     downsample_kernel: int = 8
+    projection_dropout: float = 0.5
     max_prompt_tokens: int = 129
     max_answer_tokens: int = 250
     max_context_length: int = 768
@@ -162,7 +163,19 @@ def _audio_forward(wrapper: nn.Module, waveform: torch.Tensor) -> torch.Tensor:
         output = wrapper(waveform)
     except Exception:
         output = wrapper(waveform.squeeze(1))
-    latent = _named_output(output, ("latent_output", "latent", "embedding", "embeddings"))
+    # The official Mellow wrapper has already applied c2l to the 527-dim
+    # event-presence map and concatenated it after the 1x768 latent/CLS token.
+    # Prefer that exact mapper output so c2l is neither skipped nor executed
+    # twice.  The explicit latent/framewise path remains a compatibility
+    # fallback for wrappers that expose the two tensors but no embedding.
+    embedding = _named_output(output, ("embedding", "embeddings"))
+    if embedding is not None:
+        if embedding.ndim == 2:
+            embedding = embedding.unsqueeze(1)
+        if embedding.ndim != 3 or embedding.shape[-1] != 768:
+            raise RuntimeError(f"Mellow embedding must be [B,T,768], got {tuple(embedding.shape)}")
+        return embedding
+    latent = _named_output(output, ("latent_output", "latent"))
     framewise = _named_output(output, ("framewise_output", "framewise"))
     c2l = getattr(wrapper, "c2l", None)
     if latent is not None and framewise is not None:
@@ -193,27 +206,37 @@ def _audio_forward(wrapper: nn.Module, waveform: torch.Tensor) -> torch.Tensor:
 
 
 class AudioBridge(nn.Module):
-    """Mellow projection plus official CLS-preserving average pooling."""
-    def __init__(self, in_dim: int, hidden_size: int, kernel: int = 8) -> None:
+    """Exact Mellow nonlinear projection followed by 8x temporal pooling."""
+    def __init__(self, in_dim: int, hidden_size: int, kernel: int = 8, dropout: float = 0.5) -> None:
         super().__init__()
         self.in_dim = int(in_dim)
         self.hidden_size = int(hidden_size)
         self.kernel = int(kernel)
-        self.linear1 = nn.Linear(in_dim, hidden_size)
-        self.linear2 = nn.Linear(hidden_size, hidden_size)
+        self.linear1 = nn.Linear(in_dim, hidden_size, bias=False)
+        self.linear2 = nn.Linear(hidden_size, hidden_size, bias=False)
         self.norm = nn.LayerNorm(hidden_size)
-        self.dropout = nn.Dropout(0.0)
+        self.dropout = nn.Dropout(float(dropout))
         self.activation = nn.GELU()
+        # Mellow initializes both projection matrices with Xavier uniform and
+        # LayerNorm with unit scale / zero bias.  This mapper is intentionally
+        # random when audio training starts; it is not inherited from MeSH.
+        nn.init.xavier_uniform_(self.linear1.weight)
+        nn.init.xavier_uniform_(self.linear2.weight)
+        nn.init.ones_(self.norm.weight)
+        nn.init.zeros_(self.norm.bias)
 
     def forward(self, embedding: torch.Tensor) -> torch.Tensor:
         if embedding.ndim != 3 or embedding.shape[-1] != self.in_dim:
             raise ValueError(f"bridge expects [B,T,{self.in_dim}], got {tuple(embedding.shape)}")
-        cls, framewise = embedding[:, :1], embedding[:, 1:]
-        framewise = F.avg_pool1d(framewise.transpose(1, 2), kernel_size=self.kernel, stride=self.kernel).transpose(1, 2)
-        values = torch.cat((cls, framewise), dim=1)
-        values = self.linear1(values)
-        values = self.linear2(self.activation(values)) + values
-        return self.dropout(self.norm(values))
+        # Official ordering: project every latent/frame token first, fuse the
+        # two linear paths, normalize, and only then downsample.  The global
+        # latent at index zero is preserved exactly as the CLS-equivalent.
+        projected1 = self.linear1(embedding)
+        projected2 = self.dropout(self.linear2(self.activation(projected1)))
+        projected = self.norm(projected1 + projected2)
+        cls, framewise = projected[:, :1], projected[:, 1:]
+        framewise = F.avg_pool2d(framewise, kernel_size=(self.kernel, 1), stride=(self.kernel, 1))
+        return torch.cat((cls, framewise), dim=1)
 
 
 def _find_embedding(model: nn.Module, ids: torch.Tensor) -> torch.Tensor:
@@ -259,9 +282,10 @@ class AudioMeshModel(nn.Module):
         hidden = int(mesh_model.config.hidden_size)
         self.config_audio = config or AudioMeshConfig(projection_dim=hidden)
         self.config_audio.projection_dim = hidden
-        self.bridge = AudioBridge(768, hidden, self.config_audio.downsample_kernel)
+        self.bridge = AudioBridge(768, hidden, self.config_audio.downsample_kernel, self.config_audio.projection_dropout)
         self.last_labels: torch.Tensor | None = None
         self.last_prefix_length: int | None = None
+        self.last_audio_tokens_per_clip: tuple[int, int] | None = None
         for parameter in self.htsat_backbone.parameters():
             parameter.requires_grad_(False)
         self.htsat_backbone.eval()
@@ -338,6 +362,7 @@ class AudioMeshModel(nn.Module):
         separator = _find_embedding(self.mesh_model, torch.full((text_ids.shape[0], 1), self.separator_token_id, dtype=torch.long, device=text_ids.device))
         inputs_embeds = torch.cat((audio_prefix1, separator, audio_prefix2, separator, text_embeds), dim=1)
         prefix_length = int(audio_prefix1.shape[1] + 1 + audio_prefix2.shape[1] + 1)
+        self.last_audio_tokens_per_clip = (int(audio_prefix1.shape[1]), int(audio_prefix2.shape[1]))
         labels = build_labels(text_ids=text_ids, prompt_lengths=prompt_lengths, answer_lengths=answer_lengths, prefix_length=prefix_length)
         self.last_labels = labels.detach()
         self.last_prefix_length = prefix_length

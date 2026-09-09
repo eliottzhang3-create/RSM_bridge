@@ -42,6 +42,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("Stage 4 requires CUDA; run on a GPU node")
         device = torch.device("cuda", 0)
         model, tokenizer = _load(args, device)
+        if model.bridge.linear1.bias is not None or model.bridge.linear2.bias is not None:
+            raise RuntimeError("Mellow mapper contract failed: projection Linear layers must use bias=False")
+        if model.bridge.kernel != 8 or float(model.bridge.dropout.p) != 0.5:
+            raise RuntimeError(f"Mellow mapper contract failed: kernel={model.bridge.kernel} dropout={model.bridge.dropout.p}")
         model.train()
         dataset = ReasonAQADataset(args.manifest, tokenizer)
         loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
@@ -54,6 +58,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         prefix_length = int(model.last_prefix_length or 0)
         if labels is None or prefix_length <= 0:
             raise RuntimeError("model did not expose labels/prefix length for loss audit")
+        audio_tokens = model.last_audio_tokens_per_clip
+        if audio_tokens != (129, 129) or prefix_length != 260:
+            raise RuntimeError(f"Mellow audio-token contract failed: audio_tokens={audio_tokens} prefix_length={prefix_length}")
         text_ids = moved["text_ids"]
         prompt_lengths = moved["prompt_lengths"]
         answer_lengths = moved["answer_lengths"]
@@ -86,7 +93,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         c2l_grad = c2l is not None and any(p.grad is not None and torch.isfinite(p.grad).all() for p in c2l.parameters())
         if not c2l_grad:
             raise RuntimeError("c2l received no finite gradient")
-        report.update({"status": "PASS", "device": str(device), "loss": float(loss.detach().cpu()), "logits_shape": list(output.logits.shape), "parameter_audit": parameter_audit(model.mesh_model), "trainable_audit": audit, "c2l_gradient": True, "audio2_reused": bool(moved.get("audio2") is None), "label_audit": {"unified_text_padding": True, "prefix_length": prefix_length, "prefix_non_ignore_count": int((prefix_labels != -100).sum().item()), "answer_supervised_tokens": actual_answer_tokens, "expected_answer_tokens": expected_answer_tokens}, "checks": [{"name": "cuda_available", "passed": True}, {"name": "forward_loss_finite", "passed": True}, {"name": "unified_text_padding", "passed": True, "detail": "prompt and answer were concatenated before batch padding"}, {"name": "answer_only_labels", "passed": True, "detail": "verified exact answer intervals from model.last_labels"}, {"name": "backward_gradients", "passed": True}]})
+        report.update({"status": "PASS", "device": str(device), "loss": float(loss.detach().cpu()), "logits_shape": list(output.logits.shape), "parameter_audit": parameter_audit(model.mesh_model), "trainable_audit": audit, "c2l_gradient": True, "audio2_reused": bool(moved.get("audio2") is None), "mapper_audit": {"architecture": "c2l_527x768__concat_cls_frames__projection_768x576x576__avgpool8", "random_initialization": "xavier_uniform", "linear_bias": False, "dropout": 0.5, "audio_tokens_per_clip": list(audio_tokens), "two_audio_tokens": 258, "two_audio_plus_separators": prefix_length}, "label_audit": {"unified_text_padding": True, "prefix_length": prefix_length, "prefix_non_ignore_count": int((prefix_labels != -100).sum().item()), "answer_supervised_tokens": actual_answer_tokens, "expected_answer_tokens": expected_answer_tokens}, "checks": [{"name": "cuda_available", "passed": True}, {"name": "mellow_mapper_architecture", "passed": True}, {"name": "mellow_audio_token_count", "passed": True}, {"name": "forward_loss_finite", "passed": True}, {"name": "unified_text_padding", "passed": True, "detail": "prompt and answer were concatenated before batch padding"}, {"name": "answer_only_labels", "passed": True, "detail": "verified exact answer intervals from model.last_labels"}, {"name": "backward_gradients", "passed": True}]})
     except Exception as exc:
         report["hard_failures"].append({"name": "stage4_exception", "detail": repr(exc), "traceback": traceback.format_exc()})
     report["summary"] = {"checks": len(report["checks"]), "warnings": len(report["warnings"]), "hard_failures": len(report["hard_failures"])}

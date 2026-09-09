@@ -7,12 +7,19 @@ HTSAT interface and ReasonAQA manifests.  It does not modify the legacy
 The contract is 32 kHz mono audio normalized to 10 seconds by cropping the
 first 10 seconds or right-padding.  Empty audio2 rows reuse audio1 and, when
 possible, the same encoded prefix.  HTSAT is frozen; Mellow c2l (527 to 768),
-the projection/downsampling bridge, MeSH, and routers are trainable.
+the projection/downsampling bridge, MeSH, and routers are trainable.  The
+mapper follows Mellow exactly: random c2l, concatenate the 1x768 latent/CLS
+with the projected framewise map, then a randomly Xavier-initialized
+bias-free 768->576->576 nonlinear residual projection with dropout 0.5 and
+LayerNorm, followed by CLS-preserving 8x average pooling.  Each audio becomes
+129 tokens; two audios plus two separators form a 260-position audio prefix.
 
 The formal route is 8 GPUs, microbatch 8 per GPU, GA 4 (effective global
 batch 256), 3 epochs, max LR 1e-3, cosine schedule, warmup
 `ceil(total_optimizer_steps * 0.05)`, and
-gradient clipping 0.5.  Each sample is tokenized as `prompt + answer` before
+gradient clipping 0.5.  Formal checkpoints are saved every 1000 optimizer
+steps and only the newest four complete checkpoints are retained.  Each
+sample is tokenized as `prompt + answer` before
 the batch is right-padded to its longest complete text sequence.  Only the
 real answer interval has labels; all audio, separator, prompt, and trailing
 batch-padding positions are `-100`.  The standard causal-LM shift therefore
