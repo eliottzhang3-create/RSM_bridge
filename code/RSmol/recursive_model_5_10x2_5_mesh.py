@@ -20,12 +20,87 @@ from torch import nn
 
 try:
     from transformers import AutoModelForCausalLM
-    from transformers.cache_utils import DynamicCache
     from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
     from transformers.models.llama.configuration_llama import LlamaConfig
-    from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaPreTrainedModel
+    from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaPreTrainedModel, LlamaRotaryEmbedding
 except ImportError as exc:  # pragma: no cover - static checkout without ML dependencies
     raise ImportError("recursive_model_5_10x2_5_mesh requires torch and transformers") from exc
+
+try:
+    from transformers.cache_utils import DynamicCache
+    HAS_TRANSFORMERS_DYNAMIC_CACHE = True
+except ImportError:  # pragma: no cover - exercised by older remote images
+    HAS_TRANSFORMERS_DYNAMIC_CACHE = False
+
+    class DynamicCache:  # type: ignore[no-redef]
+        """Small legacy-compatible cache used only when Transformers lacks DynamicCache.
+
+        Audio FORMAL always passes ``use_cache=False``.  This fallback keeps the
+        module importable on older Transformers and provides the subset of the
+        modern cache API needed by lazy generation/tests when the decoder accepts
+        cache objects.  It deliberately does not alter the MeSH forward path.
+        """
+
+        def __init__(self) -> None:
+            self.key_cache: list[torch.Tensor] = []
+            self.value_cache: list[torch.Tensor] = []
+
+        def update(self, key_states: torch.Tensor, value_states: torch.Tensor, layer_idx: int, cache_kwargs: Mapping[str, Any] | None = None, **kwargs: Any) -> tuple[torch.Tensor, torch.Tensor]:
+            del cache_kwargs, kwargs
+            index = int(layer_idx)
+            while len(self.key_cache) <= index:
+                self.key_cache.append(torch.empty(0, device=key_states.device, dtype=key_states.dtype))
+                self.value_cache.append(torch.empty(0, device=value_states.device, dtype=value_states.dtype))
+            if self.key_cache[index].numel() == 0:
+                self.key_cache[index] = key_states
+                self.value_cache[index] = value_states
+            else:
+                self.key_cache[index] = torch.cat((self.key_cache[index], key_states), dim=-2)
+                self.value_cache[index] = torch.cat((self.value_cache[index], value_states), dim=-2)
+            return self.key_cache[index], self.value_cache[index]
+
+        def get_seq_length(self, layer_idx: int = 0, cache_position: torch.LongTensor | None = None) -> int:
+            del cache_position
+            index = int(layer_idx)
+            if index >= len(self.key_cache) or self.key_cache[index].numel() == 0:
+                return 0
+            return int(self.key_cache[index].shape[-2])
+
+        def get_usable_length(self, new_seq_length: int, layer_idx: int = 0) -> int:
+            del new_seq_length
+            return self.get_seq_length(layer_idx)
+
+        def __len__(self) -> int:
+            return len(self.key_cache)
+
+
+def _make_decoder_layer(config: Any, layer_idx: int) -> nn.Module:
+    """Instantiate both modern and legacy Llama decoder layer signatures."""
+    parameters = inspect.signature(LlamaDecoderLayer).parameters
+    kwargs = {"layer_idx": layer_idx} if "layer_idx" in parameters else {}
+    return LlamaDecoderLayer(config, **kwargs)
+
+
+def _make_rotary_embedding(config: Any) -> nn.Module:
+    """Instantiate the config-based or legacy positional rotary API."""
+    parameters = inspect.signature(LlamaRotaryEmbedding).parameters
+    if "config" in parameters:
+        return LlamaRotaryEmbedding(config=config)
+    dim = int(config.hidden_size) // int(config.num_attention_heads)
+    kwargs: dict[str, Any] = {"dim": dim}
+    if "max_position_embeddings" in parameters:
+        kwargs["max_position_embeddings"] = int(getattr(config, "max_position_embeddings", 2048))
+    if "base" in parameters:
+        kwargs["base"] = float(getattr(config, "rope_theta", 10000.0))
+    return LlamaRotaryEmbedding(**kwargs)
+
+
+def _rotary_forward(rotary: nn.Module, hidden: torch.Tensor, position_ids: torch.LongTensor) -> Any:
+    parameters = inspect.signature(rotary.forward).parameters
+    if "position_ids" in parameters:
+        return rotary(hidden, position_ids=position_ids)
+    seq_len = int(position_ids.max().item()) + 1 if position_ids.numel() else 0
+    return rotary(hidden, seq_len=seq_len)
 
 
 LOGICAL_LAYER_COUNT = 30
@@ -89,7 +164,7 @@ def _assert_llama_api(layer: nn.Module) -> None:
         pass
     if not ({"past_key_value", "past_key_values"} & set(inspect.signature(layer.forward).parameters)):
         raise RuntimeError("unsupported LlamaDecoderLayer cache API")
-    if "layer_idx" not in inspect.signature(DynamicCache.update).parameters:
+    if HAS_TRANSFORMERS_DYNAMIC_CACHE and "layer_idx" not in inspect.signature(DynamicCache.update).parameters:
         raise RuntimeError("unsupported DynamicCache.update API")
 
 
@@ -243,12 +318,12 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         self.recursive_layer_count = 20
         self.recursive_loops = 2
         self.memory_slots = MEMORY_SLOT_COUNT
-        self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_idx=i) for i in range(PHYSICAL_LAYER_COUNT)])
+        self.layers = nn.ModuleList([_make_decoder_layer(config, i) for i in range(PHYSICAL_LAYER_COUNT)])
         _assert_llama_api(self.layers[0])
         from transformers.models.llama.modeling_llama import LlamaRMSNorm, LlamaRotaryEmbedding
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
-        self.rotary_emb = LlamaRotaryEmbedding(config=config)
+        self.rotary_emb = _make_rotary_embedding(config)
         self.write_routers = nn.ModuleList([nn.Linear(config.hidden_size, MEMORY_SLOT_COUNT, bias=True) for _ in range(ROUTER_COUNT)])
         self.read_routers = nn.ModuleList([nn.Linear(config.hidden_size, MEMORY_SLOT_COUNT, bias=True) for _ in range(ROUTER_COUNT)])
         for router in list(self.write_routers) + list(self.read_routers):
@@ -346,7 +421,7 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         if cache_position is None:
             cache_position = position_ids[0]
         mask = _causal_mask(attention_mask, batch_size=batch_size, query_length=query_length, past_length=past_length, dtype=hidden.dtype, device=hidden.device)
-        position_embeddings = self.rotary_emb(hidden, position_ids=position_ids)
+        position_embeddings = _rotary_forward(self.rotary_emb, hidden, position_ids)
         self.last_forward_trace = []
         self.last_router_weights = {}
         self.last_router_queries = {}
@@ -453,7 +528,17 @@ class RecursiveLlama5_10x2_5MeshForCausalLM(LlamaForCausalLM):
         logits = self.lm_head(outputs.last_hidden_state[:, indices, :])
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **loss_kwargs)
+            loss_function = getattr(self, "loss_function", None)
+            if loss_function is not None:
+                loss = loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **loss_kwargs)
+            else:  # Transformers versions before the configurable loss API.
+                shift_logits = logits[..., :-1, :].contiguous()
+                shift_labels = labels[..., 1:].contiguous()
+                loss = F.cross_entropy(
+                    shift_logits.view(-1, shift_logits.shape[-1]),
+                    shift_labels.view(-1),
+                    ignore_index=-100,
+                )
         result = CausalLMOutputWithPast(loss=loss, logits=logits, past_key_values=outputs.past_key_values, hidden_states=outputs.hidden_states, attentions=outputs.attentions)
         if return_dict is None:
             return_dict = bool(_cfg(self.config, "use_return_dict", True))
