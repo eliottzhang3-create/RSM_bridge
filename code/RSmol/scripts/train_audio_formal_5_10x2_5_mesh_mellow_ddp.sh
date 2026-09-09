@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+conda activate rsmol
 # Formal configuration: 8 samples/GPU with GA=4 gives effective global batch
 # 8 GPUs * 8 * 4 = 256.  User-supplied arguments after these defaults may still
 # override it when an intentional experiment needs a different accumulation.
