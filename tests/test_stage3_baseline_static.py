@@ -137,12 +137,19 @@ class Stage3BaselineStaticTest(unittest.TestCase):
     def test_remote_wrappers_use_rsmol_and_one_4090_gpu(self):
         for runtime in (self.falcon_runtime, self.tiny_runtime):
             self.assertIn("source \"$USER_CONDA_BASE/etc/profile.d/conda.sh\"", runtime)
-            self.assertIn('RSMOL_BASELINE_CONDA_ENV="${RSMOL_BASELINE_CONDA_ENV:-rsmol}"', runtime)
             self.assertIn('conda activate "$RSMOL_BASELINE_CONDA_ENV"', runtime)
             self.assertIn("HF_HUB_OFFLINE=1", runtime)
             self.assertIn("evaluate_stage3_baseline.py", runtime)
             self.assertIn("--tasks", runtime)
             self.assertIn("cuda:0", runtime)
+        self.assertIn(
+            'RSMOL_BASELINE_CONDA_ENV="${RSMOL_BASELINE_CONDA_ENV:-swift_start}"',
+            self.falcon_runtime,
+        )
+        self.assertIn(
+            'RSMOL_BASELINE_CONDA_ENV="${RSMOL_BASELINE_CONDA_ENV:-rsmol}"',
+            self.tiny_runtime,
+        )
         for submit in (self.falcon_submit, self.tiny_submit):
             self.assertIn("vc submit", submit)
             self.assertIn("-p pdgpu-4090", submit)

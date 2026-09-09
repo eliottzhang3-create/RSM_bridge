@@ -9,7 +9,7 @@ if [[ ! -f "$USER_CONDA_BASE/etc/profile.d/conda.sh" ]]; then
   exit 2
 fi
 source "$USER_CONDA_BASE/etc/profile.d/conda.sh"
-RSMOL_BASELINE_CONDA_ENV="${RSMOL_BASELINE_CONDA_ENV:-rsmol}"
+RSMOL_BASELINE_CONDA_ENV="${RSMOL_BASELINE_CONDA_ENV:-swift_start}"
 conda activate "$RSMOL_BASELINE_CONDA_ENV"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
