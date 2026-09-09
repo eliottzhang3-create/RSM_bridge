@@ -17,4 +17,4 @@ vc submit \
   -j audio-checkpoint-audit-5090-$(date +%m%d%H%M%S) \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$SCRIPT_DIR/log/audio_checkpoint_audit_5090.JOB.log" \
-  --cmd "python scripts/audit_audio_checkpoint_5_10x2_5_mesh_mellow.py $CMD_ARGS"
+  --cmd "bash scripts/audit_audio_checkpoint_5_10x2_5_mesh_mellow.sh $CMD_ARGS"
