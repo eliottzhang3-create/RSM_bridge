@@ -15,6 +15,9 @@ STAGE3 = ROOT / "code" / "RSmol" / "scripts" / "audit_audio_stage3_5_10x2_5_mesh
 STAGE4 = ROOT / "code" / "RSmol" / "scripts" / "audit_audio_stage4_5_10x2_5_mesh_mellow.py"
 TRAIN = ROOT / "code" / "RSmol" / "scripts" / "train_audio_5_10x2_5_mesh_mellow_ddp.py"
 FORMAL_SH = ROOT / "code" / "RSmol" / "scripts" / "train_audio_formal_5_10x2_5_mesh_mellow_ddp.sh"
+GENERATION = ROOT / "code" / "RSmol" / "scripts" / "generate_audio_checkpoint_reasonaqa.py"
+GENERATION_SH = ROOT / "code" / "RSmol" / "scripts" / "generate_audio_checkpoint_reasonaqa.sh"
+GENERATION_SUBMIT = ROOT / "code" / "RSmol" / "run_audio_checkpoint_reasonaqa_generation_3090.sh"
 SUBMIT_WRAPPERS = tuple(ROOT / "code" / "RSmol" / name for name in (
     "run_audio_stage4_5_10x2_5_mesh_mellow_5090.sh",
     "run_audio_stage5_5_10x2_5_mesh_mellow_5090.sh",
@@ -138,6 +141,39 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         text = (ROOT / "code" / "RSmol" / "scripts" / "audit_audio_checkpoint_5_10x2_5_mesh_mellow.py").read_text(encoding="utf-8")
         for marker in ("tokenizer/tokenizer_config.json", "optimizer_state_entries", "rng_states_by_rank", "external_htsat_verified", "forward_backward", "gradient_audit"):
             self.assertIn(marker, text)
+
+    def test_reasonaqa_checkpoint_sample_generation_contract(self) -> None:
+        for path in (GENERATION, GENERATION_SH, GENERATION_SUBMIT):
+            self.assertTrue(path.is_file(), path)
+        text = GENERATION.read_text(encoding="utf-8")
+        for marker in (
+            "_audit_saved_checkpoint",
+            "_load_model",
+            "model.eval()",
+            "model.encode_audio",
+            "separator_token_id",
+            "AUDIO_PREFIX_TOKENS",
+            "audio1 + separator + audio2 + separator + prompt + generated_tokens",
+            "use_cache=False",
+            "logits_to_keep=1",
+            "torch.argmax",
+            "reference_answer",
+            "generated_token_ids",
+            "test_manifest_sha256",
+            "logical_trace_verified",
+            "reasonaqa_samples.md",
+        ):
+            self.assertIn(marker, text)
+        self.assertNotIn(".generate(", text)
+        inner = GENERATION_SH.read_text(encoding="utf-8")
+        self.assertIn('source "$USER_CONDA_BASE/etc/profile.d/conda.sh"', inner)
+        self.assertIn("conda activate rsmol", inner)
+        submit = GENERATION_SUBMIT.read_text(encoding="utf-8")
+        self.assertIn("-p pdgpu-3090", submit)
+        self.assertIn("-g 1", submit)
+        self.assertIn("--num-samples 3", submit)
+        self.assertIn("checkpoint-001500", submit)
+        self.assertIn("reasonaqa_test.jsonl", submit)
 
     def test_gpu_stages_have_submission_wrappers(self) -> None:
         for wrapper in SUBMIT_WRAPPERS:
