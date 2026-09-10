@@ -98,7 +98,7 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn('"audio_tokens_per_clip": AUDIO_TOKENS_PER_CLIP', text)
         self.assertIn("--gradient-accumulation-steps 4", FORMAL_SH.read_text(encoding="utf-8"))
         self.assertIn("--micro-batch-size 8", FORMAL_SH.read_text(encoding="utf-8"))
-        self.assertIn("--save-every 1000 --checkpoint-retention 4", FORMAL_SH.read_text(encoding="utf-8"))
+        self.assertIn("--save-every 500 --checkpoint-retention 4", FORMAL_SH.read_text(encoding="utf-8"))
         self.assertIn("dropped_microbatches", text)
         self.assertIn("effective_global_batch_size", text)
         self.assertIn("completed_optimizer_steps = batch_in_epoch // args.gradient_accumulation_steps", text)

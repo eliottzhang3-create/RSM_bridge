@@ -23,7 +23,7 @@ ReasonAQA 两段音频
 stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244
 ```
 
-当前代码中的正式音频训练合同是：8 卡、每卡 micro-batch 8、GA=4、effective batch=256、3 epochs、max LR=1e-3、min LR=0、实际总 optimizer steps 的前 5% warmup、cosine decay、每 1000 步保存、最多保留最近 4 个完整 checkpoint。
+当前代码中的正式音频训练合同是：8 卡、每卡 micro-batch 8、GA=4、effective batch=256、3 epochs、max LR=1e-3、min LR=0、实际总 optimizer steps 的前 5% warmup、cosine decay、每 500 步保存、最多保留最近 4 个完整 checkpoint。
 
 重要状态：
 
@@ -451,11 +451,11 @@ rank 0 每 10 optimizer steps 打印：
 
 ### 8.5 checkpoint 保存、清理和 resume
 
-正式训练每 1000 optimizer steps 保存，并只保留当前 output dir 内最近 4 个带完整 marker 的 checkpoint；final step 总会保存。按 11,343 步预计最终保留：
+正式训练每 500 optimizer steps 保存，并只保留当前 output dir 内最近 4 个带完整 marker 的 checkpoint；final step 总会保存。按 11,343 步预计最终保留：
 
 ```text
-checkpoint-009000
 checkpoint-010000
+checkpoint-010500
 checkpoint-011000
 checkpoint-011343
 ```
@@ -562,11 +562,11 @@ bash code/RSmol/run_audio_formal_5_10x2_5_mesh_mellow_5090.sh \
   --epochs 3 \
   --max-lr 1e-3 \
   --min-lr 0 \
-  --save-every 1000 \
+  --save-every 500 \
   --checkpoint-retention 4
 ```
 
-底层 formal shell 已注入 micro 8、GA 4、save 1000、retention 4；命令中再次显式写出是为了让实验合同自说明。后置 CLI 参数会覆盖默认值。
+底层 formal shell 已注入 micro 8、GA 4、save 500、retention 4；命令中再次显式写出是为了让实验合同自说明。后置 CLI 参数会覆盖默认值。
 
 ## 10. 文件地图
 

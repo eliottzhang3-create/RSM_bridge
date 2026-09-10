@@ -450,7 +450,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "epochs": 3,
                 "max_lr": 1e-3,
                 "min_lr": 0.0,
-                "save_every": 1000,
+                "save_every": 500,
                 "checkpoint_retention": 4,
             }
             for key, expected in canonical.items():
