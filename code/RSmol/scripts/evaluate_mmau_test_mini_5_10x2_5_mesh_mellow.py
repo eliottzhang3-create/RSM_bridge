@@ -276,18 +276,71 @@ def _letter_from_output(text: str) -> str | None:
     return None
 
 
-def parse_model_output(text: Any, choices: Sequence[Any]) -> dict[str, str]:
-    """Conservatively map model text to one original choice.
+def _leading_choice_label(text: str) -> str | None:
+    """Return an explicit choice label anchored at the start of generation."""
 
-    The parser intentionally does not receive or inspect a gold answer.  A
-    full-text match is whole-string and unique after normalization, so options
-    that are substrings of one another cannot cause a false positive.
+    match = re.match(
+        r"^\s*(?:\(([A-Za-z])\)|\[([A-Za-z])\]|([A-Za-z])[.):])",
+        text,
+    )
+    if not match:
+        return None
+    return next(group for group in match.groups() if group is not None).upper()
+
+
+def _leading_choice_text(text: str, choices: Sequence[str]) -> int | None:
+    """Match a unique complete option at the start of a longer generation.
+
+    Prefer the longest matching option so a choice such as ``red`` cannot
+    steal a generation that begins with ``red and blue``.  A following
+    alphanumeric character is rejected unless it begins another explicit
+    choice label such as the model's observed ``Unusual soundD) ...`` loop.
+    """
+
+    normalized_text = _normalize_text(text)
+    bodies = [_normalize_text(_strip_choice_label(choice)) for choice in choices]
+    matches: list[int] = []
+    for index, body in enumerate(bodies):
+        if not body or not normalized_text.startswith(body):
+            continue
+        suffix = normalized_text[len(body) :]
+        if suffix and suffix[0].isalnum() and not re.match(r"^[A-Za-z][.):]", suffix):
+            continue
+        matches.append(index)
+    if not matches:
+        return None
+    longest = max(len(bodies[index]) for index in matches)
+    longest_matches = [index for index in matches if len(bodies[index]) == longest]
+    return longest_matches[0] if len(longest_matches) == 1 else None
+
+
+def parse_model_output(text: Any, choices: Sequence[Any]) -> dict[str, str]:
+    """Map the answer at the start of model text to one original choice.
+
+    The parser intentionally does not receive or inspect a gold answer.  The
+    untouched generation remains in ``generated_text`` for audit; only the
+    derived ``model_output`` is reduced to the selected benchmark option.
     """
 
     original = [str(choice) for choice in choices]
     raw = "" if text is None else str(text).strip()
     if not original or not raw:
         return {"selected_option": "", "parse_status": "unparseable", "parse_method": "none"}
+
+    leading_label = _leading_choice_label(raw)
+    if leading_label is not None:
+        index = ord(leading_label) - ord("A")
+        if 0 <= index < len(original):
+            return {
+                "selected_option": original[index],
+                "parse_status": "parsed",
+                "parse_method": "leading_label",
+            }
+        return {
+            "selected_option": "",
+            "parse_status": "unparseable",
+            "parse_method": "leading_label_out_of_range",
+        }
 
     letter = _letter_from_output(raw)
     if letter is not None:
@@ -312,37 +365,8 @@ def parse_model_output(text: Any, choices: Sequence[Any]) -> dict[str, str]:
     if len(exact_matches) > 1:
         return {"selected_option": "", "parse_status": "unparseable", "parse_method": "ambiguous_full_text"}
 
-    # Also accept a labeled full answer such as ``(B) violin`` only when the
-    # text after the label is an exact, unique choice.  A mismatched label is
-    # rejected rather than allowing a loose substring match.
-    labeled = re.fullmatch(r"^\s*(?:\(([A-Za-z])\)|\[([A-Za-z])\]|([A-Za-z])[.):])\s*(.+?)\s*$", raw)
-    if labeled:
-        label = next(group for group in labeled.groups()[:3] if group is not None).upper()
-        index = ord(label) - ord("A")
-        candidate = _normalize_text(labeled.group(4))
-        if not 0 <= index < len(original):
-            return {"selected_option": "", "parse_status": "unparseable", "parse_method": "labeled_out_of_range"}
-        label_choice = _normalize_text(original[index])
-        if candidate == label_choice:
-            return {
-                "selected_option": original[index],
-                "parse_status": "parsed",
-                "parse_method": "labeled_full_text",
-            }
-        # A parquet/official option can itself include a label.  Permit only
-        # the exact normalized option body, never a substring.
-        bodies = [_normalize_text(_strip_choice_label(choice)) for choice in original]
-        matches = [i for i, body in enumerate(bodies) if body == candidate]
-        if len(matches) == 1 and matches[0] == index:
-            return {
-                "selected_option": original[index],
-                "parse_status": "parsed",
-                "parse_method": "labeled_full_text",
-            }
-        return {"selected_option": "", "parse_status": "unparseable", "parse_method": "labeled_text_mismatch"}
-
     # A body-only match is useful when the official JSON choice carries a
-    # prefix but the model emits the body.  It remains whole-string and unique.
+    # prefix but the model emits the body.
     bodies = [_normalize_text(_strip_choice_label(choice)) for choice in original]
     body_matches = [index for index, body in enumerate(bodies) if body == _normalize_text(raw)]
     if len(body_matches) == 1:
@@ -351,7 +375,21 @@ def parse_model_output(text: Any, choices: Sequence[Any]) -> dict[str, str]:
             "parse_status": "parsed",
             "parse_method": "full_text_without_label",
         }
-    method = "ambiguous_full_text_without_label" if len(body_matches) > 1 else "no_match"
+    if len(body_matches) > 1:
+        return {
+            "selected_option": "",
+            "parse_status": "unparseable",
+            "parse_method": "ambiguous_full_text_without_label",
+        }
+
+    leading_text_index = _leading_choice_text(raw, original)
+    if leading_text_index is not None:
+        return {
+            "selected_option": original[leading_text_index],
+            "parse_status": "parsed",
+            "parse_method": "leading_full_text",
+        }
+    method = "no_match"
     return {"selected_option": "", "parse_status": "unparseable", "parse_method": method}
 
 

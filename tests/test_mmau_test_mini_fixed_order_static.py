@@ -52,6 +52,36 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             "same long",
         )
 
+    def test_parser_extracts_answer_from_start_of_repetitive_generation(self) -> None:
+        first = self.module.parse_model_output(
+            "B) A goat Cd) A birdB) A goat Cd) A bird",
+            ["A human", "A goat", "A car", "A bird"],
+        )
+        self.assertEqual(first["selected_option"], "A goat")
+        self.assertEqual(first["parse_method"], "leading_label")
+
+        second = self.module.parse_model_output(
+            "D) Unusual soundD) Unusual sound) Unusual sound is a sound that lacks context",
+            ["Loudness", "Frequency range", "Duration", "Unusual sound"],
+        )
+        self.assertEqual(second["selected_option"], "Unusual sound")
+        self.assertEqual(second["parse_method"], "leading_label")
+
+        text_first = self.module.parse_model_output(
+            "Unusual soundD) Unusual sound continues",
+            ["Loudness", "Frequency range", "Duration", "Unusual sound"],
+        )
+        self.assertEqual(text_first["selected_option"], "Unusual sound")
+        self.assertEqual(text_first["parse_method"], "leading_full_text")
+
+    def test_parser_does_not_search_for_an_answer_inside_explanation(self) -> None:
+        choices = ["Man", "Woman", "Child", "Robot"]
+        self.assertEqual(
+            self.module.parse_model_output("The answer is (A) Man", choices)["selected_option"],
+            "",
+        )
+        self.assertEqual(self.module.parse_model_output("Mango", choices)["selected_option"], "")
+
     def test_fixed_order_prompt_and_choice_alignment(self) -> None:
         prompt = self.module.build_fixed_order_prompt("Which one?", ["first", "second"])
         self.assertIn("(A) first", prompt)
