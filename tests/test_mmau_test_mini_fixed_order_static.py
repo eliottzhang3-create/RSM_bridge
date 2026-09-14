@@ -56,7 +56,11 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
         prompt = self.module.build_fixed_order_prompt("Which one?", ["first", "second"])
         self.assertIn("(A) first", prompt)
         self.assertIn("(B) second", prompt)
-        self.assertIn("only one choice", prompt)
+        self.assertEqual(
+            prompt,
+            "Answer the following multiple-choice question based on the audio. Which one? "
+            "Choices: (A) first (B) second",
+        )
         self.assertTrue(self.module.choices_match_fixed_order(["(A) first", "B. second"], ["first", "second"]))
         self.assertFalse(self.module.choices_match_fixed_order(["second", "first"], ["first", "second"]))
         self.assertFalse(self.module.choices_match_fixed_order(["(B) first", "A. second"], ["first", "second"]))

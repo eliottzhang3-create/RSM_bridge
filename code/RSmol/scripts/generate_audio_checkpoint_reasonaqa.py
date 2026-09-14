@@ -35,7 +35,7 @@ from train_audio_5_10x2_5_mesh_mellow_ddp import (  # noqa: E402
 )
 
 
-DEFAULT_CHECKPOINT = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/formal_restart_save500_20260910_105248/checkpoint-001500"
+DEFAULT_CHECKPOINT = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/formal_restart_save500_20260910_105248/checkpoint-011343"
 DEFAULT_TEST_MANIFEST = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_test.jsonl"
 DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"

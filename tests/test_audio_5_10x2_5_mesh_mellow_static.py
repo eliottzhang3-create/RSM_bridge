@@ -172,7 +172,7 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn("-p pdgpu-3090", submit)
         self.assertIn("-g 1", submit)
         self.assertIn("--num-samples 3", submit)
-        self.assertIn("checkpoint-001500", submit)
+        self.assertIn("checkpoint-011343", submit)
         self.assertIn("reasonaqa_test.jsonl", submit)
 
     def test_gpu_stages_have_submission_wrappers(self) -> None:

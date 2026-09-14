@@ -377,14 +377,7 @@ def build_fixed_order_prompt(question: str, choices: Sequence[Any]) -> str:
         f"({chr(ord('A') + index)}) {_strip_choice_label(choice)}"
         for index, choice in enumerate(choices)
     ]
-    return (
-        "Answer the following multiple-choice question based on the audio.\n"
-        f"Question: {question}\n"
-        "Choices:\n"
-        + "\n".join(lines)
-        + "\nReply with only one choice (the exact choice text or its letter). "
-        "Do not include an explanation."
-    )
+    return "Answer the following multiple-choice question based on the audio. " + str(question).strip() + " Choices: " + " ".join(lines)
 
 
 def _unbox(value: Any) -> Any:
