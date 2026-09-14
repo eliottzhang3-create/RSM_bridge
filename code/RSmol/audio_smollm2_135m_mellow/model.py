@@ -121,6 +121,12 @@ def _find_embedding(model: nn.Module, ids: torch.Tensor) -> torch.Tensor:
 class AudioSmolLM2Model(nn.Module):
     """Composite baseline model: frozen HTSAT plus trainable audio/text path."""
 
+    # Keep the well-tested audio composite reusable by architecture-specific
+    # comparison routes.  The original SmolLM2 route retains this default;
+    # subclasses may replace only the text-backbone validator while sharing
+    # the exact Mellow, bridge, prefix, label, and training-mode semantics.
+    validate_text_model = staticmethod(validate_original_smollm2)
+
     def __init__(
         self,
         text_model: nn.Module,
@@ -134,7 +140,7 @@ class AudioSmolLM2Model(nn.Module):
         self.tokenizer = tokenizer
         self.htsat_wrapper = htsat_wrapper
         self.htsat_backbone = htsat_backbone
-        self.text_contract = validate_original_smollm2(text_model)
+        self.text_contract = self.validate_text_model(text_model)
         for parameter in self.text_model.parameters():
             parameter.requires_grad_(True)
         self.config_audio = config or AudioSmolLM2Config()

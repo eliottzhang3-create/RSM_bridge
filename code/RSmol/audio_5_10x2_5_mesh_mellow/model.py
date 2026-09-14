@@ -20,6 +20,7 @@ from typing import Any, Mapping
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.profiler import record_function
 
 
 # These are runtime invariants of the current Audio MeSH route, not tunable
@@ -185,10 +186,14 @@ def _load_mellow_wrapper(root: Path, checkpoint: Path, device: torch.device) -> 
 def _audio_forward(wrapper: nn.Module, waveform: torch.Tensor) -> torch.Tensor:
     # Do not wrap this call in no_grad: the HTSAT parameters are frozen, but
     # Mellow's c2l adapter must receive gradients through the wrapper.
-    try:
-        output = wrapper(waveform)
-    except Exception:
-        output = wrapper(waveform.squeeze(1))
+    # The official Mellow wrapper may already include its own c2l adapter;
+    # keep this scope at the wrapper boundary rather than labelling the
+    # whole call as a standalone HTSAT or c2l region.
+    with record_function("audio/mellow_wrapper"):
+        try:
+            output = wrapper(waveform)
+        except Exception:
+            output = wrapper(waveform.squeeze(1))
     # The official Mellow wrapper has already applied c2l to the 527-dim
     # event-presence map and concatenated it after the 1x768 latent/CLS token.
     # Prefer that exact mapper output so c2l is neither skipped nor executed
@@ -212,7 +217,8 @@ def _audio_forward(wrapper: nn.Module, waveform: torch.Tensor) -> torch.Tensor:
         if framewise.shape[-1] == 527:
             if c2l is None:
                 raise RuntimeError("HTSAT returned 527-dim framewise output but wrapper has no c2l")
-            framewise = c2l(framewise)
+            with record_function("audio/c2l"):
+                framewise = c2l(framewise)
         if latent.ndim != 3 or framewise.ndim != 3 or latent.shape[0] != framewise.shape[0] or latent.shape[-1] != framewise.shape[-1]:
             raise RuntimeError(f"HTSAT latent/framewise shape mismatch: latent={tuple(latent.shape)} framewise={tuple(framewise.shape)}")
         # Mellow's prefix keeps the latent CLS token before downsampled frames.
@@ -227,7 +233,8 @@ def _audio_forward(wrapper: nn.Module, waveform: torch.Tensor) -> torch.Tensor:
     if embedding.shape[-1] == 527:
         if c2l is None:
             raise RuntimeError("HTSAT returned 527-dim embedding but wrapper has no c2l")
-        embedding = c2l(embedding)
+        with record_function("audio/c2l"):
+            embedding = c2l(embedding)
     return embedding
 
 
@@ -257,12 +264,13 @@ class AudioBridge(nn.Module):
         # Official ordering: project every latent/frame token first, fuse the
         # two linear paths, normalize, and only then downsample.  The global
         # latent at index zero is preserved exactly as the CLS-equivalent.
-        projected1 = self.linear1(embedding)
-        projected2 = self.dropout(self.linear2(self.activation(projected1)))
-        projected = self.norm(projected1 + projected2)
-        cls, framewise = projected[:, :1], projected[:, 1:]
-        framewise = F.avg_pool2d(framewise, kernel_size=(self.kernel, 1), stride=(self.kernel, 1))
-        return torch.cat((cls, framewise), dim=1)
+        with record_function("audio/bridge"):
+            projected1 = self.linear1(embedding)
+            projected2 = self.dropout(self.linear2(self.activation(projected1)))
+            projected = self.norm(projected1 + projected2)
+            cls, framewise = projected[:, :1], projected[:, 1:]
+            framewise = F.avg_pool2d(framewise, kernel_size=(self.kernel, 1), stride=(self.kernel, 1))
+            return torch.cat((cls, framewise), dim=1)
 
 
 def _find_embedding(model: nn.Module, ids: torch.Tensor) -> torch.Tensor:
@@ -396,7 +404,8 @@ class AudioMeshModel(nn.Module):
         # official Mellow wrapper already returned latent+c2l(framewise).
         if embedding.shape[-1] == 527:
             c2l = getattr(self.htsat_wrapper, "c2l")
-            embedding = c2l(embedding)
+            with record_function("audio/c2l"):
+                embedding = c2l(embedding)
         return embedding
 
     def encode_audio(self, audio1: torch.Tensor, audio2: torch.Tensor | None = None, audio2_reused_mask: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
@@ -406,7 +415,8 @@ class AudioMeshModel(nn.Module):
             audio2 = audio1
         if audio2.ndim == 2:
             audio2 = audio2.unsqueeze(1)
-        first = self._waveform_embedding(audio1)
+        with record_function("audio/waveform_embedding_audio1"):
+            first = self._waveform_embedding(audio1)
         if audio2.data_ptr() == audio1.data_ptr() or (audio2_reused_mask is not None and bool(audio2_reused_mask.all())):
             second = first
         elif audio2_reused_mask is not None and bool(audio2_reused_mask.any()):
@@ -414,9 +424,11 @@ class AudioMeshModel(nn.Module):
             second = first.clone()
             unique = ~mask
             if bool(unique.any()):
-                second[unique] = self._waveform_embedding(audio2[unique])
+                with record_function("audio/waveform_embedding_audio2"):
+                    second[unique] = self._waveform_embedding(audio2[unique])
         else:
-            second = self._waveform_embedding(audio2)
+            with record_function("audio/waveform_embedding_audio2"):
+                second = self._waveform_embedding(audio2)
         return self.bridge(first), self.bridge(second)
 
     def forward(self, *, audio1: torch.Tensor, audio2: torch.Tensor | None, text_ids: torch.Tensor, text_attention_mask: torch.Tensor, prompt_lengths: torch.Tensor, answer_lengths: torch.Tensor, answer_attention_mask: torch.Tensor | None = None, audio2_reused_mask: torch.Tensor | None = None) -> Any:
@@ -429,10 +441,11 @@ class AudioMeshModel(nn.Module):
             )
         if int(audio_prefix1.shape[-1]) != MESH_HIDDEN_SIZE or int(audio_prefix2.shape[-1]) != MESH_HIDDEN_SIZE:
             raise RuntimeError("Audio MeSH bridge output hidden size violates the 576-dimensional contract")
-        text_embeds = _find_embedding(self.mesh_model, text_ids)
-        separator = _find_embedding(self.mesh_model, torch.full((text_ids.shape[0], 1), self.separator_token_id, dtype=torch.long, device=text_ids.device))
-        inputs_embeds = torch.cat((audio_prefix1, separator, audio_prefix2, separator, text_embeds), dim=1)
-        prefix_length = int(audio_prefix1.shape[1] + 1 + audio_prefix2.shape[1] + 1)
+        with record_function("mesh/text_and_prefix"):
+            text_embeds = _find_embedding(self.mesh_model, text_ids)
+            separator = _find_embedding(self.mesh_model, torch.full((text_ids.shape[0], 1), self.separator_token_id, dtype=torch.long, device=text_ids.device))
+            inputs_embeds = torch.cat((audio_prefix1, separator, audio_prefix2, separator, text_embeds), dim=1)
+            prefix_length = int(audio_prefix1.shape[1] + 1 + audio_prefix2.shape[1] + 1)
         if prefix_length != AUDIO_PREFIX_TOKENS:
             raise RuntimeError(
                 f"Audio MeSH requires total prefix length {AUDIO_PREFIX_TOKENS}, got {prefix_length}"

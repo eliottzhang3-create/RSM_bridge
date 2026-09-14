@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import contextlib
 import copy
 import gc
@@ -20,13 +21,17 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
+from torch.profiler import ProfilerActivity, profile, record_function, schedule, tensorboard_trace_handler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_ROOT = Path(__file__).resolve().parent
 import sys
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if str(SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_ROOT))
 
 from audio_5_10x2_5_mesh_mellow.data import ReasonAQADataset, collate_reasonaqa  # noqa: E402
 from audio_5_10x2_5_mesh_mellow.model import (  # noqa: E402
@@ -40,17 +45,19 @@ from audio_5_10x2_5_mesh_mellow.model import (  # noqa: E402
     _load_mellow_wrapper,
     write_config,
 )
+from perf20_schedule import active_steps as _schedule_active_steps, affected_steps as _schedule_affected_steps  # noqa: E402
 from recursive_model_5_10x2_5_mesh import RecursiveLlamaForCausalLM, register_auto_class  # noqa: E402
 
 
 DEFAULT_MESH = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244"
 DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
+PERF20_STEPS = 20
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--gate", choices=("STAGE5", "STAGE7", "FORMAL"), default="STAGE5")
+    p.add_argument("--gate", choices=("STAGE5", "STAGE7", "FORMAL", "PERF20"), default="STAGE5")
     # ``--mesh-checkpoint`` is the public name used by the repository
     # submission wrappers and operator commands; keep ``--model-path`` as a
     # backward-compatible alias for older invocations.
@@ -75,7 +82,259 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--checkpoint-retention", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--num-workers", type=int, default=0, help="DataLoader workers per DDP rank; 0 keeps loading in the rank process")
+    p.add_argument("--steady-state-start-step", type=int, default=6, help="First optimizer step included in steady-state summaries (PERF20 default: 6, excluding steps 1-5)")
+    profiler_group = p.add_mutually_exclusive_group()
+    profiler_group.add_argument("--profiler", "--enable-profiler", dest="profiler", action="store_true", help="Enable rank0 torch.profiler collection for PERF20")
+    profiler_group.add_argument("--no-profiler", "--disable-profiler", dest="profiler", action="store_false", help="Disable torch.profiler collection")
+    p.set_defaults(profiler=False)
+    p.add_argument("--profiler-skip-first", type=int, default=4)
+    p.add_argument("--profiler-wait", type=int, default=1)
+    p.add_argument("--profiler-warmup", type=int, default=1)
+    p.add_argument("--profiler-active", type=int, default=2)
+    p.add_argument("--profiler-repeat", type=int, default=1)
+    p.add_argument("--profiler-with-stack", action="store_true", help="Collect Python/C++ stacks; off by default for the first profile")
+    p.add_argument("--profiler-profile-memory", action="store_true", help="Collect profiler memory events; off by default for the first profile")
+    p.add_argument("--profiler-record-shapes", action="store_true", help="Record operator input shapes; off by default for the first profile")
     return p.parse_args(argv)
+
+
+def _validate_profiler_options(args: argparse.Namespace, max_steps: int) -> None:
+    values = (
+        args.profiler_skip_first,
+        args.profiler_wait,
+        args.profiler_warmup,
+        args.profiler_active,
+        args.profiler_repeat,
+    )
+    if any(int(value) < 0 for value in values):
+        raise ValueError("profiler schedule values must be non-negative")
+    if int(args.profiler_active) <= 0 or int(args.profiler_repeat) <= 0:
+        raise ValueError("profiler active and repeat must be positive")
+    required = int(args.profiler_skip_first)
+    required += int(args.profiler_repeat) * (int(args.profiler_wait) + int(args.profiler_warmup) + int(args.profiler_active))
+    if args.profiler and required > int(max_steps):
+        raise ValueError(
+            "profiler schedule cannot complete within the bounded run: "
+            f"needs {required} optimizer steps, run has {max_steps}"
+        )
+
+
+def _profile_active_steps(args: argparse.Namespace, max_steps: int) -> list[int]:
+    """Return one-indexed optimizer steps in the active profiler window."""
+    return _schedule_active_steps(
+        skip_first=int(args.profiler_skip_first),
+        wait=int(args.profiler_wait),
+        warmup=int(args.profiler_warmup),
+        active=int(args.profiler_active),
+        repeat=int(args.profiler_repeat),
+        max_steps=int(max_steps),
+    )
+
+
+def _profile_overhead_steps(args: argparse.Namespace, max_steps: int) -> list[int]:
+    """Return one-indexed wait/warmup/active steps excluded from throughput."""
+    return _schedule_affected_steps(
+        skip_first=int(args.profiler_skip_first),
+        wait=int(args.profiler_wait),
+        warmup=int(args.profiler_warmup),
+        active=int(args.profiler_active),
+        repeat=int(args.profiler_repeat),
+        max_steps=int(max_steps),
+    )
+
+
+def _environment_report(device: torch.device, world: int) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "torch_version": str(torch.__version__),
+        "torch_cuda_version": str(getattr(torch.version, "cuda", None)),
+        "cuda_available": bool(torch.cuda.is_available()),
+        "device": str(device),
+        "device_index": int(device.index or 0),
+        "world_size": int(world),
+    }
+    try:
+        payload["gpu_name"] = str(torch.cuda.get_device_name(device))
+        payload["gpu_capability"] = list(torch.cuda.get_device_capability(device))
+    except Exception as exc:
+        payload["gpu_name_error"] = repr(exc)
+    return payload
+
+
+class _CudaPhaseEvents:
+    """Collect device elapsed times without relying on asynchronous wall clocks."""
+
+    def __init__(self, *, enabled: bool = True) -> None:
+        self.enabled = bool(enabled)
+        self.events: dict[str, list[tuple[torch.cuda.Event, torch.cuda.Event]]] = {}
+
+    def measure(self, name: str, fn: Any) -> Any:
+        if not self.enabled:
+            return fn()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        try:
+            return fn()
+        finally:
+            end.record()
+            self.events.setdefault(name, []).append((start, end))
+
+    def seconds(self, device: torch.device) -> dict[str, float]:
+        if not self.enabled:
+            return {}
+        torch.cuda.synchronize(device)
+        return {
+            name: sum(float(start.elapsed_time(end)) / 1000.0 for start, end in pairs)
+            for name, pairs in self.events.items()
+        }
+
+
+def _percentile(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * float(fraction)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _distribution(values: list[float]) -> dict[str, Any]:
+    return {
+        "count": len(values),
+        "median": _percentile(values, 0.50),
+        "p25": _percentile(values, 0.25),
+        "p75": _percentile(values, 0.75),
+    }
+
+
+def _make_profiler(args: argparse.Namespace, profile_dir: Path, artifact_paths: list[dict[str, Any]]) -> Any:
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    def _on_trace_ready(active_profiler: Any) -> None:
+        """Export one completed schedule cycle before profiler rotates it."""
+        cycle_index = len(artifact_paths) + 1
+        step_num = int(getattr(active_profiler, "step_num", 0))
+        cycle_dir = profile_dir / f"cycle_{cycle_index:02d}_step_{step_num:04d}"
+        # PERF20 output directories are unique, and cycle directories are
+        # nevertheless created exclusively so a repeated callback can never
+        # silently overwrite an earlier cycle.
+        cycle_dir.mkdir(parents=True, exist_ok=False)
+        worker_name = f"rank0-cycle{cycle_index:02d}-step{step_num:04d}"
+        before_trace = set(cycle_dir.iterdir())
+        tensorboard_trace_handler(str(cycle_dir), worker_name=worker_name)(active_profiler)
+        trace_paths = sorted(str(path) for path in cycle_dir.iterdir() if path not in before_trace and path.is_file())
+        artifact: dict[str, Any] = {
+            "cycle": cycle_index,
+            "profiler_step_num": step_num,
+            "cycle_dir": str(cycle_dir),
+            "trace_dir": str(cycle_dir),
+            "trace_paths": trace_paths,
+        }
+        # Record the trace path immediately; if summary generation itself
+        # fails, the failure report still identifies the completed export.
+        artifact_paths.append(artifact)
+        # key_averages() is consumed here, while this cycle's events are still
+        # available.  It must not be deferred until profiler.__exit__().
+        artifact.update(_write_profiler_summary(active_profiler, cycle_dir, cycle_index, step_num))
+
+    return profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        schedule=schedule(
+            skip_first=int(args.profiler_skip_first),
+            wait=int(args.profiler_wait),
+            warmup=int(args.profiler_warmup),
+            active=int(args.profiler_active),
+            repeat=int(args.profiler_repeat),
+        ),
+        on_trace_ready=_on_trace_ready,
+        record_shapes=bool(args.profiler_record_shapes),
+        profile_memory=bool(args.profiler_profile_memory),
+        with_stack=bool(args.profiler_with_stack),
+    )
+
+
+def _profiler_event_value(event: Any, *names: str) -> float:
+    for name in names:
+        value = getattr(event, name, None)
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    return 0.0
+
+
+def _write_profiler_summary(profiler: Any, profile_dir: Path, cycle_index: int, step_num: int) -> dict[str, Any]:
+    """Write one schedule-cycle summary while its events are still live."""
+    summary_txt = profile_dir / f"operator_summary_cycle{int(cycle_index):02d}_step{int(step_num):04d}.txt"
+    summary_csv = profile_dir / f"operator_summary_cycle{int(cycle_index):02d}_step{int(step_num):04d}.csv"
+    averages = profiler.key_averages()
+    try:
+        table = averages.table(sort_by="self_cuda_time_total", row_limit=-1)
+    except (AttributeError, KeyError, RuntimeError, ValueError):
+        table = averages.table(sort_by="self_device_time_total", row_limit=-1)
+    summary_txt.write_text(table + "\n", encoding="utf-8")
+    with summary_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("operator", "count", "self_cpu_time_us", "cpu_time_us", "self_cuda_time_us", "cuda_time_us"))
+        for event in averages:
+            writer.writerow((
+                str(getattr(event, "key", "")),
+                int(getattr(event, "count", 0)),
+                _profiler_event_value(event, "self_cpu_time_total"),
+                _profiler_event_value(event, "cpu_time_total"),
+                _profiler_event_value(event, "self_device_time_total", "self_cuda_time_total"),
+                _profiler_event_value(event, "device_time_total", "cuda_time_total"),
+            ))
+    return {
+        "operator_summary_txt": str(summary_txt),
+        "operator_summary_csv": str(summary_csv),
+        "summary_cycle": int(cycle_index),
+        "summary_profiler_step_num": int(step_num),
+    }
+
+
+def _perf_steady_summary(metrics: list[dict[str, Any]], args: argparse.Namespace, max_steps: int) -> dict[str, Any]:
+    profiler_affected_steps = set(_profile_overhead_steps(args, max_steps)) if args.profiler else set()
+    configured_start = max(1, int(args.steady_state_start_step))
+    steady = [item for item in metrics if int(item["step"]) >= configured_start and int(item["step"]) not in profiler_affected_steps]
+    host_phases = ("data_wait", "host_to_device_enqueue", "forward_enqueue", "backward_enqueue", "grad_clip_host", "optimizer_enqueue", "scheduler_host", "metrics_enqueue_host")
+    device_phases = ("host_to_device", "forward", "backward", "grad_clip", "optimizer", "metrics_collectives")
+    host_phase_summary = {
+        phase: _distribution([float(item.get("phase_timings_host_seconds", {}).get(phase, 0.0)) for item in steady])
+        for phase in host_phases
+    }
+    device_phase_summary = {
+        phase: _distribution([float(item.get("phase_timings_device_seconds", {}).get(phase, 0.0)) for item in steady])
+        for phase in device_phases
+    }
+    return {
+        "definition": {
+            "start_step_inclusive": configured_start,
+            "end_step_inclusive": int(max_steps),
+            "excluded_first_steps": list(range(1, configured_start)),
+            "excluded_profiler_steps": sorted(profiler_affected_steps),
+            "timing_scope": "rank0 timings; throughput/token counts use DDP-global reductions",
+        },
+        "included_steps": [int(item["step"]) for item in steady],
+        "step_time_seconds": _distribution([float(item["step_time_seconds"]) for item in steady]),
+        "samples_per_second": _distribution([float(item["samples_per_second"]) for item in steady]),
+        "audio_seconds_per_second": _distribution([float(item["audio_seconds_per_second"]) for item in steady]),
+        "multimodal_tokens_per_second": _distribution([float(item["multimodal_tokens_per_second"]) for item in steady]),
+        "nonpadding_tokens_per_second": _distribution([float(item["nonpadding_tokens_per_second"]) for item in steady]),
+        "answer_tokens_per_second": _distribution([float(item["answer_tokens_per_second"]) for item in steady]),
+        "phase_timings_host_seconds": host_phase_summary,
+        "phase_timings_device_seconds": device_phase_summary,
+        "peak_gpu_memory_allocated_gib": max((float(item.get("gpu_memory_max_allocated_gib", 0.0)) for item in metrics), default=0.0),
+        "peak_gpu_memory_reserved_gib": max((float(item.get("gpu_memory_max_reserved_gib", 0.0)) for item in metrics), default=0.0),
+        "profiler_affected_steps": sorted(profiler_affected_steps),
+    }
 
 
 def _init_dist(args: argparse.Namespace) -> tuple[int, int, torch.device]:
@@ -436,13 +695,64 @@ def _actual_resume_audit(path: Path, args: argparse.Namespace, batch_cpu: dict[s
 def run(args: argparse.Namespace) -> dict[str, Any]:
     rank, world, device = _init_dist(args)
     _seed(args.seed, rank)
-    report: dict[str, Any] = {"stage": f"{args.gate.lower()}_audio_5_10x2_5_mesh_mellow", "status": "FAIL", "configuration": vars(args), "rank": rank, "world_size": world, "checks": [], "warnings": [], "hard_failures": []}
+    report: dict[str, Any] = {"stage": f"{args.gate.lower()}_audio_5_10x2_5_mesh_mellow", "status": "FAIL", "configuration": vars(args), "rank": rank, "world_size": world, "checks": [], "warnings": [], "hard_failures": [], "environment": _environment_report(device, world)}
+    profiler: Any | None = None
+    profiler_artifacts: list[dict[str, Any]] = []
+    perf_output_preexisting = False
     try:
         if world != args.world_size:
             raise RuntimeError(f"world size mismatch: launcher={world} requested={args.world_size}")
-        if args.save_every <= 0 or args.checkpoint_retention <= 0:
+        if args.gate != "PERF20" and (args.save_every <= 0 or args.checkpoint_retention <= 0):
             raise ValueError("save_every and checkpoint_retention must be positive")
-        if args.gate == "FORMAL":
+        if args.gate == "PERF20":
+            canonical = {
+                "world_size": 8,
+                "micro_batch_size": 8,
+                "gradient_accumulation_steps": 4,
+                "epochs": 1,
+                "max_lr": 1e-3,
+                "min_lr": 0.0,
+            }
+            for key, expected in canonical.items():
+                if getattr(args, key) != expected:
+                    raise ValueError(f"PERF20 requires {key}={expected}, got {getattr(args, key)}")
+            if args.resume_from is not None:
+                raise ValueError("PERF20 starts from the text MeSH checkpoint and does not accept --resume-from")
+            if args.max_steps is not None and int(args.max_steps) != PERF20_STEPS:
+                raise ValueError(f"PERF20 requires --max-steps {PERF20_STEPS}")
+            args.max_steps = PERF20_STEPS
+            if int(args.steady_state_start_step) < 1 or int(args.steady_state_start_step) > PERF20_STEPS:
+                raise ValueError(f"PERF20 steady-state start must be in [1, {PERF20_STEPS}]")
+            if args.output_dir.exists():
+                perf_output_preexisting = True
+                raise FileExistsError(f"PERF20 refuses to reuse an existing output directory: {args.output_dir}")
+            _validate_profiler_options(args, PERF20_STEPS)
+            report["profiler"] = {
+                "enabled": bool(args.profiler),
+                "rank": 0,
+                "precision": "bf16",
+                "activities": ["CPU", "CUDA"],
+                "step_granularity": "optimizer_step",
+                "schedule": {
+                    "skip_first": int(args.profiler_skip_first),
+                    "wait": int(args.profiler_wait),
+                    "warmup": int(args.profiler_warmup),
+                    "active": int(args.profiler_active),
+                    "repeat": int(args.profiler_repeat),
+                },
+                "options": {
+                    "with_stack": bool(args.profiler_with_stack),
+                    "profile_memory": bool(args.profiler_profile_memory),
+                    "record_shapes": bool(args.profiler_record_shapes),
+                },
+                "profile_dir": str(args.output_dir / "profile"),
+                "worker_name": "rank0",
+                "active_steps": _profile_active_steps(args, PERF20_STEPS),
+                "overhead_steps_excluded_from_steady_state": _profile_overhead_steps(args, PERF20_STEPS),
+                "artifacts": profiler_artifacts,
+            }
+            report["correctness_audit"] = {"status": "pending_until_first_optimizer_step", "mesh_runtime_gradient_audit": None}
+        elif args.gate == "FORMAL":
             canonical = {
                 "world_size": 8,
                 "micro_batch_size": 8,
@@ -460,6 +770,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise ValueError("FORMAL does not accept --max-steps; use STAGE5/STAGE7 for bounded smoke")
         elif args.max_steps is not None and args.max_steps <= 0:
             raise ValueError("bounded smoke --max-steps must be positive")
+        if args.gate != "PERF20" and args.profiler:
+            raise ValueError("--profiler is isolated to PERF20; standard smoke/formal gates are unchanged")
         model, tokenizer = _load_model(args, device)
         model.train()
         if not model.trainable_parameter_audit()["training_mode_contract"]:
@@ -483,7 +795,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if steps_epoch <= 0:
             raise ValueError(f"loader has {len(loader)} batches, fewer than one accumulation window of {args.gradient_accumulation_steps}")
         formal_steps = steps_epoch * args.epochs
-        max_steps = args.max_steps or (2 if args.gate == "STAGE5" else 10 if args.gate == "STAGE7" else formal_steps)
+        max_steps = args.max_steps or (2 if args.gate == "STAGE5" else 10 if args.gate == "STAGE7" else PERF20_STEPS if args.gate == "PERF20" else formal_steps)
         total_steps = formal_steps if args.gate == "FORMAL" else max_steps
         required_warmup = math.ceil(total_steps * 0.05)
         if args.gate == "FORMAL" and args.warmup_steps is not None and args.warmup_steps != required_warmup:
@@ -545,6 +857,60 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         optimizer_step = start_step
         epoch = start_epoch
         batch_in_epoch = start_batch_in_epoch
+        perf_mode = args.gate == "PERF20"
+        if args.gate == "PERF20" and rank == 0 and args.profiler:
+            profile_dir = args.output_dir / "profile"
+            profiler = _make_profiler(args, profile_dir, profiler_artifacts)
+            profiler.__enter__()
+            report["profiler"] = {
+                "enabled": True,
+                "rank": 0,
+                "precision": "bf16",
+                "activities": ["CPU", "CUDA"],
+                "step_granularity": "optimizer_step",
+                "schedule": {
+                    "skip_first": int(args.profiler_skip_first),
+                    "wait": int(args.profiler_wait),
+                    "warmup": int(args.profiler_warmup),
+                    "active": int(args.profiler_active),
+                    "repeat": int(args.profiler_repeat),
+                },
+                "options": {
+                    "with_stack": bool(args.profiler_with_stack),
+                    "profile_memory": bool(args.profiler_profile_memory),
+                    "record_shapes": bool(args.profiler_record_shapes),
+                },
+                "profile_dir": str(profile_dir),
+                "worker_name": "rank0",
+                "active_steps": _profile_active_steps(args, max_steps),
+                "overhead_steps_excluded_from_steady_state": _profile_overhead_steps(args, max_steps),
+                "artifacts": profiler_artifacts,
+            }
+        elif args.gate == "PERF20":
+            report["profiler"] = {
+                "enabled": False,
+                "rank": 0,
+                "precision": "bf16",
+                "activities": ["CPU", "CUDA"],
+                "step_granularity": "optimizer_step",
+                "schedule": {
+                    "skip_first": int(args.profiler_skip_first),
+                    "wait": int(args.profiler_wait),
+                    "warmup": int(args.profiler_warmup),
+                    "active": int(args.profiler_active),
+                    "repeat": int(args.profiler_repeat),
+                },
+                "options": {
+                    "with_stack": bool(args.profiler_with_stack),
+                    "profile_memory": bool(args.profiler_profile_memory),
+                    "record_shapes": bool(args.profiler_record_shapes),
+                },
+                "profile_dir": str(args.output_dir / "profile"),
+                "worker_name": "rank0",
+                "active_steps": _profile_active_steps(args, max_steps),
+                "overhead_steps_excluded_from_steady_state": _profile_overhead_steps(args, max_steps),
+                "artifacts": profiler_artifacts,
+            }
         if batch_in_epoch >= len(loader):
             epoch += batch_in_epoch // len(loader)
             batch_in_epoch = batch_in_epoch % len(loader)
@@ -559,38 +925,142 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 step_started = time.perf_counter()
                 torch.cuda.reset_peak_memory_stats(device)
                 optimizer.zero_grad(set_to_none=True)
+                phase_events = _CudaPhaseEvents(enabled=perf_mode)
+                data_wait_seconds = 0.0
+                host_phase_seconds: dict[str, float] = {}
+                local_answer_tokens = 0
+                last_local_answer_tokens = 0
+                local_text_nonpadding_tokens = 0
+                local_multimodal_tokens = 0
+                local_max_sequence_length = 0
+                microbatch_metrics: list[dict[str, int]] = []
                 for micro in range(args.gradient_accumulation_steps):
-                    batch = next(data_iter)
-                    if micro == args.gradient_accumulation_steps - 1:
+                    if perf_mode:
+                        data_wait_started = time.perf_counter()
+                        with record_function("data_wait"):
+                            batch = next(data_iter)
+                        data_wait_seconds += time.perf_counter() - data_wait_started
+                        text_nonpadding = int(batch["text_attention_mask"].sum().item())
+                        answer_nonpadding = int(batch["answer_attention_mask"].sum().item())
+                        last_local_answer_tokens = answer_nonpadding
+                        batch_size = int(batch["text_ids"].shape[0])
+                        sequence_length = int(AUDIO_PREFIX_TOKENS + batch["text_ids"].shape[1])
+                        multimodal_tokens = int(AUDIO_PREFIX_TOKENS * batch_size + text_nonpadding)
+                        local_answer_tokens += answer_nonpadding
+                        local_text_nonpadding_tokens += text_nonpadding
+                        local_multimodal_tokens += multimodal_tokens
+                        local_max_sequence_length = max(local_max_sequence_length, sequence_length)
+                        microbatch_metrics.append({
+                            "micro": int(micro),
+                            "batch_size": batch_size,
+                            "sequence_length": sequence_length,
+                            "text_nonpadding_tokens": text_nonpadding,
+                            "answer_tokens": answer_nonpadding,
+                            "multimodal_tokens": multimodal_tokens,
+                        })
+                    else:
+                        batch = next(data_iter)
+                    # All legacy gates retain their original final-microbatch
+                    # CPU snapshot for checkpoint/reload audits.  PERF20 is
+                    # the only gate that deliberately avoids this copy.
+                    if not perf_mode and micro == args.gradient_accumulation_steps - 1:
                         batch_cpu = {key: (value.detach().cpu().clone() if torch.is_tensor(value) else value) for key, value in batch.items()}
-                    batch = {key: (value.to(device) if torch.is_tensor(value) else value) for key, value in batch.items()}
+                    if perf_mode:
+                        host_to_device_started = time.perf_counter()
+                        with record_function("host_to_device"):
+                            batch = phase_events.measure("host_to_device", lambda: {key: (value.to(device) if torch.is_tensor(value) else value) for key, value in batch.items()})
+                        host_phase_seconds["host_to_device_enqueue"] = host_phase_seconds.get("host_to_device_enqueue", 0.0) + (time.perf_counter() - host_to_device_started)
+                    else:
+                        batch = {key: (value.to(device) if torch.is_tensor(value) else value) for key, value in batch.items()}
                     sync = contextlib.nullcontext() if not hasattr(ddp, "no_sync") or micro == args.gradient_accumulation_steps - 1 else ddp.no_sync()
                     with sync:
-                        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                            output = ddp(**{k: v for k, v in batch.items() if k not in {"row_indices", "audio2_reused"}})
+                        def _forward() -> Any:
+                            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                                return ddp(**{k: v for k, v in batch.items() if k not in {"row_indices", "audio2_reused"}})
+                        if perf_mode:
+                            forward_started = time.perf_counter()
+                            with record_function("forward"):
+                                output = phase_events.measure("forward", _forward)
+                            host_phase_seconds["forward_enqueue"] = host_phase_seconds.get("forward_enqueue", 0.0) + (time.perf_counter() - forward_started)
+                        else:
+                            output = _forward()
                         if output.loss is None or not torch.isfinite(output.loss):
                             raise RuntimeError("nonfinite audio MeSH loss")
-                        (output.loss / args.gradient_accumulation_steps).backward()
+                        if perf_mode:
+                            backward_started = time.perf_counter()
+                            with record_function("backward"):
+                                phase_events.measure("backward", lambda: (output.loss / args.gradient_accumulation_steps).backward())
+                            host_phase_seconds["backward_enqueue"] = host_phase_seconds.get("backward_enqueue", 0.0) + (time.perf_counter() - backward_started)
+                        else:
+                            (output.loss / args.gradient_accumulation_steps).backward()
                 owner = ddp.module if hasattr(ddp, "module") else ddp
-                grad_norm = torch.nn.utils.clip_grad_norm_(ddp.parameters(), 0.5, error_if_nonfinite=True)
+                if perf_mode:
+                    grad_clip_started = time.perf_counter()
+                    with record_function("grad_clip"):
+                        grad_norm = phase_events.measure("grad_clip", lambda: torch.nn.utils.clip_grad_norm_(ddp.parameters(), 0.5, error_if_nonfinite=True))
+                    host_phase_seconds["grad_clip_host"] = time.perf_counter() - grad_clip_started
+                else:
+                    grad_norm = torch.nn.utils.clip_grad_norm_(ddp.parameters(), 0.5, error_if_nonfinite=True)
                 if runtime_gradient_audit is None:
                     runtime_gradient_audit = _mesh_runtime_gradient_audit(owner)
                     owner.mesh_model.model.gradient_audit_mode = False
                 lr_before_optimizer_step = float(optimizer.param_groups[0]["lr"])
                 optimizer_step += 1
-                optimizer.step()
-                scheduler.step()
-                elapsed = max(time.perf_counter() - step_started, 1e-9)
+                if perf_mode:
+                    optimizer_started = time.perf_counter()
+                    with record_function("optimizer"):
+                        phase_events.measure("optimizer", optimizer.step)
+                    host_phase_seconds["optimizer_enqueue"] = time.perf_counter() - optimizer_started
+                    scheduler_started = time.perf_counter()
+                    with record_function("scheduler"):
+                        # scheduler.step() is a CPU/Python operation.  Do not
+                        # label a near-zero CUDA event as its full duration.
+                        scheduler.step()
+                    host_phase_seconds["scheduler_host"] = time.perf_counter() - scheduler_started
+                else:
+                    optimizer.step()
+                    scheduler.step()
                 global_samples = int(args.micro_batch_size * world * args.gradient_accumulation_steps)
-                answer_tokens = torch.tensor(int(batch["answer_attention_mask"].sum().item()), dtype=torch.long, device=device)
-                if world > 1:
-                    dist.all_reduce(answer_tokens, op=dist.ReduceOp.SUM)
-                item = {"step": optimizer_step, "total_steps": max_steps, "progress_percent": 100.0 * optimizer_step / max(1, max_steps), "epoch": epoch, "batch_in_epoch": batch_in_epoch, "steps_per_epoch": steps_epoch, "loss": float(output.loss.detach().cpu()), "lr": float(optimizer.param_groups[0]["lr"]), "lr_before_optimizer_step": lr_before_optimizer_step, "grad_norm": float(grad_norm), "effective_answer_tokens": int(answer_tokens.item()), "step_time_seconds": elapsed, "samples_per_second": global_samples / elapsed, "audio_seconds_per_second": global_samples * 20.0 / elapsed, "gpu_memory_allocated_gib": float(torch.cuda.memory_allocated(device) / 1024**3), "gpu_memory_reserved_gib": float(torch.cuda.memory_reserved(device) / 1024**3), "gpu_memory_max_allocated_gib": float(torch.cuda.max_memory_allocated(device) / 1024**3), "gpu_memory_max_reserved_gib": float(torch.cuda.max_memory_reserved(device) / 1024**3), "router_stats": _router_stats(owner)}
+                if perf_mode:
+                    metrics_started = time.perf_counter()
+                    with record_function("metrics"):
+                        def _collect_metrics() -> tuple[torch.Tensor, torch.Tensor]:
+                            reduced_local = torch.tensor([local_answer_tokens, local_text_nonpadding_tokens, local_multimodal_tokens, last_local_answer_tokens], dtype=torch.long, device=device)
+                            max_sequence_local = torch.tensor(local_max_sequence_length, dtype=torch.long, device=device)
+                            if world > 1:
+                                with record_function("DDP/collectives"):
+                                    dist.all_reduce(reduced_local, op=dist.ReduceOp.SUM)
+                                    dist.all_reduce(max_sequence_local, op=dist.ReduceOp.MAX)
+                            return reduced_local, max_sequence_local
+                        reduced, max_sequence = phase_events.measure("metrics_collectives", _collect_metrics)
+                    # This is intentionally named enqueue: CUDA/NCCL may still
+                    # be running.  The device event below is resolved only by
+                    # the single end-of-step synchronize.
+                    host_phase_seconds["metrics_enqueue_host"] = time.perf_counter() - metrics_started
+                else:
+                    answer_tensor = torch.tensor(int(batch["answer_attention_mask"].sum().item()), dtype=torch.long, device=device)
+                    if world > 1:
+                        dist.all_reduce(answer_tensor, op=dist.ReduceOp.SUM)
+                    reduced = torch.tensor([int(answer_tensor.item()), 0, 0, int(answer_tensor.item())], dtype=torch.long, device=device)
+                    max_sequence = torch.tensor(0, dtype=torch.long, device=device)
+                phase_timings_device = phase_events.seconds(device)
+                phase_timings_host = {}
+                if perf_mode:
+                    phase_timings_host = {"data_wait": float(data_wait_seconds), **{key: float(value) for key, value in host_phase_seconds.items()}}
+                elapsed = max(time.perf_counter() - step_started, 1e-9)
+                answer_tokens = int(reduced[0].item())
+                reported_answer_tokens = answer_tokens if args.gate == "PERF20" else int(reduced[3].item())
+                text_nonpadding_tokens = int(reduced[1].item()) if perf_mode else 0
+                multimodal_tokens = int(reduced[2].item()) if perf_mode else 0
+                max_sequence_length = int(max_sequence.item()) if perf_mode else 0
+                item = {"step": optimizer_step, "total_steps": max_steps, "progress_percent": 100.0 * optimizer_step / max(1, max_steps), "epoch": epoch, "batch_in_epoch": batch_in_epoch, "steps_per_epoch": steps_epoch, "loss": float(output.loss.detach().cpu()), "lr": float(optimizer.param_groups[0]["lr"]), "lr_before_optimizer_step": lr_before_optimizer_step, "grad_norm": float(grad_norm), "effective_answer_tokens": reported_answer_tokens, "aggregated_answer_tokens": answer_tokens, "nonpadding_tokens": text_nonpadding_tokens, "multimodal_tokens": multimodal_tokens, "max_sequence_length": max_sequence_length, "microbatches": microbatch_metrics, "phase_timings": {"host_seconds": phase_timings_host, "device_seconds": phase_timings_device}, "phase_timings_host_seconds": phase_timings_host, "phase_timings_device_seconds": phase_timings_device, "step_time_seconds": elapsed, "samples_per_second": global_samples / elapsed, "audio_seconds_per_second": global_samples * 20.0 / elapsed, "multimodal_tokens_per_second": multimodal_tokens / elapsed, "nonpadding_tokens_per_second": text_nonpadding_tokens / elapsed, "answer_tokens_per_second": answer_tokens / elapsed, "gpu_memory_allocated_gib": float(torch.cuda.memory_allocated(device) / 1024**3), "gpu_memory_reserved_gib": float(torch.cuda.memory_reserved(device) / 1024**3), "gpu_memory_max_allocated_gib": float(torch.cuda.max_memory_allocated(device) / 1024**3), "gpu_memory_max_reserved_gib": float(torch.cuda.max_memory_reserved(device) / 1024**3), "router_stats": _router_stats(owner)}
                 metrics.append(item)
+                if profiler is not None:
+                    profiler.step()
                 batch_in_epoch += args.gradient_accumulation_steps
                 if rank == 0 and (optimizer_step % 10 == 0 or optimizer_step == max_steps):
                     memory = torch.cuda.memory_allocated(device) / 1024**3
-                    print(f"[audio-train] step={optimizer_step}/{max_steps} progress={item['progress_percent']:.2f}% epoch={epoch + 1}/{args.epochs if args.gate == 'FORMAL' else '?'} batch={batch_in_epoch}/{len(loader)} loss={item['loss']:.6f} lr={item['lr']:.8g} step_s={item['step_time_seconds']:.3f} samples/s={item['samples_per_second']:.2f} audio_s/s={item['audio_seconds_per_second']:.2f} answer_tokens={item['effective_answer_tokens']} gpu_alloc_gib={item['gpu_memory_allocated_gib']:.3f} gpu_reserved_gib={item['gpu_memory_reserved_gib']:.3f} gpu_max_alloc_gib={item['gpu_memory_max_allocated_gib']:.3f} gpu_max_reserved_gib={item['gpu_memory_max_reserved_gib']:.3f} router_stats={item['router_stats']}", flush=True)
+                    print(f"[audio-train] step={optimizer_step}/{max_steps} progress={item['progress_percent']:.2f}% epoch={epoch + 1}/{args.epochs if args.gate == 'FORMAL' else '?'} batch={batch_in_epoch}/{len(loader)} loss={item['loss']:.6f} lr={item['lr']:.8g} step_s={item['step_time_seconds']:.3f} samples/s={item['samples_per_second']:.2f} audio_s/s={item['audio_seconds_per_second']:.2f} multimodal_tokens/s={item['multimodal_tokens_per_second']:.2f} nonpadding_tokens/s={item['nonpadding_tokens_per_second']:.2f} answer_tokens={item['effective_answer_tokens']} gpu_alloc_gib={item['gpu_memory_allocated_gib']:.3f} gpu_reserved_gib={item['gpu_memory_reserved_gib']:.3f} gpu_max_alloc_gib={item['gpu_memory_max_allocated_gib']:.3f} gpu_max_reserved_gib={item['gpu_memory_max_reserved_gib']:.3f} router_stats={item['router_stats']}", flush=True)
                 save_due = (args.gate == "FORMAL" and (optimizer_step % max(1, args.save_every) == 0 or optimizer_step == max_steps)) or (args.gate == "STAGE7" and (optimizer_step == 10 or optimizer_step == max_steps))
                 if save_due:
                     out = args.output_dir / f"checkpoint-{optimizer_step:06d}"
@@ -616,15 +1086,51 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if batch_in_epoch >= steps_epoch * args.gradient_accumulation_steps:
                 epoch += 1
                 batch_in_epoch = 0
-        report.update({"status": "PASS", "start_step": start_step, "end_step": optimizer_step, "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "dropped_microbatches_per_epoch": dropped_microbatches, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "effective_global_batch_size": int(args.micro_batch_size * world * args.gradient_accumulation_steps), "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "runtime_gradient_audit": runtime_gradient_audit, "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
+        report.update({"status": "PASS", "start_step": start_step, "end_step": optimizer_step, "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "dropped_microbatches_per_epoch": dropped_microbatches, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "effective_global_batch_size": int(args.micro_batch_size * world * args.gradient_accumulation_steps), "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "routing_stats": {"enabled": True, "mode": "continuous_per_forward", "reported_in_each_step": True}, "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "runtime_gradient_audit": runtime_gradient_audit, "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
+        report["correctness_audit"] = {
+            "mesh_runtime_gradient_audit": runtime_gradient_audit,
+            "answer_only_labels": "build_labels enforces -100 outside real answer intervals and exact answer token count",
+            "routing_stats": "continuous per forward; first-step gradient audit retained, then gradient_audit_mode disabled",
+        }
+        if args.gate == "PERF20" and rank == 0:
+            report["steady_state_summary"] = _perf_steady_summary(metrics, args, max_steps)
+            report["timing_semantics"] = {
+                "step_time_seconds": "rank0 wall-clock from before the first microbatch data wait through the single CUDA synchronize after all metrics/collectives; this is the completion-inclusive step duration",
+                "phase_timings_host_seconds": "host wall/enqueue timings; per-microbatch data_wait/dispatch/forward/backward values are summed within the optimizer step; data_wait includes next(data_iter), scheduler_host is CPU/Python scheduler.step(), and metrics_enqueue_host ends after collective launch rather than after CUDA/NCCL completion",
+                "phase_timings_device_seconds": "CUDA event elapsed timings resolved after one unified end-of-step synchronize; per-microbatch device values are summed within the optimizer step; metrics_collectives includes the device/NCCL work through its event and therefore is completion-inclusive",
+                "host_to_device": "rank0 CUDA event elapsed time around tensor .to(device) for every microbatch; host_to_device_enqueue separately records host dispatch time",
+                "forward_backward_optimizer": "rank0 CUDA event elapsed time; DDP gradient collectives are included in backward; host enqueue fields are reported separately",
+                "metrics_collectives": "global token counts use one identical all_reduce sequence on every rank; no rank-specific collective is introduced, and its device timing is not the enqueue-only host latency",
+                "steady_state": "optimizer steps 6-20 by default, excluding profiler wait/warmup/active steps when profiling is enabled",
+            }
     except Exception as exc:
+        if args.gate == "PERF20":
+            report.setdefault("correctness_audit", {})["status"] = "not_completed"
         report["hard_failures"].append({"error": repr(exc), "traceback": traceback.format_exc()})
     finally:
+        if profiler is not None:
+            try:
+                profiler.__exit__(None, None, None)
+                if rank == 0:
+                    # All trace and operator-summary files were emitted by
+                    # _on_trace_ready before each schedule cycle rotated.
+                    # Do not call key_averages() after exit: events may have
+                    # been consumed or cleared by the profiler lifecycle.
+                    report.setdefault("profiler", {}).update({"artifacts": profiler_artifacts})
+            except Exception as exc:
+                report["status"] = "FAIL"
+                report["hard_failures"].append({"error": f"profiler finalization failed: {exc!r}", "traceback": traceback.format_exc()})
         if dist.is_initialized():
             dist.destroy_process_group()
     if rank == 0:
         args.output_dir.mkdir(parents=True, exist_ok=True)
-        report_path = args.report_path or args.output_dir / f"{args.gate.lower()}_audit.json"
+        if args.gate == "PERF20" and perf_output_preexisting:
+            report_path = args.output_dir.parent / f"{args.output_dir.name}.FAIL.{os.getpid()}.json"
+            report["report_path"] = str(report_path)
+        else:
+            default_report_name = "perf20_report.json" if args.gate == "PERF20" else f"{args.gate.lower()}_audit.json"
+            report_path = args.report_path or args.output_dir / default_report_name
+            report["report_path"] = str(report_path)
         report_path.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
     return report
 
@@ -633,7 +1139,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     report = run(args)
     if int(os.environ.get("RANK", "0")) == 0:
-        print(json.dumps({"stage": report["stage"], "status": report["status"], "summary": {"steps": report.get("optimizer_steps"), "hard_failures": len(report.get("hard_failures", []))}, "report": str(args.report_path or args.output_dir)}, default=str))
+        if args.gate == "PERF20":
+            if report.get("status") == "PASS":
+                summary = report.get("steady_state_summary", {})
+                step_summary = summary.get("step_time_seconds", {})
+                throughput = summary.get("samples_per_second", {})
+                print(
+                    "[audio-perf20] PASS "
+                    f"steps={report.get('optimizer_steps')} "
+                    f"steady_steps={len(summary.get('included_steps', []))} "
+                    f"step_median_s={step_summary.get('median')} "
+                    f"samples_per_s_median={throughput.get('median')} "
+                    f"profiler={'on' if report.get('profiler', {}).get('enabled') else 'off'}",
+                    flush=True,
+                )
+            else:
+                print(f"[audio-perf20] FAIL errors={len(report.get('hard_failures', []))}", flush=True)
+        print(json.dumps({"stage": report["stage"], "status": report["status"], "summary": {"steps": report.get("optimizer_steps"), "hard_failures": len(report.get("hard_failures", []))}, "report": report.get("report_path", str(args.report_path or args.output_dir))}, default=str))
     return 0 if report["status"] == "PASS" else 1
 
 

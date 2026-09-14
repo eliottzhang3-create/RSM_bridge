@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.profiler import record_function
 
 try:
     from transformers import AutoModelForCausalLM
@@ -277,7 +278,14 @@ class MeshLlamaModel(LlamaPreTrainedModel):
             _init_router(router)
 
     def _route(self, router: nn.Linear, query: torch.Tensor, name: str) -> torch.Tensor:
-        weights = F.softmax(router(query).float(), dim=-1).to(dtype=query.dtype)
+        if name.endswith("pre"):
+            region = "mesh/router_pre"
+        elif name.endswith("_0"):
+            region = "mesh/router_loop_0"
+        else:
+            region = "mesh/router_loop_1"
+        with record_function(region):
+            weights = F.softmax(router(query).float(), dim=-1).to(dtype=query.dtype)
         if self.audit_mode:
             self.last_router_weights[name] = weights.detach().cpu()
             self.last_router_queries[name] = query.detach().cpu()
@@ -369,7 +377,8 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         memory[:, 0] = hidden
         if self.audit_mode:
             self.last_initial_memory = memory.detach().cpu()
-        prefix_output = self._run_stack(hidden, range(0, 5), 0, attention_mask=mask, position_ids=position_ids, cache=cache, use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings, output_attentions=output_attentions, all_attentions=attentions)
+        with record_function("mesh/prefix_5"):
+            prefix_output = self._run_stack(hidden, range(0, 5), 0, attention_mask=mask, position_ids=position_ids, cache=cache, use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings, output_attentions=output_attentions, all_attentions=attentions)
         if self.audit_mode:
             self.last_prefix_output = prefix_output.detach().cpu()
         write_pre = self._route(self.write_routers[0], prefix_output, "write_pre")
@@ -386,7 +395,9 @@ class MeshLlamaModel(LlamaPreTrainedModel):
                 self.last_core_input_refs.append(hidden)
             if self.audit_mode:
                 self.last_core_inputs.append(hidden.detach().cpu())
-            core = self._run_stack(hidden, range(5, 15), 5 + loop * 10, attention_mask=mask, position_ids=position_ids, cache=cache, use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings, output_attentions=output_attentions, all_attentions=attentions)
+            middle_region = "mesh/middle_loop_0" if loop == 0 else "mesh/middle_loop_1"
+            with record_function(middle_region):
+                core = self._run_stack(hidden, range(5, 15), 5 + loop * 10, attention_mask=mask, position_ids=position_ids, cache=cache, use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings, output_attentions=output_attentions, all_attentions=attentions)
             if self.gradient_audit_mode and core.requires_grad:
                 core.retain_grad()
                 self.last_core_output_refs.append(core)
@@ -400,7 +411,8 @@ class MeshLlamaModel(LlamaPreTrainedModel):
             hidden = self._read(memory, read)
             if output_hidden_states:
                 hidden_states.append(hidden)
-        hidden = self._run_stack(hidden, range(15, 20), 25, attention_mask=mask, position_ids=position_ids, cache=cache, use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings, output_attentions=output_attentions, all_attentions=attentions)
+        with record_function("mesh/suffix_5"):
+            hidden = self._run_stack(hidden, range(15, 20), 25, attention_mask=mask, position_ids=position_ids, cache=cache, use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings, output_attentions=output_attentions, all_attentions=attentions)
         hidden = self.norm(hidden)
         if self.audit_mode:
             self.last_memory_shape = tuple(memory.shape)
@@ -453,7 +465,8 @@ class RecursiveLlama5_10x2_5MeshForCausalLM(LlamaForCausalLM):
         logits = self.lm_head(outputs.last_hidden_state[:, indices, :])
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **loss_kwargs)
+            with record_function("loss"):
+                loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **loss_kwargs)
         result = CausalLMOutputWithPast(loss=loss, logits=logits, past_key_values=outputs.past_key_values, hidden_states=outputs.hidden_states, attentions=outputs.attentions)
         if return_dict is None:
             return_dict = bool(_cfg(self.config, "use_return_dict", True))

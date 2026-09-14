@@ -54,12 +54,55 @@ DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
 DEFAULT_TRAIN_MANIFEST = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl"
 DEFAULT_VAL_MANIFEST = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_val.jsonl"
 DEFAULT_OUTPUT = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/manual_run"
+TRAINER_DESCRIPTION = __doc__
+GATE_CHOICES = ("STAGE7", "FORMAL")
+DEFAULT_GATE = "STAGE7"
+MODEL_PATH_OPTIONS = ("--model-path", "--smollm2-model")
+ROUTE_NAME = "audio_smollm2_135m_mellow"
+LOG_PREFIX = "audio-smollm2"
+ARTIFACT_CONTRACT = "audio_smollm2_135m_mellow_composite_v1"
+CONFIG_FILENAME = "audio_smollm2_config.json"
+ARCHITECTURE_CONTRACT = ORIGINAL_SMOLLM2_CONTRACT
+
+
+def _extra_checkpoint_config(model: AudioSmolLM2Model) -> dict[str, Any]:
+    """Route-specific immutable metadata added to every checkpoint config."""
+    return {}
+
+
+def _validate_route_checkpoint_config(config: dict[str, Any]) -> None:
+    """Route-specific artifact checks; the original baseline needs no extras."""
+    return None
+
+
+def _validate_route_training_plan(
+    args: argparse.Namespace,
+    *,
+    dataset_rows: int,
+    loader_batches: int,
+    steps_per_epoch: int,
+    formal_steps: int,
+    warmup_steps: int,
+) -> None:
+    """Route-specific checks after the exact distributed plan is known."""
+    return None
+
+
+def _after_ddp_initialization(
+    model: AudioSmolLM2Model,
+    args: argparse.Namespace,
+    *,
+    rank: int,
+    world: int,
+) -> None:
+    """Optional route hook after DDP has broadcast rank-0 parameters."""
+    return None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gate", choices=("STAGE7", "FORMAL"), default="STAGE7")
-    parser.add_argument("--model-path", "--smollm2-model", dest="model_path", type=Path, default=Path(DEFAULT_MODEL))
+    parser = argparse.ArgumentParser(description=TRAINER_DESCRIPTION)
+    parser.add_argument("--gate", choices=GATE_CHOICES, default=DEFAULT_GATE)
+    parser.add_argument(*MODEL_PATH_OPTIONS, dest="model_path", type=Path, default=Path(DEFAULT_MODEL))
     parser.add_argument("--resume-from", type=Path)
     parser.add_argument("--tokenizer-path", type=Path)
     parser.add_argument("--htsat-checkpoint", type=Path, default=Path(DEFAULT_HTSAT))
@@ -130,13 +173,21 @@ def _manifest_hashes(args: argparse.Namespace) -> dict[str, str | None]:
     }
 
 
+def _load_text_backbone(model_path: Path) -> torch.nn.Module:
+    """Load and validate the route's text backbone from a local artifact."""
+    from transformers import AutoModelForCausalLM
+
+    text_model = AutoModelForCausalLM.from_pretrained(model_path, local_files_only=True)
+    validate_original_smollm2(text_model)
+    return text_model
+
+
 def _load_model(args: argparse.Namespace, device: torch.device) -> tuple[AudioSmolLM2Model, Any]:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     model_path = args.resume_from / "text_model" if args.resume_from else args.model_path
     tokenizer_path = args.tokenizer_path or (args.resume_from / "tokenizer" if args.resume_from else model_path)
-    text_model = AutoModelForCausalLM.from_pretrained(model_path, local_files_only=True)
-    validate_original_smollm2(text_model)
+    text_model = _load_text_backbone(model_path)
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
     if tokenizer.pad_token_id is None:
         if tokenizer.eos_token_id is None:
@@ -167,6 +218,15 @@ def _trainable_state(model: AudioSmolLM2Model) -> dict[str, Any]:
     return {"bridge": model.bridge.state_dict(), "c2l": c2l.state_dict() if c2l is not None else {}}
 
 
+def _text_model_weight_files(path: Path) -> list[Path]:
+    """Return concrete HF weight files, including sharded checkpoints."""
+    candidates = [
+        *path.glob("pytorch_model*.bin"),
+        *path.glob("model*.safetensors"),
+    ]
+    return sorted(item for item in candidates if item.is_file())
+
+
 def _model_batch(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
     ignored = {"row_indices", "audio2_reused"}
     return {key: (value.to(device) if torch.is_tensor(value) else value) for key, value in batch.items() if key not in ignored}
@@ -189,11 +249,11 @@ def _checkpoint_config(
     source_config = model.text_model.config.to_dict()
     config_path = Path(str(args.model_path)) / "config.json"
     run_kind = "formal" if args.gate == "FORMAL" else "stage7"
-    return {
-        "artifact_contract": "audio_smollm2_135m_mellow_composite_v1",
+    config = {
+        "artifact_contract": ARTIFACT_CONTRACT,
         "gate": str(args.gate),
         "run_kind": run_kind,
-        "architecture_contract": ORIGINAL_SMOLLM2_CONTRACT,
+        "architecture_contract": ARCHITECTURE_CONTRACT,
         "mapper_contract": MAPPER_CONTRACT,
         "text_model_source_path": str(args.model_path.resolve()),
         "text_model_runtime_class": model.text_contract["model_class"],
@@ -252,6 +312,8 @@ def _checkpoint_config(
         "frozen_audio_encoder": True,
         "periodic_validation": False,
     }
+    config.update(_extra_checkpoint_config(model))
+    return config
 
 
 def _save_checkpoint(
@@ -311,18 +373,18 @@ def _save_checkpoint(
             run_target_step=run_target_step,
             parameter_change_audit=parameter_change_audit,
         )
-        (temporary / "audio_smollm2_config.json").write_text(json.dumps(config, indent=2, default=str) + "\n", encoding="utf-8")
+        (temporary / CONFIG_FILENAME).write_text(json.dumps(config, indent=2, default=str) + "\n", encoding="utf-8")
         required_names = [
             "text_model/config.json",
             "tokenizer/tokenizer_config.json",
             "audio_bridge.pt",
             "training_state.pt",
-            "audio_smollm2_config.json",
+            CONFIG_FILENAME,
             "checkpoint_complete.json",
         ]
         marker = {
             "status": "complete",
-            "artifact_contract": "audio_smollm2_135m_mellow_composite_v1",
+            "artifact_contract": ARTIFACT_CONTRACT,
             "gate": str(args.gate),
             "run_kind": run_kind,
             "global_step": int(step),
@@ -332,6 +394,9 @@ def _save_checkpoint(
         required = tuple(temporary / name for name in required_names)
         if any(not item.exists() for item in required):
             raise RuntimeError("refusing to publish incomplete baseline checkpoint")
+        model_weight_files = _text_model_weight_files(temporary / "text_model")
+        if not model_weight_files:
+            raise RuntimeError("refusing to publish checkpoint without text-model weights")
         temporary.replace(path)
         published = True
     finally:
@@ -369,18 +434,21 @@ def _audit_saved_checkpoint(path: Path) -> dict[str, Any]:
         "tokenizer/tokenizer_config.json",
         "audio_bridge.pt",
         "training_state.pt",
-        "audio_smollm2_config.json",
+        CONFIG_FILENAME,
         "checkpoint_complete.json",
     )
     missing = [name for name in required if not (path / name).exists()]
     if missing:
         raise RuntimeError(f"baseline checkpoint missing files: {missing}")
+    model_weight_files = _text_model_weight_files(path / "text_model")
+    if not model_weight_files:
+        raise RuntimeError("baseline checkpoint has no text-model weight files")
     marker = json.loads((path / "checkpoint_complete.json").read_text(encoding="utf-8"))
-    if marker.get("status") != "complete" or marker.get("artifact_contract") != "audio_smollm2_135m_mellow_composite_v1":
+    if marker.get("status") != "complete" or marker.get("artifact_contract") != ARTIFACT_CONTRACT:
         raise RuntimeError("baseline checkpoint completion marker is invalid")
     if marker.get("required") != list(required):
         raise RuntimeError(f"baseline checkpoint marker.required is invalid: {marker.get('required')!r}")
-    config = json.loads((path / "audio_smollm2_config.json").read_text(encoding="utf-8"))
+    config = json.loads((path / CONFIG_FILENAME).read_text(encoding="utf-8"))
     required_config = (
         "gate", "run_kind", "architecture_contract", "mapper_contract", "text_model_source_path", "text_model_runtime_class", "text_model_config_sha256", "text_model_config", "embedding_lm_head_tied", "text_model_type", "text_model_hidden_size",
         "text_model_num_hidden_layers", "audio_tokens_per_clip", "audio_prefix_tokens_with_separators",
@@ -400,8 +468,9 @@ def _audit_saved_checkpoint(path: Path) -> dict[str, Any]:
         raise RuntimeError(f"baseline checkpoint gate/run_kind mismatch: gate={config['gate']!r} run_kind={config['run_kind']!r}")
     if marker.get("gate") != config["gate"] or marker.get("run_kind") != config["run_kind"]:
         raise RuntimeError("baseline checkpoint marker gate/run_kind disagrees with config")
-    if config["architecture_contract"] != ORIGINAL_SMOLLM2_CONTRACT or config["mapper_contract"] != MAPPER_CONTRACT:
+    if config["architecture_contract"] != ARCHITECTURE_CONTRACT or config["mapper_contract"] != MAPPER_CONTRACT:
         raise RuntimeError("baseline checkpoint architecture/mapper contract mismatch")
+    _validate_route_checkpoint_config(config)
     if not Path(str(config["text_model_source_path"])).is_absolute():
         raise RuntimeError("baseline checkpoint text_model_source_path must be absolute")
     for path_key in ("train_manifest", "val_manifest", "htsat_checkpoint", "mellow_root"):
@@ -525,6 +594,7 @@ def _audit_saved_checkpoint(path: Path) -> dict[str, Any]:
         "batch_in_epoch": int(state["batch_in_epoch"]),
         "rng_ranks": sorted(actual_rng),
         "required_files": list(required),
+        "text_model_weight_files": [str(item) for item in model_weight_files],
         "optimizer_state_entries": len(state["optimizer"].get("state", {})),
         "scheduler_keys": sorted(state["scheduler"]),
         "gate": config["gate"],
@@ -536,7 +606,7 @@ def _validate_resume_artifacts(path: Path) -> dict[str, Any]:
     if not path.is_dir():
         raise FileNotFoundError(f"resume checkpoint directory not found: {path}")
     _audit_saved_checkpoint(path)
-    return json.loads((path / "audio_smollm2_config.json").read_text(encoding="utf-8"))
+    return json.loads((path / CONFIG_FILENAME).read_text(encoding="utf-8"))
 
 
 def _prune_checkpoints(output_dir: Path, retention: int) -> list[str]:
@@ -703,7 +773,7 @@ def _actual_resume_audit(path: Path, args: argparse.Namespace, batch_cpu: dict[s
     reload_args.resume_from = path
     reload_model, _ = _load_model(reload_args, device)
     try:
-        saved_config = json.loads((path / "audio_smollm2_config.json").read_text(encoding="utf-8"))
+        saved_config = json.loads((path / CONFIG_FILENAME).read_text(encoding="utf-8"))
         optimizer = torch.optim.AdamW(
             [parameter for parameter in reload_model.parameters() if parameter.requires_grad],
             lr=float(saved_config["max_lr"]),
@@ -770,7 +840,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     rank, world, device = _init_dist(args)
     _seed(args.seed, rank)
     report: dict[str, Any] = {
-        "stage": f"{args.gate.lower()}_audio_smollm2_135m_mellow",
+        "stage": f"{args.gate.lower()}_{ROUTE_NAME}",
         "status": "FAIL",
         "configuration": vars(args),
         "rank": rank,
@@ -841,6 +911,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if args.gate == "FORMAL" and args.warmup_steps is not None and args.warmup_steps != required_warmup:
             raise ValueError(f"FORMAL warmup must equal ceil(actual_total_steps*0.05)={required_warmup}, got {args.warmup_steps}")
         args.warmup_steps = required_warmup
+        _validate_route_training_plan(
+            args,
+            dataset_rows=len(dataset),
+            loader_batches=len(loader),
+            steps_per_epoch=steps_epoch,
+            formal_steps=formal_steps,
+            warmup_steps=args.warmup_steps,
+        )
         optimizer = torch.optim.AdamW(
             [parameter for parameter in model.parameters() if parameter.requires_grad],
             lr=args.max_lr,
@@ -903,7 +981,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise RuntimeError("resume checkpoint has no text model config SHA256 provenance")
             if not current_source_config.is_file() or _sha256(current_source_config) != saved_source_config_sha:
                 raise RuntimeError("resume source model config SHA256 mismatch")
-            if saved_config.get("architecture_contract") != ORIGINAL_SMOLLM2_CONTRACT:
+            if saved_config.get("architecture_contract") != ARCHITECTURE_CONTRACT:
                 raise RuntimeError("resume original-text architecture contract mismatch")
             if model.text_contract["model_type"] != "llama" or model.text_contract["num_hidden_layers"] != 30:
                 raise RuntimeError("resume loaded a non-standard text model")
@@ -951,6 +1029,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             resume_snapshots = _snapshot_resume_representatives(resume_representatives)
         ddp = DDP(model, device_ids=[device.index], broadcast_buffers=False, find_unused_parameters=False) if world > 1 else model
         owner = ddp.module if hasattr(ddp, "module") else ddp
+        _after_ddp_initialization(owner, args, rank=rank, world=world)
         metrics: list[dict[str, Any]] = []
         runtime_gradient_audit: dict[str, Any] | None = None
         optimizer_step = start_step
@@ -1033,7 +1112,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 batch_in_epoch += args.gradient_accumulation_steps
                 if rank == 0 and (optimizer_step % 10 == 0 or optimizer_step == max_steps):
                     print(
-                        f"[audio-smollm2] step={optimizer_step}/{max_steps} progress={item['progress_percent']:.2f}% "
+                        f"[{LOG_PREFIX}] step={optimizer_step}/{max_steps} progress={item['progress_percent']:.2f}% "
                         f"epoch={epoch + 1}/{args.epochs if args.gate == 'FORMAL' else '?'} "
                         f"batch={batch_in_epoch}/{len(loader)} loss={item['loss']:.6f} lr={item['lr']:.8g} "
                         f"step_s={item['step_time_seconds']:.3f} samples/s={item['samples_per_second']:.2f} "

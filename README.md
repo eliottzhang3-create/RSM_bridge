@@ -1,6 +1,6 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
-> 最后同步：2026-09-09
+> 最后同步：2026-09-14
 > 本文件是后续 Codex 会话的首要交接依据。任何新会话必须先完整阅读本文件，再查看对应代码、测试和远程日志。若 README、口头历史与当前代码冲突，以当前代码行为和最新远程报告为准，并把差异补回本文。
 
 ## 0. 一页结论：现在做到哪里
@@ -127,7 +127,7 @@ HTSAT AudioSet checkpoint:
 |---|---|---|---|
 | 原始 SmolLM2-135M | Hugging Face 原模型 | 基线与转换来源 | `/models/SmolLM2` |
 | 15R recursive | 15 个物理层被逻辑重复执行 | 最早验证循环、梯度、DDP、checkpoint 的历史主线 | 历史输出 `/outputs/RSmol/stage4` |
-| 固定 5-10-5 | prefix 5 + middle 10 + suffix 5，旧两次循环实现 | 历史固定深度对照；曾作为最初音频方案的文本 backbone，现已被 MeSH 替代 | `stage4_5_10_5/formal-epoch2-continue-20260902_184936/checkpoint-step-009244` |
+| 固定 5-10-5 | prefix 5 + middle 10 + suffix 5，旧两次循环实现 | 历史固定深度对照；现新增隔离的 ReasonAQA 音频正式训练路线 | `stage4_5_10_5/formal-epoch2-continue-20260902_184936/checkpoint-step-009244` |
 | 5-10-5 linear | 非递归线性对照 | 历史/对照 | 代码和评测仍保留 |
 | 5-10x7-5 | 中间层固定运行 7 次 | 历史实验 | 代码保留，不是当前主线 |
 | 5-10xr-5 | 直接 recursion，支持 Poisson 深度 | 与 Parcae 隔离的历史动态深度对照 | 代码保留 |
@@ -135,12 +135,13 @@ HTSAT AudioSet checkpoint:
 | 5-10x2-5-mesh | 20 个物理层、30 个逻辑层、5 个 memory slots、固定两轮 MeSH | 当前文本 backbone | 第一轮和第二轮 checkpoint 均存在 |
 | 音频 5-10-5 + Mellow preflight | ReasonAQA manifest 与 HTSAT 预审 | 仍负责 Stage 0/1/2；名称保留是历史原因 | 最终 manifest 和 Stage 2 PASS report |
 | 音频 5-10x2-5-mesh + Mellow | HTSAT/Mellow 音频 prefix 接 MeSH LM | **当前主线** | 当前严格 mapper 版本待重新完成 Stage 4/7/FORMAL |
+| 音频固定 5-10-5 + Mellow | 同一音频/ReasonAQA 合同接无 router 的固定两轮 recursive LM | 独立对照路线；只提供三轮 FORMAL/FORMAL resume，不要求 smoke | `audio_5_10_5_recursive_mellow` |
 
 最重要的隔离规则：
 
 - Parcae 的 `A_bar(h)+B_bar(u)`、特殊 `h0` 和 Poisson 深度不能复制进 MeSH。
 - 直接 recursion 的 `h0=e` 也不能冒充 Parcae。
-- 当前音频路线必须使用 `recursive_model_5_10x2_5_mesh.py`，不是旧 `recursive_model_5_10_5.py`。
+- MeSH 音频主线必须使用 `recursive_model_5_10x2_5_mesh.py`；固定 5-10-5 音频对照路线则明确使用 `recursive_model_5_10_5.py`，两者的 checkpoint 合同和输出目录必须隔离。
 - 文件名中保留的 `audio_5_10_5_mellow` 仅用于早期 manifest/HTSAT preflight，不代表正式音频训练仍使用 5-10-5 文本模型。
 
 ### 3.1 历史循环路线的必要语义
@@ -568,6 +569,59 @@ bash code/RSmol/run_audio_formal_5_10x2_5_mesh_mellow_5090.sh \
 
 底层 formal shell 已注入 micro 8、GA 4、save 500、retention 4；命令中再次显式写出是为了让实验合同自说明。后置 CLI 参数会覆盖默认值。
 
+### 9.3.1 PERF20 可复现性能基线与 torch.profiler
+
+当前状态（2026-09-14）：第一、二阶段所需的 PERF20 基线计时、`torch.profiler` 采集、逐 cycle trace/operator summary 和静态测试代码已经落地，并已完成本地语法与静态测试；尚未在远程 5090/CUDA 环境提交任何 PERF20 baseline 或 profiler 作业，因此当前没有可引用的吞吐、显存、算子热点或 trace 结论。该性能测量工作现暂缓；恢复时应先运行无 profiler baseline，再使用独立输出目录运行 profiler，不能把下面的实现说明误认为已经取得的实测结果。
+
+性能测量入口与标准 STAGE5/STAGE7/FORMAL 完全隔离：
+
+```text
+code/RSmol/scripts/train_audio_perf20_5_10x2_5_mesh_mellow_ddp.sh
+code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
+```
+
+PERF20 固定 8×5090、每卡 micro-batch 8、GA=4、20 个 optimizer steps、BF16、seed=0、最终 drop12 manifest、第二轮 MeSH checkpoint、HTSAT/Mellow 默认路径；它不会保存 checkpoint、执行 reload audit 或 prune，也拒绝复用已有输出目录。默认 profiler 关闭，基线提交命令为：
+
+```bash
+bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
+```
+
+独立 profiler 提交命令为（必须使用另一输出目录；未显式指定时 inner shell 自动生成带纳秒时间戳的唯一目录）：
+
+```bash
+bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh --profiler
+```
+
+profiler 只在 rank0 创建，activities 为 CPU+CUDA，`profiler.step()` 的粒度是 optimizer step；默认 schedule 是 `skip_first=4, wait=1, warmup=1, active=2, repeat=1`，默认关闭 `with_stack/profile_memory/record_shapes`。每个 completed schedule cycle 都在 `on_trace_ready` 中导出不覆盖的 trace 与 operator summary（`profile/cycle_<nn>_step_<nnnn>/`，summary 文件名也包含 cycle/step）；主报告 `perf20_report.json` 的 `profiler.artifacts` 列出所有 cycle 的 trace/summary 路径。可用 `--profiler-with-stack`、`--profiler-profile-memory`、`--profiler-record-shapes` 和对应 schedule CLI 开关扩大采集；脚本会校验 20 步内能完成 schedule。
+
+PERF20 报告逐 optimizer step 记录 data_wait（包括 `next(data_iter)`）、host-to-device、forward、backward、grad_clip、optimizer、scheduler、metrics/collectives 的分层计时，并记录每个 microbatch 的实际 sequence length、文本非 padding token 与多模态 token。GPU 运算使用 CUDA event，在每个 optimizer step 末尾只做一次统一 CUDA synchronize；data_wait、scheduler 和 metrics 的 host 字段是清楚标注的 host enqueue/wall 时间，不能被误读为 CUDA/NCCL 完成时间；metrics/collectives 的 device 字段覆盖同步完成，step wall 也覆盖这次同步。稳定吞吐默认只统计 steps 6–20，并排除 profiler wait/warmup/active steps；报告 median/P25/P75、samples/s、audio seconds/s、多模态/非 padding tokens/s、rank0 峰值 allocated/reserved 显存。token 数由各 rank 按一致顺序 all-reduce 汇总；不会把 profiler warmup/active overhead 当作无 profiler 基线。
+
+训练主文件的 profiler 标记覆盖 `audio/mellow_wrapper`、显式兼容路径的 `audio/c2l`、`audio/bridge`、`audio/waveform_embedding_audio1/2`、`mesh/text_and_prefix`、`mesh/prefix_5`、`mesh/router_pre`、`mesh/middle_loop_0/1`、`mesh/router_loop_0/1`、`mesh/suffix_5`、`loss`、`backward`、`grad_clip`、`optimizer`、`scheduler`、`metrics`、`DDP/collectives`；同名区域不会嵌套双计。模型数学与正式 gate 默认行为不因标记改变。Windows 本地没有远程权重、Mellow/HTSAT 与 CUDA 环境，不能在本地验证 GPU 吞吐或 trace；需在远程 Linux 通过上述 `vc submit` wrapper 验证。
+
+### 9.3.2 固定 5-10-5 recursive 音频正式训练
+
+该路线使用无 MeSH router/memory 的历史固定 5-10-5 checkpoint：20 个物理层，执行 `prefix 5 + middle 10 × 2 + suffix 5` 的精确 30-entry schedule。音频、ReasonAQA、Mellow mapper、answer-only loss、batch、optimizer 和 scheduler 合同与现有 MeSH/原始 SmolLM2 音频实验保持一致；新入口只允许 FORMAL，不提供或要求 smoke gate。`--model-path` 是文本初始化，只有本路线生成的完整复合 checkpoint 才能传给 `--resume-from`。
+
+默认直接提交三轮正式训练：
+
+```bash
+bash code/RSmol/run_audio_5_10_5_recursive_mellow_formal_5090.sh
+```
+
+默认使用：
+
+```text
+text checkpoint: /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10_5/formal-epoch2-continue-20260902_184936/checkpoint-step-009244
+train/val:        stage1_with_clotho_aqa_v2_drop12
+world/micro/GA:   8 / 8 / 4（effective batch 256）
+epochs/steps:     3 / 11,343
+warmup:           568
+LR:               1e-3 -> 0
+save/retention:   500 / 4
+```
+
+训练启动时会严格验证 20 个物理层、两次 middle 循环、精确 logical-to-physical schedule、原始 source-layer mapping 以及不存在 router/memory 参数；第一次真实前反向还会通过临时 forward hooks 核对 30 次实际调用顺序和全部物理层梯度。每个正式 checkpoint 额外保存并审计这些递归架构字段。当前只完成本地语法/静态合同检查，尚未在远程 CUDA 环境启动该正式任务。
+
 ### 9.4 ReasonAQA generation 与逐 token router 权重导出
 
 当前 ReasonAQA test generation 默认加载正式训练的 `checkpoint-011343`，选择 manifest 的前 5 行；也可用 `--sample-indices` 传入任意 5 个 zero-based manifest 行号。提交入口：
@@ -615,9 +669,19 @@ code/RSmol/audio_5_10x2_5_mesh_mellow/stage3.py
 code/RSmol/scripts/audit_audio_stage3_5_10x2_5_mesh_mellow.py
 code/RSmol/scripts/audit_audio_stage4_5_10x2_5_mesh_mellow.py
 code/RSmol/scripts/train_audio_5_10x2_5_mesh_mellow_ddp.py
+code/RSmol/scripts/train_audio_perf20_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/scripts/audit_audio_checkpoint_5_10x2_5_mesh_mellow.py
 code/RSmol/run_audio_*5_10x2_5_mesh_mellow_5090.sh
 tests/test_audio_5_10x2_5_mesh_mellow_static.py
+tests/test_audio_perf20_static.py
+
+# 固定 5-10-5 recursive 音频正式对照（无 MeSH、FORMAL-only）
+code/RSmol/audio_5_10_5_recursive_mellow/data.py
+code/RSmol/audio_5_10_5_recursive_mellow/model.py
+code/RSmol/scripts/train_audio_5_10_5_recursive_mellow_ddp.py
+code/RSmol/scripts/train_audio_5_10_5_recursive_mellow_formal_ddp.sh
+code/RSmol/run_audio_5_10_5_recursive_mellow_formal_5090.sh
+tests/test_audio_5_10_5_recursive_mellow_static.py
 ```
 
 ### 10.3 历史模型与评测
@@ -664,7 +728,7 @@ code/RSmol/run_stage3_eval_5_10xpoisson_parcae_5090.sh
 
 ## 12. 当前仍需关注的风险与待办
 
-1. **先拿到严格 mapper 的新 Stage 4/5/7 PASS**，再开始或确认 FORMAL；旧 PASS 不能自动继承。
+1. MeSH 主线仍应先拿到严格 mapper 的新 Stage 4/5/7 PASS，再开始或确认其 FORMAL；固定 5-10-5 recursive 音频对照按 2026-09-14 的明确决定跳过 smoke、直接 FORMAL，其代码因此增加了启动前架构/步数硬校验和首个真实前反向的运行时 schedule/gradient 审计。
 2. 正式训练的 `val_manifest` 目前不执行周期验证；若需要模型选择或过拟合监控，要单独设计 validation，但不要未经授权改变正式合同。
 3. 日志 loss 不是全局 GA 聚合 loss；如要严谨比较实验，需要新增只读聚合指标或明确改变 reduction 的方案。
 4. answer-only loss 能保证监督区间正确，但不能保证模型真正使用音频。后续应做 zero/shuffle/correct audio 对照和 ReasonAQA evaluation。
