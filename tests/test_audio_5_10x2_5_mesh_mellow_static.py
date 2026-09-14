@@ -162,6 +162,10 @@ class AudioMeshStaticContractTest(unittest.TestCase):
             "test_manifest_sha256",
             "logical_trace_verified",
             "reasonaqa_samples.md",
+            "RouterWeightCsvRecorder",
+            "router_weights.csv",
+            "weight_columns_per_token",
+            '"first_n_manifest_rows"',
         ):
             self.assertIn(marker, text)
         self.assertNotIn(".generate(", text)
@@ -171,7 +175,7 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         submit = GENERATION_SUBMIT.read_text(encoding="utf-8")
         self.assertIn("-p pdgpu-3090", submit)
         self.assertIn("-g 1", submit)
-        self.assertIn("--num-samples 3", submit)
+        self.assertIn("--num-samples 5", submit)
         self.assertIn("checkpoint-011343", submit)
         self.assertIn("reasonaqa_test.jsonl", submit)
 

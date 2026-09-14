@@ -568,6 +568,22 @@ bash code/RSmol/run_audio_formal_5_10x2_5_mesh_mellow_5090.sh \
 
 底层 formal shell 已注入 micro 8、GA 4、save 500、retention 4；命令中再次显式写出是为了让实验合同自说明。后置 CLI 参数会覆盖默认值。
 
+### 9.4 ReasonAQA generation 与逐 token router 权重导出
+
+当前 ReasonAQA test generation 默认加载正式训练的 `checkpoint-011343`，选择 manifest 的前 5 行；也可用 `--sample-indices` 传入任意 5 个 zero-based manifest 行号。提交入口：
+
+```bash
+bash code/RSmol/run_audio_checkpoint_reasonaqa_generation_3090.sh
+
+# 指定样本示例
+bash code/RSmol/run_audio_checkpoint_reasonaqa_generation_3090.sh \
+  --sample-indices 72100 72101 72102 72103 72104
+```
+
+每次 greedy generation 前向都使用 `use_cache=False` 做完整序列重算。输出目录除 `reasonaqa_samples.json` 和 `reasonaqa_samples.md` 外，还会生成 `router_weights.csv`：每行对应一个样本、一个 generation forward、一个 sequence token 位置，包含 `write_pre/read_pre/write_0/read_0/write_1/read_1` 六个 router 对 5 个 memory slots 的 30 个权重值。`generation_step=0` 表示预测第一个新 token 的前向；后续 step 会再次包含完整 prefix、prompt 和此前已生成 token。
+
+音频 prefix 固定为 260 tokens：`audio1 129 + separator 1 + audio2 129 + separator 1`。若样本没有第二段音频而复用第一段音频，prefix 长度仍为 260。
+
 ## 10. 文件地图
 
 ### 10.1 当前 MeSH 文本路线

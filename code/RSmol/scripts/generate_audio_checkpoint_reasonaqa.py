@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import gc
 import hashlib
 import json
-import random
 import sys
 import time
 import traceback
@@ -40,6 +40,21 @@ DEFAULT_TEST_MANIFEST = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_
 DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
 
+ROUTER_ORDER = (
+    "write_pre",
+    "read_pre",
+    "write_0",
+    "read_0",
+    "write_1",
+    "read_1",
+)
+ROUTER_SLOT_COUNT = 5
+ROUTER_WEIGHT_COLUMNS = tuple(
+    f"{router_name}_slot_{slot_index}"
+    for router_name in ROUTER_ORDER
+    for slot_index in range(ROUTER_SLOT_COUNT)
+)
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -49,7 +64,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mellow-root", type=Path, default=Path(DEFAULT_MELLOW))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--report-path", type=Path)
-    parser.add_argument("--num-samples", type=int, default=3)
+    parser.add_argument(
+        "--router-csv",
+        type=Path,
+        help="Router-weight CSV path (default: OUTPUT_DIR/router_weights.csv).",
+    )
+    parser.add_argument("--num-samples", type=int, default=5)
     parser.add_argument(
         "--sample-indices",
         type=int,
@@ -109,11 +129,206 @@ def _select_indices(length: int, args: argparse.Namespace) -> list[int]:
             raise ValueError("num-samples must be positive")
         if args.num_samples > length:
             raise ValueError(f"requested {args.num_samples} samples from a {length}-row manifest")
-        indices = random.Random(args.seed).sample(range(length), args.num_samples)
+        indices = list(range(args.num_samples))
     invalid = [index for index in indices if index < 0 or index >= length]
     if invalid:
         raise IndexError(f"sample indices outside [0, {length}): {invalid}")
     return indices
+
+
+class RouterWeightCsvRecorder:
+    """Stream the six MeSH router distributions for every sequence position."""
+
+    def __init__(self, model: Any, tokenizer: Any, path: Path) -> None:
+        self.model = model
+        self.tokenizer = tokenizer
+        self.path = path
+        self.rows_written = 0
+        self.forwards_written = 0
+        self._sample_ordinal: int | None = None
+        self._row_index: int | None = None
+        self._prompt_token_count: int | None = None
+        self._captured: dict[str, torch.Tensor] = {}
+        self._handles: list[Any] = []
+        self._token_text_cache: dict[int, str] = {}
+        self._stream: Any = None
+        self._writer: Any = None
+
+    def __enter__(self) -> "RouterWeightCsvRecorder":
+        backbone = self.model.mesh_model.model
+        write_routers = list(backbone.write_routers)
+        read_routers = list(backbone.read_routers)
+        if len(write_routers) != 3 or len(read_routers) != 3:
+            raise RuntimeError(
+                "router recorder requires exactly three write and three read routers"
+            )
+        if int(getattr(backbone, "memory_slots", -1)) != ROUTER_SLOT_COUNT:
+            raise RuntimeError(
+                f"router recorder requires {ROUTER_SLOT_COUNT} memory slots"
+            )
+        modules = {
+            "write_pre": write_routers[0],
+            "read_pre": read_routers[0],
+            "write_0": write_routers[1],
+            "read_0": read_routers[1],
+            "write_1": write_routers[2],
+            "read_1": read_routers[2],
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._stream = self.path.open("x", encoding="utf-8", newline="")
+        metadata_columns = (
+            "sample_ordinal",
+            "manifest_row_index",
+            "generation_step",
+            "sequence_position",
+            "token_region",
+            "token_id",
+            "token_text",
+        )
+        self._writer = csv.writer(self._stream)
+        self._writer.writerow((*metadata_columns, *ROUTER_WEIGHT_COLUMNS))
+        for name in ROUTER_ORDER:
+            self._handles.append(modules[name].register_forward_hook(self._make_hook(name)))
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback_value: Any) -> None:
+        for handle in self._handles:
+            handle.remove()
+        self._handles.clear()
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
+
+    def _make_hook(self, name: str) -> Any:
+        def capture(_module: Any, inputs: tuple[Any, ...], output: torch.Tensor) -> None:
+            if name in self._captured:
+                raise RuntimeError(f"router {name} ran more than once in one model forward")
+            if not inputs or not torch.is_tensor(inputs[0]) or not torch.is_tensor(output):
+                raise RuntimeError(f"router {name} hook received an unexpected signature")
+            # Match MeshLlamaModel._route exactly: fp32 softmax followed by the
+            # query dtype cast. Convert back to fp32 only for readable CSV output.
+            weights = torch.softmax(output.float(), dim=-1).to(dtype=inputs[0].dtype)
+            self._captured[name] = weights.detach().float().cpu()
+
+        return capture
+
+    def start_sample(
+        self,
+        *,
+        sample_ordinal: int,
+        row_index: int,
+        prompt_token_count: int,
+    ) -> None:
+        self._sample_ordinal = int(sample_ordinal)
+        self._row_index = int(row_index)
+        self._prompt_token_count = int(prompt_token_count)
+
+    def begin_forward(self) -> None:
+        if self._captured:
+            raise RuntimeError(
+                f"unconsumed router captures before forward: {sorted(self._captured)}"
+            )
+        if self._sample_ordinal is None or self._row_index is None:
+            raise RuntimeError("start_sample must be called before router capture")
+
+    def _token_text(self, token_id: int) -> str:
+        if token_id not in self._token_text_cache:
+            self._token_text_cache[token_id] = self.tokenizer.decode(
+                [token_id], skip_special_tokens=False
+            )
+        return self._token_text_cache[token_id]
+
+    def record_forward(self, *, generation_step: int, text_ids: torch.Tensor) -> None:
+        missing = [name for name in ROUTER_ORDER if name not in self._captured]
+        unexpected = [name for name in self._captured if name not in ROUTER_ORDER]
+        if missing or unexpected:
+            raise RuntimeError(
+                f"router capture mismatch: missing={missing} unexpected={unexpected}"
+            )
+        token_ids = [int(value) for value in text_ids.detach().cpu().reshape(-1).tolist()]
+        expected_sequence_length = AUDIO_PREFIX_TOKENS + len(token_ids)
+        router_rows: dict[str, list[list[float]]] = {}
+        for name in ROUTER_ORDER:
+            weights = self._captured[name]
+            expected_shape = (1, expected_sequence_length, ROUTER_SLOT_COUNT)
+            if tuple(weights.shape) != expected_shape:
+                raise RuntimeError(
+                    f"router {name} shape mismatch: expected={expected_shape} "
+                    f"actual={tuple(weights.shape)}"
+                )
+            if not bool(torch.isfinite(weights).all()):
+                raise RuntimeError(f"router {name} contains non-finite weights")
+            if not torch.allclose(
+                weights.sum(dim=-1),
+                torch.ones_like(weights[..., 0]),
+                rtol=5e-3,
+                atol=5e-3,
+            ):
+                raise RuntimeError(f"router {name} weights do not sum to one")
+            router_rows[name] = weights[0].tolist()
+
+        first_separator = AUDIO_TOKENS_PER_CLIP
+        second_audio_start = first_separator + 1
+        second_separator = second_audio_start + AUDIO_TOKENS_PER_CLIP
+        text_start = second_separator + 1
+        if text_start != AUDIO_PREFIX_TOKENS:
+            raise RuntimeError("audio-prefix token layout no longer matches its constants")
+        separator_id = int(self.model.separator_token_id)
+        separator_text = self._token_text(separator_id)
+        assert self._prompt_token_count is not None
+        assert self._writer is not None
+        for position in range(expected_sequence_length):
+            if position < first_separator:
+                token_region, token_id, token_text = "audio1", "", ""
+            elif position == first_separator:
+                token_region, token_id, token_text = "separator1", separator_id, separator_text
+            elif position < second_separator:
+                token_region, token_id, token_text = "audio2", "", ""
+            elif position == second_separator:
+                token_region, token_id, token_text = "separator2", separator_id, separator_text
+            else:
+                text_position = position - text_start
+                token_id = token_ids[text_position]
+                token_text = self._token_text(token_id)
+                token_region = (
+                    "prompt"
+                    if text_position < self._prompt_token_count
+                    else "generated_input"
+                )
+            weight_values = [
+                router_rows[name][position][slot_index]
+                for name in ROUTER_ORDER
+                for slot_index in range(ROUTER_SLOT_COUNT)
+            ]
+            self._writer.writerow(
+                (
+                    self._sample_ordinal,
+                    self._row_index,
+                    int(generation_step),
+                    position,
+                    token_region,
+                    token_id,
+                    token_text,
+                    *weight_values,
+                )
+            )
+        self._stream.flush()
+        self.rows_written += expected_sequence_length
+        self.forwards_written += 1
+        self._captured.clear()
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "path": str(self.path.resolve()),
+            "rows_written": self.rows_written,
+            "forwards_written": self.forwards_written,
+            "router_order": list(ROUTER_ORDER),
+            "memory_slots": ROUTER_SLOT_COUNT,
+            "weight_columns_per_token": len(ROUTER_WEIGHT_COLUMNS),
+            "weight_columns": list(ROUTER_WEIGHT_COLUMNS),
+            "row_granularity": "one sample-generation-forward sequence position",
+            "generation_step_zero_meaning": "forward that predicts the first generated token",
+        }
 
 
 def _validate_checkpoint_contract(args: argparse.Namespace) -> dict[str, Any]:
@@ -214,6 +429,7 @@ def _greedy_decode(
     *,
     max_new_tokens: int,
     autocast_enabled: bool,
+    router_recorder: RouterWeightCsvRecorder | None = None,
 ) -> dict[str, Any]:
     if max_new_tokens <= 0:
         raise ValueError("max-new-tokens must be positive")
@@ -231,7 +447,9 @@ def _greedy_decode(
     expected_trace = _expected_trace()
     started = time.perf_counter()
     stop_reason = "max_new_tokens" if token_budget == max_new_tokens else "max_context_length"
-    for _ in range(token_budget):
+    for generation_step in range(token_budget):
+        if router_recorder is not None:
+            router_recorder.begin_forward()
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=autocast_enabled):
             text_embeds = _find_embedding(model.mesh_model, text_ids)
             inputs_embeds = torch.cat((audio_prefix, text_embeds), dim=1)
@@ -253,6 +471,11 @@ def _greedy_decode(
         if trace != expected_trace:
             raise RuntimeError(
                 f"MeSH generation trace mismatch: expected={expected_trace} actual={trace}"
+            )
+        if router_recorder is not None:
+            router_recorder.record_forward(
+                generation_step=generation_step,
+                text_ids=text_ids,
             )
         next_token = int(torch.argmax(output.logits[:, -1, :], dim=-1).item())
         generated.append(next_token)
@@ -294,6 +517,7 @@ def _markdown(report: dict[str, Any]) -> str:
         f"- Test manifest: `{report['test_manifest']}`",
         f"- Selected rows: `{report.get('selected_indices', [])}`",
         f"- Decoder: greedy, `use_cache=False`, max new tokens `{report['generation']['max_new_tokens']}`",
+        f"- Router weights CSV: `{report['router_weights']['path']}`",
         "",
     ]
     for number, sample in enumerate(report.get("samples", []), start=1):
@@ -387,7 +611,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     selected = _select_indices(len(dataset), args)
     autocast_enabled = args.dtype == "bf16"
     samples: list[dict[str, Any]] = []
-    with torch.inference_mode():
+    router_recorder = RouterWeightCsvRecorder(model, tokenizer, args.router_csv)
+    with router_recorder, torch.inference_mode():
         for ordinal, row_index in enumerate(selected, start=1):
             item = dataset[row_index]
             row = dataset.rows[row_index]
@@ -415,6 +640,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             prompt_ids = torch.tensor(
                 [prompt_token_ids], dtype=torch.long, device=device
             )
+            router_recorder.start_sample(
+                sample_ordinal=ordinal,
+                row_index=row_index,
+                prompt_token_count=len(prompt_token_ids),
+            )
+            router_rows_before = router_recorder.rows_written
+            router_forwards_before = router_recorder.forwards_written
             audio_prefix, prefix_audit = _build_audio_prefix(
                 model,
                 item,
@@ -428,6 +660,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 prompt_ids,
                 max_new_tokens=args.max_new_tokens,
                 autocast_enabled=autocast_enabled,
+                router_recorder=router_recorder,
             )
             audio1_path = _manifest_path(row, first=True)
             audio2_path = _manifest_path(row, first=False) or audio1_path
@@ -444,6 +677,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "prompt_truncated": len(prompt_token_ids) < len(full_prompt_ids),
                 "normalized_exact_match": _normalize(generated["generated_text"])
                 == _normalize(reference),
+                "router_csv_rows": router_recorder.rows_written - router_rows_before,
+                "router_forward_count": (
+                    router_recorder.forwards_written - router_forwards_before
+                ),
                 **prefix_audit,
                 **generated,
             }
@@ -486,10 +723,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "max_new_tokens": args.max_new_tokens,
             "max_prompt_tokens": args.max_prompt_tokens,
             "seed": args.seed,
-            "sample_selection": "explicit_indices" if args.sample_indices else "seeded_without_replacement",
+            "sample_selection": "explicit_indices" if args.sample_indices else "first_n_manifest_rows",
             "audio_encoded_once_per_sample": True,
             "multimodal_prefix_order": "audio1 + separator + audio2 + separator + prompt + generated_tokens",
         },
+        "router_weights": router_recorder.summary(),
         "samples": samples,
         "summary": {
             "sample_count": len(samples),
@@ -504,9 +742,11 @@ def main(argv: list[str] | None = None) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     report_path = args.report_path or args.output_dir / "reasonaqa_samples.json"
     markdown_path = args.output_dir / "reasonaqa_samples.md"
-    if report_path.exists() or markdown_path.exists():
+    args.router_csv = args.router_csv or args.output_dir / "router_weights.csv"
+    if report_path.exists() or markdown_path.exists() or args.router_csv.exists():
         raise FileExistsError(
-            f"refusing to overwrite generation report: {report_path} or {markdown_path}"
+            "refusing to overwrite generation outputs: "
+            f"{report_path}, {markdown_path}, or {args.router_csv}"
         )
     report: dict[str, Any] = {
         "stage": "reasonaqa_test_sample_generation_5_10x2_5_mesh_mellow",
@@ -536,6 +776,7 @@ def main(argv: list[str] | None = None) -> int:
                 "status": report["status"],
                 "report": str(report_path),
                 "comparison_report": str(markdown_path) if markdown_path.exists() else None,
+                "router_weights_csv": report.get("router_weights", {}).get("path"),
                 "summary": report.get("summary"),
                 "hard_failures": len(report.get("hard_failures", [])),
             },

@@ -10,7 +10,7 @@ CHECKPOINT="${RSMOL_AUDIO_GENERATION_CHECKPOINT:-/hpc_stor03/sjtu_home/jinwei.zh
 TEST_MANIFEST="${RSMOL_REASONAQA_TEST_MANIFEST:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_test.jsonl}"
 HTSAT_CHECKPOINT="${RSMOL_HTSAT_CHECKPOINT:-/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt}"
 MELLOW_ROOT="${RSMOL_MELLOW_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main}"
-OUTPUT_DIR="${RSMOL_AUDIO_GENERATION_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/reasonaqa_samples_checkpoint001500_${RUN_TAG}}"
+OUTPUT_DIR="${RSMOL_AUDIO_GENERATION_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/reasonaqa_router_weights_checkpoint011343_${RUN_TAG}}"
 
 ARGS=(
   --checkpoint "$CHECKPOINT"
@@ -18,7 +18,7 @@ ARGS=(
   --htsat-checkpoint "$HTSAT_CHECKPOINT"
   --mellow-root "$MELLOW_ROOT"
   --output-dir "$OUTPUT_DIR"
-  --num-samples 3
+  --num-samples 5
   --seed 0
   --max-new-tokens 64
   --dtype bf16
