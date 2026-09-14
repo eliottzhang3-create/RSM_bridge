@@ -324,7 +324,7 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
                 htsat_checkpoint=Path("/models/htsat.ckpt"),
                 mellow_root=Path("/code/mellow"),
                 max_prompt_tokens=129,
-                max_new_tokens=5,
+                max_new_tokens=16,
             )
             self.module._ensure_output_dir(types.SimpleNamespace(mode="smoke", **common))
             self.module._ensure_output_dir(types.SimpleNamespace(mode="full", **common))
