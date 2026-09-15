@@ -20,9 +20,10 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             self.assertTrue(path.is_file(), path)
         inner = INNER.read_text(encoding="utf-8")
         submit = SUBMIT.read_text(encoding="utf-8")
-        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID"):
+        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 2", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID"):
             self.assertIn(marker, inner)
         self.assertIn("vc submit", submit)
+        self.assertIn("-c 64", submit)
         self.assertIn("-g 8", submit)
         self.assertIn("audio-mesh-perf20-5090", submit)
 
@@ -36,6 +37,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertIn("save_due = (args.gate == \"FORMAL\"", text)
         self.assertIn("args.gate == \"STAGE7\"", text)
         self.assertIn("args.gate != \"PERF20\" and args.profiler", text)
+        self.assertIn('"num_workers": 2', text)
 
     def test_perf20_audit_does_not_require_syncing_router_statistics(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")

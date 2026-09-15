@@ -41,6 +41,7 @@ torchrun --standalone --nproc_per_node=8 "$SCRIPT_DIR/train_audio_5_10x2_5_mesh_
   --world-size 8 \
   --micro-batch-size 8 \
   --gradient-accumulation-steps 4 \
+  --num-workers 2 \
   --epochs 1 \
   --max-steps 20 \
   --max-lr 1e-3 \

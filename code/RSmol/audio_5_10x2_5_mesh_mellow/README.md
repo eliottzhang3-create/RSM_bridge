@@ -41,8 +41,10 @@ run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh  # isolated 8-GPU PERF20 baseline/
 The wrappers accept the same arguments as their underlying runtime scripts and
 submit them inside the project GPU image.
 
-PERF20 fixes microbatch 8/GPU, GA=4, 20 optimizer steps, BF16, seed 0, and the
-current drop12 manifest plus second-round MeSH checkpoint defaults. It never
+PERF20 currently fixes 64 CPU cores, two DataLoader workers per rank (16 total),
+microbatch 8/GPU, GA=4, 20 optimizer steps, BF16, seed 0, and the current
+drop12 manifest plus second-round MeSH checkpoint defaults. This worker
+experiment does not also enable pin memory, persistent workers, or compile. It never
 saves/reloads/prunes checkpoints and refuses an existing output directory. The
 baseline is submitted with `bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh`;
 the independent profiling run adds `--profiler`. Profiler collection is rank0

@@ -724,6 +724,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "world_size": 8,
                 "micro_batch_size": 8,
                 "gradient_accumulation_steps": 4,
+                "num_workers": 2,
                 "epochs": 1,
                 "max_lr": 1e-3,
                 "min_lr": 0.0,

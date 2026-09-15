@@ -580,7 +580,7 @@ code/RSmol/scripts/train_audio_perf20_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
 ```
 
-PERF20 固定 8×5090、每卡 micro-batch 8、GA=4、20 个 optimizer steps、BF16、seed=0、最终 drop12 manifest、第二轮 MeSH checkpoint、HTSAT/Mellow 默认路径；它不会保存 checkpoint、执行 reload audit 或 prune，也拒绝复用已有输出目录。默认 profiler 关闭，基线提交命令为：
+PERF20 当前固定 8×5090、64 个 CPU 核、每 rank `num_workers=2`（共 16 个 DataLoader workers）、每卡 micro-batch 8、GA=4、20 个 optimizer steps、BF16、seed=0、最终 drop12 manifest、第二轮 MeSH checkpoint、HTSAT/Mellow 默认路径；它不会保存 checkpoint、执行 reload audit 或 prune，也拒绝复用已有输出目录。该 worker 实验没有同时启用 pin memory、persistent workers 或 compile。默认 profiler 关闭，提交命令为：
 
 ```bash
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
