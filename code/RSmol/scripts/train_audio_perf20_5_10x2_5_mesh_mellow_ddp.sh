@@ -15,6 +15,22 @@ DEFAULT_MANIFEST="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_
 PERF20_RUN_ID="${PERF20_RUN_ID:-$(date +%Y%m%d_%H%M%S%N)-$$}"
 DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/perf20_${PERF20_RUN_ID}"
 
+# Keep the baseline explicit, but do not pass both sides of the mutually
+# exclusive argparse profiler group when the outer submission wrapper adds
+# ``--profiler``.  The caller's explicit profiler flag always wins.
+PROFILER_FLAG_SEEN=0
+for argument in "$@"; do
+  case "$argument" in
+    --profiler|--enable-profiler|--no-profiler|--disable-profiler)
+      PROFILER_FLAG_SEEN=1
+      ;;
+  esac
+done
+PROFILER_DEFAULT=()
+if [[ "$PROFILER_FLAG_SEEN" -eq 0 ]]; then
+  PROFILER_DEFAULT=(--no-profiler)
+fi
+
 torchrun --standalone --nproc_per_node=8 "$SCRIPT_DIR/train_audio_5_10x2_5_mesh_mellow_ddp.py" \
   --gate PERF20 \
   --model-path "$DEFAULT_MESH" \
@@ -31,5 +47,5 @@ torchrun --standalone --nproc_per_node=8 "$SCRIPT_DIR/train_audio_5_10x2_5_mesh_
   --min-lr 0 \
   --seed 0 \
   --steady-state-start-step 6 \
-  --no-profiler \
+  "${PROFILER_DEFAULT[@]}" \
   "$@"

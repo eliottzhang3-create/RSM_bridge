@@ -44,6 +44,13 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertIn('model.mesh_model.model.routing_stats_mode = False', text)
         self.assertIn('"router_stats_required": bool(require_router_stats)', text)
 
+    def test_perf20_wrapper_does_not_mix_profiler_flags(self) -> None:
+        inner = INNER.read_text(encoding="utf-8")
+        self.assertIn("PROFILER_FLAG_SEEN=0", inner)
+        self.assertIn("--profiler|--enable-profiler|--no-profiler|--disable-profiler", inner)
+        self.assertIn('PROFILER_DEFAULT=(--no-profiler)', inner)
+        self.assertIn('"${PROFILER_DEFAULT[@]}"', inner)
+
     def test_profiler_schedule_and_rank0_artifacts(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
         for marker in ("ProfilerActivity.CPU", "ProfilerActivity.CUDA", "skip_first", "profiler_wait", "profiler_warmup", "profiler_active", "profiler_repeat", "tensorboard_trace_handler", "worker_name = f\"rank0-cycle", "profiler.__enter__", "profiler.step()", "on_trace_ready", "def _on_trace_ready", "cycle_dir", "trace_paths", "operator_summary_cycle", "profiler_artifacts", "overhead_steps_excluded_from_steady_state"):
