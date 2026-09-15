@@ -525,8 +525,14 @@ def _router_stats(model: AudioMeshModel) -> dict[str, Any]:
     return getattr(owner, "last_routing_stats", {})
 
 
-def _mesh_runtime_gradient_audit(model: AudioMeshModel) -> dict[str, Any]:
-    """Validate one forward/backward traversed both MeSH middle loops."""
+def _mesh_runtime_gradient_audit(model: AudioMeshModel, *, require_router_stats: bool = True) -> dict[str, Any]:
+    """Validate one forward/backward traversed both MeSH middle loops.
+
+    PERF20 intentionally disables per-router CPU statistics so its timing path
+    contains only the unified end-of-step CUDA synchronization.  Router
+    parameter gradients and the full logical trace remain mandatory there;
+    only the optional statistics side channel is skipped.
+    """
     mesh_owner = model.mesh_model.model
     trace = list(getattr(mesh_owner, "last_forward_trace", []))
     expected_trace = [
@@ -561,13 +567,22 @@ def _mesh_runtime_gradient_audit(model: AudioMeshModel) -> dict[str, Any]:
         "loop_output_finite_gradients": loop_output_grads,
         "both_middle_loops_have_finite_gradients": len(input_refs) == 2 and len(output_refs) == 2 and all(loop_input_grads) and all(loop_output_grads),
         "router_stats_nonempty": len(_router_stats(model)) == 6,
+        "router_stats_required": bool(require_router_stats),
         "router_stats_names": sorted(_router_stats(model)),
         "router_finite_gradients": router_grads,
         "all_router_gradients_finite": all(router_grads.values()),
         "middle_core_layer_gradients_finite": core_grads,
         "all_middle_core_gradients_finite": all(core_grads),
     }
-    if not all((result["trace_matches_5_10_10_5"], result["both_middle_loops_have_finite_gradients"], result["router_stats_nonempty"], result["all_router_gradients_finite"], result["all_middle_core_gradients_finite"])):
+    required_checks = (
+        result["trace_matches_5_10_10_5"],
+        result["both_middle_loops_have_finite_gradients"],
+        result["all_router_gradients_finite"],
+        result["all_middle_core_gradients_finite"],
+    )
+    if require_router_stats:
+        required_checks = (*required_checks, result["router_stats_nonempty"])
+    if not all(required_checks):
         raise RuntimeError(f"MeSH runtime gradient/router/trace audit failed: {result}")
     return result
 
@@ -1010,7 +1025,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 else:
                     grad_norm = torch.nn.utils.clip_grad_norm_(ddp.parameters(), 0.5, error_if_nonfinite=True)
                 if runtime_gradient_audit is None:
-                    runtime_gradient_audit = _mesh_runtime_gradient_audit(owner)
+                    runtime_gradient_audit = _mesh_runtime_gradient_audit(
+                        owner,
+                        require_router_stats=args.gate != "PERF20",
+                    )
                     owner.mesh_model.model.gradient_audit_mode = False
                 lr_before_optimizer_step = float(optimizer.param_groups[0]["lr"])
                 optimizer_step += 1

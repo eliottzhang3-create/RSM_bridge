@@ -37,6 +37,13 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertIn("args.gate == \"STAGE7\"", text)
         self.assertIn("args.gate != \"PERF20\" and args.profiler", text)
 
+    def test_perf20_audit_does_not_require_syncing_router_statistics(self) -> None:
+        text = TRAIN.read_text(encoding="utf-8")
+        self.assertIn("def _mesh_runtime_gradient_audit(model: AudioMeshModel, *, require_router_stats: bool = True)", text)
+        self.assertIn('require_router_stats=args.gate != "PERF20"', text)
+        self.assertIn('model.mesh_model.model.routing_stats_mode = False', text)
+        self.assertIn('"router_stats_required": bool(require_router_stats)', text)
+
     def test_profiler_schedule_and_rank0_artifacts(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
         for marker in ("ProfilerActivity.CPU", "ProfilerActivity.CUDA", "skip_first", "profiler_wait", "profiler_warmup", "profiler_active", "profiler_repeat", "tensorboard_trace_handler", "worker_name = f\"rank0-cycle", "profiler.__enter__", "profiler.step()", "on_trace_ready", "def _on_trace_ready", "cycle_dir", "trace_paths", "operator_summary_cycle", "profiler_artifacts", "overhead_steps_excluded_from_steady_state"):
