@@ -776,7 +776,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         model.train()
         if not model.trainable_parameter_audit()["training_mode_contract"]:
             raise RuntimeError(f"audio training mode contract failed: {model.trainable_parameter_audit()}")
-        model.mesh_model.model.routing_stats_mode = True
+        # PERF20 must measure the actual training path.  Router statistics call
+        # ``.cpu()`` inside every router forward, which introduces extra CUDA
+        # synchronizations and would invalidate the single-sync timing
+        # contract.  Keep the statistics for the normal audit/training gates,
+        # but disable them for the performance gate.
+        if args.gate == "PERF20":
+            model.mesh_model.model.routing_stats_mode = False
+        else:
+            model.mesh_model.model.routing_stats_mode = True
         model.mesh_model.model.gradient_audit_mode = True
         dataset = ReasonAQADataset(args.train_manifest, tokenizer)
         # Shuffle deterministically per epoch; set_epoch(epoch) below changes
@@ -1086,11 +1094,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if batch_in_epoch >= steps_epoch * args.gradient_accumulation_steps:
                 epoch += 1
                 batch_in_epoch = 0
-        report.update({"status": "PASS", "start_step": start_step, "end_step": optimizer_step, "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "dropped_microbatches_per_epoch": dropped_microbatches, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "effective_global_batch_size": int(args.micro_batch_size * world * args.gradient_accumulation_steps), "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "routing_stats": {"enabled": True, "mode": "continuous_per_forward", "reported_in_each_step": True}, "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "runtime_gradient_audit": runtime_gradient_audit, "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
+        report.update({"status": "PASS", "start_step": start_step, "end_step": optimizer_step, "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "dropped_microbatches_per_epoch": dropped_microbatches, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "effective_global_batch_size": int(args.micro_batch_size * world * args.gradient_accumulation_steps), "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "routing_stats": {"enabled": args.gate != "PERF20", "mode": "disabled_for_perf20" if args.gate == "PERF20" else "continuous_per_forward", "reported_in_each_step": args.gate != "PERF20", "reason": "per-router .cpu() statistics would add CUDA synchronizations to the PERF20 timing path" if args.gate == "PERF20" else None}, "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "runtime_gradient_audit": runtime_gradient_audit, "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
         report["correctness_audit"] = {
             "mesh_runtime_gradient_audit": runtime_gradient_audit,
             "answer_only_labels": "build_labels enforces -100 outside real answer intervals and exact answer token count",
-            "routing_stats": "continuous per forward; first-step gradient audit retained, then gradient_audit_mode disabled",
+            "routing_stats": "disabled for PERF20 timing to avoid per-router CUDA synchronizations; first-step gradient audit retained, then gradient_audit_mode disabled" if args.gate == "PERF20" else "continuous per forward; first-step gradient audit retained, then gradient_audit_mode disabled",
         }
         if args.gate == "PERF20" and rank == 0:
             report["steady_state_summary"] = _perf_steady_summary(metrics, args, max_steps)

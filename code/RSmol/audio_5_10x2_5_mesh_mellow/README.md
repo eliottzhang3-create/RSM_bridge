@@ -61,5 +61,8 @@ are included. Each completed profiler schedule cycle is exported from the
 directory; the report's `profiler.artifacts` list contains that cycle's trace
 and operator-summary paths. By default steady state is optimizer steps 6-20,
 excluding profiler wait/warmup/active steps in a profile run.
+PERF20 also disables per-forward router statistics because their internal
+GPU-to-CPU copies would add synchronization overhead to the timing path; the
+first-step MeSH gradient/path audit remains enabled.
 The repository's Windows checkout cannot run the remote CUDA/Mellow/HTSAT
 validation; use the 5090 `vc submit` launcher for the actual measurement.

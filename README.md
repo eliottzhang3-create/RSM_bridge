@@ -596,6 +596,8 @@ profiler 只在 rank0 创建，activities 为 CPU+CUDA，`profiler.step()` 的�
 
 PERF20 报告逐 optimizer step 记录 data_wait（包括 `next(data_iter)`）、host-to-device、forward、backward、grad_clip、optimizer、scheduler、metrics/collectives 的分层计时，并记录每个 microbatch 的实际 sequence length、文本非 padding token 与多模态 token。GPU 运算使用 CUDA event，在每个 optimizer step 末尾只做一次统一 CUDA synchronize；data_wait、scheduler 和 metrics 的 host 字段是清楚标注的 host enqueue/wall 时间，不能被误读为 CUDA/NCCL 完成时间；metrics/collectives 的 device 字段覆盖同步完成，step wall 也覆盖这次同步。稳定吞吐默认只统计 steps 6–20，并排除 profiler wait/warmup/active steps；报告 median/P25/P75、samples/s、audio seconds/s、多模态/非 padding tokens/s、rank0 峰值 allocated/reserved 显存。token 数由各 rank 按一致顺序 all-reduce 汇总；不会把 profiler warmup/active overhead 当作无 profiler 基线。
 
+为避免破坏上述单次同步计时合同，PERF20 默认关闭逐 forward 的 router 统计（该统计内部需要多次 `.cpu()`）；首个 optimizer step 的 MeSH 梯度/路径审计仍保留。正式训练和非 PERF20 审计 gate 继续保留 router 统计。
+
 训练主文件的 profiler 标记覆盖 `audio/mellow_wrapper`、显式兼容路径的 `audio/c2l`、`audio/bridge`、`audio/waveform_embedding_audio1/2`、`mesh/text_and_prefix`、`mesh/prefix_5`、`mesh/router_pre`、`mesh/middle_loop_0/1`、`mesh/router_loop_0/1`、`mesh/suffix_5`、`loss`、`backward`、`grad_clip`、`optimizer`、`scheduler`、`metrics`、`DDP/collectives`；同名区域不会嵌套双计。模型数学与正式 gate 默认行为不因标记改变。Windows 本地没有远程权重、Mellow/HTSAT 与 CUDA 环境，不能在本地验证 GPU 吞吐或 trace；需在远程 Linux 通过上述 `vc submit` wrapper 验证。
 
 ### 9.3.2 固定 5-10-5 recursive 音频正式训练
