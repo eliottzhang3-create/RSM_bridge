@@ -1,0 +1,126 @@
+"""Dependency-light contracts for isolated SmolLM2 generation and MMAU eval."""
+from __future__ import annotations
+
+import importlib.util
+import tempfile
+import types
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = ROOT / "code" / "RSmol" / "scripts"
+GEN = SCRIPT_DIR / "generate_audio_smollm2_checkpoint_reasonaqa.py"
+GEN_SH = SCRIPT_DIR / "generate_audio_smollm2_checkpoint_reasonaqa.sh"
+GEN_SUBMIT = ROOT / "code" / "RSmol" / "run_audio_smollm2_checkpoint_reasonaqa_generation_3090.sh"
+EVAL = SCRIPT_DIR / "evaluate_mmau_test_mini_audio_smollm2.py"
+EVAL_SH = SCRIPT_DIR / "evaluate_mmau_test_mini_audio_smollm2.sh"
+EVAL_SUBMIT = ROOT / "code" / "RSmol" / "run_mmau_test_mini_audio_smollm2_5090.sh"
+
+
+def load_eval():
+    spec = importlib.util.spec_from_file_location("audio_smollm2_mmau_static_eval", EVAL)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.evaluator = load_eval()
+
+    def test_isolated_files_and_defaults(self) -> None:
+        for path in (GEN, GEN_SH, GEN_SUBMIT, EVAL, EVAL_SH, EVAL_SUBMIT):
+            self.assertTrue(path.is_file(), path)
+        generation = GEN.read_text(encoding="utf-8")
+        evaluator = EVAL.read_text(encoding="utf-8")
+        self.assertIn("audio_smollm2_135m_mellow/formal_20260911_v1/checkpoint-011343", generation)
+        self.assertIn("audio_smollm2_135m_mellow/formal_20260911_v1/checkpoint-011343", evaluator)
+        self.assertIn("DEFAULT_MAX_NEW_TOKENS = 16", evaluator)
+        self.assertIn("audio_smollm2_config.json", generation + evaluator)
+        self.assertIn("evaluation_predictions.jsonl", evaluator)
+        self.assertNotIn("evaluate_mmau_test_mini_5_10x2_5_mesh_mellow", evaluator)
+        self.assertNotIn("generate_audio_checkpoint_reasonaqa", generation)
+
+    def test_standard_architecture_and_prefix_contract(self) -> None:
+        generation = GEN.read_text(encoding="utf-8")
+        evaluator = EVAL.read_text(encoding="utf-8")
+        for marker in (
+            "ORIGINAL_SMOLLM2_CONTRACT",
+            "SMOLLM2_HIDDEN_SIZE",
+            "AUDIO_TOKENS_PER_CLIP",
+            "AUDIO_PREFIX_TOKENS",
+            "independent_decoder_layers",
+            "has_router_parameters",
+            "has_memory_parameters",
+            "_audit_saved_checkpoint",
+            "_load_model",
+            "model.text_model",
+            "use_cache=False",
+            "logits_to_keep=1",
+            "audio1 + separator + audio2 + separator + prompt + generated_tokens",
+        ):
+            self.assertIn(marker, generation + evaluator)
+        self.assertIn('"architecture_contract": ORIGINAL_SMOLLM2_CONTRACT', generation)
+        self.assertNotIn("write_routers", generation + evaluator)
+        self.assertNotIn("read_routers", generation + evaluator)
+        self.assertNotIn("model.mesh_model", generation + evaluator)
+
+    def test_generation_args_lock_protocol(self) -> None:
+        args = self.evaluator.parse_args(["--output-dir", "/tmp/mmau", "--mode", "formal"])
+        self.assertEqual(args.mode, "formal")
+        self.assertEqual(args.max_new_tokens, 16)
+        self.assertEqual(args.max_prompt_tokens, 129)
+        with self.assertRaises(SystemExit):
+            self.evaluator.parse_args(["--output-dir", "/tmp/mmau", "--max-new-tokens", "5"])
+
+    def test_prompt_options_and_parser_match_established_contract(self) -> None:
+        prompt = self.evaluator.build_fixed_order_prompt("Which one?", ["first", "second"])
+        self.assertEqual(
+            prompt,
+            "Answer the following multiple-choice question based on the audio. Which one? Choices: (A) first (B) second",
+        )
+        self.assertIn("(A) first", prompt)
+        self.assertIn("(B) second", prompt)
+        result = self.evaluator.parse_model_output(
+            "B) A goat Cd) A birdB) A goat", ["A human", "A goat", "A car", "A bird"]
+        )
+        self.assertEqual(result["selected_option"], "A goat")
+        self.assertEqual(result["parse_method"], "leading_label")
+
+    def test_official_evaluation_uses_input_and_prediction_field(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            evaluator = output / "evaluation.py"
+            evaluator.write_text(
+                "import argparse, json\n"
+                "p=argparse.ArgumentParser(); p.add_argument('--input', required=True)\n"
+                "a=p.parse_args(); d=json.load(open(a.input)); assert all('model_output' in x for x in d)\n",
+                encoding="utf-8",
+            )
+            (output / "predictions_fixed_order.json").write_text("[{\"model_output\": \"A\"}]", encoding="utf-8")
+            result = self.evaluator._run_official_evaluation(
+                types.SimpleNamespace(run_official_evaluation=True, evaluation_script=evaluator), output, 1
+            )
+            self.assertEqual(result["status"], "PASS")
+            text = (output / "official_evaluation.txt").read_text(encoding="utf-8")
+            self.assertIn("--input", text)
+
+    def test_submit_wrappers_are_isolated(self) -> None:
+        gen_submit = GEN_SUBMIT.read_text(encoding="utf-8")
+        eval_submit = EVAL_SUBMIT.read_text(encoding="utf-8")
+        self.assertIn("pdgpu-3090", gen_submit)
+        self.assertIn("pdgpu-5090", eval_submit)
+        self.assertIn("-g 1", gen_submit)
+        self.assertIn("-g 1", eval_submit)
+        self.assertIn("test_mini.parquet", eval_submit)
+        self.assertIn("mmau-test-mini.json", eval_submit)
+        self.assertIn("evaluation.py", eval_submit)
+        self.assertIn("audio_smollm2", gen_submit + eval_submit)
+        self.assertNotIn("5_10x2_5_mesh_mellow", gen_submit + eval_submit)
+
+
+if __name__ == "__main__":
+    unittest.main()

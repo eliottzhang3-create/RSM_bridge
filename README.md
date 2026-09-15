@@ -638,6 +638,60 @@ bash code/RSmol/run_audio_checkpoint_reasonaqa_generation_3090.sh \
 
 音频 prefix 固定为 260 tokens：`audio1 129 + separator 1 + audio2 129 + separator 1`。若样本没有第二段音频而复用第一段音频，prefix 长度仍为 260。
 
+### 9.5 原始 SmolLM2 音频对比基线 generation 与 MMAU test mini
+
+该对比路线加载音频 SmolLM2-135M 正式 checkpoint，不加载 MeSH 或 recursive
+模型。默认 checkpoint 为：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/formal_20260911_v1/checkpoint-011343
+```
+
+generation 使用与 MeSH 路线一致的最终 ReasonAQA test manifest、Mellow/HTSAT
+路径、260-token 音频 prefix、greedy、`use_cache=False` 和 `max_new_tokens=16`；
+默认生成前 5 个样本，也可传 zero-based `--sample-indices`。MMAU evaluator
+使用同一简化 Choices prompt、选项顺序、答案开头 parser、terminal/raw JSONL
+记录和官方 `evaluation.py --input ...` 调用。`--mode smoke` 只读取前 5 行，
+`--mode formal` 读取全量 test mini。所有输出均写入新的
+`audio_smollm2_135m_mellow` 命名空间，与 MeSH 输出目录隔离；本地尚未运行
+远程 GPU generation 或 MMAU evaluator。
+
+入口文件：
+
+```text
+code/RSmol/scripts/generate_audio_smollm2_checkpoint_reasonaqa.py
+code/RSmol/run_audio_smollm2_checkpoint_reasonaqa_generation_3090.sh
+code/RSmol/scripts/evaluate_mmau_test_mini_audio_smollm2.py
+code/RSmol/run_mmau_test_mini_audio_smollm2_5090.sh
+```
+
+生成 5 个 ReasonAQA 样本：
+
+```bash
+bash code/RSmol/run_audio_smollm2_checkpoint_reasonaqa_generation_3090.sh
+
+# 指定 zero-based manifest 行号
+bash code/RSmol/run_audio_smollm2_checkpoint_reasonaqa_generation_3090.sh \
+  --sample-indices 72100 72101 72102 72103 72104
+```
+
+MMAU test mini smoke 或正式评测：
+
+```bash
+RSMOL_MMAU_MODE=smoke \
+bash code/RSmol/run_mmau_test_mini_audio_smollm2_5090.sh
+
+RSMOL_MMAU_MODE=formal \
+bash code/RSmol/run_mmau_test_mini_audio_smollm2_5090.sh
+```
+
+MMAU 输出包含 `raw_generations.jsonl`、`skipped.jsonl`、
+`progress.jsonl`、`evaluation_predictions.jsonl`、
+`predictions_fixed_order.json`、`official_evaluation.txt` 和
+`evaluation_report.json`。标准模型审计验证 30 个独立 decoder layers、无
+router/memory 参数，以及 Mellow/HTSAT 外部 provenance；不使用 MeSH logical
+trace 或 router 权重导出。
+
 ## 10. 文件地图
 
 ### 10.1 当前 MeSH 文本路线
@@ -682,6 +736,13 @@ code/RSmol/scripts/train_audio_5_10_5_recursive_mellow_ddp.py
 code/RSmol/scripts/train_audio_5_10_5_recursive_mellow_formal_ddp.sh
 code/RSmol/run_audio_5_10_5_recursive_mellow_formal_5090.sh
 tests/test_audio_5_10_5_recursive_mellow_static.py
+
+# 原始 SmolLM2 音频对比基线的独立 generation 与 MMAU test mini
+code/RSmol/scripts/generate_audio_smollm2_checkpoint_reasonaqa.py
+code/RSmol/scripts/evaluate_mmau_test_mini_audio_smollm2.py
+code/RSmol/run_audio_smollm2_checkpoint_reasonaqa_generation_3090.sh
+code/RSmol/run_mmau_test_mini_audio_smollm2_5090.sh
+tests/test_audio_smollm2_generation_mmau_static.py
 ```
 
 ### 10.3 历史模型与评测
