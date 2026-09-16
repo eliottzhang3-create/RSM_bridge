@@ -23,7 +23,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             self.assertTrue(path.is_file(), path)
         inner = INNER.read_text(encoding="utf-8")
         submit = SUBMIT.read_text(encoding="utf-8")
-        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID"):
+        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID", "PERF20_OUTPUT_PREFIX", "perf20_preloaded"):
             self.assertIn(marker, inner)
         self.assertIn("vc submit", submit)
         self.assertIn("-c 32", submit)
@@ -57,7 +57,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             '"per_step_collectives_added": 0',
         ):
             self.assertIn(marker, text)
-        gather_call = 'per_rank_timing = _gather_perf20_rank_timings(rank, world, metrics)'
+        gather_call = 'per_rank_timing = _gather_perf20_rank_timings(rank, world, metrics, preload_metadata)'
         self.assertEqual(text.count(gather_call), 1)
         self.assertGreater(text.index(gather_call), text.index("while optimizer_step < max_steps:"))
         self.assertGreater(text.index(gather_call), text.index("if batch_in_epoch >= steps_epoch * args.gradient_accumulation_steps:"))
@@ -91,6 +91,48 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertEqual(step["phases"]["data_wait_seconds"]["slowest_rank"], 1)
         self.assertEqual(step["phases"]["step_wall_seconds"]["maximum"], 11.0)
         self.assertEqual(len(report["raw_by_rank"]), 2)
+
+        for rank, payload in enumerate(payloads):
+            payload["preload"] = {
+                "duration_seconds": float(20 + rank),
+                "barrier_wait_seconds": float(rank),
+                "cpu_tensor_bytes": 1024**3,
+                "required_microbatches": 80,
+                "loaded_microbatches": 80,
+                "consumed_microbatches": 80,
+            }
+        preloaded_report = namespace["_per_rank_timing_report"](payloads, 2)
+        self.assertEqual(len(preloaded_report["preload_by_rank"]), 2)
+        self.assertEqual(preloaded_report["preload_summary"]["rank_count"], 2)
+        self.assertEqual(preloaded_report["preload_summary"]["cpu_tensor_gib"]["median"], 1.0)
+        self.assertIn("preloaded_cpu_batches", preloaded_report["timing_sources"]["data_wait_seconds"])
+
+    def test_preloaded_control_is_exact_and_outside_measurement(self) -> None:
+        text = TRAIN.read_text(encoding="utf-8")
+        for marker in (
+            '"--preload-data"',
+            "def _preload_perf20_batches",
+            "required_microbatches = (int(max_steps) - int(optimizer_step)) * int(args.gradient_accumulation_steps)",
+            '"required_microbatches": required',
+            '"loaded_microbatches": len(batches)',
+            '"consumed_microbatches": 0',
+            'preload_metadata["consumed_microbatches"] = int(preloaded_consumed)',
+            '"row_indices_sha256"',
+            '"cpu_tensor_bytes"',
+            '"preloaded": bool(args.preload_data)',
+            '"training_dataloader_accesses": 0 if args.preload_data',
+            '"preload_by_rank"',
+            '"preload_summary"',
+        ):
+            self.assertIn(marker, text)
+        preload_call = "preloaded_batches, preload_metadata = _preload_perf20_batches("
+        profiler_entry = "profiler = _make_profiler(args, profile_dir, profiler_artifacts)"
+        step_timer = "step_started = time.perf_counter()"
+        self.assertLess(text.index(preload_call), text.index(profiler_entry))
+        self.assertLess(text.index(preload_call), text.index(step_timer))
+        self.assertIn("preloaded_data_iter = iter(preloaded_batches)", text)
+        self.assertIn("data_iter = preloaded_data_iter", text)
+        self.assertIn("dist.barrier()", text[text.index(preload_call):text.index(profiler_entry)])
 
     def test_perf20_audit_does_not_require_syncing_router_statistics(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")

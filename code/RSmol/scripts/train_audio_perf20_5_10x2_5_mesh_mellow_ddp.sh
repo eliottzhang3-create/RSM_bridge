@@ -13,7 +13,13 @@ DEFAULT_HTSAT="/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Sa
 DEFAULT_MELLOW="/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
 DEFAULT_MANIFEST="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl"
 PERF20_RUN_ID="${PERF20_RUN_ID:-$(date +%Y%m%d_%H%M%S%N)-$$}"
-DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/perf20_${PERF20_RUN_ID}"
+PERF20_OUTPUT_PREFIX="perf20"
+for argument in "$@"; do
+  if [[ "$argument" == "--preload-data" ]]; then
+    PERF20_OUTPUT_PREFIX="perf20_preloaded"
+  fi
+done
+DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/${PERF20_OUTPUT_PREFIX}_${PERF20_RUN_ID}"
 
 # Keep the baseline explicit, but do not pass both sides of the mutually
 # exclusive argparse profiler group when the outer submission wrapper adds

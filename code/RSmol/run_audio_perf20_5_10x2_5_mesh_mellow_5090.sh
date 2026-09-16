@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Independent 8x5090 PERF20 baseline/profile launcher.  Pass --profiler for
-# the separate profiling run; output directories are generated uniquely by the
-# inner script unless --output-dir is explicitly supplied.
+# Independent 8x5090 PERF20 launcher. Pass --preload-data for the rank-local
+# in-memory input control and --profiler for profiling. Output directories are
+# generated uniquely by the inner script unless --output-dir is supplied.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 mkdir -p log

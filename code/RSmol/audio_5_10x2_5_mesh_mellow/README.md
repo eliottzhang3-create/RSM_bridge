@@ -54,6 +54,17 @@ only, CPU+CUDA, with optimizer-step granularity and default
 are opt-in. Trace and operator summaries are under `output_dir/profile/`, and
 the JSON report records schedule/options/artifact paths.
 
+The input-path control adds `--preload-data`. Before rank0 enters the profiler
+or any optimizer-step timer, every rank materializes the exact 80 CPU batches
+needed by 20 steps at GA=4, then all ranks cross one pre-measurement barrier.
+Measured training takes batches only from the rank-local list, so shared-storage
+reads, audio decode/resampling, tokenization, and collate are outside the timed
+region. The default command is
+`bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh --preload-data`;
+its unique output directory starts with `perf20_preloaded_`. The report records
+per-rank preload duration, barrier wait, CPU tensor bytes, row-order hash, and
+exact loaded/consumed counts. Any count other than 80 is a hard failure.
+
 Each PERF20 report includes rank0 CUDA-aware device timings and explicitly
 named host timings for data wait (including `next(data_iter)`), scheduler, and
 metrics enqueue; the metrics/collectives device timing includes the one unified
