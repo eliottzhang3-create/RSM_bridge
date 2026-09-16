@@ -33,7 +33,11 @@ if str(ROOT) not in sys.path:
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from audio_5_10x2_5_mesh_mellow.data import ReasonAQADataset, collate_reasonaqa  # noqa: E402
+from audio_5_10x2_5_mesh_mellow.data import (  # noqa: E402
+    ReasonAQADataset,
+    ShardAwareDistributedBatchSampler,
+    collate_reasonaqa,
+)
 from audio_5_10x2_5_mesh_mellow.model import (  # noqa: E402
     AUDIO_PREFIX_TOKENS,
     AUDIO_TOKENS_PER_CLIP,
@@ -82,6 +86,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--checkpoint-retention", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--num-workers", type=int, default=0, help="DataLoader workers per DDP rank; 0 keeps loading in the rank process")
+    p.add_argument(
+        "--waveform-cache-dir",
+        type=Path,
+        help="PERF20 only: read fixed float32 waveforms from the completed 64-shard cache",
+    )
     p.add_argument(
         "--preload-data",
         action="store_true",
@@ -858,7 +867,7 @@ def _actual_resume_audit(path: Path, args: argparse.Namespace, batch_cpu: dict[s
         moved = {key: (value.to(device) if torch.is_tensor(value) else value) for key, value in batch_cpu.items()}
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            output = reload_model(**{key: value for key, value in moved.items() if key not in {"row_indices", "audio2_reused"}})
+            output = reload_model(**{key: value for key, value in moved.items() if key not in {"row_indices", "audio2_reused", "waveform_cache_shard_ids"}})
         if output.loss is None or not torch.isfinite(output.loss):
             raise RuntimeError("reloaded checkpoint produced a nonfinite loss")
         labels = reload_model.last_labels
@@ -987,6 +996,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("--profiler is isolated to PERF20; standard smoke/formal gates are unchanged")
         if args.gate != "PERF20" and args.preload_data:
             raise ValueError("--preload-data is isolated to PERF20; standard smoke/formal gates are unchanged")
+        if args.gate != "PERF20" and args.waveform_cache_dir is not None:
+            raise ValueError("--waveform-cache-dir is isolated to PERF20 until the cache path passes the performance/correctness control")
+        if args.preload_data and args.waveform_cache_dir is not None:
+            raise ValueError("PERF20 input controls are mutually exclusive: choose --preload-data or --waveform-cache-dir")
         model, tokenizer = _load_model(args, device)
         model.train()
         if not model.trainable_parameter_audit()["training_mode_contract"]:
@@ -1001,12 +1014,50 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         else:
             model.mesh_model.model.routing_stats_mode = True
         model.mesh_model.model.gradient_audit_mode = True
-        dataset = ReasonAQADataset(args.train_manifest, tokenizer)
-        # Shuffle deterministically per epoch; set_epoch(epoch) below changes
-        # the permutation while DistributedSampler keeps rank partitions
-        # disjoint and equally sized.
-        sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, drop_last=True)
-        loader = DataLoader(dataset, batch_size=args.micro_batch_size, sampler=sampler, num_workers=args.num_workers, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
+        dataset = ReasonAQADataset(
+            args.train_manifest,
+            tokenizer,
+            waveform_cache_dir=args.waveform_cache_dir,
+        )
+        sampler_audit: dict[str, Any]
+        if args.waveform_cache_dir is not None:
+            if dataset.waveform_cache is None or dataset.waveform_cache.num_shards != 64:
+                raise RuntimeError(
+                    "waveform-cache PERF20 requires the completed 64-shard contract, got "
+                    f"{None if dataset.waveform_cache is None else dataset.waveform_cache.num_shards}"
+                )
+            sampler = ShardAwareDistributedBatchSampler(
+                dataset,
+                batch_size=args.micro_batch_size,
+                num_replicas=world,
+                rank=rank,
+                seed=args.seed,
+            )
+            loader = DataLoader(
+                dataset,
+                batch_sampler=sampler,
+                num_workers=args.num_workers,
+                collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer),
+            )
+            required_perf20_microbatches = PERF20_STEPS * args.gradient_accumulation_steps
+            if len(loader) < required_perf20_microbatches:
+                raise RuntimeError(
+                    "waveform-cache PERF20 cannot remain within one shard assignment epoch: "
+                    f"batches_per_rank={len(loader)} required={required_perf20_microbatches}"
+                )
+            sampler_audit = sampler.audit()
+        else:
+            # Shuffle deterministically per epoch; set_epoch(epoch) below
+            # changes the permutation while DistributedSampler keeps rank
+            # partitions disjoint and equally sized.
+            sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, drop_last=True)
+            loader = DataLoader(dataset, batch_size=args.micro_batch_size, sampler=sampler, num_workers=args.num_workers, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
+            sampler_audit = {
+                "kind": "torch_distributed_sampler",
+                "shuffle": True,
+                "drop_last": True,
+                "batches_per_rank": len(loader),
+            }
         if args.gradient_accumulation_steps <= 0:
             raise ValueError("gradient_accumulation_steps must be positive")
         # Only complete accumulation windows become optimizer steps.  This
@@ -1188,7 +1239,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 local_text_nonpadding_tokens = 0
                 local_multimodal_tokens = 0
                 local_max_sequence_length = 0
-                microbatch_metrics: list[dict[str, int]] = []
+                microbatch_metrics: list[dict[str, Any]] = []
                 for micro in range(args.gradient_accumulation_steps):
                     if perf_mode:
                         data_wait_started = time.perf_counter()
@@ -1207,14 +1258,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         local_text_nonpadding_tokens += text_nonpadding
                         local_multimodal_tokens += multimodal_tokens
                         local_max_sequence_length = max(local_max_sequence_length, sequence_length)
-                        microbatch_metrics.append({
+                        microbatch_item: dict[str, Any] = {
                             "micro": int(micro),
                             "batch_size": batch_size,
                             "sequence_length": sequence_length,
                             "text_nonpadding_tokens": text_nonpadding,
                             "answer_tokens": answer_nonpadding,
                             "multimodal_tokens": multimodal_tokens,
-                        })
+                        }
+                        cache_shard_pairs = batch.get("waveform_cache_shard_ids")
+                        if cache_shard_pairs is not None:
+                            microbatch_item["waveform_cache_primary_shards"] = sorted({int(pair[0]) for pair in cache_shard_pairs})
+                            microbatch_item["waveform_cache_shards_touched"] = sorted({int(shard_id) for pair in cache_shard_pairs for shard_id in pair})
+                        microbatch_metrics.append(microbatch_item)
                     else:
                         batch = next(data_iter)
                     # All legacy gates retain their original final-microbatch
@@ -1233,7 +1289,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     with sync:
                         def _forward() -> Any:
                             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                                return ddp(**{k: v for k, v in batch.items() if k not in {"row_indices", "audio2_reused"}})
+                                return ddp(**{k: v for k, v in batch.items() if k not in {"row_indices", "audio2_reused", "waveform_cache_shard_ids"}})
                         if perf_mode:
                             forward_started = time.perf_counter()
                             with record_function("forward"):
@@ -1362,9 +1418,43 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         }
         if args.gate == "PERF20" and rank == 0:
             report["per_rank_timing"] = per_rank_timing
+            input_mode = (
+                "preloaded_cpu_batches"
+                if args.preload_data else
+                "waveform_shard_mmap"
+                if args.waveform_cache_dir is not None else
+                "raw_audio_files"
+            )
+            cached_microbatches = [
+                microbatch
+                for metric in metrics
+                for microbatch in metric.get("microbatches", [])
+                if "waveform_cache_shards_touched" in microbatch
+            ]
+            cache_locality = None
+            if cached_microbatches:
+                cache_locality = {
+                    "rank0_measured_microbatches": len(cached_microbatches),
+                    "single_primary_shard_microbatches": sum(
+                        len(item["waveform_cache_primary_shards"]) == 1
+                        for item in cached_microbatches
+                    ),
+                    "shards_touched_per_microbatch": _distribution([
+                        float(len(item["waveform_cache_shards_touched"]))
+                        for item in cached_microbatches
+                    ]),
+                }
             report["data_pipeline"] = {
+                "mode": input_mode,
                 "preloaded": bool(args.preload_data),
-                "timed_source": "rank-local preloaded CPU batch list" if args.preload_data else "DataLoader over shared-storage audio",
+                "waveform_cache_enabled": args.waveform_cache_dir is not None,
+                "timed_source": (
+                    "rank-local preloaded CPU batch list"
+                    if args.preload_data else
+                    "DataLoader over copy-on-write mmap of fixed float32 waveform shards"
+                    if args.waveform_cache_dir is not None else
+                    "DataLoader over shared-storage encoded audio files"
+                ),
                 "preload_scope": (
                     f"exactly {PERF20_STEPS * args.gradient_accumulation_steps} microbatches per rank before profiler/timing"
                     if args.preload_data else None
@@ -1376,11 +1466,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 "preload_by_rank": per_rank_timing.get("preload_by_rank", []) if per_rank_timing else [],
                 "preload_summary": per_rank_timing.get("preload_summary") if per_rank_timing else None,
+                "waveform_cache": ({
+                    "cache_dir": str(dataset.waveform_cache.cache_dir),
+                    "format": dataset.waveform_cache.metadata.get("format"),
+                    "num_shards": dataset.waveform_cache.num_shards,
+                    "num_unique_audio_files": dataset.waveform_cache.metadata.get("num_unique_audio_files"),
+                    "total_waveform_gib": dataset.waveform_cache.metadata.get("total_waveform_gib"),
+                    "mmap_mode": "copy-on-write",
+                    "online_audio_decode_resample_crop_pad": False,
+                    "sampler": sampler_audit,
+                    "measured_locality": cache_locality,
+                } if dataset.waveform_cache is not None else None),
             }
             report["steady_state_summary"] = _perf_steady_summary(metrics, args, max_steps)
             report["timing_semantics"] = {
                 "step_time_seconds": "rank0 wall-clock from before the first microbatch data wait through the single CUDA synchronize after all metrics/collectives; this is the completion-inclusive step duration",
-                "phase_timings_host_seconds": "host wall/enqueue timings; per-microbatch data_wait/dispatch/forward/backward values are summed within the optimizer step; data_wait includes only in-memory iterator access when --preload-data is enabled, otherwise next(DataLoader); scheduler_host is CPU/Python scheduler.step(), and metrics_enqueue_host ends after collective launch rather than after CUDA/NCCL completion",
+                "phase_timings_host_seconds": "host wall/enqueue timings; per-microbatch data_wait/dispatch/forward/backward values are summed within the optimizer step; data_wait includes only in-memory iterator access with --preload-data, mmap row access plus tokenization/collate with --waveform-cache-dir, or encoded-file read/decode/resample plus tokenization/collate otherwise; scheduler_host is CPU/Python scheduler.step(), and metrics_enqueue_host ends after collective launch rather than after CUDA/NCCL completion",
                 "phase_timings_device_seconds": "CUDA event elapsed timings resolved after one unified end-of-step synchronize; per-microbatch device values are summed within the optimizer step; metrics_collectives includes the device/NCCL work through its event and therefore is completion-inclusive",
                 "host_to_device": "rank0 CUDA event elapsed time around tensor .to(device) for every microbatch; host_to_device_enqueue separately records host dispatch time",
                 "forward_backward_optimizer": "rank0 CUDA event elapsed time; DDP gradient collectives are included in backward; host enqueue fields are reported separately",

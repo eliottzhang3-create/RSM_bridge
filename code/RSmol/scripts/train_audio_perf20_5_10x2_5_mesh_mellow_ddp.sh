@@ -15,9 +15,14 @@ DEFAULT_MANIFEST="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_
 PERF20_RUN_ID="${PERF20_RUN_ID:-$(date +%Y%m%d_%H%M%S%N)-$$}"
 PERF20_OUTPUT_PREFIX="perf20"
 for argument in "$@"; do
-  if [[ "$argument" == "--preload-data" ]]; then
-    PERF20_OUTPUT_PREFIX="perf20_preloaded"
-  fi
+  case "$argument" in
+    --preload-data)
+      PERF20_OUTPUT_PREFIX="perf20_preloaded"
+      ;;
+    --waveform-cache-dir|--waveform-cache-dir=*)
+      PERF20_OUTPUT_PREFIX="perf20_waveform_shards"
+      ;;
+  esac
 done
 DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/${PERF20_OUTPUT_PREFIX}_${PERF20_RUN_ID}"
 
