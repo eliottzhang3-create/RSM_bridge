@@ -1,6 +1,9 @@
 """Dependency-light contracts for the isolated PERF20 performance gate."""
 from __future__ import annotations
 
+import ast
+import math
+import typing
 import unittest
 from pathlib import Path
 
@@ -20,10 +23,10 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             self.assertTrue(path.is_file(), path)
         inner = INNER.read_text(encoding="utf-8")
         submit = SUBMIT.read_text(encoding="utf-8")
-        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 2", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID"):
+        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID"):
             self.assertIn(marker, inner)
         self.assertIn("vc submit", submit)
-        self.assertIn("-c 64", submit)
+        self.assertIn("-c 32", submit)
         self.assertIn("-g 8", submit)
         self.assertIn("audio-mesh-perf20-5090", submit)
 
@@ -37,7 +40,57 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertIn("save_due = (args.gate == \"FORMAL\"", text)
         self.assertIn("args.gate == \"STAGE7\"", text)
         self.assertIn("args.gate != \"PERF20\" and args.profiler", text)
-        self.assertIn('"num_workers": 2', text)
+        self.assertIn('"num_workers": 0', text)
+
+    def test_per_rank_timing_is_gathered_only_after_training(self) -> None:
+        text = TRAIN.read_text(encoding="utf-8")
+        for marker in (
+            "def _local_rank_timing_payload",
+            "def _per_rank_timing_report",
+            "def _gather_perf20_rank_timings",
+            "dist.gather_object",
+            '"raw_by_rank"',
+            '"per_rank_summary"',
+            '"per_step_rank_skew"',
+            '"slowest_rank"',
+            '"max_over_min"',
+            '"per_step_collectives_added": 0',
+        ):
+            self.assertIn(marker, text)
+        gather_call = 'per_rank_timing = _gather_perf20_rank_timings(rank, world, metrics)'
+        self.assertEqual(text.count(gather_call), 1)
+        self.assertGreater(text.index(gather_call), text.index("while optimizer_step < max_steps:"))
+        self.assertGreater(text.index(gather_call), text.index("if batch_in_epoch >= steps_epoch * args.gradient_accumulation_steps:"))
+
+    def test_per_rank_timing_summary_identifies_straggler(self) -> None:
+        source = TRAIN.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        selected = [
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name in {"_percentile", "_distribution", "_per_rank_timing_report"}
+        ]
+        namespace = {"Any": typing.Any, "math": math}
+        exec(compile(ast.Module(body=selected, type_ignores=[]), str(TRAIN), "exec"), namespace)
+        payloads = [
+            {
+                "rank": rank,
+                "steps": [{
+                    "step": 1,
+                    "data_wait_seconds": float(rank + 1),
+                    "forward_device_seconds": 2.0,
+                    "backward_device_seconds": 3.0,
+                    "step_wall_seconds": float(10 + rank),
+                }],
+            }
+            for rank in range(2)
+        ]
+        report = namespace["_per_rank_timing_report"](payloads, 2)
+        self.assertEqual(report["per_step_collectives_added"], 0)
+        step = report["per_step_rank_skew"][0]
+        self.assertEqual(step["phases"]["data_wait_seconds"]["slowest_rank"], 1)
+        self.assertEqual(step["phases"]["step_wall_seconds"]["maximum"], 11.0)
+        self.assertEqual(len(report["raw_by_rank"]), 2)
 
     def test_perf20_audit_does_not_require_syncing_router_statistics(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")

@@ -41,10 +41,11 @@ run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh  # isolated 8-GPU PERF20 baseline/
 The wrappers accept the same arguments as their underlying runtime scripts and
 submit them inside the project GPU image.
 
-PERF20 currently fixes 64 CPU cores, two DataLoader workers per rank (16 total),
-microbatch 8/GPU, GA=4, 20 optimizer steps, BF16, seed 0, and the current
-drop12 manifest plus second-round MeSH checkpoint defaults. This worker
-experiment does not also enable pin memory, persistent workers, or compile. It never
+PERF20 currently uses 32 CPU cores and synchronous loading (`num_workers=0`
+per rank), after the 64-core/two-worker experiment exposed worse shared-storage
+tail latency and rank skew. It fixes microbatch 8/GPU, GA=4, 20 optimizer
+steps, BF16, seed 0, and the current drop12 manifest plus second-round MeSH
+checkpoint defaults. It never
 saves/reloads/prunes checkpoints and refuses an existing output directory. The
 baseline is submitted with `bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh`;
 the independent profiling run adds `--profiler`. Profiler collection is rank0
@@ -63,6 +64,11 @@ are included. Each completed profiler schedule cycle is exported from the
 directory; the report's `profiler.artifacts` list contains that cycle's trace
 and operator-summary paths. By default steady state is optimizer steps 6-20,
 excluding profiler wait/warmup/active steps in a profile run.
+Each rank retains local data-wait, CUDA-event forward/backward, and completed
+step-wall timings. A single `gather_object` runs after all 20 measured steps;
+the rank0 report contains raw rank rows, per-rank distributions, and per-step
+cross-rank skew/slowest-rank summaries without adding a measured-step
+collective.
 PERF20 also disables per-forward router statistics because their internal
 GPU-to-CPU copies would add synchronization overhead to the timing path; the
 first-step MeSH gradient/path audit remains enabled.

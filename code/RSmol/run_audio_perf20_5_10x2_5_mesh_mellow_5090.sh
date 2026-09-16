@@ -17,7 +17,7 @@ JOB_TAG="audio-mesh-perf20-5090-$(date +%m%d%H%M%S%N)"
 vc submit \
   -p pdgpu-5090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
-  -c 64 -m 256G -g 8 -n 1 \
+  -c 32 -m 256G -g 8 -n 1 \
   -j "$JOB_TAG" \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$SCRIPT_DIR/log/${JOB_TAG}.JOB.log" \

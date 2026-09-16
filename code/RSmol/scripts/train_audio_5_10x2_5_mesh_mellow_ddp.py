@@ -337,6 +337,109 @@ def _perf_steady_summary(metrics: list[dict[str, Any]], args: argparse.Namespace
     }
 
 
+def _local_rank_timing_payload(rank: int, metrics: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the compact timing payload gathered once after PERF20 training."""
+
+    steps: list[dict[str, Any]] = []
+    for item in metrics:
+        host = item.get("phase_timings_host_seconds", {})
+        device = item.get("phase_timings_device_seconds", {})
+        steps.append({
+            "step": int(item["step"]),
+            "data_wait_seconds": float(host.get("data_wait", 0.0)),
+            "forward_device_seconds": float(device.get("forward", 0.0)),
+            "backward_device_seconds": float(device.get("backward", 0.0)),
+            "step_wall_seconds": float(item["step_time_seconds"]),
+        })
+    return {"rank": int(rank), "steps": steps}
+
+
+def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int) -> dict[str, Any]:
+    """Summarize rank-local timings without adding collectives to measured steps."""
+
+    ordered = sorted(payloads, key=lambda item: int(item["rank"]))
+    actual_ranks = [int(item["rank"]) for item in ordered]
+    expected_ranks = list(range(int(expected_world)))
+    if actual_ranks != expected_ranks:
+        raise RuntimeError(f"PERF20 per-rank timing ranks mismatch: expected={expected_ranks} actual={actual_ranks}")
+    step_sets = [{int(step["step"]) for step in item["steps"]} for item in ordered]
+    if not step_sets or any(steps != step_sets[0] for steps in step_sets[1:]):
+        raise RuntimeError(f"PERF20 per-rank timing step sets mismatch: {step_sets}")
+
+    fields = (
+        "data_wait_seconds",
+        "forward_device_seconds",
+        "backward_device_seconds",
+        "step_wall_seconds",
+    )
+    per_rank_summary = []
+    by_step: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+    for payload in ordered:
+        rank = int(payload["rank"])
+        steps = sorted(payload["steps"], key=lambda item: int(item["step"]))
+        per_rank_summary.append({
+            "rank": rank,
+            "step_count": len(steps),
+            "distributions": {
+                field: _distribution([float(step[field]) for step in steps])
+                for field in fields
+            },
+        })
+        for step in steps:
+            by_step.setdefault(int(step["step"]), []).append((rank, step))
+
+    per_step_rank_skew = []
+    for step_number in sorted(by_step):
+        ranked_steps = sorted(by_step[step_number], key=lambda item: item[0])
+        phases: dict[str, Any] = {}
+        for field in fields:
+            ranked_values = [(rank, float(step[field])) for rank, step in ranked_steps]
+            values = [value for _, value in ranked_values]
+            slowest_rank, maximum = max(ranked_values, key=lambda item: item[1])
+            fastest_rank, minimum = min(ranked_values, key=lambda item: item[1])
+            phases[field] = {
+                **_distribution(values),
+                "minimum": minimum,
+                "maximum": maximum,
+                "fastest_rank": fastest_rank,
+                "slowest_rank": slowest_rank,
+                "max_over_min": maximum / minimum if minimum > 0.0 else None,
+            }
+        per_step_rank_skew.append({"step": step_number, "phases": phases})
+
+    return {
+        "collection": "one dist.gather_object after the final optimizer step",
+        "included_in_step_timing": False,
+        "per_step_collectives_added": 0,
+        "timing_sources": {
+            "data_wait_seconds": "host wall time around next(data_iter), summed across microbatches",
+            "forward_device_seconds": "CUDA events, summed across microbatches and resolved by the existing end-of-step synchronize",
+            "backward_device_seconds": "CUDA events, summed across microbatches and resolved by the existing end-of-step synchronize; includes DDP gradient communication dependencies",
+            "step_wall_seconds": "rank-local completion-inclusive optimizer-step wall time",
+        },
+        "raw_by_rank": ordered,
+        "per_rank_summary": per_rank_summary,
+        "per_step_rank_skew": per_step_rank_skew,
+    }
+
+
+def _gather_perf20_rank_timings(rank: int, world: int, metrics: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Gather all rank-local PERF20 timings exactly once after measurement."""
+
+    local_payload = _local_rank_timing_payload(rank, metrics)
+    if world > 1:
+        gathered: list[dict[str, Any] | None] | None = [None] * world if rank == 0 else None
+        dist.gather_object(local_payload, gathered, dst=0)
+        if rank != 0:
+            return None
+        if gathered is None or any(item is None for item in gathered):
+            raise RuntimeError("PERF20 per-rank timing gather returned an incomplete payload")
+        payloads = [item for item in gathered if item is not None]
+    else:
+        payloads = [local_payload]
+    return _per_rank_timing_report(payloads, world)
+
+
 def _init_dist(args: argparse.Namespace) -> tuple[int, int, torch.device]:
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", str(rank)))
@@ -724,7 +827,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "world_size": 8,
                 "micro_batch_size": 8,
                 "gradient_accumulation_steps": 4,
-                "num_workers": 2,
+                "num_workers": 0,
                 "epochs": 1,
                 "max_lr": 1e-3,
                 "min_lr": 0.0,
@@ -1113,6 +1216,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if batch_in_epoch >= steps_epoch * args.gradient_accumulation_steps:
                 epoch += 1
                 batch_in_epoch = 0
+        per_rank_timing = _gather_perf20_rank_timings(rank, world, metrics) if args.gate == "PERF20" else None
         report.update({"status": "PASS", "start_step": start_step, "end_step": optimizer_step, "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "dropped_microbatches_per_epoch": dropped_microbatches, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "effective_global_batch_size": int(args.micro_batch_size * world * args.gradient_accumulation_steps), "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "routing_stats": {"enabled": args.gate != "PERF20", "mode": "disabled_for_perf20" if args.gate == "PERF20" else "continuous_per_forward", "reported_in_each_step": args.gate != "PERF20", "reason": "per-router .cpu() statistics would add CUDA synchronizations to the PERF20 timing path" if args.gate == "PERF20" else None}, "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "runtime_gradient_audit": runtime_gradient_audit, "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
         report["correctness_audit"] = {
             "mesh_runtime_gradient_audit": runtime_gradient_audit,
@@ -1120,6 +1224,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "routing_stats": "disabled for PERF20 timing to avoid per-router CUDA synchronizations; first-step gradient audit retained, then gradient_audit_mode disabled" if args.gate == "PERF20" else "continuous per forward; first-step gradient audit retained, then gradient_audit_mode disabled",
         }
         if args.gate == "PERF20" and rank == 0:
+            report["per_rank_timing"] = per_rank_timing
             report["steady_state_summary"] = _perf_steady_summary(metrics, args, max_steps)
             report["timing_semantics"] = {
                 "step_time_seconds": "rank0 wall-clock from before the first microbatch data wait through the single CUDA synchronize after all metrics/collectives; this is the completion-inclusive step duration",
@@ -1128,6 +1233,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "host_to_device": "rank0 CUDA event elapsed time around tensor .to(device) for every microbatch; host_to_device_enqueue separately records host dispatch time",
                 "forward_backward_optimizer": "rank0 CUDA event elapsed time; DDP gradient collectives are included in backward; host enqueue fields are reported separately",
                 "metrics_collectives": "global token counts use one identical all_reduce sequence on every rank; no rank-specific collective is introduced, and its device timing is not the enqueue-only host latency",
+                "per_rank_timing": "all ranks retain local data/forward/backward/step timings during training; one gather_object runs only after the final measured optimizer step and is excluded from every step duration",
                 "steady_state": "optimizer steps 6-20 by default, excluding profiler wait/warmup/active steps when profiling is enabled",
             }
     except Exception as exc:

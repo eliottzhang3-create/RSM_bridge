@@ -580,7 +580,7 @@ code/RSmol/scripts/train_audio_perf20_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
 ```
 
-PERF20 当前固定 8×5090、64 个 CPU 核、每 rank `num_workers=2`（共 16 个 DataLoader workers）、每卡 micro-batch 8、GA=4、20 个 optimizer steps、BF16、seed=0、最终 drop12 manifest、第二轮 MeSH checkpoint、HTSAT/Mellow 默认路径；它不会保存 checkpoint、执行 reload audit 或 prune，也拒绝复用已有输出目录。该 worker 实验没有同时启用 pin memory、persistent workers 或 compile。默认 profiler 关闭，提交命令为：
+PERF20 当前恢复为 8×5090、32 个 CPU 核、每 rank `num_workers=0`、每卡 micro-batch 8、GA=4、20 个 optimizer steps、BF16、seed=0、最终 drop12 manifest、第二轮 MeSH checkpoint、HTSAT/Mellow 默认路径；它不会保存 checkpoint、执行 reload audit 或 prune，也拒绝复用已有输出目录。此前 `64 CPU + num_workers=2/rank` 实验因共享存储长尾与 rank 失步导致吞吐显著下降，已回退。默认 profiler 关闭，提交命令为：
 
 ```bash
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
@@ -595,6 +595,8 @@ bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh --profiler
 profiler 只在 rank0 创建，activities 为 CPU+CUDA，`profiler.step()` 的粒度是 optimizer step；默认 schedule 是 `skip_first=4, wait=1, warmup=1, active=2, repeat=1`，默认关闭 `with_stack/profile_memory/record_shapes`。每个 completed schedule cycle 都在 `on_trace_ready` 中导出不覆盖的 trace 与 operator summary（`profile/cycle_<nn>_step_<nnnn>/`，summary 文件名也包含 cycle/step）；主报告 `perf20_report.json` 的 `profiler.artifacts` 列出所有 cycle 的 trace/summary 路径。可用 `--profiler-with-stack`、`--profiler-profile-memory`、`--profiler-record-shapes` 和对应 schedule CLI 开关扩大采集；脚本会校验 20 步内能完成 schedule。
 
 PERF20 报告逐 optimizer step 记录 data_wait（包括 `next(data_iter)`）、host-to-device、forward、backward、grad_clip、optimizer、scheduler、metrics/collectives 的分层计时，并记录每个 microbatch 的实际 sequence length、文本非 padding token 与多模态 token。GPU 运算使用 CUDA event，在每个 optimizer step 末尾只做一次统一 CUDA synchronize；data_wait、scheduler 和 metrics 的 host 字段是清楚标注的 host enqueue/wall 时间，不能被误读为 CUDA/NCCL 完成时间；metrics/collectives 的 device 字段覆盖同步完成，step wall 也覆盖这次同步。稳定吞吐默认只统计 steps 6–20，并排除 profiler wait/warmup/active steps；报告 median/P25/P75、samples/s、audio seconds/s、多模态/非 padding tokens/s、rank0 峰值 allocated/reserved 显存。token 数由各 rank 按一致顺序 all-reduce 汇总；不会把 profiler warmup/active overhead 当作无 profiler 基线。
+
+为定位 DDP straggler，每个 rank 还会在本地保留每个 optimizer step 的 `data_wait`、CUDA-event `forward/backward` 和完成态 step wall；20 步结束后才执行一次 `gather_object` 汇总到 rank0，不在被测训练循环中增加任何 collective。`perf20_report.json.per_rank_timing` 同时包含逐 rank 原始值、逐 rank 分布，以及每一步跨 rank 的 min/median/max、最快/最慢 rank 和 max/min ratio。
 
 为避免破坏上述单次同步计时合同，PERF20 默认关闭逐 forward 的 router 统计（该统计内部需要多次 `.cpu()`）；首个 optimizer step 的 MeSH 梯度/路径审计仍保留。正式训练和非 PERF20 审计 gate 继续保留 router 统计。
 
