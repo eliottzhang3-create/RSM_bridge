@@ -96,3 +96,16 @@ marks a writable local path eligible when at least 150 GiB is free. Raw `df`,
 `findmnt`, `lsblk`, `/proc`, cgroup, and VM diagnostics are stored beside the
 JSON report. A separate bounded I/O benchmark should be designed only after a
 real candidate path has been identified.
+
+The CPU-only `scripts/prepare_audio_waveform_shards.py` builder creates the
+persistent Parastor cache before any training reader is enabled. It scans the
+three currently used audio roots, deduplicates canonical paths, applies the
+same mono/32-kHz/10-second preprocessing as `ReasonAQADataset`, globally
+shuffles once with a fixed seed, and writes 64 balanced, immutable raw-float32
+shards plus a path-to-shard/row/offset index. Shards are completed atomically;
+an interrupted build can use `--resume`, which validates the source
+path/size/mtime inventory, configuration, and index hash before skipping
+complete shards. `metadata.json.status=PASS` and the absence of `BUILDING` are
+the completion contract. The future reader will shuffle shard order and rows
+inside each shard independently per epoch; shard generation alone does not
+change the existing training Dataset/Sampler.

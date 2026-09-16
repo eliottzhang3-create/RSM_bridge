@@ -630,7 +630,39 @@ bash code/RSmol/run_audio_storage_probe_5090.sh
 
 脚本会区分 RAM-backed tmpfs、容器 overlay、网络/共享文件系统和确认/待确认的本地文件系统；只有可写、本地、可用空间不少于 150 GiB 的路径才会进入 `eligible_local_stage_paths`。本轮严格只做发现，不把 overlay 或 `/dev/shm` 当作 cache 目标，也不因一次探测成功就假设未来节点始终有相同空闲空间；正式 staging 入口仍须在每次训练启动时重复容量检查。可用 `--candidate-path /some/path` 补充集群特有路径。拿到容量与挂载类型后，再决定是否对候选本地盘提交独立的小规模 I/O benchmark。
 
-### 9.3.3 固定 5-10-5 recursive 音频正式训练
+远程实测结果（2026-09-16）：`hpc_stor03` 是 `parastor` 共享存储，个人配额 1 TiB、探测时剩余约 505.59 GiB；`-m 256G` 对应 cgroup CPU 内存上限；`/dev/shm` 是同一 256 GiB 内存预算内的 tmpfs；`/tmp` 位于非平台承诺的容器 overlay；常见 `/scratch`/本地 NVMe 路径未暴露。因此目前不把完整 cache stage 到 `/tmp` 或 `/dev/shm`，先在 Parastor 上构造少量大 shard 并实测训练读取。
+
+### 9.3.3 离线 float32 waveform shard 生成
+
+纯 CPU 生成器 `code/RSmol/scripts/prepare_audio_waveform_shards.py` 扫描当前训练会用到的 AudioCaps train、ClothoAQA audio_files 和 Clotho v2.1 development，只按规范化绝对路径去重。它复用正式数据路径的 `load_waveform`，把每个音频统一为 mono、32 kHz、前截断/右补零到 10 秒、固定 `[1,320000]` little-endian float32；默认 seed `20260916` 对完整源列表做一次确定性全局 shuffle，再将连续、数量平衡的区间固化为 64 个 raw binary shard。每条索引保留 source group、原始相对/绝对路径、源文件 size/mtime、shard/row/byte offset；每个 shard 及全局索引都有 SHA256/provenance。
+
+先执行只扫描不读 waveform、也不创建输出的 dry run，核对三个根目录文件数和预计容量：
+
+```bash
+conda activate rsmol
+python code/RSmol/scripts/prepare_audio_waveform_shards.py \
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_audio_waveform_shards_32k_10s_f32_v1 \
+  --num-shards 64 \
+  --seed 20260916 \
+  --dry-run
+```
+
+确认 dry run 后直接在 CPU 环境生成；`workers` 可按登录/CPU 节点允许的并发调整，输出顺序不随 worker 数变化：
+
+```bash
+python code/RSmol/scripts/prepare_audio_waveform_shards.py \
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_audio_waveform_shards_32k_10s_f32_v1 \
+  --num-shards 64 \
+  --seed 20260916 \
+  --workers 8 \
+  --torch-threads-per-worker 1
+```
+
+生成器每次只打开一个目标 shard，不把全部 waveform 放入内存；输出目录已存在时默认拒绝覆盖。每个约 1.8 GiB shard 先写隐藏 `.partial`，完成并 `fsync` 后原子改名；若进程中断，已完成 shard 保留，使用完全相同的源目录/seed/shard 参数并追加 `--resume` 即可继续，最多重做当时未完成的一个 shard。resume 会严格核对源文件 path/size/mtime inventory、build config 和 index SHA256。最终 `metadata.json.status=PASS` 且 `BUILDING` 标记被删除才代表生成完成。
+
+物理 shard 在创建后保持不变。后续读取器/采样器将按已确定的训练方案，在每个 epoch 先全局 shuffle 64 个 shard，再对每个 shard 内的固定 row 做独立 shuffle，并把完整 batch 分配给 rank；**当前这一步只生成 cache/index，尚未修改训练 Dataset/Sampler，也不能直接把新 cache 用于正式训练**。
+
+### 9.3.4 固定 5-10-5 recursive 音频正式训练
 
 该路线使用无 MeSH router/memory 的历史固定 5-10-5 checkpoint：20 个物理层，执行 `prefix 5 + middle 10 × 2 + suffix 5` 的精确 30-entry schedule。音频、ReasonAQA、Mellow mapper、answer-only loss、batch、optimizer 和 scheduler 合同与现有 MeSH/原始 SmolLM2 音频实验保持一致；新入口只允许 FORMAL，不提供或要求 smoke gate。`--model-path` 是文本初始化，只有本路线生成的完整复合 checkpoint 才能传给 `--resume-from`。
 
@@ -759,11 +791,13 @@ code/RSmol/scripts/train_audio_perf20_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/scripts/probe_audio_storage.py
 code/RSmol/scripts/probe_audio_storage_5090.sh
 code/RSmol/run_audio_storage_probe_5090.sh
+code/RSmol/scripts/prepare_audio_waveform_shards.py
 code/RSmol/scripts/audit_audio_checkpoint_5_10x2_5_mesh_mellow.py
 code/RSmol/run_audio_*5_10x2_5_mesh_mellow_5090.sh
 tests/test_audio_5_10x2_5_mesh_mellow_static.py
 tests/test_audio_perf20_static.py
 tests/test_audio_storage_probe_static.py
+tests/test_audio_waveform_shards_static.py
 
 # 固定 5-10-5 recursive 音频正式对照（无 MeSH、FORMAL-only）
 code/RSmol/audio_5_10_5_recursive_mellow/data.py
