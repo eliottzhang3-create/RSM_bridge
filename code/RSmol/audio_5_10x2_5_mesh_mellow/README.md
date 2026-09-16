@@ -36,6 +36,7 @@ run_audio_stage7_5_10x2_5_mesh_mellow_5090.sh  # 8-GPU 10-step/reload smoke
 run_audio_formal_5_10x2_5_mesh_mellow_5090.sh  # 8-GPU formal 3-epoch training
 run_audio_checkpoint_audit_5_10x2_5_mesh_mellow_5090.sh  # 1-GPU standalone checkpoint reload audit
 run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh  # isolated 8-GPU PERF20 baseline/profile
+run_audio_storage_probe_5090.sh  # read-only local-storage/memory discovery
 ```
 
 The wrappers accept the same arguments as their underlying runtime scripts and
@@ -85,3 +86,13 @@ GPU-to-CPU copies would add synchronization overhead to the timing path; the
 first-step MeSH gradient/path audit remains enabled.
 The repository's Windows checkout cannot run the remote CUDA/Mellow/HTSAT
 validation; use the 5090 `vc submit` launcher for the actual measurement.
+
+Before designing a persistent waveform-cache staging path, run
+`bash code/RSmol/run_audio_storage_probe_5090.sh`. It requests the same queue,
+image, CPU, memory, GPU, and single-node shape as formal training, but only
+performs read-only mount/capacity/cgroup discovery. Its persistent JSON report
+classifies tmpfs, overlay, network filesystems, and local filesystems, and only
+marks a writable local path eligible when at least 150 GiB is free. Raw `df`,
+`findmnt`, `lsblk`, `/proc`, cgroup, and VM diagnostics are stored beside the
+JSON report. A separate bounded I/O benchmark should be designed only after a
+real candidate path has been identified.

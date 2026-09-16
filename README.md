@@ -610,7 +610,27 @@ PERF20 报告逐 optimizer step 记录 data_wait（普通模式包括 `next(Data
 
 训练主文件的 profiler 标记覆盖 `audio/mellow_wrapper`、显式兼容路径的 `audio/c2l`、`audio/bridge`、`audio/waveform_embedding_audio1/2`、`mesh/text_and_prefix`、`mesh/prefix_5`、`mesh/router_pre`、`mesh/middle_loop_0/1`、`mesh/router_loop_0/1`、`mesh/suffix_5`、`loss`、`backward`、`grad_clip`、`optimizer`、`scheduler`、`metrics`、`DDP/collectives`；同名区域不会嵌套双计。模型数学与正式 gate 默认行为不因标记改变。Windows 本地没有远程权重、Mellow/HTSAT 与 CUDA 环境，不能在本地验证 GPU 吞吐或 trace；需在远程 Linux 通过上述 `vc submit` wrapper 验证。
 
-### 9.3.2 固定 5-10-5 recursive 音频正式训练
+### 9.3.2 计算节点本地存储探测
+
+为评估约 `115.30 GiB` 的离线 waveform cache 能否在训练开始前整体 stage 到计算节点本地盘，仓库提供独立的只读探测作业：
+
+```bash
+bash code/RSmol/run_audio_storage_probe_5090.sh
+```
+
+该作业不加载模型、不读训练数据，也不执行 `dd`/`fio` 等大文件写入；它默认申请与正式训练一致的 `pdgpu-5090`、同镜像、单节点、32 CPU、256G RAM 和 8 GPU，以便观察相关容器的真实挂载与 cgroup。容器内会采集 `df -hT/-ih`、`findmnt`、`lsblk`、GPU、`ulimit`、`/proc/meminfo`、`/proc/mounts`、cgroup memory limit/current、`vm.max_map_count` 和 overcommit 设置，并检查 `/tmp`、`/dev/shm`、常见 scratch/NVMe 路径、`/hpc_stor03` 以及 `TMPDIR/SCRATCH/LOCAL_SCRATCH` 环境路径。
+
+默认报告写到：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_storage_probe/<unique-run-id>/
+  storage_probe_report.json
+  raw_diagnostics.txt
+```
+
+脚本会区分 RAM-backed tmpfs、容器 overlay、网络/共享文件系统和确认/待确认的本地文件系统；只有可写、本地、可用空间不少于 150 GiB 的路径才会进入 `eligible_local_stage_paths`。本轮严格只做发现，不把 overlay 或 `/dev/shm` 当作 cache 目标，也不因一次探测成功就假设未来节点始终有相同空闲空间；正式 staging 入口仍须在每次训练启动时重复容量检查。可用 `--candidate-path /some/path` 补充集群特有路径。拿到容量与挂载类型后，再决定是否对候选本地盘提交独立的小规模 I/O benchmark。
+
+### 9.3.3 固定 5-10-5 recursive 音频正式训练
 
 该路线使用无 MeSH router/memory 的历史固定 5-10-5 checkpoint：20 个物理层，执行 `prefix 5 + middle 10 × 2 + suffix 5` 的精确 30-entry schedule。音频、ReasonAQA、Mellow mapper、answer-only loss、batch、optimizer 和 scheduler 合同与现有 MeSH/原始 SmolLM2 音频实验保持一致；新入口只允许 FORMAL，不提供或要求 smoke gate。`--model-path` 是文本初始化，只有本路线生成的完整复合 checkpoint 才能传给 `--resume-from`。
 
@@ -736,10 +756,14 @@ code/RSmol/scripts/audit_audio_stage3_5_10x2_5_mesh_mellow.py
 code/RSmol/scripts/audit_audio_stage4_5_10x2_5_mesh_mellow.py
 code/RSmol/scripts/train_audio_5_10x2_5_mesh_mellow_ddp.py
 code/RSmol/scripts/train_audio_perf20_5_10x2_5_mesh_mellow_ddp.sh
+code/RSmol/scripts/probe_audio_storage.py
+code/RSmol/scripts/probe_audio_storage_5090.sh
+code/RSmol/run_audio_storage_probe_5090.sh
 code/RSmol/scripts/audit_audio_checkpoint_5_10x2_5_mesh_mellow.py
 code/RSmol/run_audio_*5_10x2_5_mesh_mellow_5090.sh
 tests/test_audio_5_10x2_5_mesh_mellow_static.py
 tests/test_audio_perf20_static.py
+tests/test_audio_storage_probe_static.py
 
 # 固定 5-10-5 recursive 音频正式对照（无 MeSH、FORMAL-only）
 code/RSmol/audio_5_10_5_recursive_mellow/data.py
