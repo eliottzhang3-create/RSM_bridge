@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import math
+import tempfile
+import time
 import typing
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,18 +189,131 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             "UniqueWaveformStore",
             "def _warm_shared_waveform_store",
             'if int(rank) == 0:',
-            'bytearray(64 * 1024 * 1024)',
+            'bytearray(store.bytes_per_audio)',
+            'dist.all_gather_object(gathered, payload)',
+            'global_ids = sorted(',
             'store.data_path.open("rb", buffering=0)',
+            'handle.seek(audio_id * store.bytes_per_audio)',
+            '"global_planned_unique_audio"',
             '"shared_store_waveform_sha256"',
             '"shared_waveform_store_enabled": input_mode == "shared_waveform_store"',
-            '_warm_shared_waveform_store(dataset.unique_waveform_store, rank=rank)',
+            '_warm_shared_waveform_store(dataset, planned_rows, rank=rank, world=world)',
         ):
             self.assertIn(marker, text)
-        warm_call = "_warm_shared_waveform_store(dataset.unique_waveform_store, rank=rank)"
+        warm_call = "_warm_shared_waveform_store(dataset, planned_rows, rank=rank, world=world)"
         profiler_entry = "profiler = _make_profiler(args, profile_dir, profiler_artifacts)"
         step_timer = "step_started = time.perf_counter()"
         self.assertLess(text.index(warm_call), text.index(profiler_entry))
         self.assertLess(text.index(warm_call), text.index(step_timer))
+
+    def test_shared_store_warm_reads_only_unique_planned_offsets(self) -> None:
+        tree = ast.parse(TRAIN.read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "_warm_shared_waveform_store")
+        namespace = {"__builtins__": __builtins__, "hashlib": hashlib, "time": time}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            data_path = Path(directory) / "waveforms.f32"
+            data_path.write_bytes(b"aaaabbbbccccdddd")
+            store = SimpleNamespace(
+                data_path=data_path, store_dir=Path(directory), bytes_per_audio=4,
+                num_audio=4, metadata={"manifest_sha256": "manifest", "waveform_sha256": "waveform"},
+                locate=lambda path: {"a": 0, "c": 2}[path],
+            )
+            dataset = SimpleNamespace(unique_waveform_store=store,
+                                      audio_paths=lambda row: {0: ("c", "a"), 1: ("a", "a")}[row])
+            result = namespace["_warm_shared_waveform_store"](dataset, [0, 1], rank=0, world=1)
+            self.assertEqual(result["local_planned_unique_audio"], 2)
+            self.assertEqual(result["global_planned_unique_audio"], 2)
+            self.assertEqual(result["shared_store_expected_bytes"], 8)
+            self.assertEqual(result["warmed_file_bytes"], 8)
+            self.assertEqual(result["global_audio_ids_sha256"], hashlib.sha256(b"0,2").hexdigest())
+
+    def test_shared_store_warm_includes_other_rank_audio(self) -> None:
+        tree = ast.parse(TRAIN.read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "_warm_shared_waveform_store")
+        def all_gather(gathered, local):
+            gathered[0] = local
+            gathered[1] = {"audio_ids": [3], "error": None}
+        namespace = {"__builtins__": __builtins__, "hashlib": hashlib, "time": time,
+                     "dist": SimpleNamespace(all_gather_object=all_gather)}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            data_path = Path(directory) / "waveforms.f32"
+            data_path.write_bytes(b"aaaabbbbccccdddd")
+            store = SimpleNamespace(
+                data_path=data_path, store_dir=Path(directory), bytes_per_audio=4,
+                num_audio=4, metadata={}, locate=lambda path: 0,
+            )
+            dataset = SimpleNamespace(unique_waveform_store=store,
+                                      audio_paths=lambda row: ("a", "a"))
+            result = namespace["_warm_shared_waveform_store"](dataset, [0], rank=0, world=2)
+            self.assertEqual(result["local_planned_unique_audio"], 1)
+            self.assertEqual(result["global_planned_unique_audio"], 2)
+            self.assertEqual(result["warmed_file_bytes"], 8)
+            self.assertEqual(result["global_audio_ids_sha256"], hashlib.sha256(b"0,3").hexdigest())
+
+    def test_cgroup_v1_cache_snapshot_is_normalized(self) -> None:
+        tree = ast.parse(TRAIN.read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "_cgroup_memory_snapshot")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "proc_cgroup").write_text("12:cpu:/job\n8:memory,cpuacct:/job\n", encoding="utf-8")
+            group = root / "memory" / "job"
+            group.mkdir(parents=True)
+            (group / "memory.usage_in_bytes").write_text("200\n", encoding="utf-8")
+            (group / "memory.limit_in_bytes").write_text("1024\n", encoding="utf-8")
+            (group / "memory.stat").write_text(
+                "cache 10\nrss 20\ntotal_cache 80\ntotal_rss 90\n"
+                "total_mapped_file 30\ntotal_active_file 40\ntotal_inactive_file 25\n",
+                encoding="utf-8",
+            )
+            def mapped_path(value):
+                if value == "/proc/self/cgroup":
+                    return root / "proc_cgroup"
+                if value == "/sys/fs/cgroup/memory":
+                    return root / "memory"
+                raise AssertionError(value)
+            namespace = {"__builtins__": __builtins__, "Path": mapped_path}
+            exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
+            snapshot = namespace["_cgroup_memory_snapshot"]()
+            self.assertEqual(snapshot["cgroup_version"], 1)
+            self.assertEqual(snapshot["memory_current_bytes"], 200)
+            self.assertEqual(snapshot["memory_max_bytes"], 1024)
+            self.assertEqual(snapshot["memory_stat_bytes"]["file"], 80)
+            self.assertEqual(snapshot["memory_stat_bytes"]["anon"], 90)
+            self.assertEqual(snapshot["memory_stat_bytes"]["file_mapped"], 30)
+
+    def test_cgroup_v2_snapshot_is_preserved(self) -> None:
+        tree = ast.parse(TRAIN.read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "_cgroup_memory_snapshot")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "proc_cgroup").write_text("0::/job\n", encoding="utf-8")
+            group = root / "unified" / "job"
+            group.mkdir(parents=True)
+            (group / "memory.current").write_text("200\n", encoding="utf-8")
+            (group / "memory.max").write_text("max\n", encoding="utf-8")
+            (group / "memory.stat").write_text(
+                "anon 90\nfile 80\nfile_mapped 30\nactive_file 40\ninactive_file 25\n",
+                encoding="utf-8",
+            )
+            def mapped_path(value):
+                if value == "/proc/self/cgroup":
+                    return root / "proc_cgroup"
+                if value == "/sys/fs/cgroup":
+                    return root / "unified"
+                raise AssertionError(value)
+            namespace = {"__builtins__": __builtins__, "Path": mapped_path}
+            exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
+            snapshot = namespace["_cgroup_memory_snapshot"]()
+            self.assertEqual(snapshot["cgroup_version"], 2)
+            self.assertEqual(snapshot["memory_current_bytes"], 200)
+            self.assertIsNone(snapshot["memory_max_bytes"])
+            self.assertEqual(snapshot["memory_stat_bytes"]["file"], 80)
 
     def test_perf20_audit_does_not_require_syncing_router_statistics(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")

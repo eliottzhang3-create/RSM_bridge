@@ -921,28 +921,64 @@ def _process_io_snapshot() -> dict[str, int] | None:
 
 
 def _cgroup_memory_snapshot() -> dict[str, Any] | None:
-    """Best-effort cgroup-v2 memory snapshot for cache-residency diagnosis."""
+    """Best-effort cgroup-v2/v1 memory snapshot for cache-residency diagnosis."""
 
     try:
-        cgroup_line = next(
-            line for line in Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines()
-            if line.startswith("0::")
-        )
-        relative = cgroup_line.split("::", 1)[1].lstrip("/")
-        root = Path("/sys/fs/cgroup") / relative
-        current = int((root / "memory.current").read_text(encoding="utf-8").strip())
-        maximum_text = (root / "memory.max").read_text(encoding="utf-8").strip()
-        stats = {}
+        memberships = Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines()
+        unified = next((line.split(":", 2)[2] for line in memberships if line.startswith("0::")), None)
+        if unified is not None:
+            version = 2
+            root = Path("/sys/fs/cgroup") / unified.lstrip("/")
+            current_name, maximum_name = "memory.current", "memory.max"
+            mount_root_fallback = False
+        else:
+            memory = next(
+                (line.split(":", 2)[2] for line in memberships
+                 if "memory" in line.split(":", 2)[1].split(",")),
+                None,
+            )
+            if memory is None:
+                return None
+            version = 1
+            mount_root = Path("/sys/fs/cgroup/memory")
+            root = mount_root / memory.lstrip("/")
+            current_name, maximum_name = "memory.usage_in_bytes", "memory.limit_in_bytes"
+            # Some containers expose the job cgroup as the mount root while
+            # /proc/self/cgroup still names its host-relative hierarchy.
+            mount_root_fallback = not (root / current_name).is_file() and (mount_root / current_name).is_file()
+            if mount_root_fallback:
+                root = mount_root
+        current = int((root / current_name).read_text(encoding="utf-8").strip())
+        maximum_text = (root / maximum_name).read_text(encoding="utf-8").strip()
+        maximum = None if maximum_text == "max" else int(maximum_text)
+        if maximum is not None and maximum >= 1 << 60:
+            maximum = None  # v1 uses a very large sentinel for unlimited memory.
+        raw_stats = {}
         for line in (root / "memory.stat").read_text(encoding="utf-8").splitlines():
             key, value = line.split()
-            if key in {"anon", "file", "file_mapped", "file_dirty", "file_writeback"}:
-                stats[key] = int(value)
+            raw_stats[key] = int(value)
+        if version == 1:
+            # total_* includes child cgroups, matching the hierarchical usage limit.
+            stats = {
+                "anon": raw_stats.get("total_rss", raw_stats.get("rss", 0)),
+                "file": raw_stats.get("total_cache", raw_stats.get("cache", 0)),
+                "file_mapped": raw_stats.get("total_mapped_file", raw_stats.get("mapped_file", 0)),
+                "active_file": raw_stats.get("total_active_file", raw_stats.get("active_file", 0)),
+                "inactive_file": raw_stats.get("total_inactive_file", raw_stats.get("inactive_file", 0)),
+            }
+        else:
+            stats = {key: raw_stats[key] for key in
+                     ("anon", "file", "file_mapped", "file_dirty", "file_writeback", "active_file", "inactive_file")
+                     if key in raw_stats}
         return {
+            "cgroup_version": version,
+            "cgroup_path": str(root),
+            "mount_root_fallback": mount_root_fallback,
             "memory_current_bytes": current,
-            "memory_max_bytes": None if maximum_text == "max" else int(maximum_text),
+            "memory_max_bytes": maximum,
             "memory_stat_bytes": stats,
         }
-    except (OSError, StopIteration, ValueError):
+    except (OSError, ValueError, IndexError):
         return None
 
 
@@ -986,36 +1022,53 @@ def _warm_exact_perf20_files(
     }
 
 
-def _warm_shared_waveform_store(store: UniqueWaveformStore, *, rank: int) -> dict[str, Any]:
-    """Have rank 0 sequentially populate the complete store into page cache."""
+def _warm_shared_waveform_store(
+    dataset: ReasonAQADataset, local_rows: list[int], *, rank: int, world: int,
+) -> dict[str, Any]:
+    """Warm exactly the all-rank bounded-run audio IDs, ordered by file offset."""
 
-    expected_bytes = int(store.num_audio) * int(store.bytes_per_audio)
+    store = dataset.unique_waveform_store
+    if store is None:
+        raise RuntimeError("shared waveform store is not installed")
+    local_ids: list[int] = []
+    local_error: str | None = None
+    try:
+        local_ids = sorted({store.locate(path) for row in local_rows for path in dataset.audio_paths(row)})
+    except Exception as exc:
+        local_error = repr(exc)
+    gathered: list[dict[str, Any] | None] = [None] * world
+    payload = {"audio_ids": local_ids, "error": local_error}
+    if world > 1:
+        dist.all_gather_object(gathered, payload)
+    else:
+        gathered[0] = payload
+    failures = {i: item["error"] for i, item in enumerate(gathered) if item is not None and item["error"]}
+    if failures:
+        raise RuntimeError(f"shared waveform store planned audio lookup failed: {failures}")
+    if any(item is None for item in gathered):
+        raise RuntimeError("shared waveform store received an incomplete all-rank audio union")
+    global_ids = sorted({audio_id for item in gathered if item is not None for audio_id in item["audio_ids"]})
+    if not global_ids:
+        raise RuntimeError("shared waveform store planned audio union is empty")
+    expected_bytes = len(global_ids) * int(store.bytes_per_audio)
     started = time.perf_counter()
     warmed_bytes = 0
-    sequential_advice = False
     if int(rank) == 0:
-        buffer = bytearray(64 * 1024 * 1024)
+        buffer = bytearray(store.bytes_per_audio)
         view = memoryview(buffer)
-        next_progress = 8 * 1024**3
         with store.data_path.open("rb", buffering=0) as handle:
-            if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_SEQUENTIAL"):
-                try:
-                    os.posix_fadvise(handle.fileno(), 0, 0, os.POSIX_FADV_SEQUENTIAL)
-                    sequential_advice = True
-                except OSError:
-                    sequential_advice = False
-            while True:
-                size = handle.readinto(view)
-                if not size:
-                    break
-                warmed_bytes += int(size)
-                if warmed_bytes >= next_progress:
-                    print(
-                        "[audio-perf20] shared waveform warm "
-                        f"gib={warmed_bytes / 1024**3:.3f}/{expected_bytes / 1024**3:.3f}",
-                        flush=True,
-                    )
-                    next_progress += 8 * 1024**3
+            for count, audio_id in enumerate(global_ids, start=1):
+                handle.seek(audio_id * store.bytes_per_audio)
+                offset = 0
+                while offset < store.bytes_per_audio:
+                    size = handle.readinto(view[offset:])
+                    if not size:
+                        raise RuntimeError(f"short waveform store read for audio_id={audio_id}: {offset}")
+                    offset += int(size)
+                warmed_bytes += offset
+                if count % 1024 == 0:
+                    print(f"[audio-perf20] shared waveform target warm "
+                          f"audio={count}/{len(global_ids)} gib={warmed_bytes / 1024**3:.3f}", flush=True)
         if warmed_bytes != expected_bytes:
             raise RuntimeError(
                 "shared waveform store warm byte count mismatch: "
@@ -1027,13 +1080,15 @@ def _warm_shared_waveform_store(store: UniqueWaveformStore, *, rank: int) -> dic
         "shared_store_manifest_sha256": str(store.metadata.get("manifest_sha256")),
         "shared_store_waveform_sha256": str(store.metadata.get("waveform_sha256")),
         "shared_store_unique_audio": int(store.num_audio),
+        "local_planned_unique_audio": len(local_ids),
+        "global_planned_unique_audio": len(global_ids),
+        "global_audio_ids_sha256": hashlib.sha256(",".join(map(str, global_ids)).encode("ascii")).hexdigest(),
         "shared_store_expected_bytes": expected_bytes,
         "shared_store_expected_gib": expected_bytes / 1024**3,
         "warmed_file_bytes": warmed_bytes if int(rank) == 0 else None,
         "warm_read_seconds": float(time.perf_counter() - started) if int(rank) == 0 else 0.0,
         "warm_owner_rank": 0,
-        "posix_fadvise_sequential": sequential_advice if int(rank) == 0 else None,
-        "warm_strategy": "rank0 sequentially reads the complete immutable data file before the common pre-measurement barrier",
+        "warm_strategy": "rank0 reads only the exact all-rank 20-step unique waveform regions in increasing audio_id order before the common pre-measurement barrier",
     }
 
 
@@ -1428,7 +1483,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     if args.perf20_input_mode == "warm_online" else
                     "rank-local decoded waveforms for exact bounded rows are resident before timing"
                     if args.perf20_input_mode == "waveform_preload" else
-                    "rank0 reads the complete single-file decoded waveform store into node page cache before timing"
+                    "rank0 reads only the all-rank bounded-run unique decoded waveform regions into node page cache before timing"
                     if args.perf20_input_mode == "shared_waveform_store" else
                     "rank-local fully collated CPU batches are resident before timing"
                 ),
@@ -1459,7 +1514,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         if dataset.unique_waveform_store is None:
                             raise RuntimeError("shared_waveform_store mode did not install its store reader")
                         input_preparation.update(
-                            _warm_shared_waveform_store(dataset.unique_waveform_store, rank=rank)
+                            _warm_shared_waveform_store(dataset, planned_rows, rank=rank, world=world)
                         )
                     elif args.perf20_input_mode == "full_preload":
                         preloaded_batches, full_metadata = _preload_perf20_batches(
@@ -1783,7 +1838,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "warm_online": "same online DataLoader path after exact bounded-run file bytes were read before timing",
                 "waveform_preload": "rank-local waveform RAM lookup plus timed tokenization/collate",
                 "full_preload": "rank-local fully collated CPU batch list",
-                "shared_waveform_store": "node-shared fixed-stride waveform mmap after rank0 sequentially warmed the complete data file",
+                "shared_waveform_store": "node-shared fixed-stride waveform mmap after rank0 warmed the exact all-rank 20-step audio union by file offset",
             }[input_mode]
             report["data_pipeline"] = {
                 "mode": input_mode,
