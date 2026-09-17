@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import random
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -535,7 +536,14 @@ class ShardAwareDistributedBatchSampler(Sampler[list[int]]):
         }
 
 
-def collate_reasonaqa(items: list[dict[str, Any]], tokenizer: Any, *, max_prompt_tokens: int = 129, max_answer_tokens: int = 250) -> dict[str, Any]:
+def collate_reasonaqa(
+    items: list[dict[str, Any]],
+    tokenizer: Any,
+    *,
+    max_prompt_tokens: int = 129,
+    max_answer_tokens: int = 250,
+    timing_accumulator: dict[str, float] | None = None,
+) -> dict[str, Any]:
     if not items:
         raise ValueError("empty batch")
     prompts = [item["prompt"] for item in items]
@@ -546,9 +554,16 @@ def collate_reasonaqa(items: list[dict[str, Any]], tokenizer: Any, *, max_prompt
     # current batch.  Padding prompt and answer independently would insert
     # artificial pad tokens between the prompt and answer and would break the
     # causal next-token relationship at the answer boundary.
+    phase_started = time.perf_counter()
+    phase_cpu_started = time.thread_time()
     prompt = tokenizer(prompts, max_length=max_prompt_tokens, truncation=True, padding=False, return_tensors=None, add_special_tokens=True)
     answer = tokenizer(answers, max_length=max_answer_tokens, truncation=True, padding=False, return_tensors=None, add_special_tokens=False)
+    if timing_accumulator is not None:
+        timing_accumulator["tokenize"] = timing_accumulator.get("tokenize", 0.0) + time.perf_counter() - phase_started
+        timing_accumulator["tokenize_thread_cpu"] = timing_accumulator.get("tokenize_thread_cpu", 0.0) + time.thread_time() - phase_cpu_started
 
+    phase_started = time.perf_counter()
+    phase_cpu_started = time.thread_time()
     def _rows(value: Any) -> list[list[int]]:
         if isinstance(value, torch.Tensor):
             return value.detach().cpu().tolist()
@@ -582,10 +597,22 @@ def collate_reasonaqa(items: list[dict[str, Any]], tokenizer: Any, *, max_prompt
     answer_attention_mask = torch.zeros((len(items), max_answer_length), dtype=torch.long)
     for row_index, length in enumerate(answer_lengths):
         answer_attention_mask[row_index, :length] = 1
+    if timing_accumulator is not None:
+        timing_accumulator["text_tensor_build"] = timing_accumulator.get("text_tensor_build", 0.0) + time.perf_counter() - phase_started
+        timing_accumulator["text_tensor_build_thread_cpu"] = timing_accumulator.get("text_tensor_build_thread_cpu", 0.0) + time.thread_time() - phase_cpu_started
+
+    phase_started = time.perf_counter()
+    phase_cpu_started = time.thread_time()
     audio1 = torch.stack([item["audio1"] for item in items])
     reused_mask = torch.tensor([item["audio2"] is None for item in items], dtype=torch.bool)
     reused = bool(reused_mask.all())
     audio2 = None if reused else torch.stack([item["audio1"] if item["audio2"] is None else item["audio2"] for item in items])
+    if timing_accumulator is not None:
+        timing_accumulator["waveform_stack"] = timing_accumulator.get("waveform_stack", 0.0) + time.perf_counter() - phase_started
+        timing_accumulator["waveform_stack_thread_cpu"] = timing_accumulator.get("waveform_stack_thread_cpu", 0.0) + time.thread_time() - phase_cpu_started
+
+    phase_started = time.perf_counter()
+    phase_cpu_started = time.thread_time()
     batch = {
         "audio1": audio1,
         "audio2": audio2,
@@ -600,4 +627,7 @@ def collate_reasonaqa(items: list[dict[str, Any]], tokenizer: Any, *, max_prompt
     }
     if all("waveform_cache_shard_ids" in item for item in items):
         batch["waveform_cache_shard_ids"] = [tuple(item["waveform_cache_shard_ids"]) for item in items]
+    if timing_accumulator is not None:
+        timing_accumulator["batch_metadata"] = timing_accumulator.get("batch_metadata", 0.0) + time.perf_counter() - phase_started
+        timing_accumulator["batch_metadata_thread_cpu"] = timing_accumulator.get("batch_metadata_thread_cpu", 0.0) + time.thread_time() - phase_cpu_started
     return batch

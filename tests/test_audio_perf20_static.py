@@ -64,7 +64,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             '"per_step_collectives_added": 0',
         ):
             self.assertIn(marker, text)
-        gather_call = 'per_rank_timing = _gather_perf20_rank_timings(rank, world, metrics, input_preparation)'
+        gather_call = 'per_rank_timing = _gather_perf20_rank_timings('
         self.assertEqual(text.count(gather_call), 1)
         self.assertGreater(text.index(gather_call), text.index("while optimizer_step < max_steps:"))
         self.assertGreater(text.index(gather_call), text.index("if batch_in_epoch >= steps_epoch * args.gradient_accumulation_steps:"))
@@ -99,6 +99,18 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertEqual(step["phases"]["data_wait_seconds"]["slowest_rank"], 1)
         self.assertEqual(step["phases"]["step_wall_seconds"]["maximum"], 11.0)
         self.assertEqual(len(report["raw_by_rank"]), 2)
+
+        for payload in payloads:
+            payload["steps"][0]["included_in_steady_state"] = False
+            payload["steps"].append({
+                "step": 6, "included_in_steady_state": True,
+                "data_wait_seconds": 0.5, "collate_seconds": 0.25,
+                "forward_device_seconds": 1.0, "backward_device_seconds": 2.0,
+                "step_wall_seconds": 4.0,
+            })
+        steady_report = namespace["_per_rank_timing_report"](payloads, 2)
+        self.assertEqual(steady_report["per_rank_summary"][0]["included_steps"], [6])
+        self.assertEqual(steady_report["per_step_rank_skew"][0]["step"], 6)
 
         for rank, payload in enumerate(payloads):
             payload["input_preparation"] = {
@@ -273,13 +285,8 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
                 "total_mapped_file 30\ntotal_active_file 40\ntotal_inactive_file 25\n",
                 encoding="utf-8",
             )
-            def mapped_path(value):
-                if value == "/proc/self/cgroup":
-                    return root / "proc_cgroup"
-                if value == "/sys/fs/cgroup/memory":
-                    return root / "memory"
-                raise AssertionError(value)
-            namespace = {"__builtins__": __builtins__, "Path": mapped_path}
+            namespace = {"__builtins__": __builtins__, "Path": Path,
+                         "_cgroup_candidate_paths": lambda controller: ([(1, group)], [])}
             exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
             snapshot = namespace["_cgroup_memory_snapshot"]()
             self.assertEqual(snapshot["cgroup_version"], 1)
@@ -304,19 +311,36 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
                 "anon 90\nfile 80\nfile_mapped 30\nactive_file 40\ninactive_file 25\n",
                 encoding="utf-8",
             )
-            def mapped_path(value):
-                if value == "/proc/self/cgroup":
-                    return root / "proc_cgroup"
-                if value == "/sys/fs/cgroup":
-                    return root / "unified"
-                raise AssertionError(value)
-            namespace = {"__builtins__": __builtins__, "Path": mapped_path}
+            namespace = {"__builtins__": __builtins__, "Path": Path,
+                         "_cgroup_candidate_paths": lambda controller: ([(2, group)], [])}
             exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
             snapshot = namespace["_cgroup_memory_snapshot"]()
             self.assertEqual(snapshot["cgroup_version"], 2)
             self.assertEqual(snapshot["memory_current_bytes"], 200)
             self.assertIsNone(snapshot["memory_max_bytes"])
             self.assertEqual(snapshot["memory_stat_bytes"]["file"], 80)
+
+    def test_cgroup_memory_falls_back_from_broken_v2_to_v1(self) -> None:
+        tree = ast.parse(TRAIN.read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "_cgroup_memory_snapshot")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            broken_v2 = root / "broken-v2"
+            broken_v2.mkdir()
+            v1 = root / "memory-v1"
+            v1.mkdir()
+            (v1 / "memory.usage_in_bytes").write_text("300\n", encoding="utf-8")
+            (v1 / "memory.limit_in_bytes").write_text("2048\n", encoding="utf-8")
+            (v1 / "memory.stat").write_text("total_cache 100\ntotal_rss 150\n", encoding="utf-8")
+            namespace = {"__builtins__": __builtins__, "Path": Path,
+                         "_cgroup_candidate_paths": lambda controller: ([(2, broken_v2), (1, v1)], [])}
+            exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
+            snapshot = namespace["_cgroup_memory_snapshot"]()
+            self.assertEqual(snapshot["status"], "PASS")
+            self.assertEqual(snapshot["cgroup_version"], 1)
+            self.assertEqual(snapshot["memory_current_bytes"], 300)
+            self.assertEqual(len(snapshot["failed_candidates"]), 1)
 
     def test_rank_local_store_clones_and_evicts_owned_tensors(self) -> None:
         tree = ast.parse(TRAIN.read_text(encoding="utf-8"))
@@ -375,7 +399,8 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         text = TRAIN.read_text(encoding="utf-8")
         for marker in (
             '"store_rank_ram_preload", "store_rank_ram_prefetch"',
-            'value = self.store.load_audio_id(audio_id).clone()',
+            'view = self.store.load_audio_id(audio_id)',
+            'value = view.clone()',
             'self.slots = threading.BoundedSemaphore(depth)',
             '"waveform_cache_stats_after_prime"',
             '"waveform_cache_stats_after_training"',
@@ -387,6 +412,21 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertLess(text.index("store_prefetcher.start_and_prime()"),
                         text.index("profiler = _make_profiler(args, profile_dir, profiler_artifacts)"))
         self.assertIn('args.gate == "PERF20" and args.perf20_input_mode in {', text)
+
+    def test_corrected_perf20_measurements_are_explicit(self) -> None:
+        text = TRAIN.read_text(encoding="utf-8")
+        data = (ROOT / "code" / "RSmol" / "audio_5_10x2_5_mesh_mellow" / "data.py").read_text(encoding="utf-8")
+        for marker in (
+            '"queue_get_seconds"', '"queue_depth_before_get"', '"tokenize_seconds"',
+            '"waveform_stack_seconds"', '"process_runtime_delta"', '"cgroup_cpu_delta"',
+            '"thread_runtime_configuration"', '"first_forward_input_audit"',
+            'perf_loader_generator.manual_seed', '"included_in_steady_state"',
+            '"failed_candidates"', 'Path("/proc/self/mountinfo")',
+        ):
+            self.assertIn(marker, text)
+        for marker in ('timing_accumulator', '"tokenize"', '"text_tensor_build"',
+                       '"waveform_stack"', '"batch_metadata"'):
+            self.assertIn(marker, data)
 
     def test_perf20_audit_does_not_require_syncing_router_statistics(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")

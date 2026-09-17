@@ -339,7 +339,13 @@ def _perf_steady_summary(metrics: list[dict[str, Any]], args: argparse.Namespace
     profiler_affected_steps = set(_profile_overhead_steps(args, max_steps)) if args.profiler else set()
     configured_start = max(1, int(args.steady_state_start_step))
     steady = [item for item in metrics if int(item["step"]) >= configured_start and int(item["step"]) not in profiler_affected_steps]
-    host_phases = ("data_wait", "collate", "host_to_device_enqueue", "forward_enqueue", "backward_enqueue", "grad_clip_host", "optimizer_enqueue", "scheduler_host", "metrics_enqueue_host")
+    host_phases = (
+        "data_wait", "queue_get", "collate", "tokenize", "tokenize_thread_cpu",
+        "text_tensor_build", "text_tensor_build_thread_cpu", "waveform_stack", "waveform_stack_thread_cpu",
+        "batch_metadata", "batch_metadata_thread_cpu", "store_locate", "store_mmap_view", "store_clone", "store_dataset_item",
+        "host_to_device_enqueue", "forward_enqueue", "backward_enqueue", "grad_clip_host",
+        "optimizer_enqueue", "scheduler_host", "metrics_enqueue_host",
+    )
     device_phases = ("host_to_device", "forward", "backward", "grad_clip", "optimizer", "metrics_collectives")
     host_phase_summary = {
         phase: _distribution([float(item.get("phase_timings_host_seconds", {}).get(phase, 0.0)) for item in steady])
@@ -376,6 +382,7 @@ def _local_rank_timing_payload(
     rank: int,
     metrics: list[dict[str, Any]],
     input_preparation: dict[str, Any] | None = None,
+    steady_steps: set[int] | None = None,
 ) -> dict[str, Any]:
     """Build the compact timing payload gathered once after PERF20 training."""
 
@@ -385,11 +392,21 @@ def _local_rank_timing_payload(
         device = item.get("phase_timings_device_seconds", {})
         steps.append({
             "step": int(item["step"]),
+            "included_in_steady_state": steady_steps is None or int(item["step"]) in steady_steps,
             "data_wait_seconds": float(host.get("data_wait", 0.0)),
+            "queue_get_seconds": float(host.get("queue_get", 0.0)),
             "collate_seconds": float(host.get("collate", 0.0)),
+            "tokenize_seconds": float(host.get("tokenize", 0.0)),
+            "tokenize_thread_cpu_seconds": float(host.get("tokenize_thread_cpu", 0.0)),
+            "text_tensor_build_seconds": float(host.get("text_tensor_build", 0.0)),
+            "waveform_stack_seconds": float(host.get("waveform_stack", 0.0)),
+            "waveform_stack_thread_cpu_seconds": float(host.get("waveform_stack_thread_cpu", 0.0)),
+            "store_clone_seconds": float(host.get("store_clone", 0.0)),
             "forward_device_seconds": float(device.get("forward", 0.0)),
             "backward_device_seconds": float(device.get("backward", 0.0)),
             "step_wall_seconds": float(item["step_time_seconds"]),
+            "process_runtime_delta": item.get("process_runtime_delta"),
+            "cgroup_cpu_delta": item.get("cgroup_cpu_delta"),
         })
     return {"rank": int(rank), "steps": steps, "input_preparation": input_preparation}
 
@@ -408,7 +425,14 @@ def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int)
 
     fields = (
         "data_wait_seconds",
+        "queue_get_seconds",
         "collate_seconds",
+        "tokenize_seconds",
+        "tokenize_thread_cpu_seconds",
+        "text_tensor_build_seconds",
+        "waveform_stack_seconds",
+        "waveform_stack_thread_cpu_seconds",
+        "store_clone_seconds",
         "forward_device_seconds",
         "backward_device_seconds",
         "step_wall_seconds",
@@ -418,23 +442,26 @@ def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int)
     for payload in ordered:
         rank = int(payload["rank"])
         steps = sorted(payload["steps"], key=lambda item: int(item["step"]))
+        steady = [step for step in steps if bool(step.get("included_in_steady_state", True))]
         per_rank_summary.append({
             "rank": rank,
-            "step_count": len(steps),
+            "step_count": len(steady),
+            "included_steps": [int(step["step"]) for step in steady],
             "distributions": {
-                field: _distribution([float(step[field]) for step in steps])
+                field: _distribution([float(step.get(field, 0.0)) for step in steady])
                 for field in fields
             },
         })
         for step in steps:
-            by_step.setdefault(int(step["step"]), []).append((rank, step))
+            if bool(step.get("included_in_steady_state", True)):
+                by_step.setdefault(int(step["step"]), []).append((rank, step))
 
     per_step_rank_skew = []
     for step_number in sorted(by_step):
         ranked_steps = sorted(by_step[step_number], key=lambda item: item[0])
         phases: dict[str, Any] = {}
         for field in fields:
-            ranked_values = [(rank, float(step[field])) for rank, step in ranked_steps]
+            ranked_values = [(rank, float(step.get(field, 0.0))) for rank, step in ranked_steps]
             values = [value for _, value in ranked_values]
             slowest_rank, maximum = max(ranked_values, key=lambda item: item[1])
             fastest_rank, minimum = min(ranked_values, key=lambda item: item[1])
@@ -472,6 +499,22 @@ def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int)
             "cpu_tensor_gib": _distribution([float(item.get("cpu_tensor_bytes", 0)) / 1024**3 for item in preparation_by_rank]),
             "row_indices_sha256_by_rank": [str(item["row_indices_sha256"]) for item in preparation_by_rank],
         }
+        training_seconds = [float(item.get("training_measurement_seconds", 0.0)) for item in preparation_by_rank]
+        preparation_summary["training_measurement_seconds"] = _distribution(training_seconds)
+        preparation_summary["maximum_training_measurement_seconds"] = max(training_seconds)
+        sample_counts = {int(item.get("global_samples_processed", 0)) for item in preparation_by_rank}
+        if len(sample_counts) == 1:
+            global_samples = sample_counts.pop()
+            preparation_summary["global_samples_processed"] = global_samples
+            preparation_summary["completion_inclusive_samples_per_second"] = (
+                global_samples / max(training_seconds) if global_samples and max(training_seconds) > 0 else None
+            )
+        end_to_end = [
+            float(item["duration_seconds"]) + float(item["barrier_wait_seconds"]) + float(item.get("training_measurement_seconds", 0.0))
+            for item in preparation_by_rank
+        ]
+        preparation_summary["preparation_barrier_training_seconds"] = _distribution(end_to_end)
+        preparation_summary["maximum_preparation_barrier_training_seconds"] = max(end_to_end)
         rank0_preparation = next(item for item in preparation_by_rank if int(item["rank"]) == 0)
         preparation_summary["rank0_duration_seconds"] = float(rank0_preparation["duration_seconds"])
         preparation_summary["rank0_warm_read_seconds"] = float(rank0_preparation.get("warm_read_seconds", 0.0))
@@ -489,6 +532,7 @@ def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int)
                 "host wall time around next(data_iter), summed across microbatches"
             ),
             "collate_seconds": "rank-process tokenizer plus collate wall time; zero during measured full_preload iteration",
+            "queue_get_seconds": "prefetch consumer wall time inside queue.get only; zero for non-prefetch modes",
             "forward_device_seconds": "CUDA events, summed across microbatches and resolved by the existing end-of-step synchronize",
             "backward_device_seconds": "CUDA events, summed across microbatches and resolved by the existing end-of-step synchronize; includes DDP gradient communication dependencies",
             "step_wall_seconds": "rank-local completion-inclusive optimizer-step wall time",
@@ -506,10 +550,16 @@ def _gather_perf20_rank_timings(
     world: int,
     metrics: list[dict[str, Any]],
     input_preparation: dict[str, Any] | None = None,
+    args: argparse.Namespace | None = None,
+    max_steps: int | None = None,
 ) -> dict[str, Any] | None:
     """Gather all rank-local PERF20 timings exactly once after measurement."""
 
-    local_payload = _local_rank_timing_payload(rank, metrics, input_preparation)
+    steady_steps = None
+    if args is not None and max_steps is not None:
+        excluded = set(_profile_overhead_steps(args, max_steps)) if args.profiler else set()
+        steady_steps = {step for step in range(max(1, int(args.steady_state_start_step)), int(max_steps) + 1) if step not in excluded}
+    local_payload = _local_rank_timing_payload(rank, metrics, input_preparation, steady_steps)
     if world > 1:
         gathered: list[dict[str, Any] | None] | None = [None] * world if rank == 0 else None
         dist.gather_object(local_payload, gathered, dst=0)
@@ -840,14 +890,27 @@ class _TimedReasonAQACollator:
         self.tokenizer = tokenizer
         self.total_seconds = 0.0
         self.calls = 0
+        self.phase_seconds = {
+            "tokenize": 0.0,
+            "tokenize_thread_cpu": 0.0,
+            "text_tensor_build": 0.0,
+            "text_tensor_build_thread_cpu": 0.0,
+            "waveform_stack": 0.0,
+            "waveform_stack_thread_cpu": 0.0,
+            "batch_metadata": 0.0,
+            "batch_metadata_thread_cpu": 0.0,
+        }
 
     def __call__(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
         started = time.perf_counter()
         try:
-            return collate_reasonaqa(rows, self.tokenizer)
+            return collate_reasonaqa(rows, self.tokenizer, timing_accumulator=self.phase_seconds)
         finally:
             self.total_seconds += time.perf_counter() - started
             self.calls += 1
+
+    def snapshot(self) -> dict[str, float]:
+        return {"collate": float(self.total_seconds), **{key: float(value) for key, value in self.phase_seconds.items()}}
 
 
 class _Perf20WaveformPreloadedDataset:
@@ -879,18 +942,30 @@ class _RankLocalStoreWaveforms:
         self.items: OrderedDict[int, torch.Tensor] = OrderedDict()
         self.hits = self.misses = self.evictions = self.cloned_bytes = 0
         self.current_bytes = self.peak_bytes = self.copy_seconds = 0
+        self.locate_seconds = self.mmap_view_seconds = self.clone_seconds = 0.0
+        self.clone_thread_cpu_seconds = 0.0
+        self.dataset_item_seconds = self.audio_paths_seconds = 0.0
 
     def _get(self, path: str) -> torch.Tensor:
+        started = time.perf_counter()
         audio_id = self.store.locate(path)
+        self.locate_seconds += time.perf_counter() - started
         value = self.items.get(audio_id)
         if value is not None:
             self.hits += 1
             self.items.move_to_end(audio_id)
             return value
         self.misses += 1
-        started = time.perf_counter()
-        value = self.store.load_audio_id(audio_id).clone()
-        self.copy_seconds += time.perf_counter() - started
+        copy_started = time.perf_counter()
+        view_started = time.perf_counter()
+        view = self.store.load_audio_id(audio_id)
+        self.mmap_view_seconds += time.perf_counter() - view_started
+        clone_started = time.perf_counter()
+        thread_cpu_started = time.thread_time()
+        value = view.clone()
+        self.clone_thread_cpu_seconds += time.thread_time() - thread_cpu_started
+        self.clone_seconds += time.perf_counter() - clone_started
+        self.copy_seconds += time.perf_counter() - copy_started
         size = int(value.numel() * value.element_size())
         self.cloned_bytes += size
         if self.max_bytes is not None:
@@ -904,8 +979,12 @@ class _RankLocalStoreWaveforms:
         return value
 
     def materialize(self, row: int) -> dict[str, Any]:
+        started = time.perf_counter()
         item = self.dataset[int(row)]  # text/answer contract; mmap views are not retained.
+        self.dataset_item_seconds += time.perf_counter() - started
+        started = time.perf_counter()
         audio1, audio2 = self.dataset.audio_paths(int(row))
+        self.audio_paths_seconds += time.perf_counter() - started
         item["audio1"] = self._get(audio1)
         item["audio2"] = None if audio2 == audio1 else self._get(audio2)
         return item
@@ -917,6 +996,9 @@ class _RankLocalStoreWaveforms:
             "waveform_misses": self.misses, "hit_rate": self.hits / lookups if lookups else 0.0,
             "waveform_evictions": self.evictions, "cloned_bytes": self.cloned_bytes,
             "copy_seconds": self.copy_seconds, "resident_unique_audio": len(self.items),
+            "locate_seconds": self.locate_seconds, "mmap_view_seconds": self.mmap_view_seconds,
+            "clone_seconds": self.clone_seconds, "clone_thread_cpu_seconds": self.clone_thread_cpu_seconds,
+            "dataset_item_seconds": self.dataset_item_seconds, "audio_paths_seconds": self.audio_paths_seconds,
             "cache_current_bytes": self.current_bytes, "cache_peak_bytes": self.peak_bytes,
             "cache_capacity_bytes": self.max_bytes,
         }
@@ -938,6 +1020,10 @@ class _Perf20StorePrefetcher:
         self.stopped = threading.Event()
         self.error: BaseException | None = None
         self.produced = self.consumed = 0
+        self.queue_get_seconds = 0.0
+        self.queue_empty_polls = 0
+        self.queue_depth_before_get: list[int] = []
+        self.queue_depth_after_get: list[int] = []
         self.thread = threading.Thread(target=self._produce, name="perf20-waveform-prefetch", daemon=True)
 
     def _produce(self) -> None:
@@ -975,16 +1061,40 @@ class _Perf20StorePrefetcher:
     def __next__(self) -> dict[str, Any]:
         if self.consumed >= self.total:
             raise StopIteration
+        self.queue_depth_before_get.append(self.pending.qsize())
+        get_started = time.perf_counter()
         while True:
             try:
                 items = self.pending.get(timeout=0.2)
                 self.slots.release()
                 break
             except queue.Empty:
+                self.queue_empty_polls += 1
                 if self.finished.is_set():
                     raise RuntimeError("rank-local waveform prefetch stopped early") from self.error
+        self.queue_get_seconds += time.perf_counter() - get_started
+        self.queue_depth_after_get.append(self.pending.qsize())
         self.consumed += 1
         return self.collator(items)
+
+    def timing_snapshot(self) -> dict[str, float]:
+        return {
+            "queue_get": float(self.queue_get_seconds),
+            "queue_empty_polls": float(self.queue_empty_polls),
+            "depth_observations": float(len(self.queue_depth_before_get)),
+        }
+
+    def stats(self) -> dict[str, Any]:
+        return {
+            "produced_microbatches": self.produced,
+            "consumed_microbatches": self.consumed,
+            "queue_get_seconds": self.queue_get_seconds,
+            "queue_empty_polls": self.queue_empty_polls,
+            "queue_depth_before_get": list(self.queue_depth_before_get),
+            "queue_depth_after_get": list(self.queue_depth_after_get),
+            "queue_depth_before_get_distribution": _distribution([float(value) for value in self.queue_depth_before_get]),
+            "queue_depth_after_get_distribution": _distribution([float(value) for value in self.queue_depth_after_get]),
+        }
 
     def close(self) -> None:
         self.stopped.set()
@@ -1052,43 +1162,190 @@ def _process_io_snapshot() -> dict[str, int] | None:
         return None
 
 
-def _cgroup_memory_snapshot() -> dict[str, Any] | None:
-    """Best-effort cgroup-v2/v1 memory snapshot for cache-residency diagnosis."""
+def _process_runtime_snapshot() -> dict[str, Any]:
+    """Capture scheduler/context-switch evidence without adding dependencies."""
 
+    result: dict[str, Any] = {}
     try:
-        memberships = Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines()
-        unified = next((line.split(":", 2)[2] for line in memberships if line.startswith("0::")), None)
-        if unified is not None:
-            version = 2
-            root = Path("/sys/fs/cgroup") / unified.lstrip("/")
-            current_name, maximum_name = "memory.current", "memory.max"
-            mount_root_fallback = False
-        else:
-            memory = next(
-                (line.split(":", 2)[2] for line in memberships
-                 if "memory" in line.split(":", 2)[1].split(",")),
-                None,
-            )
-            if memory is None:
-                return None
-            version = 1
-            mount_root = Path("/sys/fs/cgroup/memory")
-            root = mount_root / memory.lstrip("/")
-            current_name, maximum_name = "memory.usage_in_bytes", "memory.limit_in_bytes"
-            # Some containers expose the job cgroup as the mount root while
-            # /proc/self/cgroup still names its host-relative hierarchy.
-            mount_root_fallback = not (root / current_name).is_file() and (mount_root / current_name).is_file()
-            if mount_root_fallback:
-                root = mount_root
-        current = int((root / current_name).read_text(encoding="utf-8").strip())
-        maximum_text = (root / maximum_name).read_text(encoding="utf-8").strip()
+        values = {}
+        for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition(":")
+            if key in {"Threads", "voluntary_ctxt_switches", "nonvoluntary_ctxt_switches", "VmRSS", "VmHWM"}:
+                values[key] = int(value.strip().split()[0])
+        result["proc_status"] = values
+    except (OSError, ValueError, IndexError) as exc:
+        result["proc_status_error"] = repr(exc)
+    try:
+        fields = Path("/proc/self/schedstat").read_text(encoding="utf-8").split()
+        result["schedstat"] = {
+            "cpu_run_time_ns": int(fields[0]),
+            "runqueue_wait_time_ns": int(fields[1]),
+            "timeslices": int(fields[2]),
+        }
+    except (OSError, ValueError, IndexError) as exc:
+        result["schedstat_error"] = repr(exc)
+    return result
+
+
+def _thread_runtime_configuration() -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "os_cpu_count": os.cpu_count(),
+        "python_active_threads": threading.active_count(),
+        "torch_intraop_threads": torch.get_num_threads(),
+        "torch_interop_threads": torch.get_num_interop_threads(),
+        "environment": {
+            key: os.environ.get(key)
+            for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "RAYON_NUM_THREADS", "TOKENIZERS_PARALLELISM")
+        },
+    }
+    try:
+        affinity = sorted(os.sched_getaffinity(0))
+        result.update({"cpu_affinity": affinity, "cpu_affinity_count": len(affinity)})
+    except (AttributeError, OSError) as exc:
+        result["cpu_affinity_error"] = repr(exc)
+    return result
+
+
+def _nested_numeric_delta(before: Any, after: Any) -> Any:
+    """Subtract matching numeric leaves while retaining only comparable counters."""
+
+    if isinstance(before, dict) and isinstance(after, dict):
+        return {
+            key: value
+            for key in before.keys() & after.keys()
+            if (value := _nested_numeric_delta(before[key], after[key])) is not None
+        }
+    if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+        return after - before
+    return None
+
+
+def _tensor_sha256(value: torch.Tensor) -> str:
+    tensor = value.detach().cpu().contiguous()
+    return hashlib.sha256(tensor.numpy().tobytes()).hexdigest()
+
+
+def _rng_fingerprint(device: torch.device) -> dict[str, str]:
+    result = {
+        "python_random": hashlib.sha256(repr(random.getstate()).encode("utf-8")).hexdigest(),
+        "torch_cpu": hashlib.sha256(torch.get_rng_state().cpu().numpy().tobytes()).hexdigest(),
+    }
+    if torch.cuda.is_available():
+        result["torch_cuda"] = hashlib.sha256(torch.cuda.get_rng_state(device).cpu().numpy().tobytes()).hexdigest()
+    return result
+
+
+def _batch_fingerprint(batch: dict[str, Any]) -> dict[str, Any]:
+    tensor_hashes = {
+        key: _tensor_sha256(value)
+        for key, value in batch.items()
+        if torch.is_tensor(value)
+    }
+    encoded = json.dumps({"row_indices": batch.get("row_indices"), "tensor_hashes": tensor_hashes}, sort_keys=True).encode("utf-8")
+    return {
+        "row_indices": [int(value) for value in batch.get("row_indices", [])],
+        "tensor_sha256": tensor_hashes,
+        "combined_sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _cgroup_memberships_and_mounts() -> tuple[list[tuple[str, str]], list[dict[str, str]], list[str]]:
+    """Return controller memberships and cgroup mounts with diagnostics."""
+
+    errors: list[str] = []
+    memberships: list[tuple[str, str]] = []
+    mounts: list[dict[str, str]] = []
+    try:
+        for line in Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines():
+            _, controllers, path = line.split(":", 2)
+            memberships.append((controllers, path))
+    except (OSError, ValueError) as exc:
+        errors.append(f"cgroup memberships: {exc!r}")
+    try:
+        for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines():
+            left, right = line.split(" - ", 1)
+            left_fields, right_fields = left.split(), right.split()
+            if right_fields[0] not in {"cgroup", "cgroup2"}:
+                continue
+            mounts.append({
+                "root": left_fields[3],
+                "mountpoint": left_fields[4],
+                "fstype": right_fields[0],
+                "source": right_fields[1],
+                "super_options": right_fields[2] if len(right_fields) > 2 else "",
+            })
+    except (OSError, ValueError, IndexError) as exc:
+        errors.append(f"cgroup mounts: {exc!r}")
+    return memberships, mounts, errors
+
+
+def _cgroup_candidate_paths(controller: str) -> tuple[list[tuple[int, Path]], list[str]]:
+    cache = globals().setdefault("_PERF20_CGROUP_CANDIDATE_CACHE", {})
+    if controller in cache:
+        return cache[controller]
+    memberships, mounts, errors = _cgroup_memberships_and_mounts()
+    candidates: list[tuple[int, Path]] = []
+    for controllers, membership in memberships:
+        version = 2 if controllers == "" else 1
+        if version == 1 and controller not in controllers.split(","):
+            continue
+        for mount in mounts:
+            if mount["fstype"] != ("cgroup2" if version == 2 else "cgroup"):
+                continue
+            if version == 1 and controller not in (mount["source"] + "," + mount["super_options"]).split(","):
+                continue
+            mount_root = mount["root"].rstrip("/") or "/"
+            member = membership.rstrip("/") or "/"
+            if mount_root == "/":
+                relative = member.lstrip("/")
+            elif member == mount_root:
+                relative = ""
+            elif member.startswith(mount_root + "/"):
+                relative = member[len(mount_root):].lstrip("/")
+            else:
+                continue
+            candidates.append((version, Path(mount["mountpoint"]) / relative))
+            candidates.append((version, Path(mount["mountpoint"])))
+    # Conventional paths cover restricted container mountinfo views.
+    for controllers, membership in memberships:
+        if controllers == "":
+            candidates.extend(((2, Path("/sys/fs/cgroup") / membership.lstrip("/")), (2, Path("/sys/fs/cgroup"))))
+        elif controller in controllers.split(","):
+            base = Path("/sys/fs/cgroup") / controller
+            candidates.extend(((1, base / membership.lstrip("/")), (1, base)))
+    unique: list[tuple[int, Path]] = []
+    seen: set[tuple[int, str]] = set()
+    for version, path in candidates:
+        key = (version, str(path))
+        if key not in seen:
+            seen.add(key)
+            unique.append((version, path))
+    result = (unique, errors)
+    cache[controller] = result
+    return result
+
+
+def _cgroup_memory_snapshot() -> dict[str, Any] | None:
+    """Best-effort hybrid-safe memory snapshot; failures remain observable."""
+
+    attempts: list[dict[str, Any]] = []
+    candidates, discovery_errors = _cgroup_candidate_paths("memory")
+    for version, root in candidates:
+        current_name, maximum_name = (("memory.current", "memory.max") if version == 2 else
+                                      ("memory.usage_in_bytes", "memory.limit_in_bytes"))
+        try:
+            current = int((root / current_name).read_text(encoding="utf-8").strip())
+            maximum_text = (root / maximum_name).read_text(encoding="utf-8").strip()
+            raw_stats = {}
+            for line in (root / "memory.stat").read_text(encoding="utf-8").splitlines():
+                key, value = line.split()
+                raw_stats[key] = int(value)
+        except (OSError, ValueError, IndexError) as exc:
+            attempts.append({"version": version, "path": str(root), "error": repr(exc)})
+            continue
         maximum = None if maximum_text == "max" else int(maximum_text)
         if maximum is not None and maximum >= 1 << 60:
             maximum = None  # v1 uses a very large sentinel for unlimited memory.
-        raw_stats = {}
-        for line in (root / "memory.stat").read_text(encoding="utf-8").splitlines():
-            key, value = line.split()
-            raw_stats[key] = int(value)
         if version == 1:
             # total_* includes child cgroups, matching the hierarchical usage limit.
             stats = {
@@ -1103,15 +1360,58 @@ def _cgroup_memory_snapshot() -> dict[str, Any] | None:
                      ("anon", "file", "file_mapped", "file_dirty", "file_writeback", "active_file", "inactive_file")
                      if key in raw_stats}
         return {
+            "status": "PASS",
             "cgroup_version": version,
             "cgroup_path": str(root),
-            "mount_root_fallback": mount_root_fallback,
             "memory_current_bytes": current,
             "memory_max_bytes": maximum,
             "memory_stat_bytes": stats,
+            "discovery_errors": discovery_errors,
+            "failed_candidates": attempts,
         }
-    except (OSError, ValueError, IndexError):
-        return None
+    return {
+        "status": "UNAVAILABLE",
+        "cgroup_version": None,
+        "cgroup_path": None,
+        "memory_current_bytes": None,
+        "memory_max_bytes": None,
+        "memory_stat_bytes": {},
+        "discovery_errors": discovery_errors,
+        "failed_candidates": attempts,
+    }
+
+
+def _cgroup_cpu_snapshot() -> dict[str, Any]:
+    attempts: list[dict[str, Any]] = []
+    candidates, discovery_errors = _cgroup_candidate_paths("cpu")
+    for version, root in candidates:
+        try:
+            if version == 2:
+                quota_text, period_text = (root / "cpu.max").read_text(encoding="utf-8").split()
+                quota = None if quota_text == "max" else int(quota_text)
+                period = int(period_text)
+            else:
+                raw_quota = int((root / "cpu.cfs_quota_us").read_text(encoding="utf-8").strip())
+                quota = None if raw_quota < 0 else raw_quota
+                period = int((root / "cpu.cfs_period_us").read_text(encoding="utf-8").strip())
+            stats: dict[str, int] = {}
+            for line in (root / "cpu.stat").read_text(encoding="utf-8").splitlines():
+                key, value = line.split()
+                stats[key] = int(value)
+        except (OSError, ValueError, IndexError) as exc:
+            attempts.append({"version": version, "path": str(root), "error": repr(exc)})
+            continue
+        return {
+            "status": "PASS", "cgroup_version": version, "cgroup_path": str(root),
+            "quota_us": quota, "period_us": period,
+            "quota_cpus": quota / period if quota is not None and period > 0 else None,
+            "cpu_stat": stats, "discovery_errors": discovery_errors, "failed_candidates": attempts,
+        }
+    return {
+        "status": "UNAVAILABLE", "cgroup_version": None, "cgroup_path": None,
+        "quota_us": None, "period_us": None, "quota_cpus": None, "cpu_stat": {},
+        "discovery_errors": discovery_errors, "failed_candidates": attempts,
+    }
 
 
 def _warm_exact_perf20_files(
@@ -1519,12 +1819,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         loader_dataset = waveform_preloaded_dataset or dataset
         timed_collator = _TimedReasonAQACollator(tokenizer) if args.gate == "PERF20" else None
         collate_fn = timed_collator if timed_collator is not None else lambda rows: collate_reasonaqa(rows, tokenizer)
+        perf_loader_generator = None
+        if args.gate == "PERF20":
+            # Iterator construction consumes only this dedicated RNG, never
+            # the model/dropout CPU RNG.  Modes that materialize iterators at
+            # different times therefore remain comparable.
+            perf_loader_generator = torch.Generator()
+            perf_loader_generator.manual_seed(int(args.seed) + 100_003 * int(rank) + 17)
         loader = DataLoader(
             loader_dataset,
             batch_size=args.micro_batch_size,
             sampler=sampler,
             num_workers=args.num_workers,
             collate_fn=collate_fn,
+            generator=perf_loader_generator,
         )
         sampler_audit: dict[str, Any] = {
             "kind": "torch_distributed_sampler",
@@ -1615,6 +1923,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         rank_ram_cache: _RankLocalStoreWaveforms | None = None
         input_preparation: dict[str, Any] | None = None
         preloaded_consumed = 0
+        first_forward_input_audit: dict[str, Any] | None = None
         if perf_mode:
             required_microbatches = (int(max_steps) - int(optimizer_step)) * int(args.gradient_accumulation_steps)
             planned_rows = _planned_perf20_rows(
@@ -1649,6 +1958,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "process_faults_before": _process_fault_snapshot(),
                 "process_io_before": _process_io_snapshot(),
                 "cgroup_memory_before": _cgroup_memory_snapshot(),
+                "cgroup_cpu_before": _cgroup_cpu_snapshot(),
+                "process_runtime_before": _process_runtime_snapshot(),
+                "thread_runtime_configuration": _thread_runtime_configuration(),
+                "perf20_dataloader_uses_dedicated_generator": perf_loader_generator is not None,
             }
             saved_preparation_rng = _rng_state(device)
             preparation_started = time.perf_counter()
@@ -1742,6 +2055,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             input_preparation["process_faults_after"] = _process_fault_snapshot()
             input_preparation["process_io_after"] = _process_io_snapshot()
             input_preparation["cgroup_memory_after"] = _cgroup_memory_snapshot()
+            input_preparation["cgroup_cpu_after"] = _cgroup_cpu_snapshot()
+            input_preparation["process_runtime_after"] = _process_runtime_snapshot()
             if rank == 0:
                 print(
                     "[audio-perf20] causal input preparation complete "
@@ -1807,6 +2122,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             iter(preloaded_batches) if preloaded_batches is not None else
             iter(store_prefetcher) if store_prefetcher is not None else None
         )
+        training_measurement_started = time.perf_counter()
         while optimizer_step < max_steps:
             if preloaded_data_iter is None:
                 sampler.set_epoch(epoch)
@@ -1818,19 +2134,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             for _ in range(completed_optimizer_steps, steps_epoch):
                 if optimizer_step >= max_steps:
                     break
+                collator_before = timed_collator.snapshot() if timed_collator is not None else {}
+                prefetch_before = store_prefetcher.timing_snapshot() if store_prefetcher is not None else {}
+                cache_before = rank_ram_cache.stats() if rank_ram_cache is not None else {}
+                process_runtime_before_step = _process_runtime_snapshot() if perf_mode else {}
+                cgroup_cpu_before_step = _cgroup_cpu_snapshot() if perf_mode else {}
                 step_started = time.perf_counter()
                 torch.cuda.reset_peak_memory_stats(device)
                 optimizer.zero_grad(set_to_none=True)
                 phase_events = _CudaPhaseEvents(enabled=perf_mode)
                 data_wait_seconds = 0.0
                 host_phase_seconds: dict[str, float] = {}
+                input_pipeline_step: dict[str, Any] = {}
                 local_answer_tokens = 0
                 last_local_answer_tokens = 0
                 local_text_nonpadding_tokens = 0
                 local_multimodal_tokens = 0
                 local_max_sequence_length = 0
                 microbatch_metrics: list[dict[str, Any]] = []
-                collate_seconds_before = float(timed_collator.total_seconds) if timed_collator is not None else 0.0
                 for micro in range(args.gradient_accumulation_steps):
                     if perf_mode:
                         data_wait_started = time.perf_counter()
@@ -1864,6 +2185,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         microbatch_metrics.append(microbatch_item)
                     else:
                         batch = next(data_iter)
+                    if perf_mode and first_forward_input_audit is None:
+                        first_forward_input_audit = {
+                            "optimizer_step": int(optimizer_step + 1),
+                            "microbatch": int(micro),
+                            "rng_before_first_forward": _rng_fingerprint(device),
+                            "batch_before_device_transfer": _batch_fingerprint(batch),
+                        }
                     # All legacy gates retain their original final-microbatch
                     # CPU snapshot for checkpoint/reload audits.  PERF20 is
                     # the only gate that deliberately avoids this copy.
@@ -1900,10 +2228,32 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 if perf_mode:
                     if timed_collator is None:
                         raise RuntimeError("PERF20 timed collator is unavailable")
-                    host_phase_seconds["collate"] = max(
-                        0.0,
-                        float(timed_collator.total_seconds) - collate_seconds_before,
-                    )
+                    collator_after = timed_collator.snapshot()
+                    for phase, value in collator_after.items():
+                        host_phase_seconds[phase] = max(0.0, float(value) - float(collator_before.get(phase, 0.0)))
+                    if store_prefetcher is not None:
+                        prefetch_after = store_prefetcher.timing_snapshot()
+                        host_phase_seconds["queue_get"] = max(
+                            0.0, float(prefetch_after["queue_get"]) - float(prefetch_before.get("queue_get", 0.0))
+                        )
+                        host_phase_seconds["queue_empty_polls"] = max(
+                            0.0, float(prefetch_after["queue_empty_polls"]) - float(prefetch_before.get("queue_empty_polls", 0.0))
+                        )
+                        depth_start = int(prefetch_before.get("depth_observations", 0.0))
+                        depth_end = int(prefetch_after.get("depth_observations", 0.0))
+                        input_pipeline_step["queue_depth_before_get"] = store_prefetcher.queue_depth_before_get[depth_start:depth_end]
+                        input_pipeline_step["queue_depth_after_get"] = store_prefetcher.queue_depth_after_get[depth_start:depth_end]
+                    if rank_ram_cache is not None:
+                        cache_after = rank_ram_cache.stats()
+                        for source, target in (
+                            ("locate_seconds", "store_locate"),
+                            ("mmap_view_seconds", "store_mmap_view"),
+                            ("clone_seconds", "store_clone"),
+                            ("dataset_item_seconds", "store_dataset_item"),
+                        ):
+                            host_phase_seconds[target] = max(
+                                0.0, float(cache_after[source]) - float(cache_before.get(source, 0.0))
+                            )
                 owner = ddp.module if hasattr(ddp, "module") else ddp
                 if perf_mode:
                     grad_clip_started = time.perf_counter()
@@ -1962,12 +2312,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 if perf_mode:
                     phase_timings_host = {"data_wait": float(data_wait_seconds), **{key: float(value) for key, value in host_phase_seconds.items()}}
                 elapsed = max(time.perf_counter() - step_started, 1e-9)
+                process_runtime_after_step = _process_runtime_snapshot() if perf_mode else {}
+                cgroup_cpu_after_step = _cgroup_cpu_snapshot() if perf_mode else {}
                 answer_tokens = int(reduced[0].item())
                 reported_answer_tokens = answer_tokens if args.gate == "PERF20" else int(reduced[3].item())
                 text_nonpadding_tokens = int(reduced[1].item()) if perf_mode else 0
                 multimodal_tokens = int(reduced[2].item()) if perf_mode else 0
                 max_sequence_length = int(max_sequence.item()) if perf_mode else 0
-                item = {"step": optimizer_step, "total_steps": max_steps, "progress_percent": 100.0 * optimizer_step / max(1, max_steps), "epoch": epoch, "batch_in_epoch": batch_in_epoch, "steps_per_epoch": steps_epoch, "loss": float(output.loss.detach().cpu()), "lr": float(optimizer.param_groups[0]["lr"]), "lr_before_optimizer_step": lr_before_optimizer_step, "grad_norm": float(grad_norm), "effective_answer_tokens": reported_answer_tokens, "aggregated_answer_tokens": answer_tokens, "nonpadding_tokens": text_nonpadding_tokens, "multimodal_tokens": multimodal_tokens, "max_sequence_length": max_sequence_length, "microbatches": microbatch_metrics, "phase_timings": {"host_seconds": phase_timings_host, "device_seconds": phase_timings_device}, "phase_timings_host_seconds": phase_timings_host, "phase_timings_device_seconds": phase_timings_device, "step_time_seconds": elapsed, "samples_per_second": global_samples / elapsed, "audio_seconds_per_second": global_samples * 20.0 / elapsed, "multimodal_tokens_per_second": multimodal_tokens / elapsed, "nonpadding_tokens_per_second": text_nonpadding_tokens / elapsed, "answer_tokens_per_second": answer_tokens / elapsed, "gpu_memory_allocated_gib": float(torch.cuda.memory_allocated(device) / 1024**3), "gpu_memory_reserved_gib": float(torch.cuda.memory_reserved(device) / 1024**3), "gpu_memory_max_allocated_gib": float(torch.cuda.max_memory_allocated(device) / 1024**3), "gpu_memory_max_reserved_gib": float(torch.cuda.max_memory_reserved(device) / 1024**3), "router_stats": _router_stats(owner)}
+                item = {"step": optimizer_step, "total_steps": max_steps, "progress_percent": 100.0 * optimizer_step / max(1, max_steps), "epoch": epoch, "batch_in_epoch": batch_in_epoch, "steps_per_epoch": steps_epoch, "loss": float(output.loss.detach().cpu()), "lr": float(optimizer.param_groups[0]["lr"]), "lr_before_optimizer_step": lr_before_optimizer_step, "grad_norm": float(grad_norm), "effective_answer_tokens": reported_answer_tokens, "aggregated_answer_tokens": answer_tokens, "nonpadding_tokens": text_nonpadding_tokens, "multimodal_tokens": multimodal_tokens, "max_sequence_length": max_sequence_length, "microbatches": microbatch_metrics, "input_pipeline_step": input_pipeline_step, "phase_timings": {"host_seconds": phase_timings_host, "device_seconds": phase_timings_device}, "phase_timings_host_seconds": phase_timings_host, "phase_timings_device_seconds": phase_timings_device, "step_time_seconds": elapsed, "samples_per_second": global_samples / elapsed, "audio_seconds_per_second": global_samples * 20.0 / elapsed, "multimodal_tokens_per_second": multimodal_tokens / elapsed, "nonpadding_tokens_per_second": text_nonpadding_tokens / elapsed, "answer_tokens_per_second": answer_tokens / elapsed, "gpu_memory_allocated_gib": float(torch.cuda.memory_allocated(device) / 1024**3), "gpu_memory_reserved_gib": float(torch.cuda.memory_reserved(device) / 1024**3), "gpu_memory_max_allocated_gib": float(torch.cuda.max_memory_allocated(device) / 1024**3), "gpu_memory_max_reserved_gib": float(torch.cuda.max_memory_reserved(device) / 1024**3), "process_runtime_delta": _nested_numeric_delta(process_runtime_before_step, process_runtime_after_step) if perf_mode else None, "cgroup_cpu_delta": _nested_numeric_delta(cgroup_cpu_before_step, cgroup_cpu_after_step) if perf_mode else None, "router_stats": _router_stats(owner)}
                 metrics.append(item)
                 if profiler is not None:
                     profiler.step()
@@ -2000,8 +2352,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if batch_in_epoch >= steps_epoch * args.gradient_accumulation_steps:
                 epoch += 1
                 batch_in_epoch = 0
+        training_measurement_seconds = time.perf_counter() - training_measurement_started
         if input_preparation is not None:
             input_preparation["consumed_preloaded_microbatches"] = int(preloaded_consumed)
+            input_preparation["training_measurement_seconds"] = float(training_measurement_seconds)
+            input_preparation["global_samples_processed"] = int(
+                (optimizer_step - start_step) * args.micro_batch_size * world * args.gradient_accumulation_steps
+            )
             if store_prefetcher is not None:
                 store_prefetcher.close()
                 if store_prefetcher.error is not None or store_prefetcher.produced != required_microbatches or store_prefetcher.consumed != required_microbatches:
@@ -2011,16 +2368,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         f"expected={required_microbatches} error={store_prefetcher.error!r}"
                     )
                 input_preparation["waveform_cache_stats_after_training"] = rank_ram_cache.stats()
+                input_preparation["prefetch_stats_after_training"] = store_prefetcher.stats()
             input_preparation["process_faults_after_training"] = _process_fault_snapshot()
             input_preparation["process_io_after_training"] = _process_io_snapshot()
             input_preparation["cgroup_memory_after_training"] = _cgroup_memory_snapshot()
+            input_preparation["cgroup_cpu_after_training"] = _cgroup_cpu_snapshot()
+            input_preparation["process_runtime_after_training"] = _process_runtime_snapshot()
+            input_preparation["thread_runtime_configuration_after_training"] = _thread_runtime_configuration()
+            input_preparation["first_forward_input_audit"] = first_forward_input_audit
+            input_preparation["process_runtime_training_delta"] = _nested_numeric_delta(
+                input_preparation.get("process_runtime_after"), input_preparation.get("process_runtime_after_training")
+            )
+            input_preparation["cgroup_cpu_training_delta"] = _nested_numeric_delta(
+                input_preparation.get("cgroup_cpu_after"), input_preparation.get("cgroup_cpu_after_training")
+            )
         if preloaded_batches is not None and input_preparation is not None:
             if preloaded_consumed != int(input_preparation["required_microbatches"]):
                 raise RuntimeError(
                     "PERF20 did not consume the exact preloaded stream: "
                     f"expected={input_preparation['required_microbatches']} actual={preloaded_consumed}"
                 )
-        per_rank_timing = _gather_perf20_rank_timings(rank, world, metrics, input_preparation) if args.gate == "PERF20" else None
+        per_rank_timing = _gather_perf20_rank_timings(
+            rank, world, metrics, input_preparation, args=args, max_steps=max_steps,
+        ) if args.gate == "PERF20" else None
         report.update({"status": "PASS", "start_step": start_step, "end_step": optimizer_step, "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "dropped_microbatches_per_epoch": dropped_microbatches, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "effective_global_batch_size": int(args.micro_batch_size * world * args.gradient_accumulation_steps), "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "routing_stats": {"enabled": args.gate != "PERF20", "mode": "disabled_for_perf20" if args.gate == "PERF20" else "continuous_per_forward", "reported_in_each_step": args.gate != "PERF20", "reason": "per-router .cpu() statistics would add CUDA synchronizations to the PERF20 timing path" if args.gate == "PERF20" else None}, "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "runtime_gradient_audit": runtime_gradient_audit, "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
         report["correctness_audit"] = {
             "mesh_runtime_gradient_audit": runtime_gradient_audit,
@@ -2055,13 +2425,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             report["steady_state_summary"] = _perf_steady_summary(metrics, args, max_steps)
             report["timing_semantics"] = {
                 "step_time_seconds": "rank0 wall-clock from before the first microbatch data wait through the single CUDA synchronize after all metrics/collectives; this is the completion-inclusive step duration",
-                "phase_timings_host_seconds": "host wall/enqueue timings; data_wait is summed around next(data_iter), collate is the measured consumer-side tokenizer+collator subset (also in rank-RAM prefetch), and full_preload has near-zero values for both; scheduler_host is CPU/Python scheduler.step(), and metrics_enqueue_host ends after collective launch rather than after CUDA/NCCL completion",
+                "phase_timings_host_seconds": "host wall/enqueue timings; data_wait surrounds next(data_iter); queue_get is measured directly inside the prefetch consumer; collate is decomposed into tokenize, text_tensor_build, waveform_stack, and batch_metadata; concurrent store clone phases can overlap consumer phases and must not be summed",
+                "store_copy": "store_clone is load_audio_id mmap-view clone wall time accumulated by the producer; *_thread_cpu fields cover only the calling Python thread, not native helper threads; neither clone wall nor thread CPU is pure storage I/O time",
+                "system_runtime": "per-step process scheduler/context-switch and cgroup CPU counter deltas are sampled outside the measured step wall interval; unavailable cgroup candidates retain path and exception diagnostics",
                 "phase_timings_device_seconds": "CUDA event elapsed timings resolved after one unified end-of-step synchronize; per-microbatch device values are summed within the optimizer step; metrics_collectives includes the device/NCCL work through its event and therefore is completion-inclusive",
                 "host_to_device": "rank0 CUDA event elapsed time around tensor .to(device) for every microbatch; host_to_device_enqueue separately records host dispatch time",
                 "forward_backward_optimizer": "rank0 CUDA event elapsed time; DDP gradient collectives are included in backward; host enqueue fields are reported separately",
                 "metrics_collectives": "global token counts use one identical all_reduce sequence on every rank; no rank-specific collective is introduced, and its device timing is not the enqueue-only host latency",
-                "per_rank_timing": "all ranks retain local data/forward/backward/step timings during training; one gather_object runs only after the final measured optimizer step and is excluded from every step duration",
-                "causal_input_controls": "all PERF20 modes use the same per-rank row hash, restored preparation RNG state, and one pre-measurement barrier",
+                "per_rank_timing": "all ranks retain local timings; per-rank distributions and straggler tables use exactly the same steady-state step set as rank0, and one gather_object runs only after the final measured optimizer step",
+                "causal_input_controls": "all PERF20 modes use the same per-rank row hash, restored model RNG state, dedicated DataLoader generator, first-forward RNG/batch fingerprints, and one pre-measurement barrier",
                 "steady_state": "optimizer steps 6-20 by default, excluding profiler wait/warmup/active steps when profiling is enabled",
             }
     except Exception as exc:

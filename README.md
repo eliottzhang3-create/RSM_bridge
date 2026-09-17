@@ -592,7 +592,7 @@ bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh --profiler
 ```
 
-五组因果对照全部使用同一个 `DistributedSampler(seed=0)`、相同逐 rank row stream、相同模型/优化器合同，并在准备后恢复 RNG 状态、执行同样的一次测量前 barrier。每个 report 都保存逐 rank row-index SHA256；各次运行同一 rank 的 SHA256 必须一致。`online` 不主动预热文件，但操作系统缓存状态无法由普通作业强制清空，因此不得表述为“保证冷缓存”。五组命令为：
+七种 PERF20 输入模式全部使用同一个 `DistributedSampler(seed=0)`、相同逐 rank row stream、相同模型/优化器合同，并在准备后恢复 RNG 状态、执行同样的一次测量前 barrier。每个 report 都保存逐 rank row-index SHA256；各次运行同一 rank 的 SHA256 必须一致。2026-09-17 起 PERF20 DataLoader 使用独立 `torch.Generator`，避免不同模式创建 iterator 的时机改变模型 CPU RNG；报告还保存各 rank 首个 forward 前的 CPU/CUDA/Python RNG 指纹以及首个 CPU batch 的 row/tensor SHA。`online` 不主动预热文件，但操作系统缓存状态无法由普通作业强制清空，因此不得表述为“保证冷缓存”。命令为：
 
 ```bash
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
@@ -621,13 +621,13 @@ bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
 
 `warm_online` 由 rank0 收集 8 个 rank 在这 20 步将访问的 audio1/audio2 文件并去重，按文件名排序、逐文件顺序读完全部字节，然后所有 rank barrier；训练计时中仍执行完全相同的在线 load/decode/resample/crop/pad 和 tokenization/collate。`waveform_preload` 只在每个 rank 的准备阶段解码其准确 640 条 row 的 waveform；计时阶段仍通过 DataLoader 执行 tokenization/collate。`full_preload` 则提前物化精确 80 个已 collate CPU microbatch，计时中不再访问 DataLoader 或共享存储；旧 `--preload-data` 仅作为 `full_preload` 兼容别名保留。`shared_waveform_store` 加载 manifest-scoped 单文件 store，严格核对 manifest/index/尺寸合同。首次完整 64.43 GiB 顺序预热的 step 中位数为 27.60 秒；只读准确的 5,642 条/6.73 GiB 区域后约 50.03 秒，major faults 几乎未降。这些运行波动大，不能单凭两次实验判定定向预热本身造成退化，但两者都远差于 rank-local RAM preload。
 
-新增 `store_rank_ram_preload`：各 rank 从 store mmap 按本 rank 20 步的 row 顺序读取并显式 `.clone()` 成进程持有的 CPU tensor，以唯一 audio_id 去重，计时前物化完毕；计时阶段仍走 DataLoader 和 tokenization/collate。`store_rank_ram_prefetch`：每 rank 一个后台线程按完全相同 row 顺序复制音频并填充有界 microbatch 队列（默认8个），主线程消费并执行原 collator；波形按 audio_id 放在有界 LRU 中（默认2 GiB/rank，CLI `--perf20-rank-cache-gib` 和 `--perf20-prefetch-microbatches` 可调整）。准备阶段先填满队列，再统一 barrier，之后边训练边取数。LRU 容量不包含队列中或正在消费的 tensor 引用，所以总进程内存还需看实际报告。两个模式都是独立 PERF20 对照，不改 FORMAL。每 rank 报告 clone 字节/耗时、命中/未命中、淘汰和缓存峰值；预取模式额外报告初始填队列时长与训练后统计。它们尚待远程实测，不能预设正式训练吞吐。
+新增 `store_rank_ram_preload`：各 rank 从 store mmap 按本 rank 20 步的 row 顺序读取并显式 `.clone()` 成进程持有的 CPU tensor，以唯一 audio_id 去重，计时前物化完毕；远程结果为约 1.619 秒/step，但最慢 rank 准备约 207 秒。`store_rank_ram_prefetch`：每 rank 一个后台线程按完全相同 row 顺序复制音频并填充有界 microbatch 队列（默认8个），主线程消费并执行原 collator；波形按 audio_id 放在有界 LRU 中（默认2 GiB/rank）。远程结果约 60.73 秒/step，零淘汰且只有约 1%–2% 命中，说明失败不来自缓存容量，但原始计时不足以区分 queue 等待、tokenizer/stack 和 producer/consumer 资源竞争。两个模式都只用于 PERF20，不改 FORMAL。
 
-各模式分别使用 `perf20_<mode>_*` 输出目录。`perf20_report.json.data_pipeline` 与 `per_rank_timing.input_preparation_*` 记录准备耗时、barrier、CPU tensor 容量、row hash、进程 page-fault/`/proc/self/io` 计数及尽力采集的 cgroup v2/v1 usage/cache/anon/mapped 快照。2026-09-17 的两次 shared mmap 实验里 cgroup 快照均为空，故不能用其证明驻留；v1 的 `file` 由 `total_cache`（或 `cache`）映射，也不能证明特定 store 的页全部驻留。远程文件系统不一定把全部流量计入 `read_bytes`。报告把 tokenizer+collate 时间作为 `collate` 子项，从总 `data_wait` 中独立观察。第一轮因果比较应统一使用无 profiler。
+各模式分别使用 `perf20_<mode>_*` 输出目录。最新测量把 `queue.get()`、tokenizer、文本 tensor 构建、waveform `torch.stack`、batch metadata、store path locate、mmap view 与 `.clone()` 分开记录；tokenizer/text/stack/metadata 与 clone 同时报告墙钟和当前线程 CPU 时间，用于区分实际工作与调度等待。预取器保存每个 microbatch 消费前后的队列水位、空队列轮询数和每 step queue 等待。报告还记录 CPU affinity、PyTorch/OMP/MKL/Rayon/tokenizer 线程配置、进程 context switch/runqueue wait、cgroup CPU quota/throttling、内存 cache/anon/mapped 以及所有失败候选路径。cgroup 发现同时尝试 mountinfo 中的 v2/v1，失败不再静默转成空值。远程文件系统不一定把流量计入 `read_bytes`，因此该字段仍只是辅助证据。
 
 profiler 只在 rank0 创建，activities 为 CPU+CUDA，`profiler.step()` 的粒度是 optimizer step；默认 schedule 是 `skip_first=4, wait=1, warmup=1, active=2, repeat=1`，默认关闭 `with_stack/profile_memory/record_shapes`。每个 completed schedule cycle 都在 `on_trace_ready` 中导出不覆盖的 trace 与 operator summary（`profile/cycle_<nn>_step_<nnnn>/`，summary 文件名也包含 cycle/step）；主报告 `perf20_report.json` 的 `profiler.artifacts` 列出所有 cycle 的 trace/summary 路径。可用 `--profiler-with-stack`、`--profiler-profile-memory`、`--profiler-record-shapes` 和对应 schedule CLI 开关扩大采集；脚本会校验 20 步内能完成 schedule。
 
-PERF20 报告逐 optimizer step 记录 data_wait、其中的 tokenizer/collate 子集、host-to-device、forward、backward、grad_clip、optimizer、scheduler、metrics/collectives 的分层计时，并记录每个 microbatch 的实际 sequence length、文本非 padding token 与多模态 token。GPU 运算使用 CUDA event，在每个 optimizer step 末尾只做一次统一 CUDA synchronize；data_wait、scheduler 和 metrics 的 host 字段是清楚标注的 host enqueue/wall 时间，不能被误读为 CUDA/NCCL 完成时间；metrics/collectives 的 device 字段覆盖同步完成，step wall 也覆盖这次同步。稳定吞吐默认只统计 steps 6–20，并排除 profiler wait/warmup/active steps；报告 median/P25/P75、samples/s、audio seconds/s、多模态/非 padding tokens/s、rank0 峰值 allocated/reserved 显存。token 数由各 rank 按一致顺序 all-reduce 汇总；不会把 profiler warmup/active overhead 当作无 profiler基线。
+PERF20 报告逐 optimizer step 记录上述输入子阶段、host-to-device、forward、backward、grad_clip、optimizer、scheduler、metrics/collectives，并记录每个 microbatch 的实际 sequence length、文本非 padding token 与多模态 token。GPU CUDA-event 区间包含流依赖与 DDP 等待，不能解释为纯 kernel 时间；host/device 阶段也可能重叠，不能直接相加。稳定吞吐及逐 rank summary 现在统一只统计 steps 6–20，并排除 profiler wait/warmup/active steps。报告同时给出完整20步的每-rank测量墙钟、准备+barrier+训练墙钟及 completion-inclusive 总吞吐，避免只用 median 推断端到端收益。
 
 为定位 DDP straggler，每个 rank 还会在本地保留每个 optimizer step 的 `data_wait`、CUDA-event `forward/backward` 和完成态 step wall；20 步结束后才执行一次 `gather_object` 汇总到 rank0，不在被测训练循环中增加任何 collective。`perf20_report.json.per_rank_timing` 同时包含逐 rank 原始值、逐 rank 分布，以及每一步跨 rank 的 min/median/max、最快/最慢 rank 和 max/min ratio。
 
@@ -714,7 +714,7 @@ python code/RSmol/scripts/prepare_unique_audio_waveform_store.py \
 
 构建器不会把全量 waveform 放入 RAM；主进程按 audio ID 顺序写一个隐藏的 `.waveforms.f32.partial`，每 100 条 `fsync` 并原子更新 `progress.json`。中断后使用完全相同参数并追加 `--resume`，脚本会先核对 manifest SHA、源文件 canonical path/size/mtime inventory 和 index SHA，截断任何未进入 durable progress 的尾部后续写。每个 worker 在解码前后再次检查源文件 size/mtime，防止构建过程中源数据变化。最终会完整读取约 64.4 GiB 数据文件计算 SHA256，并默认均匀抽取 128 行重新调用 `load_waveform` 做逐字节验证；只有 `metadata.json.status=PASS`、`waveform_verification.passed=true`、`waveforms.f32` 尺寸正确且 `BUILDING` 已删除才算完成。
 
-`UniqueWaveformStore` reader 已独立加入 `audio_5_10x2_5_mesh_mellow/data.py`，以 copy-on-write mmap 包装同一个 immutable inode，使八个本地 rank 可以共享干净 page-cache 页。当前只接入独立的 `shared_waveform_store` PERF20 模式，FORMAL 仍保持原始在线音频路径；必须先用上述20步实验确认预热后训练阶段不再产生远程随机读取且速度接近 rank-local `waveform_preload`，再评估正式训练切换。
+`UniqueWaveformStore` reader 已独立加入 `audio_5_10x2_5_mesh_mellow/data.py`，目前接入 `shared_waveform_store`、`store_rank_ram_preload` 和 `store_rank_ram_prefetch` 三个独立 PERF20 模式；FORMAL 仍保持原始在线音频路径。shared mmap 与当前线程预取均未达到可用于正式训练的性能，后续先完成修正测量及相同 5,642 音频的远端/节点 RAM、同步/异步判别实验，再决定正式训练数据路径。
 
 ### 9.3.5 固定 5-10-5 recursive 音频正式训练
 
