@@ -2,9 +2,10 @@
 set -euo pipefail
 
 # Independent 8x5090 PERF20 launcher. Select one strict causal input control
-# with --perf20-input-mode: online, warm_online, waveform_preload, or
-# full_preload.  The retired 64-shard mmap experiment is not used. Pass
-# --profiler only when an operator trace is explicitly needed.
+# with --perf20-input-mode: online, warm_online, waveform_preload,
+# full_preload, or shared_waveform_store.  The retired 64-shard mmap
+# experiment is not used. Pass --profiler only when an operator trace is
+# explicitly needed.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 mkdir -p log

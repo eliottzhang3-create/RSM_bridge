@@ -592,7 +592,7 @@ bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh --profiler
 ```
 
-四组因果对照全部使用同一个 `DistributedSampler(seed=0)`、相同逐 rank row stream、相同模型/优化器合同，并在准备后恢复 RNG 状态、执行同样的一次测量前 barrier。每个 report 都保存逐 rank row-index SHA256；四次运行同一 rank 的 SHA256 必须一致。`online` 不主动预热文件，但操作系统缓存状态无法由普通作业强制清空，因此不得表述为“保证冷缓存”。四组命令为：
+五组因果对照全部使用同一个 `DistributedSampler(seed=0)`、相同逐 rank row stream、相同模型/优化器合同，并在准备后恢复 RNG 状态、执行同样的一次测量前 barrier。每个 report 都保存逐 rank row-index SHA256；各次运行同一 rank 的 SHA256 必须一致。`online` 不主动预热文件，但操作系统缓存状态无法由普通作业强制清空，因此不得表述为“保证冷缓存”。五组命令为：
 
 ```bash
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
@@ -606,11 +606,14 @@ bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
 
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
   --perf20-input-mode full_preload
+
+bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
+  --perf20-input-mode shared_waveform_store
 ```
 
-`warm_online` 由 rank0 收集 8 个 rank 在这 20 步将访问的 audio1/audio2 文件并去重，按文件名排序、逐文件顺序读完全部字节，然后所有 rank barrier；训练计时中仍执行完全相同的在线 load/decode/resample/crop/pad 和 tokenization/collate。`waveform_preload` 只在每个 rank 的准备阶段解码其准确 640 条 row 的 waveform；计时阶段仍通过 DataLoader 执行 tokenization/collate。`full_preload` 则提前物化精确 80 个已 collate CPU microbatch，计时中不再访问 DataLoader 或共享存储；旧 `--preload-data` 仅作为 `full_preload` 兼容别名保留。
+`warm_online` 由 rank0 收集 8 个 rank 在这 20 步将访问的 audio1/audio2 文件并去重，按文件名排序、逐文件顺序读完全部字节，然后所有 rank barrier；训练计时中仍执行完全相同的在线 load/decode/resample/crop/pad 和 tokenization/collate。`waveform_preload` 只在每个 rank 的准备阶段解码其准确 640 条 row 的 waveform；计时阶段仍通过 DataLoader 执行 tokenization/collate。`full_preload` 则提前物化精确 80 个已 collate CPU microbatch，计时中不再访问 DataLoader 或共享存储；旧 `--preload-data` 仅作为 `full_preload` 兼容别名保留。`shared_waveform_store` 加载 manifest-scoped 单文件 store，严格核对 manifest/index/尺寸合同，由 rank0 使用 64 MiB buffer 顺序读完约 64.43 GiB `waveforms.f32`，随后所有 rank 经过共同 barrier；计时阶段各 rank 从同一 inode 的固定 offset mmap waveform，仍在线执行 tokenization/collate，但不打开、解码或重采样原始音频。
 
-四种模式分别写入 `perf20_online_*`、`perf20_warm_online_*`、`perf20_waveform_preload_*` 和 `perf20_full_preload_*`。`perf20_report.json.data_pipeline` 与 `per_rank_timing.input_preparation_*` 记录准备耗时、barrier、CPU tensor 容量、row hash、进程 page-fault/`/proc/self/io` 计数和 cgroup `anon/file` 内存快照。远程文件系统不一定把全部流量计入 `read_bytes`，因此 I/O 计数只作为辅助证据。报告额外把 tokenizer+collate 时间作为 `collate` 子项，从总 `data_wait` 中独立观察。若要采 profiler，可在任一模式后追加 `--profiler`，但第一轮因果比较应统一使用无 profiler。
+五种模式分别写入 `perf20_online_*`、`perf20_warm_online_*`、`perf20_waveform_preload_*`、`perf20_full_preload_*` 和 `perf20_shared_waveform_store_*`。`perf20_report.json.data_pipeline` 与 `per_rank_timing.input_preparation_*` 记录准备耗时、barrier、CPU tensor 容量、row hash、进程 page-fault/`/proc/self/io` 计数和 cgroup `anon/file` 内存快照；shared store 还记录路径、唯一音频数、预期/实读字节数、完整 waveform SHA 和 rank0 顺序读取耗时。远程文件系统不一定把全部流量计入 `read_bytes`，因此 I/O 计数只作为辅助证据。报告额外把 tokenizer+collate 时间作为 `collate` 子项，从总 `data_wait` 中独立观察。若要采 profiler，可在任一模式后追加 `--profiler`，但第一轮因果比较应统一使用无 profiler。
 
 profiler 只在 rank0 创建，activities 为 CPU+CUDA，`profiler.step()` 的粒度是 optimizer step；默认 schedule 是 `skip_first=4, wait=1, warmup=1, active=2, repeat=1`，默认关闭 `with_stack/profile_memory/record_shapes`。每个 completed schedule cycle 都在 `on_trace_ready` 中导出不覆盖的 trace 与 operator summary（`profile/cycle_<nn>_step_<nnnn>/`，summary 文件名也包含 cycle/step）；主报告 `perf20_report.json` 的 `profiler.artifacts` 列出所有 cycle 的 trace/summary 路径。可用 `--profiler-with-stack`、`--profiler-profile-memory`、`--profiler-record-shapes` 和对应 schedule CLI 开关扩大采集；脚本会校验 20 步内能完成 schedule。
 
@@ -701,7 +704,7 @@ python code/RSmol/scripts/prepare_unique_audio_waveform_store.py \
 
 构建器不会把全量 waveform 放入 RAM；主进程按 audio ID 顺序写一个隐藏的 `.waveforms.f32.partial`，每 100 条 `fsync` 并原子更新 `progress.json`。中断后使用完全相同参数并追加 `--resume`，脚本会先核对 manifest SHA、源文件 canonical path/size/mtime inventory 和 index SHA，截断任何未进入 durable progress 的尾部后续写。每个 worker 在解码前后再次检查源文件 size/mtime，防止构建过程中源数据变化。最终会完整读取约 64.4 GiB 数据文件计算 SHA256，并默认均匀抽取 128 行重新调用 `load_waveform` 做逐字节验证；只有 `metadata.json.status=PASS`、`waveform_verification.passed=true`、`waveforms.f32` 尺寸正确且 `BUILDING` 已删除才算完成。
 
-`UniqueWaveformStore` reader 已独立加入 `audio_5_10x2_5_mesh_mellow/data.py`，以 copy-on-write mmap 包装同一个 immutable inode，使八个本地 rank 可以共享干净 page-cache 页；它当前尚未接入 PERF20 或 FORMAL。下一步应先增加完整顺序预热及 tensor/hash 等价审计，再新增独立 PERF20 模式，不能把本节“构建完成”解释为训练读取已经切换。
+`UniqueWaveformStore` reader 已独立加入 `audio_5_10x2_5_mesh_mellow/data.py`，以 copy-on-write mmap 包装同一个 immutable inode，使八个本地 rank 可以共享干净 page-cache 页。当前只接入独立的 `shared_waveform_store` PERF20 模式，FORMAL 仍保持原始在线音频路径；必须先用上述20步实验确认预热后训练阶段不再产生远程随机读取且速度接近 rank-local `waveform_preload`，再评估正式训练切换。
 
 ### 9.3.5 固定 5-10-5 recursive 音频正式训练
 

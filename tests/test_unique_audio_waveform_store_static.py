@@ -63,6 +63,10 @@ class UniqueAudioWaveformStoreStaticTest(unittest.TestCase):
             "shape=(self.num_audio, self.samples_per_audio)",
             "audio path is absent from unique waveform store",
             "audio_id * self.bytes_per_audio",
+            "unique_waveform_store_dir",
+            "unique waveform store manifest SHA256 mismatch",
+            "self.unique_waveform_store.load(audio1)",
+            "self.unique_waveform_store.load(audio2)",
         ):
             self.assertIn(marker, text)
 

@@ -33,7 +33,7 @@ if str(ROOT) not in sys.path:
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from audio_5_10x2_5_mesh_mellow.data import ReasonAQADataset, collate_reasonaqa  # noqa: E402
+from audio_5_10x2_5_mesh_mellow.data import ReasonAQADataset, UniqueWaveformStore, collate_reasonaqa  # noqa: E402
 from audio_5_10x2_5_mesh_mellow.model import (  # noqa: E402
     AUDIO_PREFIX_TOKENS,
     AUDIO_TOKENS_PER_CLIP,
@@ -52,8 +52,9 @@ from recursive_model_5_10x2_5_mesh import RecursiveLlamaForCausalLM, register_au
 DEFAULT_MESH = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244"
 DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
+DEFAULT_SHARED_WAVEFORM_STORE = "/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v1"
 PERF20_STEPS = 20
-PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload")
+PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -89,6 +90,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="PERF20 only: read fixed float32 waveforms from the completed 64-shard cache",
     )
     p.add_argument(
+        "--shared-waveform-store-dir",
+        type=Path,
+        default=Path(DEFAULT_SHARED_WAVEFORM_STORE),
+        help="PERF20 shared_waveform_store only: manifest-scoped single-file float32 waveform store",
+    )
+    p.add_argument(
         "--preload-data",
         action="store_true",
         help="Deprecated PERF20 alias for --perf20-input-mode full_preload",
@@ -99,7 +106,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="online",
         help=(
             "PERF20 causal input control: online; exact-file warm_online; waveform-only "
-            "rank-local preload with timed tokenization/collate; or fully collated full_preload"
+            "rank-local preload with timed tokenization/collate; fully collated full_preload; "
+            "or rank0-warmed node-shared single-file waveform mmap"
         ),
     )
     p.add_argument("--steady-state-start-step", type=int, default=6, help="First optimizer step included in steady-state summaries (PERF20 default: 6, excluding steps 1-5)")
@@ -452,10 +460,15 @@ def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int)
             "mode": modes[0],
             "rank_count": len(preparation_by_rank),
             "duration_seconds": _distribution([float(item["duration_seconds"]) for item in preparation_by_rank]),
+            "maximum_duration_seconds": max(float(item["duration_seconds"]) for item in preparation_by_rank),
             "barrier_wait_seconds": _distribution([float(item["barrier_wait_seconds"]) for item in preparation_by_rank]),
             "cpu_tensor_gib": _distribution([float(item.get("cpu_tensor_bytes", 0)) / 1024**3 for item in preparation_by_rank]),
             "row_indices_sha256_by_rank": [str(item["row_indices_sha256"]) for item in preparation_by_rank],
         }
+        rank0_preparation = next(item for item in preparation_by_rank if int(item["rank"]) == 0)
+        preparation_summary["rank0_duration_seconds"] = float(rank0_preparation["duration_seconds"])
+        preparation_summary["rank0_warm_read_seconds"] = float(rank0_preparation.get("warm_read_seconds", 0.0))
+        preparation_summary["rank0_warmed_file_gib"] = float(rank0_preparation.get("warmed_file_bytes") or 0) / 1024**3
 
     return {
         "collection": "one dist.gather_object after the final optimizer step",
@@ -973,6 +986,57 @@ def _warm_exact_perf20_files(
     }
 
 
+def _warm_shared_waveform_store(store: UniqueWaveformStore, *, rank: int) -> dict[str, Any]:
+    """Have rank 0 sequentially populate the complete store into page cache."""
+
+    expected_bytes = int(store.num_audio) * int(store.bytes_per_audio)
+    started = time.perf_counter()
+    warmed_bytes = 0
+    sequential_advice = False
+    if int(rank) == 0:
+        buffer = bytearray(64 * 1024 * 1024)
+        view = memoryview(buffer)
+        next_progress = 8 * 1024**3
+        with store.data_path.open("rb", buffering=0) as handle:
+            if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_SEQUENTIAL"):
+                try:
+                    os.posix_fadvise(handle.fileno(), 0, 0, os.POSIX_FADV_SEQUENTIAL)
+                    sequential_advice = True
+                except OSError:
+                    sequential_advice = False
+            while True:
+                size = handle.readinto(view)
+                if not size:
+                    break
+                warmed_bytes += int(size)
+                if warmed_bytes >= next_progress:
+                    print(
+                        "[audio-perf20] shared waveform warm "
+                        f"gib={warmed_bytes / 1024**3:.3f}/{expected_bytes / 1024**3:.3f}",
+                        flush=True,
+                    )
+                    next_progress += 8 * 1024**3
+        if warmed_bytes != expected_bytes:
+            raise RuntimeError(
+                "shared waveform store warm byte count mismatch: "
+                f"actual={warmed_bytes} expected={expected_bytes}"
+            )
+    return {
+        "shared_store_path": str(store.store_dir),
+        "shared_store_data_path": str(store.data_path),
+        "shared_store_manifest_sha256": str(store.metadata.get("manifest_sha256")),
+        "shared_store_waveform_sha256": str(store.metadata.get("waveform_sha256")),
+        "shared_store_unique_audio": int(store.num_audio),
+        "shared_store_expected_bytes": expected_bytes,
+        "shared_store_expected_gib": expected_bytes / 1024**3,
+        "warmed_file_bytes": warmed_bytes if int(rank) == 0 else None,
+        "warm_read_seconds": float(time.perf_counter() - started) if int(rank) == 0 else 0.0,
+        "warm_owner_rank": 0,
+        "posix_fadvise_sequential": sequential_advice if int(rank) == 0 else None,
+        "warm_strategy": "rank0 sequentially reads the complete immutable data file before the common pre-measurement barrier",
+    }
+
+
 def _preload_perf20_waveforms(
     dataset: ReasonAQADataset,
     rows: list[int],
@@ -1203,6 +1267,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(
                 "--waveform-cache-dir has been retired from PERF20; the 64-shard mmap experiment is abandoned"
             )
+        if args.gate != "PERF20" and args.shared_waveform_store_dir != Path(DEFAULT_SHARED_WAVEFORM_STORE):
+            raise ValueError("--shared-waveform-store-dir is isolated to PERF20")
         model, tokenizer = _load_model(args, device)
         model.train()
         if not model.trainable_parameter_audit()["training_mode_contract"]:
@@ -1220,10 +1286,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         dataset = ReasonAQADataset(
             args.train_manifest,
             tokenizer,
+            unique_waveform_store_dir=(
+                args.shared_waveform_store_dir
+                if args.gate == "PERF20" and args.perf20_input_mode == "shared_waveform_store"
+                else None
+            ),
         )
-        # All four causal controls use the original online-audio dataset and
-        # the identical global DistributedSampler contract.  No 64-shard
-        # cache or shard-owned sampler participates in these measurements.
+        # All causal controls use the identical global DistributedSampler
+        # contract.  The shared-store control changes only waveform delivery;
+        # no retired 64-shard cache or shard-owned sampler participates.
         sampler = DistributedSampler(
             dataset,
             num_replicas=world,
@@ -1357,6 +1428,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     if args.perf20_input_mode == "warm_online" else
                     "rank-local decoded waveforms for exact bounded rows are resident before timing"
                     if args.perf20_input_mode == "waveform_preload" else
+                    "rank0 reads the complete single-file decoded waveform store into node page cache before timing"
+                    if args.perf20_input_mode == "shared_waveform_store" else
                     "rank-local fully collated CPU batches are resident before timing"
                 ),
                 **_row_stream_metadata(planned_rows),
@@ -1382,6 +1455,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                             target=waveform_preloaded_dataset,
                         )
                         input_preparation.update(waveform_metadata)
+                    elif args.perf20_input_mode == "shared_waveform_store":
+                        if dataset.unique_waveform_store is None:
+                            raise RuntimeError("shared_waveform_store mode did not install its store reader")
+                        input_preparation.update(
+                            _warm_shared_waveform_store(dataset.unique_waveform_store, rank=rank)
+                        )
                     elif args.perf20_input_mode == "full_preload":
                         preloaded_batches, full_metadata = _preload_perf20_batches(
                             loader,
@@ -1399,7 +1478,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     local_preparation_error = repr(exc)
             finally:
                 # Data preparation must not change the stochastic training
-                # stream (notably bridge dropout) across the four controls.
+                # stream (notably bridge dropout) across all input controls.
                 _restore_rng_state(saved_preparation_rng, device)
             input_preparation["duration_seconds"] = float(time.perf_counter() - preparation_started)
             preparation_errors: list[str | None] = [None] * world
@@ -1704,11 +1783,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "warm_online": "same online DataLoader path after exact bounded-run file bytes were read before timing",
                 "waveform_preload": "rank-local waveform RAM lookup plus timed tokenization/collate",
                 "full_preload": "rank-local fully collated CPU batch list",
+                "shared_waveform_store": "node-shared fixed-stride waveform mmap after rank0 sequentially warmed the complete data file",
             }[input_mode]
             report["data_pipeline"] = {
                 "mode": input_mode,
-                "preloaded": input_mode in {"waveform_preload", "full_preload"},
+                "preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store"},
                 "waveform_cache_enabled": False,
+                "shared_waveform_store_enabled": input_mode == "shared_waveform_store",
                 "retired_waveform_shard_experiment": True,
                 "timed_source": timed_source,
                 "training_dataloader_accesses": 0 if input_mode == "full_preload" else PERF20_STEPS * args.gradient_accumulation_steps,
@@ -1726,7 +1807,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "forward_backward_optimizer": "rank0 CUDA event elapsed time; DDP gradient collectives are included in backward; host enqueue fields are reported separately",
                 "metrics_collectives": "global token counts use one identical all_reduce sequence on every rank; no rank-specific collective is introduced, and its device timing is not the enqueue-only host latency",
                 "per_rank_timing": "all ranks retain local data/forward/backward/step timings during training; one gather_object runs only after the final measured optimizer step and is excluded from every step duration",
-                "causal_input_controls": "online, warm_online, waveform_preload, and full_preload use the same per-rank row hash, restored preparation RNG state, and one pre-measurement barrier",
+                "causal_input_controls": "online, warm_online, waveform_preload, full_preload, and shared_waveform_store use the same per-rank row hash, restored preparation RNG state, and one pre-measurement barrier",
                 "steady_state": "optimizer steps 6-20 by default, excluding profiler wait/warmup/active steps when profiling is enabled",
             }
     except Exception as exc:

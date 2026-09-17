@@ -322,16 +322,30 @@ def _path(row: dict[str, Any], first: bool) -> str:
 
 
 class ReasonAQADataset(Dataset[dict[str, Any]]):
-    def __init__(self, manifest: str | Path, tokenizer: Any, *, max_prompt_tokens: int = 129, max_answer_tokens: int = 250, sample_rate: int = 32000, seconds: int = 10, waveform_cache_dir: str | Path | None = None) -> None:
+    def __init__(self, manifest: str | Path, tokenizer: Any, *, max_prompt_tokens: int = 129, max_answer_tokens: int = 250, sample_rate: int = 32000, seconds: int = 10, waveform_cache_dir: str | Path | None = None, unique_waveform_store_dir: str | Path | None = None) -> None:
         self.manifest = Path(manifest)
         self.tokenizer = tokenizer
         self.max_prompt_tokens = int(max_prompt_tokens)
         self.max_answer_tokens = int(max_answer_tokens)
         self.sample_rate = int(sample_rate)
         self.seconds = int(seconds)
+        if waveform_cache_dir is not None and unique_waveform_store_dir is not None:
+            raise ValueError("waveform_cache_dir and unique_waveform_store_dir are mutually exclusive")
         self.waveform_cache = WaveformShardCache(waveform_cache_dir) if waveform_cache_dir is not None else None
-        if self.waveform_cache is not None and (self.sample_rate != 32000 or self.seconds != 10):
-            raise ValueError("waveform shard cache requires sample_rate=32000 and seconds=10")
+        self.unique_waveform_store = UniqueWaveformStore(unique_waveform_store_dir) if unique_waveform_store_dir is not None else None
+        if (self.waveform_cache is not None or self.unique_waveform_store is not None) and (self.sample_rate != 32000 or self.seconds != 10):
+            raise ValueError("waveform cache/store requires sample_rate=32000 and seconds=10")
+        if self.unique_waveform_store is not None:
+            manifest_hasher = hashlib.sha256()
+            with self.manifest.open("rb") as manifest_handle:
+                for chunk in iter(lambda: manifest_handle.read(8 * 1024 * 1024), b""):
+                    manifest_hasher.update(chunk)
+            manifest_digest = manifest_hasher.hexdigest()
+            if manifest_digest != self.unique_waveform_store.metadata.get("manifest_sha256"):
+                raise RuntimeError(
+                    "unique waveform store manifest SHA256 mismatch: "
+                    f"manifest={manifest_digest} store={self.unique_waveform_store.metadata.get('manifest_sha256')}"
+                )
         self.rows = [json.loads(line) for line in self.manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
         if not self.rows:
             raise ValueError(f"empty ReasonAQA manifest: {self.manifest}")
@@ -357,7 +371,11 @@ class ReasonAQADataset(Dataset[dict[str, Any]]):
         answer = str(row.get("answer") or row.get("target") or row.get("output") or row.get("caption1") or "")
         if not answer:
             raise ValueError(f"manifest row {index} lacks answer")
-        if self.waveform_cache is None:
+        if self.unique_waveform_store is not None:
+            audio1_waveform = self.unique_waveform_store.load(audio1)
+            audio2_waveform = None if audio2 == audio1 else self.unique_waveform_store.load(audio2)
+            cache_shard_ids = None
+        elif self.waveform_cache is None:
             audio1_waveform = load_waveform(audio1, sample_rate=self.sample_rate, seconds=self.seconds)
             audio2_waveform = None if audio2 == audio1 else load_waveform(audio2, sample_rate=self.sample_rate, seconds=self.seconds)
             cache_shard_ids = None

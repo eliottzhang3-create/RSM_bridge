@@ -23,7 +23,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             self.assertTrue(path.is_file(), path)
         inner = INNER.read_text(encoding="utf-8")
         submit = SUBMIT.read_text(encoding="utf-8")
-        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID", "PERF20_OUTPUT_PREFIX", "online|warm_online|waveform_preload|full_preload"):
+        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID", "PERF20_OUTPUT_PREFIX", "online|warm_online|waveform_preload|full_preload|shared_waveform_store", "--shared-waveform-store-dir"):
             self.assertIn(marker, inner)
         self.assertIn("vc submit", submit)
         self.assertIn("-c 32", submit)
@@ -108,6 +108,8 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertEqual(len(preloaded_report["input_preparation_by_rank"]), 2)
         self.assertEqual(preloaded_report["input_preparation_summary"]["rank_count"], 2)
         self.assertEqual(preloaded_report["input_preparation_summary"]["cpu_tensor_gib"]["median"], 1.0)
+        self.assertEqual(preloaded_report["input_preparation_summary"]["maximum_duration_seconds"], 21.0)
+        self.assertEqual(preloaded_report["input_preparation_summary"]["rank0_duration_seconds"], 20.0)
         self.assertIn("preloaded_cpu_batches", preloaded_report["timing_sources"]["data_wait_seconds"])
 
     def test_planned_rows_are_an_exact_sampler_slice(self) -> None:
@@ -141,12 +143,12 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertEqual(sampler.epoch, 3)
         self.assertEqual(rows, list(range(8, 20)))
 
-    def test_four_causal_controls_are_exact_and_outside_measurement(self) -> None:
+    def test_five_causal_controls_are_exact_and_outside_measurement(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
         for marker in (
             '"--preload-data"',
             '"--perf20-input-mode"',
-            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload")',
+            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store")',
             "def _planned_perf20_rows",
             "def _warm_exact_perf20_files",
             "def _preload_perf20_waveforms",
@@ -158,7 +160,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             'input_preparation["consumed_preloaded_microbatches"] = int(preloaded_consumed)',
             '"row_indices_sha256"',
             '"cpu_tensor_bytes"',
-            '"preloaded": input_mode in {"waveform_preload", "full_preload"}',
+            '"preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store"}',
             '"training_dataloader_accesses": 0 if input_mode == "full_preload"',
             '"input_preparation_by_rank"',
             '"input_preparation_summary"',
@@ -174,6 +176,27 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertIn("data_iter = preloaded_data_iter", text)
         preparation_start = text.index("saved_preparation_rng = _rng_state(device)")
         self.assertIn("dist.barrier()", text[preparation_start:text.index(profiler_entry)])
+
+    def test_shared_waveform_store_is_rank0_warmed_before_measurement(self) -> None:
+        text = TRAIN.read_text(encoding="utf-8")
+        for marker in (
+            "DEFAULT_SHARED_WAVEFORM_STORE",
+            '"--shared-waveform-store-dir"',
+            "UniqueWaveformStore",
+            "def _warm_shared_waveform_store",
+            'if int(rank) == 0:',
+            'bytearray(64 * 1024 * 1024)',
+            'store.data_path.open("rb", buffering=0)',
+            '"shared_store_waveform_sha256"',
+            '"shared_waveform_store_enabled": input_mode == "shared_waveform_store"',
+            '_warm_shared_waveform_store(dataset.unique_waveform_store, rank=rank)',
+        ):
+            self.assertIn(marker, text)
+        warm_call = "_warm_shared_waveform_store(dataset.unique_waveform_store, rank=rank)"
+        profiler_entry = "profiler = _make_profiler(args, profile_dir, profiler_artifacts)"
+        step_timer = "step_started = time.perf_counter()"
+        self.assertLess(text.index(warm_call), text.index(profiler_entry))
+        self.assertLess(text.index(warm_call), text.index(step_timer))
 
     def test_perf20_audit_does_not_require_syncing_router_statistics(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
