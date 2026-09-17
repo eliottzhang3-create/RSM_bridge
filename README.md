@@ -1,6 +1,6 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
-> 最后同步：2026-09-14
+> 最后同步：2026-09-17
 > 本文件是后续 Codex 会话的首要交接依据。任何新会话必须先完整阅读本文件，再查看对应代码、测试和远程日志。若 README、口头历史与当前代码冲突，以当前代码行为和最新远程报告为准，并把差异补回本文。
 
 ## 0. 一页结论：现在做到哪里
@@ -715,6 +715,29 @@ python code/RSmol/scripts/prepare_unique_audio_waveform_store.py \
 构建器不会把全量 waveform 放入 RAM；主进程按 audio ID 顺序写一个隐藏的 `.waveforms.f32.partial`，每 100 条 `fsync` 并原子更新 `progress.json`。中断后使用完全相同参数并追加 `--resume`，脚本会先核对 manifest SHA、源文件 canonical path/size/mtime inventory 和 index SHA，截断任何未进入 durable progress 的尾部后续写。每个 worker 在解码前后再次检查源文件 size/mtime，防止构建过程中源数据变化。最终会完整读取约 64.4 GiB 数据文件计算 SHA256，并默认均匀抽取 128 行重新调用 `load_waveform` 做逐字节验证；只有 `metadata.json.status=PASS`、`waveform_verification.passed=true`、`waveforms.f32` 尺寸正确且 `BUILDING` 已删除才算完成。
 
 `UniqueWaveformStore` reader 已独立加入 `audio_5_10x2_5_mesh_mellow/data.py`，目前接入 `shared_waveform_store`、`store_rank_ram_preload` 和 `store_rank_ram_prefetch` 三个独立 PERF20 模式；FORMAL 仍保持原始在线音频路径。shared mmap 与当前线程预取均未达到可用于正式训练的性能，后续先完成修正测量及相同 5,642 音频的远端/节点 RAM、同步/异步判别实验，再决定正式训练数据路径。
+
+#### 9.3.4.1 六分区零复制连通分量规划（CPU，待远程验证）
+
+新规划器 `code/RSmol/scripts/plan_reasonaqa_component_partitions.py` 以最终 train manifest 和已 PASS 的唯一 waveform store 索引为输入。不同双音频 QA 建边，union-find 求包括孤立节点在内的连通分量；同音频/空第二音频 QA 为节点自身负载。每个完整连通分量只分配到一个分区，保证每条 QA 恰好分配一次、其两个音频均在本区、每个唯一音频只出现一次。不会切分连通分量、复制音频、读取/解码 waveform payload 或修改现有训练/PERF20 路径。
+
+默认六份、seed=20260917，64 次确定性多起点贪心，再对最好四个候选执行分量移动/交换局部搜索。QA 数量为主：先最小化超过 ±2% 容差的最大相对偏差；其次优化 QA 方差（权重1），waveform 字节、截断后序列长度平方计算代理和数据源 QA 分布分别为次要权重0.05。启发式不保证全局最优，也不保证六份大小严格相等；不能达到容差时 `balance_status=NOT_MET`，不会静默拆图。`status=PASS` 只证明规划完整性，不代表平衡、内存或训练性能 PASS。
+
+默认只在 CPU 使用本地 SmolLM2 tokenizer（`local_files_only=True`、关闭 tokenizer 并行）批量统计 prompt<=129、answer<=250，始终保留正式训练的260-token音频 prefix；`sum(length²)` 只是计算代理，不能当真实batch padding/kernel时间。可选 `--skip-tokenization` 改用明确标记的字符长度代理，使工具只依赖 Python 标准库。规划器核对 manifest/index SHA、store PASS/验证标记及数据文件大小；不重新扫描64.43 GiB payload checksum，记录已有 checksum 为 provenance。
+
+远程仓库根目录直接运行，不需要 `vc submit` 或 GPU：
+
+```bash
+conda activate rsmol
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+python code/RSmol/scripts/plan_reasonaqa_component_partitions.py \
+  --manifest /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl \
+  --waveform-store-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v1 \
+  --tokenizer-path /hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2 \
+  --num-partitions 6 \
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/reasonaqa_component_partitions6_v1
+```
+
+输出 `partition_plan.json`、`partition_audit.json`、全局 `row_assignments.jsonl` 和六对 `partition_<0..5>_rows.jsonl` / `partition_<0..5>_audio.jsonl`。QA 文件原有字段不变，原 Dataset row ordinal（非空记录零基序号）及物理行号保存在 sidecar；音频清单保留原 store audio_id/offset，尚未物化六个 waveform 文件，也不能直接传给现有 store loader。完成前保留 `BUILDING`，失败/已有输出目录拒绝覆盖；重跑需换新目录。完成前重新读取输出 sidecar 核查覆盖、唯一性、本地引用，并核对每份 QA 与原始分配流的内容摘要。先检查 audit 的六份 QA/GiB/来源分布，再决定是否物化连续 waveform 分区和接入训练。
 
 ### 9.3.5 固定 5-10-5 recursive 音频正式训练
 
