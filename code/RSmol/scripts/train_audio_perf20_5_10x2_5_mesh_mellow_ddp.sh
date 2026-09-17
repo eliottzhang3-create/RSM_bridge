@@ -32,7 +32,7 @@ for ((argument_index=0; argument_index<${#PERF20_ARGS[@]}; argument_index++)); d
   esac
 done
 case "$PERF20_INPUT_MODE" in
-  online|warm_online|waveform_preload|full_preload|shared_waveform_store)
+  online|warm_online|waveform_preload|full_preload|shared_waveform_store|store_rank_ram_preload|store_rank_ram_prefetch)
     PERF20_OUTPUT_PREFIX="perf20_${PERF20_INPUT_MODE}"
     ;;
   *)

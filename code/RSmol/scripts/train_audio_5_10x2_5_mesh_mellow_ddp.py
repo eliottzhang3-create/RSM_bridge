@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import OrderedDict
 import csv
 import contextlib
 import copy
@@ -11,9 +12,11 @@ import hashlib
 import json
 import math
 import os
+import queue
 import random
 import shutil
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -54,7 +57,7 @@ DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_
 DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
 DEFAULT_SHARED_WAVEFORM_STORE = "/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v1"
 PERF20_STEPS = 20
-PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store")
+PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -93,7 +96,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--shared-waveform-store-dir",
         type=Path,
         default=Path(DEFAULT_SHARED_WAVEFORM_STORE),
-        help="PERF20 shared_waveform_store only: manifest-scoped single-file float32 waveform store",
+        help="PERF20 shared-store and rank-RAM modes: manifest-scoped single-file float32 waveform store",
     )
     p.add_argument(
         "--preload-data",
@@ -107,9 +110,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "PERF20 causal input control: online; exact-file warm_online; waveform-only "
             "rank-local preload with timed tokenization/collate; fully collated full_preload; "
-            "or rank0-warmed node-shared single-file waveform mmap"
+            "rank0-warmed shared mmap; store-to-rank-RAM preload; or bounded asynchronous store-to-rank-RAM prefetch"
         ),
     )
+    p.add_argument("--perf20-prefetch-microbatches", type=int, default=8,
+                   help="store_rank_ram_prefetch only: bounded queue depth, including initial priming")
+    p.add_argument("--perf20-rank-cache-gib", type=float, default=2.0,
+                   help="store_rank_ram_prefetch only: rank-local unique-waveform LRU capacity")
     p.add_argument("--steady-state-start-step", type=int, default=6, help="First optimizer step included in steady-state summaries (PERF20 default: 6, excluding steps 1-5)")
     profiler_group = p.add_mutually_exclusive_group()
     profiler_group.add_argument("--profiler", "--enable-profiler", dest="profiler", action="store_true", help="Enable rank0 torch.profiler collection for PERF20")
@@ -860,6 +867,131 @@ class _Perf20WaveformPreloadedDataset:
             raise RuntimeError(f"PERF20 waveform preload lacks planned row {index}") from exc
 
 
+class _RankLocalStoreWaveforms:
+    """Copy store mmap views into owned CPU tensors, with optional bounded LRU."""
+
+    def __init__(self, dataset: ReasonAQADataset, max_bytes: int | None = None) -> None:
+        if dataset.unique_waveform_store is None:
+            raise RuntimeError("rank-local waveform cache requires the unique waveform store")
+        self.dataset = dataset
+        self.store = dataset.unique_waveform_store
+        self.max_bytes = max_bytes
+        self.items: OrderedDict[int, torch.Tensor] = OrderedDict()
+        self.hits = self.misses = self.evictions = self.cloned_bytes = 0
+        self.current_bytes = self.peak_bytes = self.copy_seconds = 0
+
+    def _get(self, path: str) -> torch.Tensor:
+        audio_id = self.store.locate(path)
+        value = self.items.get(audio_id)
+        if value is not None:
+            self.hits += 1
+            self.items.move_to_end(audio_id)
+            return value
+        self.misses += 1
+        started = time.perf_counter()
+        value = self.store.load_audio_id(audio_id).clone()
+        self.copy_seconds += time.perf_counter() - started
+        size = int(value.numel() * value.element_size())
+        self.cloned_bytes += size
+        if self.max_bytes is not None:
+            while self.items and self.current_bytes + size > self.max_bytes:
+                _, old = self.items.popitem(last=False)
+                self.current_bytes -= int(old.numel() * old.element_size())
+                self.evictions += 1
+        self.items[audio_id] = value
+        self.current_bytes += size
+        self.peak_bytes = max(self.peak_bytes, self.current_bytes)
+        return value
+
+    def materialize(self, row: int) -> dict[str, Any]:
+        item = self.dataset[int(row)]  # text/answer contract; mmap views are not retained.
+        audio1, audio2 = self.dataset.audio_paths(int(row))
+        item["audio1"] = self._get(audio1)
+        item["audio2"] = None if audio2 == audio1 else self._get(audio2)
+        return item
+
+    def stats(self) -> dict[str, Any]:
+        lookups = self.hits + self.misses
+        return {
+            "waveform_lookups": lookups, "waveform_hits": self.hits,
+            "waveform_misses": self.misses, "hit_rate": self.hits / lookups if lookups else 0.0,
+            "waveform_evictions": self.evictions, "cloned_bytes": self.cloned_bytes,
+            "copy_seconds": self.copy_seconds, "resident_unique_audio": len(self.items),
+            "cache_current_bytes": self.current_bytes, "cache_peak_bytes": self.peak_bytes,
+            "cache_capacity_bytes": self.max_bytes,
+        }
+
+
+class _Perf20StorePrefetcher:
+    """One bounded producer per rank; only owned CPU waveform tensors cross the queue."""
+
+    def __init__(self, cache: _RankLocalStoreWaveforms, rows: list[int],
+                 batch_size: int, depth: int, collator: _TimedReasonAQACollator) -> None:
+        if len(rows) % batch_size:
+            raise ValueError("planned PERF20 row count is not a whole number of microbatches")
+        self.cache, self.rows, self.batch_size, self.collator = cache, rows, batch_size, collator
+        self.total = len(rows) // batch_size
+        self.depth = min(depth, self.total)
+        self.pending: queue.Queue[list[dict[str, Any]]] = queue.Queue(maxsize=depth)
+        self.slots = threading.BoundedSemaphore(depth)
+        self.finished = threading.Event()
+        self.stopped = threading.Event()
+        self.error: BaseException | None = None
+        self.produced = self.consumed = 0
+        self.thread = threading.Thread(target=self._produce, name="perf20-waveform-prefetch", daemon=True)
+
+    def _produce(self) -> None:
+        try:
+            for offset in range(0, len(self.rows), self.batch_size):
+                while not self.stopped.is_set() and not self.slots.acquire(timeout=0.2):
+                    continue
+                if self.stopped.is_set():
+                    break
+                items = [self.cache.materialize(row) for row in self.rows[offset:offset + self.batch_size]]
+                while not self.stopped.is_set():
+                    try:
+                        self.pending.put(items, timeout=0.2)
+                        self.produced += 1
+                        break
+                    except queue.Full:
+                        continue
+        except BaseException as exc:
+            self.error = exc
+        finally:
+            self.finished.set()
+
+    def start_and_prime(self) -> None:
+        self.thread.start()
+        while self.pending.qsize() < self.depth and not self.finished.is_set():
+            self.finished.wait(0.1)
+        if self.error is not None:
+            raise RuntimeError("rank-local waveform prefetch failed during priming") from self.error
+        if self.pending.qsize() < self.depth:
+            raise RuntimeError(f"rank-local waveform prefetch primed {self.pending.qsize()}/{self.depth}")
+
+    def __iter__(self) -> _Perf20StorePrefetcher:
+        return self
+
+    def __next__(self) -> dict[str, Any]:
+        if self.consumed >= self.total:
+            raise StopIteration
+        while True:
+            try:
+                items = self.pending.get(timeout=0.2)
+                self.slots.release()
+                break
+            except queue.Empty:
+                if self.finished.is_set():
+                    raise RuntimeError("rank-local waveform prefetch stopped early") from self.error
+        self.consumed += 1
+        return self.collator(items)
+
+    def close(self) -> None:
+        self.stopped.set()
+        if self.thread.ident is not None:
+            self.thread.join(timeout=5)
+
+
 def _planned_perf20_rows(
     sampler: DistributedSampler,
     *,
@@ -1113,6 +1245,23 @@ def _preload_perf20_waveforms(
     }
 
 
+def _preload_store_rank_ram(
+    cache: _RankLocalStoreWaveforms, target: _Perf20WaveformPreloadedDataset, rows: list[int],
+) -> dict[str, Any]:
+    """Own exactly the planned waveforms in rank-local RAM before measurement."""
+
+    started = time.perf_counter()
+    for row in dict.fromkeys(int(value) for value in rows):
+        target.items[row] = cache.materialize(row)
+    return {
+        "loaded_rows": len(target.items),
+        "cpu_tensor_bytes": cache.current_bytes,
+        "store_to_rank_ram_seconds": time.perf_counter() - started,
+        "waveform_cache_stats": cache.stats(),
+        "timed_tokenization_and_collate": True,
+    }
+
+
 def _preload_perf20_batches(
     loader: DataLoader,
     sampler: DistributedSampler,
@@ -1236,6 +1385,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.perf20_input_mode = "full_preload"
     report: dict[str, Any] = {"stage": f"{args.gate.lower()}_audio_5_10x2_5_mesh_mellow", "status": "FAIL", "configuration": vars(args), "rank": rank, "world_size": world, "checks": [], "warnings": [], "hard_failures": [], "environment": _environment_report(device, world)}
     profiler: Any | None = None
+    store_prefetcher: _Perf20StorePrefetcher | None = None
     profiler_artifacts: list[dict[str, Any]] = []
     perf_output_preexisting = False
     try:
@@ -1265,6 +1415,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             args.max_steps = PERF20_STEPS
             if int(args.steady_state_start_step) < 1 or int(args.steady_state_start_step) > PERF20_STEPS:
                 raise ValueError(f"PERF20 steady-state start must be in [1, {PERF20_STEPS}]")
+            if args.perf20_prefetch_microbatches <= 0 or args.perf20_rank_cache_gib <= 0:
+                raise ValueError("PERF20 prefetch depth and rank cache GiB must be positive")
             if args.output_dir.exists():
                 perf_output_preexisting = True
                 raise FileExistsError(f"PERF20 refuses to reuse an existing output directory: {args.output_dir}")
@@ -1343,7 +1495,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             tokenizer,
             unique_waveform_store_dir=(
                 args.shared_waveform_store_dir
-                if args.gate == "PERF20" and args.perf20_input_mode == "shared_waveform_store"
+                if args.gate == "PERF20" and args.perf20_input_mode in {
+                    "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch"}
                 else None
             ),
         )
@@ -1360,7 +1513,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         waveform_preloaded_dataset = (
             _Perf20WaveformPreloadedDataset(dataset)
-            if args.gate == "PERF20" and args.perf20_input_mode == "waveform_preload"
+            if args.gate == "PERF20" and args.perf20_input_mode in {"waveform_preload", "store_rank_ram_preload"}
             else None
         )
         loader_dataset = waveform_preloaded_dataset or dataset
@@ -1459,6 +1612,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             batch_in_epoch = batch_in_epoch % len(loader)
 
         preloaded_batches: list[dict[str, Any]] | None = None
+        rank_ram_cache: _RankLocalStoreWaveforms | None = None
         input_preparation: dict[str, Any] | None = None
         preloaded_consumed = 0
         if perf_mode:
@@ -1485,6 +1639,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     if args.perf20_input_mode == "waveform_preload" else
                     "rank0 reads only the all-rank bounded-run unique decoded waveform regions into node page cache before timing"
                     if args.perf20_input_mode == "shared_waveform_store" else
+                    "exact rank-local store waveforms are copied into owned CPU tensors before timing"
+                    if args.perf20_input_mode == "store_rank_ram_preload" else
+                    "bounded rank-local owned CPU tensor LRU plus asynchronous microbatch waveform prefetch"
+                    if args.perf20_input_mode == "store_rank_ram_prefetch" else
                     "rank-local fully collated CPU batches are resident before timing"
                 ),
                 **_row_stream_metadata(planned_rows),
@@ -1516,6 +1674,33 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         input_preparation.update(
                             _warm_shared_waveform_store(dataset, planned_rows, rank=rank, world=world)
                         )
+                    elif args.perf20_input_mode == "store_rank_ram_preload":
+                        if waveform_preloaded_dataset is None:
+                            raise RuntimeError("store rank-RAM preload did not install its dataset wrapper")
+                        rank_ram_cache = _RankLocalStoreWaveforms(dataset)
+                        input_preparation.update(_preload_store_rank_ram(
+                            rank_ram_cache, waveform_preloaded_dataset, planned_rows,
+                        ))
+                    elif args.perf20_input_mode == "store_rank_ram_prefetch":
+                        if timed_collator is None:
+                            raise RuntimeError("store rank-RAM prefetch requires the timed collator")
+                        rank_ram_cache = _RankLocalStoreWaveforms(
+                            dataset, max_bytes=int(args.perf20_rank_cache_gib * 1024**3),
+                        )
+                        store_prefetcher = _Perf20StorePrefetcher(
+                            rank_ram_cache, planned_rows, args.micro_batch_size,
+                            args.perf20_prefetch_microbatches, timed_collator,
+                        )
+                        started_priming = time.perf_counter()
+                        store_prefetcher.start_and_prime()
+                        input_preparation.update({
+                            "initial_primed_microbatches": store_prefetcher.depth,
+                            "prefetch_queue_capacity_microbatches": args.perf20_prefetch_microbatches,
+                            "rank_cache_capacity_bytes": rank_ram_cache.max_bytes,
+                            "cpu_tensor_bytes": rank_ram_cache.current_bytes,
+                            "initial_prime_seconds": time.perf_counter() - started_priming,
+                            "waveform_cache_stats_after_prime": rank_ram_cache.stats(),
+                        })
                     elif args.perf20_input_mode == "full_preload":
                         preloaded_batches, full_metadata = _preload_perf20_batches(
                             loader,
@@ -1618,7 +1803,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "overhead_steps_excluded_from_steady_state": _profile_overhead_steps(args, max_steps),
                 "artifacts": profiler_artifacts,
             }
-        preloaded_data_iter = iter(preloaded_batches) if preloaded_batches is not None else None
+        preloaded_data_iter = (
+            iter(preloaded_batches) if preloaded_batches is not None else
+            iter(store_prefetcher) if store_prefetcher is not None else None
+        )
         while optimizer_step < max_steps:
             if preloaded_data_iter is None:
                 sampler.set_epoch(epoch)
@@ -1814,6 +2002,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 batch_in_epoch = 0
         if input_preparation is not None:
             input_preparation["consumed_preloaded_microbatches"] = int(preloaded_consumed)
+            if store_prefetcher is not None:
+                store_prefetcher.close()
+                if store_prefetcher.error is not None or store_prefetcher.produced != required_microbatches or store_prefetcher.consumed != required_microbatches:
+                    raise RuntimeError(
+                        "PERF20 rank-local waveform prefetch stream incomplete: "
+                        f"produced={store_prefetcher.produced} consumed={store_prefetcher.consumed} "
+                        f"expected={required_microbatches} error={store_prefetcher.error!r}"
+                    )
+                input_preparation["waveform_cache_stats_after_training"] = rank_ram_cache.stats()
             input_preparation["process_faults_after_training"] = _process_fault_snapshot()
             input_preparation["process_io_after_training"] = _process_io_snapshot()
             input_preparation["cgroup_memory_after_training"] = _cgroup_memory_snapshot()
@@ -1839,15 +2036,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "waveform_preload": "rank-local waveform RAM lookup plus timed tokenization/collate",
                 "full_preload": "rank-local fully collated CPU batch list",
                 "shared_waveform_store": "node-shared fixed-stride waveform mmap after rank0 warmed the exact all-rank 20-step audio union by file offset",
+                "store_rank_ram_preload": "store mmap views cloned into rank-owned CPU tensors before timing; timed tokenization and collate",
+                "store_rank_ram_prefetch": "bounded rank-owned CPU waveform LRU with asynchronous producer and timed consumer-side collate",
             }[input_mode]
             report["data_pipeline"] = {
                 "mode": input_mode,
-                "preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store"},
+                "preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload"},
                 "waveform_cache_enabled": False,
-                "shared_waveform_store_enabled": input_mode == "shared_waveform_store",
+                "shared_waveform_store_enabled": input_mode in {"shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch"},
                 "retired_waveform_shard_experiment": True,
                 "timed_source": timed_source,
-                "training_dataloader_accesses": 0 if input_mode == "full_preload" else PERF20_STEPS * args.gradient_accumulation_steps,
+                "training_dataloader_accesses": 0 if input_mode in {"full_preload", "store_rank_ram_prefetch"} else PERF20_STEPS * args.gradient_accumulation_steps,
                 "synchronization": "one barrier in every causal-control mode after preparation and before profiler/timing",
                 "sampler": sampler_audit,
                 "input_preparation_by_rank": per_rank_timing.get("input_preparation_by_rank", []) if per_rank_timing else [],
@@ -1856,13 +2055,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             report["steady_state_summary"] = _perf_steady_summary(metrics, args, max_steps)
             report["timing_semantics"] = {
                 "step_time_seconds": "rank0 wall-clock from before the first microbatch data wait through the single CUDA synchronize after all metrics/collectives; this is the completion-inclusive step duration",
-                "phase_timings_host_seconds": "host wall/enqueue timings; data_wait is summed around next(data_iter), collate is the measured tokenizer+collator subset, and full_preload has near-zero values for both; scheduler_host is CPU/Python scheduler.step(), and metrics_enqueue_host ends after collective launch rather than after CUDA/NCCL completion",
+                "phase_timings_host_seconds": "host wall/enqueue timings; data_wait is summed around next(data_iter), collate is the measured consumer-side tokenizer+collator subset (also in rank-RAM prefetch), and full_preload has near-zero values for both; scheduler_host is CPU/Python scheduler.step(), and metrics_enqueue_host ends after collective launch rather than after CUDA/NCCL completion",
                 "phase_timings_device_seconds": "CUDA event elapsed timings resolved after one unified end-of-step synchronize; per-microbatch device values are summed within the optimizer step; metrics_collectives includes the device/NCCL work through its event and therefore is completion-inclusive",
                 "host_to_device": "rank0 CUDA event elapsed time around tensor .to(device) for every microbatch; host_to_device_enqueue separately records host dispatch time",
                 "forward_backward_optimizer": "rank0 CUDA event elapsed time; DDP gradient collectives are included in backward; host enqueue fields are reported separately",
                 "metrics_collectives": "global token counts use one identical all_reduce sequence on every rank; no rank-specific collective is introduced, and its device timing is not the enqueue-only host latency",
                 "per_rank_timing": "all ranks retain local data/forward/backward/step timings during training; one gather_object runs only after the final measured optimizer step and is excluded from every step duration",
-                "causal_input_controls": "online, warm_online, waveform_preload, full_preload, and shared_waveform_store use the same per-rank row hash, restored preparation RNG state, and one pre-measurement barrier",
+                "causal_input_controls": "all PERF20 modes use the same per-rank row hash, restored preparation RNG state, and one pre-measurement barrier",
                 "steady_state": "optimizer steps 6-20 by default, excluding profiler wait/warmup/active steps when profiling is enabled",
             }
     except Exception as exc:
@@ -1870,6 +2069,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             report.setdefault("correctness_audit", {})["status"] = "not_completed"
         report["hard_failures"].append({"error": repr(exc), "traceback": traceback.format_exc()})
     finally:
+        if store_prefetcher is not None:
+            store_prefetcher.close()
         if profiler is not None:
             try:
                 profiler.__exit__(None, None, None)

@@ -609,11 +609,21 @@ bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
 
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
   --perf20-input-mode shared_waveform_store
+
+# store -> rank-owned CPU tensor，一次性预加载准确的20步；测准备时间与训练下限
+bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
+  --perf20-input-mode store_rank_ram_preload
+
+# 每 rank 一个后台生产线程、最多8个待消费 microbatch、2 GiB 波形 LRU
+bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
+  --perf20-input-mode store_rank_ram_prefetch
 ```
 
-`warm_online` 由 rank0 收集 8 个 rank 在这 20 步将访问的 audio1/audio2 文件并去重，按文件名排序、逐文件顺序读完全部字节，然后所有 rank barrier；训练计时中仍执行完全相同的在线 load/decode/resample/crop/pad 和 tokenization/collate。`waveform_preload` 只在每个 rank 的准备阶段解码其准确 640 条 row 的 waveform；计时阶段仍通过 DataLoader 执行 tokenization/collate。`full_preload` 则提前物化精确 80 个已 collate CPU microbatch，计时中不再访问 DataLoader 或共享存储；旧 `--preload-data` 仅作为 `full_preload` 兼容别名保留。`shared_waveform_store` 加载 manifest-scoped 单文件 store，严格核对 manifest/index/尺寸合同。首次完整 64.43 GiB 顺序预热在 2026-09-17 的 20 步对照中只有 9.27 samples/s、27.60 秒/step，慢于原始在线路径；当前改为收集 8 个 rank 精确 20 步的唯一 audio_id，由 rank0 按固定 offset 升序只预热这些 1.28 MB 区域，然后统一 barrier。计时阶段各 rank 仍从同一 inode mmap waveform，在线执行 tokenization/collate，不打开、解码或重采样原始音频。此改动尚待远程实测。
+`warm_online` 由 rank0 收集 8 个 rank 在这 20 步将访问的 audio1/audio2 文件并去重，按文件名排序、逐文件顺序读完全部字节，然后所有 rank barrier；训练计时中仍执行完全相同的在线 load/decode/resample/crop/pad 和 tokenization/collate。`waveform_preload` 只在每个 rank 的准备阶段解码其准确 640 条 row 的 waveform；计时阶段仍通过 DataLoader 执行 tokenization/collate。`full_preload` 则提前物化精确 80 个已 collate CPU microbatch，计时中不再访问 DataLoader 或共享存储；旧 `--preload-data` 仅作为 `full_preload` 兼容别名保留。`shared_waveform_store` 加载 manifest-scoped 单文件 store，严格核对 manifest/index/尺寸合同。首次完整 64.43 GiB 顺序预热的 step 中位数为 27.60 秒；只读准确的 5,642 条/6.73 GiB 区域后约 50.03 秒，major faults 几乎未降。这些运行波动大，不能单凭两次实验判定定向预热本身造成退化，但两者都远差于 rank-local RAM preload。
 
-五种模式分别写入 `perf20_online_*`、`perf20_warm_online_*`、`perf20_waveform_preload_*`、`perf20_full_preload_*` 和 `perf20_shared_waveform_store_*`。`perf20_report.json.data_pipeline` 与 `per_rank_timing.input_preparation_*` 记录准备耗时、barrier、CPU tensor 容量、row hash、进程 page-fault/`/proc/self/io` 计数和 cgroup v2/v1 的 usage/cache/anon/mapped 快照；shared store 还记录路径、store 总唯一音频数、20 步全 rank 预热唯一音频数、audio_id 集合 SHA、预期/实读字节数、完整 waveform SHA 和 rank0 定向读取耗时。v1 的 `file` 由 `total_cache`（或 `cache`）映射，为整个 cgroup 的近似缓存计数，不能证明特定 store 的页全部驻留；远程文件系统也不一定把全部流量计入 `read_bytes`。报告额外把 tokenizer+collate 时间作为 `collate` 子项，从总 `data_wait` 中独立观察。若要采 profiler，可在任一模式后追加 `--profiler`，但第一轮因果比较应统一使用无 profiler。
+新增 `store_rank_ram_preload`：各 rank 从 store mmap 按本 rank 20 步的 row 顺序读取并显式 `.clone()` 成进程持有的 CPU tensor，以唯一 audio_id 去重，计时前物化完毕；计时阶段仍走 DataLoader 和 tokenization/collate。`store_rank_ram_prefetch`：每 rank 一个后台线程按完全相同 row 顺序复制音频并填充有界 microbatch 队列（默认8个），主线程消费并执行原 collator；波形按 audio_id 放在有界 LRU 中（默认2 GiB/rank，CLI `--perf20-rank-cache-gib` 和 `--perf20-prefetch-microbatches` 可调整）。准备阶段先填满队列，再统一 barrier，之后边训练边取数。LRU 容量不包含队列中或正在消费的 tensor 引用，所以总进程内存还需看实际报告。两个模式都是独立 PERF20 对照，不改 FORMAL。每 rank 报告 clone 字节/耗时、命中/未命中、淘汰和缓存峰值；预取模式额外报告初始填队列时长与训练后统计。它们尚待远程实测，不能预设正式训练吞吐。
+
+各模式分别使用 `perf20_<mode>_*` 输出目录。`perf20_report.json.data_pipeline` 与 `per_rank_timing.input_preparation_*` 记录准备耗时、barrier、CPU tensor 容量、row hash、进程 page-fault/`/proc/self/io` 计数及尽力采集的 cgroup v2/v1 usage/cache/anon/mapped 快照。2026-09-17 的两次 shared mmap 实验里 cgroup 快照均为空，故不能用其证明驻留；v1 的 `file` 由 `total_cache`（或 `cache`）映射，也不能证明特定 store 的页全部驻留。远程文件系统不一定把全部流量计入 `read_bytes`。报告把 tokenizer+collate 时间作为 `collate` 子项，从总 `data_wait` 中独立观察。第一轮因果比较应统一使用无 profiler。
 
 profiler 只在 rank0 创建，activities 为 CPU+CUDA，`profiler.step()` 的粒度是 optimizer step；默认 schedule 是 `skip_first=4, wait=1, warmup=1, active=2, repeat=1`，默认关闭 `with_stack/profile_memory/record_shapes`。每个 completed schedule cycle 都在 `on_trace_ready` 中导出不覆盖的 trace 与 operator summary（`profile/cycle_<nn>_step_<nnnn>/`，summary 文件名也包含 cycle/step）；主报告 `perf20_report.json` 的 `profiler.artifacts` 列出所有 cycle 的 trace/summary 路径。可用 `--profiler-with-stack`、`--profiler-profile-memory`、`--profiler-record-shapes` 和对应 schedule CLI 开关扩大采集；脚本会校验 20 步内能完成 schedule。
 

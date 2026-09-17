@@ -4,10 +4,13 @@ from __future__ import annotations
 import ast
 import hashlib
 import math
+import queue
 import tempfile
+import threading
 import time
 import typing
 import unittest
+from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,7 +30,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             self.assertTrue(path.is_file(), path)
         inner = INNER.read_text(encoding="utf-8")
         submit = SUBMIT.read_text(encoding="utf-8")
-        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID", "PERF20_OUTPUT_PREFIX", "online|warm_online|waveform_preload|full_preload|shared_waveform_store", "--shared-waveform-store-dir"):
+        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID", "PERF20_OUTPUT_PREFIX", "store_rank_ram_preload|store_rank_ram_prefetch", "--shared-waveform-store-dir"):
             self.assertIn(marker, inner)
         self.assertIn("vc submit", submit)
         self.assertIn("-c 32", submit)
@@ -152,7 +155,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         for marker in (
             '"--preload-data"',
             '"--perf20-input-mode"',
-            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store")',
+            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch")',
             "def _planned_perf20_rows",
             "def _warm_exact_perf20_files",
             "def _preload_perf20_waveforms",
@@ -164,8 +167,8 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             'input_preparation["consumed_preloaded_microbatches"] = int(preloaded_consumed)',
             '"row_indices_sha256"',
             '"cpu_tensor_bytes"',
-            '"preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store"}',
-            '"training_dataloader_accesses": 0 if input_mode == "full_preload"',
+            '"preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload"}',
+            '"training_dataloader_accesses": 0 if input_mode in {"full_preload", "store_rank_ram_prefetch"}',
             '"input_preparation_by_rank"',
             '"input_preparation_summary"',
             '_restore_rng_state(saved_preparation_rng, device)',
@@ -176,7 +179,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         step_timer = "step_started = time.perf_counter()"
         self.assertLess(text.index(preload_call), text.index(profiler_entry))
         self.assertLess(text.index(preload_call), text.index(step_timer))
-        self.assertIn("preloaded_data_iter = iter(preloaded_batches)", text)
+        self.assertIn("iter(preloaded_batches) if preloaded_batches is not None else", text)
         self.assertIn("data_iter = preloaded_data_iter", text)
         preparation_start = text.index("saved_preparation_rng = _rng_state(device)")
         self.assertIn("dist.barrier()", text[preparation_start:text.index(profiler_entry)])
@@ -196,7 +199,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             'handle.seek(audio_id * store.bytes_per_audio)',
             '"global_planned_unique_audio"',
             '"shared_store_waveform_sha256"',
-            '"shared_waveform_store_enabled": input_mode == "shared_waveform_store"',
+            '"shared_waveform_store_enabled": input_mode in {"shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch"}',
             '_warm_shared_waveform_store(dataset, planned_rows, rank=rank, world=world)',
         ):
             self.assertIn(marker, text)
@@ -314,6 +317,76 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             self.assertEqual(snapshot["memory_current_bytes"], 200)
             self.assertIsNone(snapshot["memory_max_bytes"])
             self.assertEqual(snapshot["memory_stat_bytes"]["file"], 80)
+
+    def test_rank_local_store_clones_and_evicts_owned_tensors(self) -> None:
+        tree = ast.parse(TRAIN.read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+                    and n.name == "_RankLocalStoreWaveforms")
+        namespace = {"__builtins__": __builtins__, "OrderedDict": OrderedDict, "time": time}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
+        class FakeTensor:
+            def __init__(self, value, owned=False):
+                self.value, self.owned = value, owned
+            def clone(self):
+                return FakeTensor(self.value, owned=True)
+            def numel(self):
+                return 1
+            def element_size(self):
+                return 4
+        store = SimpleNamespace(locate=lambda path: {"a": 0, "b": 1}[path],
+                                load_audio_id=lambda audio_id: FakeTensor(audio_id))
+        class FakeDataset:
+            unique_waveform_store = store
+            def __getitem__(self, row):
+                return {"row_index": row, "audio1": FakeTensor(-1), "audio2": None}
+            def audio_paths(self, row):
+                return {0: ("a", "a"), 1: ("a", "b")}[row]
+        dataset = FakeDataset()
+        cache = namespace["_RankLocalStoreWaveforms"](dataset, max_bytes=4)
+        self.assertTrue(cache.materialize(0)["audio1"].owned)
+        self.assertTrue(cache.materialize(1)["audio1"].owned)
+        self.assertEqual(cache.stats()["waveform_hits"], 1)
+        self.assertEqual(cache.stats()["waveform_misses"], 2)
+        self.assertEqual(cache.stats()["waveform_evictions"], 1)
+        self.assertEqual(cache.stats()["cache_current_bytes"], 4)
+
+    def test_bounded_prefetch_preserves_microbatch_order(self) -> None:
+        tree = ast.parse(TRAIN.read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+                    and n.name == "_Perf20StorePrefetcher")
+        namespace = {"__builtins__": __builtins__, "queue": queue, "threading": threading, "time": time}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
+        prefetcher = namespace["_Perf20StorePrefetcher"](
+            SimpleNamespace(materialize=lambda row: {"row_index": row}),
+            list(range(12)), batch_size=2, depth=2,
+            collator=lambda items: [item["row_index"] for item in items],
+        )
+        try:
+            prefetcher.start_and_prime()
+            self.assertEqual(prefetcher.pending.qsize(), 2)
+            self.assertEqual(list(prefetcher), [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11]])
+            prefetcher.thread.join(timeout=2)
+            self.assertEqual(prefetcher.produced, 6)
+            self.assertEqual(prefetcher.consumed, 6)
+        finally:
+            prefetcher.close()
+
+    def test_store_rank_ram_modes_are_isolated_and_audited(self) -> None:
+        text = TRAIN.read_text(encoding="utf-8")
+        for marker in (
+            '"store_rank_ram_preload", "store_rank_ram_prefetch"',
+            'value = self.store.load_audio_id(audio_id).clone()',
+            'self.slots = threading.BoundedSemaphore(depth)',
+            '"waveform_cache_stats_after_prime"',
+            '"waveform_cache_stats_after_training"',
+            '"store_to_rank_ram_seconds"',
+            'store_prefetcher.produced != required_microbatches',
+            'store_prefetcher.consumed != required_microbatches',
+        ):
+            self.assertIn(marker, text)
+        self.assertLess(text.index("store_prefetcher.start_and_prime()"),
+                        text.index("profiler = _make_profiler(args, profile_dir, profiler_artifacts)"))
+        self.assertIn('args.gate == "PERF20" and args.perf20_input_mode in {', text)
 
     def test_perf20_audit_does_not_require_syncing_router_statistics(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
