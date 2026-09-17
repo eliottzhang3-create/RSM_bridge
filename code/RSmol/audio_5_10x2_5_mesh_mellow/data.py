@@ -17,6 +17,7 @@ from torch.utils.data import Dataset, Sampler
 
 
 WAVEFORM_CACHE_FORMAT = "raw_fixed_waveform_shards_v1"
+UNIQUE_WAVEFORM_STORE_FORMAT = "manifest_unique_fixed_waveform_store_v1"
 WAVEFORM_CACHE_GROUP_MARKERS = (
     ("/audiocaps_v2/train/", "audiocaps_train"),
     ("/clotho_aqa_audio/audio_files/", "clotho_aqa"),
@@ -160,6 +161,112 @@ class WaveformShardCache:
         # mode="c" is a writable copy-on-write mapping, so torch can safely
         # wrap the row without copying or being able to modify the shard file.
         return torch.from_numpy(mmap[location.row]).reshape(1, int(self.metadata["samples_per_audio"]))
+
+
+class UniqueWaveformStore:
+    """Read one manifest-scoped, deduplicated float32 waveform store.
+
+    This reader is deliberately independent from ``WaveformShardCache``.  The
+    old cache is a historical multi-shard experiment, whereas this format has
+    one fixed-stride data file that every local DDP rank can mmap and share
+    through the node page cache.
+    """
+
+    def __init__(self, store_dir: str | Path) -> None:
+        self.store_dir = Path(store_dir).expanduser().resolve(strict=True)
+        if (self.store_dir / "BUILDING").exists():
+            raise RuntimeError(f"unique waveform store is still being built: {self.store_dir}")
+        metadata_path = self.store_dir / "metadata.json"
+        index_path = self.store_dir / "index.jsonl"
+        if not metadata_path.is_file() or not index_path.is_file():
+            raise FileNotFoundError(f"unique waveform store lacks metadata.json or index.jsonl: {self.store_dir}")
+        self.metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        expected = {
+            "status": "PASS",
+            "format": UNIQUE_WAVEFORM_STORE_FORMAT,
+            "sample_rate": 32000,
+            "seconds": 10,
+            "samples_per_audio": 320000,
+            "bytes_per_audio": 1280000,
+            "dtype": "float32",
+            "byte_order": "little",
+            "data_file": "waveforms.f32",
+        }
+        mismatches = {
+            key: {"expected": value, "actual": self.metadata.get(key)}
+            for key, value in expected.items()
+            if self.metadata.get(key) != value
+        }
+        if mismatches:
+            raise RuntimeError(f"unique waveform store contract mismatch: {mismatches}")
+        index_digest = hashlib.sha256()
+        with index_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+                index_digest.update(chunk)
+        if index_digest.hexdigest() != self.metadata.get("index_sha256"):
+            raise RuntimeError("unique waveform store index SHA256 mismatch")
+
+        self.num_audio = int(self.metadata.get("num_unique_audio_files", -1))
+        self.samples_per_audio = int(self.metadata["samples_per_audio"])
+        self.bytes_per_audio = int(self.metadata["bytes_per_audio"])
+        self.data_path = self.store_dir / str(self.metadata["data_file"])
+        expected_bytes = self.num_audio * self.bytes_per_audio
+        if self.num_audio <= 0 or not self.data_path.is_file() or self.data_path.stat().st_size != expected_bytes:
+            raise RuntimeError(
+                "unique waveform store data-file contract failed: "
+                f"audio={self.num_audio} path={self.data_path} expected_bytes={expected_bytes}"
+            )
+
+        self._by_path: dict[str, int] = {}
+        observed = 0
+        with index_path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                audio_id = int(item["audio_id"])
+                if audio_id != observed or int(item["byte_offset"]) != audio_id * self.bytes_per_audio:
+                    raise RuntimeError(f"unique waveform store index order/offset mismatch at line {line_number}")
+                keys = [str(item["source_path"]), *[str(value) for value in item.get("manifest_aliases", [])]]
+                for value in keys:
+                    normalized = self._normalize_path(value)
+                    previous = self._by_path.setdefault(normalized, audio_id)
+                    if previous != audio_id:
+                        raise RuntimeError(f"unique waveform store alias collision at line {line_number}: {value}")
+                observed += 1
+        if observed != self.num_audio:
+            raise RuntimeError(f"unique waveform store index cardinality mismatch: {observed} != {self.num_audio}")
+        self._mmap: np.memmap | None = None
+
+    @staticmethod
+    def _normalize_path(value: str) -> str:
+        return os.path.normpath(os.path.expanduser(value)).replace("\\", "/")
+
+    def locate(self, source_path: str | Path) -> int:
+        normalized = self._normalize_path(str(source_path))
+        found = self._by_path.get(normalized)
+        if found is None:
+            raise KeyError(f"audio path is absent from unique waveform store: {source_path}")
+        return found
+
+    def load(self, source_path: str | Path) -> torch.Tensor:
+        return self.load_audio_id(self.locate(source_path))
+
+    def load_audio_id(self, audio_id: int) -> torch.Tensor:
+        audio_id = int(audio_id)
+        if audio_id < 0 or audio_id >= self.num_audio:
+            raise IndexError(f"unique waveform audio_id is out of range: {audio_id}")
+        if self._mmap is None:
+            # Copy-on-write makes the NumPy view writable for torch without
+            # ever permitting an accidental mutation of the immutable file.
+            # Clean mapped pages remain physically shared by all local ranks.
+            self._mmap = np.memmap(
+                self.data_path,
+                dtype="<f4",
+                mode="c",
+                shape=(self.num_audio, self.samples_per_audio),
+            )
+        return torch.from_numpy(self._mmap[audio_id]).reshape(1, self.samples_per_audio)
 
 
 def load_waveform(path: str | Path, *, sample_rate: int = 32000, seconds: int = 10) -> torch.Tensor:

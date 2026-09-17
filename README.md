@@ -674,7 +674,36 @@ python code/RSmol/scripts/prepare_audio_waveform_shards.py \
 
 物理 shard 在创建后保持不变。远程对照已经证明随机 mmap 约 27.51 秒/step，差于原始在线路径，因此 2026-09-17 起停用 PERF20 的 `--waveform-cache-dir` 与 shard-aware sampler 接口；生成器、reader 和历史测试代码暂时保留用于结果复现，但当前性能实验和 FORMAL 都不读取这批 64-shard 数据。
 
-### 9.3.4 固定 5-10-5 recursive 音频正式训练
+### 9.3.4 train manifest 唯一音频的节点共享 waveform store
+
+四模式严格因果对照表明，顺序预热原始音频文件不能改善性能，而把准确的训练 waveform 预解码到内存可将稳态 step 从约 18.88 秒降至约 1.68 秒。因此新路线不再扫描三个完整音频目录，也不复用历史 64-shard 随机读取布局。CPU-only 构建器 `code/RSmol/scripts/prepare_unique_audio_waveform_store.py` 只读取最终 drop12 train manifest，将其中实际引用的音频按 canonical path 去重并排序，复用正式 `load_waveform` 生成 mono、32 kHz、10 秒、`[1,320000]` little-endian float32 waveform，然后按固定步长写入单个 `waveforms.f32`。当前统计预期是 54,046 条唯一音频、约 64.4 GiB；实际值必须以 dry run 为准。
+
+先在远程仓库根目录直接执行只读 dry run；它解析完整 manifest、检查每个唯一源文件、统计精确容量，但不解码 waveform，也不创建输出目录：
+
+```bash
+conda activate rsmol
+python code/RSmol/scripts/prepare_unique_audio_waveform_store.py \
+  --manifest /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl \
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v1 \
+  --dry-run
+```
+
+核对 manifest SHA、唯一音频数和约 64.4 GiB 容量后，在 CPU 环境直接构建：
+
+```bash
+python code/RSmol/scripts/prepare_unique_audio_waveform_store.py \
+  --manifest /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl \
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v1 \
+  --workers 8 \
+  --torch-threads-per-worker 1 \
+  --checkpoint-every 100
+```
+
+构建器不会把全量 waveform 放入 RAM；主进程按 audio ID 顺序写一个隐藏的 `.waveforms.f32.partial`，每 100 条 `fsync` 并原子更新 `progress.json`。中断后使用完全相同参数并追加 `--resume`，脚本会先核对 manifest SHA、源文件 canonical path/size/mtime inventory 和 index SHA，截断任何未进入 durable progress 的尾部后续写。每个 worker 在解码前后再次检查源文件 size/mtime，防止构建过程中源数据变化。最终会完整读取约 64.4 GiB 数据文件计算 SHA256，并默认均匀抽取 128 行重新调用 `load_waveform` 做逐字节验证；只有 `metadata.json.status=PASS`、`waveform_verification.passed=true`、`waveforms.f32` 尺寸正确且 `BUILDING` 已删除才算完成。
+
+`UniqueWaveformStore` reader 已独立加入 `audio_5_10x2_5_mesh_mellow/data.py`，以 copy-on-write mmap 包装同一个 immutable inode，使八个本地 rank 可以共享干净 page-cache 页；它当前尚未接入 PERF20 或 FORMAL。下一步应先增加完整顺序预热及 tensor/hash 等价审计，再新增独立 PERF20 模式，不能把本节“构建完成”解释为训练读取已经切换。
+
+### 9.3.5 固定 5-10-5 recursive 音频正式训练
 
 该路线使用无 MeSH router/memory 的历史固定 5-10-5 checkpoint：20 个物理层，执行 `prefix 5 + middle 10 × 2 + suffix 5` 的精确 30-entry schedule。音频、ReasonAQA、Mellow mapper、answer-only loss、batch、optimizer 和 scheduler 合同与现有 MeSH/原始 SmolLM2 音频实验保持一致；新入口只允许 FORMAL，不提供或要求 smoke gate。`--model-path` 是文本初始化，只有本路线生成的完整复合 checkpoint 才能传给 `--resume-from`。
 
