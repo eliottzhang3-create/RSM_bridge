@@ -33,11 +33,7 @@ if str(ROOT) not in sys.path:
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from audio_5_10x2_5_mesh_mellow.data import (  # noqa: E402
-    ReasonAQADataset,
-    ShardAwareDistributedBatchSampler,
-    collate_reasonaqa,
-)
+from audio_5_10x2_5_mesh_mellow.data import ReasonAQADataset, collate_reasonaqa  # noqa: E402
 from audio_5_10x2_5_mesh_mellow.model import (  # noqa: E402
     AUDIO_PREFIX_TOKENS,
     AUDIO_TOKENS_PER_CLIP,
@@ -57,6 +53,7 @@ DEFAULT_MESH = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5
 DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
 PERF20_STEPS = 20
+PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -94,7 +91,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--preload-data",
         action="store_true",
-        help="PERF20 only: materialize all 80 rank-local CPU microbatches before profiling/timing",
+        help="Deprecated PERF20 alias for --perf20-input-mode full_preload",
+    )
+    p.add_argument(
+        "--perf20-input-mode",
+        choices=PERF20_INPUT_MODES,
+        default="online",
+        help=(
+            "PERF20 causal input control: online; exact-file warm_online; waveform-only "
+            "rank-local preload with timed tokenization/collate; or fully collated full_preload"
+        ),
     )
     p.add_argument("--steady-state-start-step", type=int, default=6, help="First optimizer step included in steady-state summaries (PERF20 default: 6, excluding steps 1-5)")
     profiler_group = p.add_mutually_exclusive_group()
@@ -318,7 +324,7 @@ def _perf_steady_summary(metrics: list[dict[str, Any]], args: argparse.Namespace
     profiler_affected_steps = set(_profile_overhead_steps(args, max_steps)) if args.profiler else set()
     configured_start = max(1, int(args.steady_state_start_step))
     steady = [item for item in metrics if int(item["step"]) >= configured_start and int(item["step"]) not in profiler_affected_steps]
-    host_phases = ("data_wait", "host_to_device_enqueue", "forward_enqueue", "backward_enqueue", "grad_clip_host", "optimizer_enqueue", "scheduler_host", "metrics_enqueue_host")
+    host_phases = ("data_wait", "collate", "host_to_device_enqueue", "forward_enqueue", "backward_enqueue", "grad_clip_host", "optimizer_enqueue", "scheduler_host", "metrics_enqueue_host")
     device_phases = ("host_to_device", "forward", "backward", "grad_clip", "optimizer", "metrics_collectives")
     host_phase_summary = {
         phase: _distribution([float(item.get("phase_timings_host_seconds", {}).get(phase, 0.0)) for item in steady])
@@ -354,7 +360,7 @@ def _perf_steady_summary(metrics: list[dict[str, Any]], args: argparse.Namespace
 def _local_rank_timing_payload(
     rank: int,
     metrics: list[dict[str, Any]],
-    preload_metadata: dict[str, Any] | None = None,
+    input_preparation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the compact timing payload gathered once after PERF20 training."""
 
@@ -365,11 +371,12 @@ def _local_rank_timing_payload(
         steps.append({
             "step": int(item["step"]),
             "data_wait_seconds": float(host.get("data_wait", 0.0)),
+            "collate_seconds": float(host.get("collate", 0.0)),
             "forward_device_seconds": float(device.get("forward", 0.0)),
             "backward_device_seconds": float(device.get("backward", 0.0)),
             "step_wall_seconds": float(item["step_time_seconds"]),
         })
-    return {"rank": int(rank), "steps": steps, "preload": preload_metadata}
+    return {"rank": int(rank), "steps": steps, "input_preparation": input_preparation}
 
 
 def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int) -> dict[str, Any]:
@@ -386,6 +393,7 @@ def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int)
 
     fields = (
         "data_wait_seconds",
+        "collate_seconds",
         "forward_device_seconds",
         "backward_device_seconds",
         "step_wall_seconds",
@@ -425,23 +433,28 @@ def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int)
             }
         per_step_rank_skew.append({"step": step_number, "phases": phases})
 
-    preload_by_rank = [
-        {"rank": int(payload["rank"]), **dict(payload["preload"])}
+    preparation_by_rank = [
+        {"rank": int(payload["rank"]), **dict(payload["input_preparation"])}
         for payload in ordered
-        if payload.get("preload") is not None
+        if payload.get("input_preparation") is not None
     ]
-    preload_summary = None
-    if preload_by_rank:
-        if len(preload_by_rank) != int(expected_world):
+    preparation_summary = None
+    if preparation_by_rank:
+        if len(preparation_by_rank) != int(expected_world):
             raise RuntimeError(
-                "PERF20 preload metadata is present for only part of the world: "
-                f"expected={expected_world} actual={len(preload_by_rank)}"
+                "PERF20 input-preparation metadata is present for only part of the world: "
+                f"expected={expected_world} actual={len(preparation_by_rank)}"
             )
-        preload_summary = {
-            "rank_count": len(preload_by_rank),
-            "duration_seconds": _distribution([float(item["duration_seconds"]) for item in preload_by_rank]),
-            "barrier_wait_seconds": _distribution([float(item["barrier_wait_seconds"]) for item in preload_by_rank]),
-            "cpu_tensor_gib": _distribution([float(item["cpu_tensor_bytes"]) / 1024**3 for item in preload_by_rank]),
+        modes = sorted({str(item["mode"]) for item in preparation_by_rank})
+        if len(modes) != 1:
+            raise RuntimeError(f"PERF20 ranks disagree on input mode: {modes}")
+        preparation_summary = {
+            "mode": modes[0],
+            "rank_count": len(preparation_by_rank),
+            "duration_seconds": _distribution([float(item["duration_seconds"]) for item in preparation_by_rank]),
+            "barrier_wait_seconds": _distribution([float(item["barrier_wait_seconds"]) for item in preparation_by_rank]),
+            "cpu_tensor_gib": _distribution([float(item.get("cpu_tensor_bytes", 0)) / 1024**3 for item in preparation_by_rank]),
+            "row_indices_sha256_by_rank": [str(item["row_indices_sha256"]) for item in preparation_by_rank],
         }
 
     return {
@@ -452,9 +465,10 @@ def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int)
             "data_wait_seconds": (
                 "host wall time around next(iter(preloaded_cpu_batches)), summed across microbatches; "
                 "shared-storage reads, audio decode/resample, tokenization, and collate completed before timing"
-                if preload_by_rank else
+                if preparation_summary and preparation_summary["mode"] == "full_preload" else
                 "host wall time around next(data_iter), summed across microbatches"
             ),
+            "collate_seconds": "rank-process tokenizer plus collate wall time; zero during measured full_preload iteration",
             "forward_device_seconds": "CUDA events, summed across microbatches and resolved by the existing end-of-step synchronize",
             "backward_device_seconds": "CUDA events, summed across microbatches and resolved by the existing end-of-step synchronize; includes DDP gradient communication dependencies",
             "step_wall_seconds": "rank-local completion-inclusive optimizer-step wall time",
@@ -462,8 +476,8 @@ def _per_rank_timing_report(payloads: list[dict[str, Any]], expected_world: int)
         "raw_by_rank": ordered,
         "per_rank_summary": per_rank_summary,
         "per_step_rank_skew": per_step_rank_skew,
-        "preload_by_rank": preload_by_rank,
-        "preload_summary": preload_summary,
+        "input_preparation_by_rank": preparation_by_rank,
+        "input_preparation_summary": preparation_summary,
     }
 
 
@@ -471,11 +485,11 @@ def _gather_perf20_rank_timings(
     rank: int,
     world: int,
     metrics: list[dict[str, Any]],
-    preload_metadata: dict[str, Any] | None = None,
+    input_preparation: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Gather all rank-local PERF20 timings exactly once after measurement."""
 
-    local_payload = _local_rank_timing_payload(rank, metrics, preload_metadata)
+    local_payload = _local_rank_timing_payload(rank, metrics, input_preparation)
     if world > 1:
         gathered: list[dict[str, Any] | None] | None = [None] * world if rank == 0 else None
         dist.gather_object(local_payload, gathered, dst=0)
@@ -799,6 +813,187 @@ def _batch_tensor_bytes(batch: dict[str, Any]) -> int:
     )
 
 
+class _TimedReasonAQACollator:
+    """Accumulate collate/tokenization wall time in the rank process."""
+
+    def __init__(self, tokenizer: Any) -> None:
+        self.tokenizer = tokenizer
+        self.total_seconds = 0.0
+        self.calls = 0
+
+    def __call__(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        started = time.perf_counter()
+        try:
+            return collate_reasonaqa(rows, self.tokenizer)
+        finally:
+            self.total_seconds += time.perf_counter() - started
+            self.calls += 1
+
+
+class _Perf20WaveformPreloadedDataset:
+    """Serve only the planned PERF20 rows from rank-local decoded waveform RAM."""
+
+    def __init__(self, base: ReasonAQADataset) -> None:
+        self.base = base
+        self.items: dict[int, dict[str, Any]] = {}
+
+    def __len__(self) -> int:
+        return len(self.base)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        try:
+            return self.items[int(index)]
+        except KeyError as exc:
+            raise RuntimeError(f"PERF20 waveform preload lacks planned row {index}") from exc
+
+
+def _planned_perf20_rows(
+    sampler: DistributedSampler,
+    *,
+    epoch: int,
+    batch_in_epoch: int,
+    micro_batch_size: int,
+    required_microbatches: int,
+) -> list[int]:
+    """Resolve the exact rank-local sample stream without touching the dataset."""
+
+    sampler.set_epoch(int(epoch))
+    indices = [int(index) for index in sampler]
+    start = int(batch_in_epoch) * int(micro_batch_size)
+    count = int(required_microbatches) * int(micro_batch_size)
+    rows = indices[start:start + count]
+    if len(rows) != count:
+        raise RuntimeError(
+            "PERF20 planned row stream is shorter than the bounded experiment: "
+            f"start={start} required={count} actual={len(rows)}"
+        )
+    return rows
+
+
+def _row_stream_metadata(rows: list[int]) -> dict[str, Any]:
+    encoded = ",".join(str(row) for row in rows).encode("ascii")
+    return {
+        "planned_samples": len(rows),
+        "unique_planned_rows": len(set(rows)),
+        "row_indices_sha256": hashlib.sha256(encoded).hexdigest(),
+        "first_row_indices": rows[: min(8, len(rows))],
+        "last_row_indices": rows[-min(8, len(rows)):],
+    }
+
+
+def _process_fault_snapshot() -> dict[str, int] | None:
+    """Read process minor/major fault counters without adding a dependency."""
+
+    try:
+        # /proc/<pid>/stat fields 10 and 12 are minflt and majflt.  Split only
+        # after the final ')' because the comm field may contain whitespace.
+        fields = Path("/proc/self/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        return {"minor_faults": int(fields[7]), "major_faults": int(fields[9])}
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _process_io_snapshot() -> dict[str, int] | None:
+    """Read Linux process I/O counters; remote clients may report a subset."""
+
+    try:
+        values = {}
+        for line in Path("/proc/self/io").read_text(encoding="utf-8").splitlines():
+            key, value = line.split(":", 1)
+            if key in {"rchar", "syscr", "read_bytes"}:
+                values[key] = int(value.strip())
+        return values
+    except (OSError, ValueError):
+        return None
+
+
+def _cgroup_memory_snapshot() -> dict[str, Any] | None:
+    """Best-effort cgroup-v2 memory snapshot for cache-residency diagnosis."""
+
+    try:
+        cgroup_line = next(
+            line for line in Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines()
+            if line.startswith("0::")
+        )
+        relative = cgroup_line.split("::", 1)[1].lstrip("/")
+        root = Path("/sys/fs/cgroup") / relative
+        current = int((root / "memory.current").read_text(encoding="utf-8").strip())
+        maximum_text = (root / "memory.max").read_text(encoding="utf-8").strip()
+        stats = {}
+        for line in (root / "memory.stat").read_text(encoding="utf-8").splitlines():
+            key, value = line.split()
+            if key in {"anon", "file", "file_mapped", "file_dirty", "file_writeback"}:
+                stats[key] = int(value)
+        return {
+            "memory_current_bytes": current,
+            "memory_max_bytes": None if maximum_text == "max" else int(maximum_text),
+            "memory_stat_bytes": stats,
+        }
+    except (OSError, StopIteration, ValueError):
+        return None
+
+
+def _warm_exact_perf20_files(
+    dataset: ReasonAQADataset,
+    local_rows: list[int],
+    *,
+    rank: int,
+    world: int,
+) -> dict[str, Any]:
+    """Read the all-rank 20-step audio-file union once, sequentially per file."""
+
+    local_paths = sorted({path for row in local_rows for path in dataset.audio_paths(row)})
+    gathered: list[list[str] | None] = [None] * world
+    if world > 1:
+        dist.all_gather_object(gathered, local_paths)
+    else:
+        gathered[0] = local_paths
+
+    started = time.perf_counter()
+    warmed_files = 0
+    warmed_bytes = 0
+    if rank == 0:
+        global_paths = sorted({path for paths in gathered if paths is not None for path in paths})
+        buffer = bytearray(8 * 1024 * 1024)
+        view = memoryview(buffer)
+        for value in global_paths:
+            with Path(value).open("rb", buffering=0) as handle:
+                while True:
+                    size = handle.readinto(view)
+                    if not size:
+                        break
+                    warmed_bytes += int(size)
+            warmed_files += 1
+    return {
+        "local_unique_audio_paths": len(local_paths),
+        "global_unique_audio_paths": warmed_files if rank == 0 else None,
+        "warmed_file_bytes": warmed_bytes if rank == 0 else None,
+        "warm_read_seconds": float(time.perf_counter() - started) if rank == 0 else 0.0,
+        "warm_strategy": "rank0 reads the exact all-rank file union; lexical file order; sequential bytes within each file",
+    }
+
+
+def _preload_perf20_waveforms(
+    dataset: ReasonAQADataset,
+    rows: list[int],
+    target: _Perf20WaveformPreloadedDataset | None = None,
+) -> tuple[_Perf20WaveformPreloadedDataset, dict[str, Any]]:
+    """Decode only planned rows; leave tokenization/collate inside timed next()."""
+
+    cached = target if target is not None else _Perf20WaveformPreloadedDataset(dataset)
+    started = time.perf_counter()
+    for row in dict.fromkeys(int(value) for value in rows):
+        cached.items[row] = dataset[row]
+    duration = time.perf_counter() - started
+    tensor_bytes = sum(_batch_tensor_bytes(item) for item in cached.items.values())
+    return cached, {
+        "loaded_rows": len(cached.items),
+        "cpu_tensor_bytes": tensor_bytes,
+        "waveform_decode_seconds": float(duration),
+        "timed_tokenization_and_collate": True,
+    }
+
+
 def _preload_perf20_batches(
     loader: DataLoader,
     sampler: DistributedSampler,
@@ -829,6 +1024,7 @@ def _preload_perf20_batches(
     row_indices = [int(row) for batch in batches for row in batch.get("row_indices", [])]
     row_stream = ",".join(str(row) for row in row_indices).encode("ascii")
     metadata = {
+        "mode": "full_preload",
         "required_microbatches": required,
         "loaded_microbatches": len(batches),
         "consumed_microbatches": 0,
@@ -916,11 +1112,16 @@ def _actual_resume_audit(path: Path, args: argparse.Namespace, batch_cpu: dict[s
 def run(args: argparse.Namespace) -> dict[str, Any]:
     rank, world, device = _init_dist(args)
     _seed(args.seed, rank)
+    preload_alias_conflict = args.preload_data and args.perf20_input_mode not in {"online", "full_preload"}
+    if args.preload_data and not preload_alias_conflict:
+        args.perf20_input_mode = "full_preload"
     report: dict[str, Any] = {"stage": f"{args.gate.lower()}_audio_5_10x2_5_mesh_mellow", "status": "FAIL", "configuration": vars(args), "rank": rank, "world_size": world, "checks": [], "warnings": [], "hard_failures": [], "environment": _environment_report(device, world)}
     profiler: Any | None = None
     profiler_artifacts: list[dict[str, Any]] = []
     perf_output_preexisting = False
     try:
+        if preload_alias_conflict:
+            raise ValueError("--preload-data cannot be combined with a non-full --perf20-input-mode")
         if world != args.world_size:
             raise RuntimeError(f"world size mismatch: launcher={world} requested={args.world_size}")
         if args.gate != "PERF20" and (args.save_every <= 0 or args.checkpoint_retention <= 0):
@@ -996,10 +1197,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("--profiler is isolated to PERF20; standard smoke/formal gates are unchanged")
         if args.gate != "PERF20" and args.preload_data:
             raise ValueError("--preload-data is isolated to PERF20; standard smoke/formal gates are unchanged")
-        if args.gate != "PERF20" and args.waveform_cache_dir is not None:
-            raise ValueError("--waveform-cache-dir is isolated to PERF20 until the cache path passes the performance/correctness control")
-        if args.preload_data and args.waveform_cache_dir is not None:
-            raise ValueError("PERF20 input controls are mutually exclusive: choose --preload-data or --waveform-cache-dir")
+        if args.gate != "PERF20" and args.perf20_input_mode != "online":
+            raise ValueError("--perf20-input-mode is isolated to PERF20; standard smoke/formal gates are unchanged")
+        if args.waveform_cache_dir is not None:
+            raise ValueError(
+                "--waveform-cache-dir has been retired from PERF20; the 64-shard mmap experiment is abandoned"
+            )
         model, tokenizer = _load_model(args, device)
         model.train()
         if not model.trainable_parameter_audit()["training_mode_contract"]:
@@ -1017,47 +1220,40 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         dataset = ReasonAQADataset(
             args.train_manifest,
             tokenizer,
-            waveform_cache_dir=args.waveform_cache_dir,
         )
-        sampler_audit: dict[str, Any]
-        if args.waveform_cache_dir is not None:
-            if dataset.waveform_cache is None or dataset.waveform_cache.num_shards != 64:
-                raise RuntimeError(
-                    "waveform-cache PERF20 requires the completed 64-shard contract, got "
-                    f"{None if dataset.waveform_cache is None else dataset.waveform_cache.num_shards}"
-                )
-            sampler = ShardAwareDistributedBatchSampler(
-                dataset,
-                batch_size=args.micro_batch_size,
-                num_replicas=world,
-                rank=rank,
-                seed=args.seed,
-            )
-            loader = DataLoader(
-                dataset,
-                batch_sampler=sampler,
-                num_workers=args.num_workers,
-                collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer),
-            )
-            required_perf20_microbatches = PERF20_STEPS * args.gradient_accumulation_steps
-            if len(loader) < required_perf20_microbatches:
-                raise RuntimeError(
-                    "waveform-cache PERF20 cannot remain within one shard assignment epoch: "
-                    f"batches_per_rank={len(loader)} required={required_perf20_microbatches}"
-                )
-            sampler_audit = sampler.audit()
-        else:
-            # Shuffle deterministically per epoch; set_epoch(epoch) below
-            # changes the permutation while DistributedSampler keeps rank
-            # partitions disjoint and equally sized.
-            sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, drop_last=True)
-            loader = DataLoader(dataset, batch_size=args.micro_batch_size, sampler=sampler, num_workers=args.num_workers, collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer))
-            sampler_audit = {
-                "kind": "torch_distributed_sampler",
-                "shuffle": True,
-                "drop_last": True,
-                "batches_per_rank": len(loader),
-            }
+        # All four causal controls use the original online-audio dataset and
+        # the identical global DistributedSampler contract.  No 64-shard
+        # cache or shard-owned sampler participates in these measurements.
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=world,
+            rank=rank,
+            shuffle=True,
+            seed=args.seed,
+            drop_last=True,
+        )
+        waveform_preloaded_dataset = (
+            _Perf20WaveformPreloadedDataset(dataset)
+            if args.gate == "PERF20" and args.perf20_input_mode == "waveform_preload"
+            else None
+        )
+        loader_dataset = waveform_preloaded_dataset or dataset
+        timed_collator = _TimedReasonAQACollator(tokenizer) if args.gate == "PERF20" else None
+        collate_fn = timed_collator if timed_collator is not None else lambda rows: collate_reasonaqa(rows, tokenizer)
+        loader = DataLoader(
+            loader_dataset,
+            batch_size=args.micro_batch_size,
+            sampler=sampler,
+            num_workers=args.num_workers,
+            collate_fn=collate_fn,
+        )
+        sampler_audit: dict[str, Any] = {
+            "kind": "torch_distributed_sampler",
+            "shuffle": True,
+            "seed": int(args.seed),
+            "drop_last": True,
+            "batches_per_rank": len(loader),
+        }
         if args.gradient_accumulation_steps <= 0:
             raise ValueError("gradient_accumulation_steps must be positive")
         # Only complete accumulation windows become optimizer steps.  This
@@ -1137,29 +1333,101 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             batch_in_epoch = batch_in_epoch % len(loader)
 
         preloaded_batches: list[dict[str, Any]] | None = None
-        preload_metadata: dict[str, Any] | None = None
+        input_preparation: dict[str, Any] | None = None
         preloaded_consumed = 0
-        if perf_mode and args.preload_data:
+        if perf_mode:
             required_microbatches = (int(max_steps) - int(optimizer_step)) * int(args.gradient_accumulation_steps)
-            preloaded_batches, preload_metadata = _preload_perf20_batches(
-                loader,
+            planned_rows = _planned_perf20_rows(
                 sampler,
                 epoch=epoch,
                 batch_in_epoch=batch_in_epoch,
+                micro_batch_size=args.micro_batch_size,
                 required_microbatches=required_microbatches,
             )
-            # Prevent a faster rank from entering timed DDP work while another
-            # rank is still reading/decoding from shared storage.  This one
-            # barrier is before profiler entry and every optimizer-step timer.
+            input_preparation = {
+                "mode": str(args.perf20_input_mode),
+                "required_microbatches": int(required_microbatches),
+                "duration_seconds": 0.0,
+                "barrier_wait_seconds": 0.0,
+                "cpu_tensor_bytes": 0,
+                "filesystem_cache_contract": (
+                    "no explicit warm; OS cache state is uncontrolled and this mode must not be described as guaranteed cold"
+                    if args.perf20_input_mode == "online" else
+                    "exact all-rank bounded-run file union is read before timing; online decode/resample remains timed"
+                    if args.perf20_input_mode == "warm_online" else
+                    "rank-local decoded waveforms for exact bounded rows are resident before timing"
+                    if args.perf20_input_mode == "waveform_preload" else
+                    "rank-local fully collated CPU batches are resident before timing"
+                ),
+                **_row_stream_metadata(planned_rows),
+                "process_faults_before": _process_fault_snapshot(),
+                "process_io_before": _process_io_snapshot(),
+                "cgroup_memory_before": _cgroup_memory_snapshot(),
+            }
+            saved_preparation_rng = _rng_state(device)
+            preparation_started = time.perf_counter()
+            local_preparation_error: str | None = None
+            try:
+                try:
+                    if args.perf20_input_mode == "warm_online":
+                        input_preparation.update(
+                            _warm_exact_perf20_files(dataset, planned_rows, rank=rank, world=world)
+                        )
+                    elif args.perf20_input_mode == "waveform_preload":
+                        if waveform_preloaded_dataset is None:
+                            raise RuntimeError("waveform_preload mode did not install its dataset wrapper")
+                        _, waveform_metadata = _preload_perf20_waveforms(
+                            dataset,
+                            planned_rows,
+                            target=waveform_preloaded_dataset,
+                        )
+                        input_preparation.update(waveform_metadata)
+                    elif args.perf20_input_mode == "full_preload":
+                        preloaded_batches, full_metadata = _preload_perf20_batches(
+                            loader,
+                            sampler,
+                            epoch=epoch,
+                            batch_in_epoch=batch_in_epoch,
+                            required_microbatches=required_microbatches,
+                        )
+                        if full_metadata["row_indices_sha256"] != input_preparation["row_indices_sha256"]:
+                            raise RuntimeError("full preload row stream differs from the planned causal-control stream")
+                        input_preparation.update(full_metadata)
+                    elif args.perf20_input_mode != "online":
+                        raise RuntimeError(f"unsupported PERF20 input mode: {args.perf20_input_mode}")
+                except Exception as exc:
+                    local_preparation_error = repr(exc)
+            finally:
+                # Data preparation must not change the stochastic training
+                # stream (notably bridge dropout) across the four controls.
+                _restore_rng_state(saved_preparation_rng, device)
+            input_preparation["duration_seconds"] = float(time.perf_counter() - preparation_started)
+            preparation_errors: list[str | None] = [None] * world
+            if world > 1:
+                dist.all_gather_object(preparation_errors, local_preparation_error)
+            else:
+                preparation_errors[0] = local_preparation_error
+            failed_preparations = {
+                failed_rank: error
+                for failed_rank, error in enumerate(preparation_errors)
+                if error is not None
+            }
+            if failed_preparations:
+                raise RuntimeError(f"PERF20 input preparation failed by rank: {failed_preparations}")
+            # Every control uses the same pre-measurement barrier so rank skew
+            # during preparation never leaks into optimizer-step timing.
             if world > 1:
                 barrier_started = time.perf_counter()
                 dist.barrier()
-                preload_metadata["barrier_wait_seconds"] = float(time.perf_counter() - barrier_started)
+                input_preparation["barrier_wait_seconds"] = float(time.perf_counter() - barrier_started)
+            input_preparation["process_faults_after"] = _process_fault_snapshot()
+            input_preparation["process_io_after"] = _process_io_snapshot()
+            input_preparation["cgroup_memory_after"] = _cgroup_memory_snapshot()
             if rank == 0:
                 print(
-                    "[audio-perf20] rank-local input preload complete "
-                    f"microbatches={len(preloaded_batches)} "
-                    f"expected={required_microbatches}; timed training will not access the DataLoader",
+                    "[audio-perf20] causal input preparation complete "
+                    f"mode={args.perf20_input_mode} microbatches={required_microbatches} "
+                    f"row_sha256={input_preparation['row_indices_sha256']}",
                     flush=True,
                 )
 
@@ -1240,6 +1508,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 local_multimodal_tokens = 0
                 local_max_sequence_length = 0
                 microbatch_metrics: list[dict[str, Any]] = []
+                collate_seconds_before = float(timed_collator.total_seconds) if timed_collator is not None else 0.0
                 for micro in range(args.gradient_accumulation_steps):
                     if perf_mode:
                         data_wait_started = time.perf_counter()
@@ -1306,6 +1575,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                             host_phase_seconds["backward_enqueue"] = host_phase_seconds.get("backward_enqueue", 0.0) + (time.perf_counter() - backward_started)
                         else:
                             (output.loss / args.gradient_accumulation_steps).backward()
+                if perf_mode:
+                    if timed_collator is None:
+                        raise RuntimeError("PERF20 timed collator is unavailable")
+                    host_phase_seconds["collate"] = max(
+                        0.0,
+                        float(timed_collator.total_seconds) - collate_seconds_before,
+                    )
                 owner = ddp.module if hasattr(ddp, "module") else ddp
                 if perf_mode:
                     grad_clip_started = time.perf_counter()
@@ -1402,14 +1678,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if batch_in_epoch >= steps_epoch * args.gradient_accumulation_steps:
                 epoch += 1
                 batch_in_epoch = 0
-        if preload_metadata is not None:
-            preload_metadata["consumed_microbatches"] = int(preloaded_consumed)
-            if preloaded_consumed != int(preload_metadata["required_microbatches"]):
+        if input_preparation is not None:
+            input_preparation["consumed_preloaded_microbatches"] = int(preloaded_consumed)
+            input_preparation["process_faults_after_training"] = _process_fault_snapshot()
+            input_preparation["process_io_after_training"] = _process_io_snapshot()
+            input_preparation["cgroup_memory_after_training"] = _cgroup_memory_snapshot()
+        if preloaded_batches is not None and input_preparation is not None:
+            if preloaded_consumed != int(input_preparation["required_microbatches"]):
                 raise RuntimeError(
                     "PERF20 did not consume the exact preloaded stream: "
-                    f"expected={preload_metadata['required_microbatches']} actual={preloaded_consumed}"
+                    f"expected={input_preparation['required_microbatches']} actual={preloaded_consumed}"
                 )
-        per_rank_timing = _gather_perf20_rank_timings(rank, world, metrics, preload_metadata) if args.gate == "PERF20" else None
+        per_rank_timing = _gather_perf20_rank_timings(rank, world, metrics, input_preparation) if args.gate == "PERF20" else None
         report.update({"status": "PASS", "start_step": start_step, "end_step": optimizer_step, "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "dropped_microbatches_per_epoch": dropped_microbatches, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "effective_global_batch_size": int(args.micro_batch_size * world * args.gradient_accumulation_steps), "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "routing_stats": {"enabled": args.gate != "PERF20", "mode": "disabled_for_perf20" if args.gate == "PERF20" else "continuous_per_forward", "reported_in_each_step": args.gate != "PERF20", "reason": "per-router .cpu() statistics would add CUDA synchronizations to the PERF20 timing path" if args.gate == "PERF20" else None}, "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "runtime_gradient_audit": runtime_gradient_audit, "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
         report["correctness_audit"] = {
             "mesh_runtime_gradient_audit": runtime_gradient_audit,
@@ -1418,76 +1698,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         }
         if args.gate == "PERF20" and rank == 0:
             report["per_rank_timing"] = per_rank_timing
-            input_mode = (
-                "preloaded_cpu_batches"
-                if args.preload_data else
-                "waveform_shard_mmap"
-                if args.waveform_cache_dir is not None else
-                "raw_audio_files"
-            )
-            cached_microbatches = [
-                microbatch
-                for metric in metrics
-                for microbatch in metric.get("microbatches", [])
-                if "waveform_cache_shards_touched" in microbatch
-            ]
-            cache_locality = None
-            if cached_microbatches:
-                cache_locality = {
-                    "rank0_measured_microbatches": len(cached_microbatches),
-                    "single_primary_shard_microbatches": sum(
-                        len(item["waveform_cache_primary_shards"]) == 1
-                        for item in cached_microbatches
-                    ),
-                    "shards_touched_per_microbatch": _distribution([
-                        float(len(item["waveform_cache_shards_touched"]))
-                        for item in cached_microbatches
-                    ]),
-                }
+            input_mode = str(args.perf20_input_mode)
+            timed_source = {
+                "online": "DataLoader reads/decodes/resamples encoded audio and tokenizes/collates during each measured step",
+                "warm_online": "same online DataLoader path after exact bounded-run file bytes were read before timing",
+                "waveform_preload": "rank-local waveform RAM lookup plus timed tokenization/collate",
+                "full_preload": "rank-local fully collated CPU batch list",
+            }[input_mode]
             report["data_pipeline"] = {
                 "mode": input_mode,
-                "preloaded": bool(args.preload_data),
-                "waveform_cache_enabled": args.waveform_cache_dir is not None,
-                "timed_source": (
-                    "rank-local preloaded CPU batch list"
-                    if args.preload_data else
-                    "DataLoader over copy-on-write mmap of fixed float32 waveform shards"
-                    if args.waveform_cache_dir is not None else
-                    "DataLoader over shared-storage encoded audio files"
-                ),
-                "preload_scope": (
-                    f"exactly {PERF20_STEPS * args.gradient_accumulation_steps} microbatches per rank before profiler/timing"
-                    if args.preload_data else None
-                ),
-                "training_dataloader_accesses": 0 if args.preload_data else PERF20_STEPS * args.gradient_accumulation_steps,
-                "synchronization": (
-                    "one barrier after all ranks preload and before profiler/timing; no preload collective inside measured steps"
-                    if args.preload_data else None
-                ),
-                "preload_by_rank": per_rank_timing.get("preload_by_rank", []) if per_rank_timing else [],
-                "preload_summary": per_rank_timing.get("preload_summary") if per_rank_timing else None,
-                "waveform_cache": ({
-                    "cache_dir": str(dataset.waveform_cache.cache_dir),
-                    "format": dataset.waveform_cache.metadata.get("format"),
-                    "num_shards": dataset.waveform_cache.num_shards,
-                    "num_unique_audio_files": dataset.waveform_cache.metadata.get("num_unique_audio_files"),
-                    "total_waveform_gib": dataset.waveform_cache.metadata.get("total_waveform_gib"),
-                    "mmap_mode": "copy-on-write",
-                    "online_audio_decode_resample_crop_pad": False,
-                    "sampler": sampler_audit,
-                    "measured_locality": cache_locality,
-                } if dataset.waveform_cache is not None else None),
+                "preloaded": input_mode in {"waveform_preload", "full_preload"},
+                "waveform_cache_enabled": False,
+                "retired_waveform_shard_experiment": True,
+                "timed_source": timed_source,
+                "training_dataloader_accesses": 0 if input_mode == "full_preload" else PERF20_STEPS * args.gradient_accumulation_steps,
+                "synchronization": "one barrier in every causal-control mode after preparation and before profiler/timing",
+                "sampler": sampler_audit,
+                "input_preparation_by_rank": per_rank_timing.get("input_preparation_by_rank", []) if per_rank_timing else [],
+                "input_preparation_summary": per_rank_timing.get("input_preparation_summary") if per_rank_timing else None,
             }
             report["steady_state_summary"] = _perf_steady_summary(metrics, args, max_steps)
             report["timing_semantics"] = {
                 "step_time_seconds": "rank0 wall-clock from before the first microbatch data wait through the single CUDA synchronize after all metrics/collectives; this is the completion-inclusive step duration",
-                "phase_timings_host_seconds": "host wall/enqueue timings; per-microbatch data_wait/dispatch/forward/backward values are summed within the optimizer step; data_wait includes only in-memory iterator access with --preload-data, mmap row access plus tokenization/collate with --waveform-cache-dir, or encoded-file read/decode/resample plus tokenization/collate otherwise; scheduler_host is CPU/Python scheduler.step(), and metrics_enqueue_host ends after collective launch rather than after CUDA/NCCL completion",
+                "phase_timings_host_seconds": "host wall/enqueue timings; data_wait is summed around next(data_iter), collate is the measured tokenizer+collator subset, and full_preload has near-zero values for both; scheduler_host is CPU/Python scheduler.step(), and metrics_enqueue_host ends after collective launch rather than after CUDA/NCCL completion",
                 "phase_timings_device_seconds": "CUDA event elapsed timings resolved after one unified end-of-step synchronize; per-microbatch device values are summed within the optimizer step; metrics_collectives includes the device/NCCL work through its event and therefore is completion-inclusive",
                 "host_to_device": "rank0 CUDA event elapsed time around tensor .to(device) for every microbatch; host_to_device_enqueue separately records host dispatch time",
                 "forward_backward_optimizer": "rank0 CUDA event elapsed time; DDP gradient collectives are included in backward; host enqueue fields are reported separately",
                 "metrics_collectives": "global token counts use one identical all_reduce sequence on every rank; no rank-specific collective is introduced, and its device timing is not the enqueue-only host latency",
                 "per_rank_timing": "all ranks retain local data/forward/backward/step timings during training; one gather_object runs only after the final measured optimizer step and is excluded from every step duration",
-                "preload_control": "when enabled, each rank materializes exactly 80 CPU microbatches and crosses one pre-measurement barrier before rank0 enters torch.profiler; measured steps perform no DataLoader/shared-storage access",
+                "causal_input_controls": "online, warm_online, waveform_preload, and full_preload use the same per-rank row hash, restored preparation RNG state, and one pre-measurement barrier",
                 "steady_state": "optimizer steps 6-20 by default, excluding profiler wait/warmup/active steps when profiling is enabled",
             }
     except Exception as exc:

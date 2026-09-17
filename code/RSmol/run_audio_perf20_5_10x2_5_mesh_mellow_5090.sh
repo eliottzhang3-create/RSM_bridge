@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# Independent 8x5090 PERF20 launcher. Pass --preload-data for the rank-local
-# in-memory control, --waveform-cache-dir for the fixed-shard mmap control,
-# and --profiler for profiling. Output directories are generated uniquely by
-# the inner script unless --output-dir is supplied.
+# Independent 8x5090 PERF20 launcher. Select one strict causal input control
+# with --perf20-input-mode: online, warm_online, waveform_preload, or
+# full_preload.  The retired 64-shard mmap experiment is not used. Pass
+# --profiler only when an operator trace is explicitly needed.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 mkdir -p log

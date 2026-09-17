@@ -571,7 +571,7 @@ bash code/RSmol/run_audio_formal_5_10x2_5_mesh_mellow_5090.sh \
 
 ### 9.3.1 PERF20 可复现性能基线与 torch.profiler
 
-当前状态（2026-09-16）：PERF20 baseline、独立 `torch.profiler`、`num_workers=2/rank` 对照、逐 rank timing 和 rank-local 全量预加载对照均已完成远程采集。结果显示不存在固定慢 rank；慢 rank 随 step 轮换，共享存储读取/音频解码形成随机长尾后会通过 DDP/NCCL 把等待传播到 forward/backward 等同步位置。`64 CPU + num_workers=2/rank` 反而把 profiler 稳态 step 中位数从约 12.01 秒恶化到约 30.72 秒，因此已经回退为 32 CPU、`num_workers=0`。全量预加载把稳态 step 中位数降到约 0.984 秒，进一步确认主要瓶颈在在线输入路径；当前进入 64 个离线 float32 waveform shard 的 mmap 流式读取对照。
+当前状态（2026-09-17）：PERF20 baseline、独立 `torch.profiler`、`num_workers=2/rank` 对照、逐 rank timing、rank-local 全量预加载和 64-shard mmap 对照均已完成远程采集。结果显示不存在固定慢 rank；慢 rank 随 step 轮换，共享存储读取/音频解码形成随机长尾后会通过 DDP/NCCL 把等待传播到 forward/backward 等同步位置。`64 CPU + num_workers=2/rank` 反而把 profiler 稳态 step 中位数从约 12.01 秒恶化到约 30.72 秒，因此已经回退为 32 CPU、`num_workers=0`。全量预加载把稳态 step 中位数降到约 0.984 秒；64-shard 随机 mmap 则约 27.51 秒，表现差于原始在线输入。64-shard PERF20 接口已经停用，当前回到原始编码音频路径，使用四组严格因果对照继续拆分文件缓存、decode/resample、tokenization/collate 的开销。
 
 性能测量入口与标准 STAGE5/STAGE7/FORMAL 完全隔离：
 
@@ -580,7 +580,7 @@ code/RSmol/scripts/train_audio_perf20_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
 ```
 
-PERF20 当前恢复为 8×5090、32 个 CPU 核、每 rank `num_workers=0`、每卡 micro-batch 8、GA=4、20 个 optimizer steps、BF16、seed=0、最终 drop12 manifest、第二轮 MeSH checkpoint、HTSAT/Mellow 默认路径；它不会保存 checkpoint、执行 reload audit 或 prune，也拒绝复用已有输出目录。此前 `64 CPU + num_workers=2/rank` 实验因共享存储长尾与 rank 失步导致吞吐显著下降，已回退。默认 profiler 关闭，提交命令为：
+PERF20 当前恢复为 8×5090、32 个 CPU 核、每 rank `num_workers=0`、每卡 micro-batch 8、GA=4、20 个 optimizer steps、BF16、seed=0、最终 drop12 manifest、第二轮 MeSH checkpoint、HTSAT/Mellow 默认路径；它不会保存 checkpoint、执行 reload audit 或 prune，也拒绝复用已有输出目录。此前 `64 CPU + num_workers=2/rank` 实验因共享存储长尾与 rank 失步导致吞吐显著下降，已回退。默认 profiler 关闭，默认输入模式是未主动预热的原始在线路径：
 
 ```bash
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
@@ -592,26 +592,29 @@ bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh --profiler
 ```
 
-全量预加载对照使用同一个 PERF20 合同，但每个 rank 会在 profiler 与 step 计时开始前依照相同 `DistributedSampler` 顺序，把 `20 steps × GA4 = 80` 个 CPU microbatch 全部物化到内存；随后经过一次测量前 barrier，20 个训练 step 只从 rank-local Python 列表取 batch，不再读取共享存储、解码/重采样音频或执行 tokenization/collate。默认先运行无 profiler 对照：
-
-```bash
-bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh --preload-data
-```
-
-预加载使用独立的 `perf20_preloaded_*` 输出目录。`perf20_report.json.data_pipeline` 和 `per_rank_timing.preload_*` 会记录逐 rank 加载/消费 batch 数、样本数、预加载耗时、barrier 等待、CPU tensor 字节数和 row-index 顺序哈希；加载数或消费数不是精确 80 会硬失败。需要采集预加载版本的算子 trace 时可同时传 `--preload-data --profiler`。
-
-64-shard 对照只在 PERF20 开放，并与 `--preload-data` 互斥。它会先严格核对 `metadata.json.status=PASS`、index SHA256、64 个 shard 的行数/字节数以及训练 manifest 中所有音频路径；每个 epoch 用同一 seed 全局打乱 shard 后，给 8 个 rank 各分配互不重叠的 8 个 primary shard，再对 rank-local shard 顺序和 shard 内 QA 行做打乱。各 rank 按最少完整 batch 数截齐，避免 DDP 长度不一致；完整 interior batch 不跨 primary shard，只有每个 shard 不足一个 batch 的尾样本池可能混合。一个 QA 的 audio2 若与 audio1 落在不同物理 shard，仍会按索引读取第二个 shard。运行命令为：
+四组因果对照全部使用同一个 `DistributedSampler(seed=0)`、相同逐 rank row stream、相同模型/优化器合同，并在准备后恢复 RNG 状态、执行同样的一次测量前 barrier。每个 report 都保存逐 rank row-index SHA256；四次运行同一 rank 的 SHA256 必须一致。`online` 不主动预热文件，但操作系统缓存状态无法由普通作业强制清空，因此不得表述为“保证冷缓存”。四组命令为：
 
 ```bash
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
-  --waveform-cache-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_audio_waveform_shards_32k_10s_f32_v1
+  --perf20-input-mode online
+
+bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
+  --perf20-input-mode warm_online
+
+bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
+  --perf20-input-mode waveform_preload
+
+bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
+  --perf20-input-mode full_preload
 ```
 
-该模式使用独立的 `perf20_waveform_shards_*` 输出目录。它通过 copy-on-write `numpy.memmap` 按行读取，不把约 115 GiB cache 整体装入 RAM，也不再在线读取/解码/重采样/裁剪/补零原始音频；tokenization、collate、mmap 缺页和 host-to-device 仍在真实计时链路中。`perf20_report.json.data_pipeline.waveform_cache` 会记录 shard 合同、所有 rank 的 shard 分配、各 rank 候选 batch 数、跨 shard audio2 数以及 rank0 实测每个 microbatch 触达的 shard 数。
+`warm_online` 由 rank0 收集 8 个 rank 在这 20 步将访问的 audio1/audio2 文件并去重，按文件名排序、逐文件顺序读完全部字节，然后所有 rank barrier；训练计时中仍执行完全相同的在线 load/decode/resample/crop/pad 和 tokenization/collate。`waveform_preload` 只在每个 rank 的准备阶段解码其准确 640 条 row 的 waveform；计时阶段仍通过 DataLoader 执行 tokenization/collate。`full_preload` 则提前物化精确 80 个已 collate CPU microbatch，计时中不再访问 DataLoader 或共享存储；旧 `--preload-data` 仅作为 `full_preload` 兼容别名保留。
+
+四种模式分别写入 `perf20_online_*`、`perf20_warm_online_*`、`perf20_waveform_preload_*` 和 `perf20_full_preload_*`。`perf20_report.json.data_pipeline` 与 `per_rank_timing.input_preparation_*` 记录准备耗时、barrier、CPU tensor 容量、row hash、进程 page-fault/`/proc/self/io` 计数和 cgroup `anon/file` 内存快照。远程文件系统不一定把全部流量计入 `read_bytes`，因此 I/O 计数只作为辅助证据。报告额外把 tokenizer+collate 时间作为 `collate` 子项，从总 `data_wait` 中独立观察。若要采 profiler，可在任一模式后追加 `--profiler`，但第一轮因果比较应统一使用无 profiler。
 
 profiler 只在 rank0 创建，activities 为 CPU+CUDA，`profiler.step()` 的粒度是 optimizer step；默认 schedule 是 `skip_first=4, wait=1, warmup=1, active=2, repeat=1`，默认关闭 `with_stack/profile_memory/record_shapes`。每个 completed schedule cycle 都在 `on_trace_ready` 中导出不覆盖的 trace 与 operator summary（`profile/cycle_<nn>_step_<nnnn>/`，summary 文件名也包含 cycle/step）；主报告 `perf20_report.json` 的 `profiler.artifacts` 列出所有 cycle 的 trace/summary 路径。可用 `--profiler-with-stack`、`--profiler-profile-memory`、`--profiler-record-shapes` 和对应 schedule CLI 开关扩大采集；脚本会校验 20 步内能完成 schedule。
 
-PERF20 报告逐 optimizer step 记录 data_wait（普通模式包括 `next(DataLoader)`；预加载模式只包括内存 iterator 取数）、host-to-device、forward、backward、grad_clip、optimizer、scheduler、metrics/collectives 的分层计时，并记录每个 microbatch 的实际 sequence length、文本非 padding token 与多模态 token。GPU 运算使用 CUDA event，在每个 optimizer step 末尾只做一次统一 CUDA synchronize；data_wait、scheduler 和 metrics 的 host 字段是清楚标注的 host enqueue/wall 时间，不能被误读为 CUDA/NCCL 完成时间；metrics/collectives 的 device 字段覆盖同步完成，step wall 也覆盖这次同步。稳定吞吐默认只统计 steps 6–20，并排除 profiler wait/warmup/active steps；报告 median/P25/P75、samples/s、audio seconds/s、多模态/非 padding tokens/s、rank0 峰值 allocated/reserved 显存。token 数由各 rank 按一致顺序 all-reduce 汇总；不会把 profiler warmup/active overhead 当作无 profiler 基线。
+PERF20 报告逐 optimizer step 记录 data_wait、其中的 tokenizer/collate 子集、host-to-device、forward、backward、grad_clip、optimizer、scheduler、metrics/collectives 的分层计时，并记录每个 microbatch 的实际 sequence length、文本非 padding token 与多模态 token。GPU 运算使用 CUDA event，在每个 optimizer step 末尾只做一次统一 CUDA synchronize；data_wait、scheduler 和 metrics 的 host 字段是清楚标注的 host enqueue/wall 时间，不能被误读为 CUDA/NCCL 完成时间；metrics/collectives 的 device 字段覆盖同步完成，step wall 也覆盖这次同步。稳定吞吐默认只统计 steps 6–20，并排除 profiler wait/warmup/active steps；报告 median/P25/P75、samples/s、audio seconds/s、多模态/非 padding tokens/s、rank0 峰值 allocated/reserved 显存。token 数由各 rank 按一致顺序 all-reduce 汇总；不会把 profiler warmup/active overhead 当作无 profiler基线。
 
 为定位 DDP straggler，每个 rank 还会在本地保留每个 optimizer step 的 `data_wait`、CUDA-event `forward/backward` 和完成态 step wall；20 步结束后才执行一次 `gather_object` 汇总到 rank0，不在被测训练循环中增加任何 collective。`perf20_report.json.per_rank_timing` 同时包含逐 rank 原始值、逐 rank 分布，以及每一步跨 rank 的 min/median/max、最快/最慢 rank 和 max/min ratio。
 
@@ -669,7 +672,7 @@ python code/RSmol/scripts/prepare_audio_waveform_shards.py \
 
 生成器每次只打开一个目标 shard，不把全部 waveform 放入内存；输出目录已存在时默认拒绝覆盖。每个约 1.8 GiB shard 先写隐藏 `.partial`，完成并 `fsync` 后原子改名；若进程中断，已完成 shard 保留，使用完全相同的源目录/seed/shard 参数并追加 `--resume` 即可继续，最多重做当时未完成的一个 shard。resume 会严格核对源文件 path/size/mtime inventory、build config 和 index SHA256。最终 `metadata.json.status=PASS` 且 `BUILDING` 标记被删除才代表生成完成。
 
-物理 shard 在创建后保持不变。PERF20 读取器/采样器已经接入：每个 epoch 先全局 shuffle 64 个 shard，给 8 个 rank 各分配互不重叠的 8 个 primary shard，再对 rank-local shard 顺序及每个 shard 内的 QA 行独立 shuffle。当前仍刻意只允许用于 PERF20；在远程 correctness/performance 对照通过前，不改变 FORMAL 的数据入口。
+物理 shard 在创建后保持不变。远程对照已经证明随机 mmap 约 27.51 秒/step，差于原始在线路径，因此 2026-09-17 起停用 PERF20 的 `--waveform-cache-dir` 与 shard-aware sampler 接口；生成器、reader 和历史测试代码暂时保留用于结果复现，但当前性能实验和 FORMAL 都不读取这批 64-shard 数据。
 
 ### 9.3.4 固定 5-10-5 recursive 音频正式训练
 

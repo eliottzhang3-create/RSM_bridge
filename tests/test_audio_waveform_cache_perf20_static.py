@@ -79,24 +79,20 @@ class AudioWaveformCachePerf20StaticTest(unittest.TestCase):
         samplers[0].set_epoch(1)
         self.assertNotEqual(rank_batches[0], list(iter(samplers[0])))
 
-    def test_perf20_flag_is_isolated_and_reported(self) -> None:
+    def test_waveform_shard_experiment_is_retired_from_perf20(self) -> None:
         train = TRAIN.read_text(encoding="utf-8")
         inner = INNER.read_text(encoding="utf-8")
         for marker in (
             '"--waveform-cache-dir"',
-            "waveform-cache PERF20 requires the completed 64-shard contract",
-            "ShardAwareDistributedBatchSampler",
-            '"waveform_shard_mmap"',
-            '"online_audio_decode_resample_crop_pad": False',
-            '"mmap_mode": "copy-on-write"',
-            '"measured_locality"',
-            "waveform-cache PERF20 cannot remain within one shard assignment epoch",
-            "PERF20 input controls are mutually exclusive",
+            "the 64-shard mmap experiment is abandoned",
+            '"retired_waveform_shard_experiment": True',
+            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload")',
         ):
             self.assertIn(marker, train)
         self.assertIn('"shards_per_rank"', DATA.read_text(encoding="utf-8"))
-        self.assertIn("--waveform-cache-dir|--waveform-cache-dir=*", inner)
-        self.assertIn('PERF20_OUTPUT_PREFIX="perf20_waveform_shards"', inner)
+        self.assertNotIn("ShardAwareDistributedBatchSampler", train)
+        self.assertNotIn("--waveform-cache-dir", inner)
+        self.assertNotIn("perf20_waveform_shards", inner)
 
 
 if __name__ == "__main__":

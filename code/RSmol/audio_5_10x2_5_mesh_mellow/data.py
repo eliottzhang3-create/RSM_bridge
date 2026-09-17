@@ -232,15 +232,24 @@ class ReasonAQADataset(Dataset[dict[str, Any]]):
     def __len__(self) -> int:
         return len(self.rows)
 
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        row = self.rows[index]
+    def audio_paths(self, index: int) -> tuple[str, str]:
+        """Return the normalized two-clip input contract without reading audio."""
+
+        row = self.rows[int(index)]
         audio1 = _path(row, True)
         audio2 = _path(row, False)
         audio2 = audio2 or audio1
+        if not audio1:
+            raise ValueError(f"manifest row {index} lacks audio1")
+        return audio1, audio2
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        row = self.rows[index]
+        audio1, audio2 = self.audio_paths(index)
         prompt = str(row.get("prompt") or row.get("question") or row.get("input") or "")
         answer = str(row.get("answer") or row.get("target") or row.get("output") or row.get("caption1") or "")
-        if not audio1 or not answer:
-            raise ValueError(f"manifest row {index} lacks audio1 or answer")
+        if not answer:
+            raise ValueError(f"manifest row {index} lacks answer")
         if self.waveform_cache is None:
             audio1_waveform = load_waveform(audio1, sample_rate=self.sample_rate, seconds=self.seconds)
             audio2_waveform = None if audio2 == audio1 else load_waveform(audio2, sample_rate=self.sample_rate, seconds=self.seconds)

@@ -23,7 +23,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             self.assertTrue(path.is_file(), path)
         inner = INNER.read_text(encoding="utf-8")
         submit = SUBMIT.read_text(encoding="utf-8")
-        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID", "PERF20_OUTPUT_PREFIX", "perf20_preloaded", "perf20_waveform_shards"):
+        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID", "PERF20_OUTPUT_PREFIX", "online|warm_online|waveform_preload|full_preload"):
             self.assertIn(marker, inner)
         self.assertIn("vc submit", submit)
         self.assertIn("-c 32", submit)
@@ -57,7 +57,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             '"per_step_collectives_added": 0',
         ):
             self.assertIn(marker, text)
-        gather_call = 'per_rank_timing = _gather_perf20_rank_timings(rank, world, metrics, preload_metadata)'
+        gather_call = 'per_rank_timing = _gather_perf20_rank_timings(rank, world, metrics, input_preparation)'
         self.assertEqual(text.count(gather_call), 1)
         self.assertGreater(text.index(gather_call), text.index("while optimizer_step < max_steps:"))
         self.assertGreater(text.index(gather_call), text.index("if batch_in_epoch >= steps_epoch * args.gradient_accumulation_steps:"))
@@ -78,6 +78,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
                 "steps": [{
                     "step": 1,
                     "data_wait_seconds": float(rank + 1),
+                    "collate_seconds": 0.25,
                     "forward_device_seconds": 2.0,
                     "backward_device_seconds": 3.0,
                     "step_wall_seconds": float(10 + rank),
@@ -93,46 +94,86 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         self.assertEqual(len(report["raw_by_rank"]), 2)
 
         for rank, payload in enumerate(payloads):
-            payload["preload"] = {
+            payload["input_preparation"] = {
+                "mode": "full_preload",
                 "duration_seconds": float(20 + rank),
                 "barrier_wait_seconds": float(rank),
                 "cpu_tensor_bytes": 1024**3,
+                "row_indices_sha256": f"rank-{rank}",
                 "required_microbatches": 80,
                 "loaded_microbatches": 80,
                 "consumed_microbatches": 80,
             }
         preloaded_report = namespace["_per_rank_timing_report"](payloads, 2)
-        self.assertEqual(len(preloaded_report["preload_by_rank"]), 2)
-        self.assertEqual(preloaded_report["preload_summary"]["rank_count"], 2)
-        self.assertEqual(preloaded_report["preload_summary"]["cpu_tensor_gib"]["median"], 1.0)
+        self.assertEqual(len(preloaded_report["input_preparation_by_rank"]), 2)
+        self.assertEqual(preloaded_report["input_preparation_summary"]["rank_count"], 2)
+        self.assertEqual(preloaded_report["input_preparation_summary"]["cpu_tensor_gib"]["median"], 1.0)
         self.assertIn("preloaded_cpu_batches", preloaded_report["timing_sources"]["data_wait_seconds"])
 
-    def test_preloaded_control_is_exact_and_outside_measurement(self) -> None:
+    def test_planned_rows_are_an_exact_sampler_slice(self) -> None:
+        source = TRAIN.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        selected = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_planned_perf20_rows"
+        )
+        namespace = {"DistributedSampler": object}
+        exec(compile(ast.Module(body=[selected], type_ignores=[]), str(TRAIN), "exec"), namespace)
+
+        class Sampler:
+            def __init__(self) -> None:
+                self.epoch = None
+
+            def set_epoch(self, epoch: int) -> None:
+                self.epoch = epoch
+
+            def __iter__(self):
+                return iter(range(100))
+
+        sampler = Sampler()
+        rows = namespace["_planned_perf20_rows"](
+            sampler,
+            epoch=3,
+            batch_in_epoch=2,
+            micro_batch_size=4,
+            required_microbatches=3,
+        )
+        self.assertEqual(sampler.epoch, 3)
+        self.assertEqual(rows, list(range(8, 20)))
+
+    def test_four_causal_controls_are_exact_and_outside_measurement(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
         for marker in (
             '"--preload-data"',
+            '"--perf20-input-mode"',
+            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload")',
+            "def _planned_perf20_rows",
+            "def _warm_exact_perf20_files",
+            "def _preload_perf20_waveforms",
             "def _preload_perf20_batches",
             "required_microbatches = (int(max_steps) - int(optimizer_step)) * int(args.gradient_accumulation_steps)",
             '"required_microbatches": required',
             '"loaded_microbatches": len(batches)',
             '"consumed_microbatches": 0',
-            'preload_metadata["consumed_microbatches"] = int(preloaded_consumed)',
+            'input_preparation["consumed_preloaded_microbatches"] = int(preloaded_consumed)',
             '"row_indices_sha256"',
             '"cpu_tensor_bytes"',
-            '"preloaded": bool(args.preload_data)',
-            '"training_dataloader_accesses": 0 if args.preload_data',
-            '"preload_by_rank"',
-            '"preload_summary"',
+            '"preloaded": input_mode in {"waveform_preload", "full_preload"}',
+            '"training_dataloader_accesses": 0 if input_mode == "full_preload"',
+            '"input_preparation_by_rank"',
+            '"input_preparation_summary"',
+            '_restore_rng_state(saved_preparation_rng, device)',
         ):
             self.assertIn(marker, text)
-        preload_call = "preloaded_batches, preload_metadata = _preload_perf20_batches("
+        preload_call = "preloaded_batches, full_metadata = _preload_perf20_batches("
         profiler_entry = "profiler = _make_profiler(args, profile_dir, profiler_artifacts)"
         step_timer = "step_started = time.perf_counter()"
         self.assertLess(text.index(preload_call), text.index(profiler_entry))
         self.assertLess(text.index(preload_call), text.index(step_timer))
         self.assertIn("preloaded_data_iter = iter(preloaded_batches)", text)
         self.assertIn("data_iter = preloaded_data_iter", text)
-        self.assertIn("dist.barrier()", text[text.index(preload_call):text.index(profiler_entry)])
+        preparation_start = text.index("saved_preparation_rng = _rng_state(device)")
+        self.assertIn("dist.barrier()", text[preparation_start:text.index(profiler_entry)])
 
     def test_perf20_audit_does_not_require_syncing_router_statistics(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
@@ -163,7 +204,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
 
     def test_phase_timing_token_report_contract(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
-        for marker in ("data_wait", "next(data_iter)", "host_to_device", "forward", "backward", "grad_clip", "optimizer", "scheduler", "metrics", "DDP/collectives", "microbatch_metrics", "sequence_length", "nonpadding_tokens_per_second", "multimodal_tokens_per_second", "steady_state_summary", "peak_gpu_memory_allocated_gib", "peak_gpu_memory_reserved_gib", "correctness_audit", "phase_timings_host_seconds", "phase_timings_device_seconds", "metrics_collectives", "metrics_enqueue_host", "scheduler_host"):
+        for marker in ("data_wait", "collate", "next(data_iter)", "host_to_device", "forward", "backward", "grad_clip", "optimizer", "scheduler", "metrics", "DDP/collectives", "microbatch_metrics", "sequence_length", "nonpadding_tokens_per_second", "multimodal_tokens_per_second", "steady_state_summary", "peak_gpu_memory_allocated_gib", "peak_gpu_memory_reserved_gib", "correctness_audit", "phase_timings_host_seconds", "phase_timings_device_seconds", "metrics_collectives", "metrics_enqueue_host", "scheduler_host"):
             self.assertIn(marker, text)
         self.assertIn("torch.cuda.Event(enable_timing=True)", text)
         self.assertIn("rank0 wall-clock", text)

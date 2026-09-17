@@ -13,17 +13,32 @@ DEFAULT_HTSAT="/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Sa
 DEFAULT_MELLOW="/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
 DEFAULT_MANIFEST="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl"
 PERF20_RUN_ID="${PERF20_RUN_ID:-$(date +%Y%m%d_%H%M%S%N)-$$}"
-PERF20_OUTPUT_PREFIX="perf20"
-for argument in "$@"; do
+PERF20_INPUT_MODE="online"
+PERF20_ARGS=("$@")
+for ((argument_index=0; argument_index<${#PERF20_ARGS[@]}; argument_index++)); do
+  argument="${PERF20_ARGS[$argument_index]}"
   case "$argument" in
     --preload-data)
-      PERF20_OUTPUT_PREFIX="perf20_preloaded"
+      PERF20_INPUT_MODE="full_preload"
       ;;
-    --waveform-cache-dir|--waveform-cache-dir=*)
-      PERF20_OUTPUT_PREFIX="perf20_waveform_shards"
+    --perf20-input-mode=*)
+      PERF20_INPUT_MODE="${argument#*=}"
+      ;;
+    --perf20-input-mode)
+      argument_index=$((argument_index + 1))
+      PERF20_INPUT_MODE="${PERF20_ARGS[$argument_index]:-}"
       ;;
   esac
 done
+case "$PERF20_INPUT_MODE" in
+  online|warm_online|waveform_preload|full_preload)
+    PERF20_OUTPUT_PREFIX="perf20_${PERF20_INPUT_MODE}"
+    ;;
+  *)
+    echo "invalid PERF20 input mode: $PERF20_INPUT_MODE" >&2
+    exit 2
+    ;;
+esac
 DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/${PERF20_OUTPUT_PREFIX}_${PERF20_RUN_ID}"
 
 # Keep the baseline explicit, but do not pass both sides of the mutually
