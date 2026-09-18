@@ -1029,3 +1029,11 @@ git diff --check
 - Parcae 参考实现：<https://github.com/sandyresearch/parcae>
 
 外部论文解释设计，当前仓库代码和最新远程 report 决定实际实验合同。
+
+## 16. 六分区 rank-RAM 音频训练（2026-09-18，待远程 smoke）
+
+独立入口 `code/RSmol/scripts/train_audio_partitioned_5_10x2_5_mesh_mellow_ddp.py`，不修改历史固定 260-prefix FORMAL/PERF20 gate。读取已 PASS 的六分区物化目录 `rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2`。每个 rank 完整克隆当前分区的已解码 32 kHz、10 s、float32 waveform 到 CPU 匿名内存，训练期间不再读取 waveform store；同步后严格释放、`gc.collect`/`malloc_trim`，检查每 rank RSS 和 cgroup anon 回落，才允许加载下一分区。进程组超时默认 30 分钟。
+
+每个分区内所有 QA 一起 shuffle，单/双音频不分池；不足完整步时只从同一分区的乱序开头补齐。0 分区用 1088 个完整全局 batch（278528 条），不重复；其余五分区每 epoch 合计 2693 步。每 epoch 共 3781 步，`--epochs` 为正整数，warm-up 严格取总步数的 5% 向上取整。分区顺序每 epoch 重排，0 分区不在末位。每条真实单槽样本是 129+1=130 个 prefix token；显式双槽（包括两条路径相同）仍是 129+1+129+1=260，文本紧跟各自 prefix，loss 只覆盖答案。混合 batch 逐条正确 padding/mask。
+
+先运行 smoke：p2 全量加载训练 10 步、释放；p0 加载训练 10 步、释放；保存 `checkpoint-000020`。再使用同一 smoke 入口、**新的输出目录**和 `--resume-from .../checkpoint-000020`，加载 p1 训练 2 步并释放、保存 `checkpoint-000022`。正式入口要求这两次 PASS report 及其关联的 checkpoint20，未经远程 smoke 不放行。当前只完成本地静态/采样测试；8-GPU、HTSAT 和实际内存回落仍需远程报告确认，不能称为已 PASS。

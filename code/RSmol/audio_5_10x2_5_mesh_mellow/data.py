@@ -269,6 +269,12 @@ class UniqueWaveformStore:
             )
         return torch.from_numpy(self._mmap[audio_id]).reshape(1, self.samples_per_audio)
 
+    def close(self) -> None:
+        """Close the mapped payload after all borrowed views have been dropped."""
+        mapped, self._mmap = self._mmap, None
+        if mapped is not None:
+            mapped._mmap.close()
+
 
 def load_waveform(path: str | Path, *, sample_rate: int = 32000, seconds: int = 10) -> torch.Tensor:
     path = Path(path)
@@ -365,28 +371,43 @@ class ReasonAQADataset(Dataset[dict[str, Any]]):
             raise ValueError(f"manifest row {index} lacks audio1")
         return audio1, audio2
 
+    def audio_structure(self, index: int) -> tuple[bool, bool]:
+        """Return (single_slot, same_waveform) from manifest structure.
+
+        ``audio2_reused`` is the materializer's explicit marker for a missing
+        second slot.  A row with two explicit identical paths remains dual;
+        it must retain the second separator/prefix even though its waveform
+        can be encoded once.
+        """
+        row = self.rows[int(index)]
+        raw2 = _path(row, False)
+        single = bool(row.get("audio2_reused", False)) or not bool(raw2)
+        audio1, audio2 = self.audio_paths(index)
+        return single, audio1 == audio2
+
     def __getitem__(self, index: int) -> dict[str, Any]:
         row = self.rows[index]
         audio1, audio2 = self.audio_paths(index)
+        single_slot, same_waveform = self.audio_structure(index)
         prompt = str(row.get("prompt") or row.get("question") or row.get("input") or "")
         answer = str(row.get("answer") or row.get("target") or row.get("output") or row.get("caption1") or "")
         if not answer:
             raise ValueError(f"manifest row {index} lacks answer")
         if self.unique_waveform_store is not None:
             audio1_waveform = self.unique_waveform_store.load(audio1)
-            audio2_waveform = None if audio2 == audio1 else self.unique_waveform_store.load(audio2)
+            audio2_waveform = None if single_slot else (audio1_waveform if same_waveform else self.unique_waveform_store.load(audio2))
             cache_shard_ids = None
         elif self.waveform_cache is None:
             audio1_waveform = load_waveform(audio1, sample_rate=self.sample_rate, seconds=self.seconds)
-            audio2_waveform = None if audio2 == audio1 else load_waveform(audio2, sample_rate=self.sample_rate, seconds=self.seconds)
+            audio2_waveform = None if single_slot else (audio1_waveform if same_waveform else load_waveform(audio2, sample_rate=self.sample_rate, seconds=self.seconds))
             cache_shard_ids = None
         else:
             first_location = self.waveform_cache.locate(audio1)
             second_location = first_location if audio2 == audio1 else self.waveform_cache.locate(audio2)
             audio1_waveform = self.waveform_cache.load_location(first_location)
-            audio2_waveform = None if audio2 == audio1 else self.waveform_cache.load_location(second_location)
+            audio2_waveform = None if single_slot else (audio1_waveform if same_waveform else self.waveform_cache.load_location(second_location))
             cache_shard_ids = (first_location.shard_id, second_location.shard_id)
-        item = {"audio1": audio1_waveform, "audio2": audio2_waveform, "prompt": prompt, "answer": answer, "row_index": index, "audio2_reused": audio2 == audio1}
+        item = {"audio1": audio1_waveform, "audio2": audio2_waveform, "prompt": prompt, "answer": answer, "row_index": index, "audio2_reused": same_waveform, "single_audio_slot": single_slot}
         if cache_shard_ids is not None:
             item["waveform_cache_shard_ids"] = cache_shard_ids
         return item
@@ -604,7 +625,8 @@ def collate_reasonaqa(
     phase_started = time.perf_counter()
     phase_cpu_started = time.thread_time()
     audio1 = torch.stack([item["audio1"] for item in items])
-    reused_mask = torch.tensor([item["audio2"] is None for item in items], dtype=torch.bool)
+    single_slot_mask = torch.tensor([bool(item.get("single_audio_slot", item["audio2"] is None)) for item in items], dtype=torch.bool)
+    reused_mask = torch.tensor([bool(item.get("audio2_reused", item["audio2"] is None)) for item in items], dtype=torch.bool)
     reused = bool(reused_mask.all())
     audio2 = None if reused else torch.stack([item["audio1"] if item["audio2"] is None else item["audio2"] for item in items])
     if timing_accumulator is not None:
@@ -617,6 +639,7 @@ def collate_reasonaqa(
         "audio1": audio1,
         "audio2": audio2,
         "audio2_reused_mask": reused_mask,
+        "single_audio_slot_mask": single_slot_mask,
         "text_ids": text_ids,
         "text_attention_mask": text_attention_mask,
         "prompt_lengths": torch.tensor(prompt_lengths, dtype=torch.long),

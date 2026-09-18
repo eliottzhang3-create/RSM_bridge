@@ -30,6 +30,8 @@ from torch.profiler import record_function
 MESH_HIDDEN_SIZE = 576
 AUDIO_TOKENS_PER_CLIP = 129
 AUDIO_PREFIX_TOKENS = 260
+AUDIO_SINGLE_PREFIX_TOKENS = AUDIO_TOKENS_PER_CLIP + 1
+AUDIO_DUAL_PREFIX_TOKENS = AUDIO_PREFIX_TOKENS
 MAPPER_CONTRACT = (
     "mellow_c2l_527x768__concat_cls_frames__projection_768x576x576_"
     "biasfree_dropout0.5__cls_preserving_avgpool8"
@@ -51,6 +53,7 @@ class AudioMeshConfig:
     max_context_length: int = 768
     separator_token_id: int | None = None
     architecture_contract: str = ARCHITECTURE_CONTRACT
+    compact_single_audio_prefix: bool = False
 
 
 def _tensor_from_output(value: Any) -> torch.Tensor | None:
@@ -331,6 +334,7 @@ class AudioMeshModel(nn.Module):
         self.bridge = AudioBridge(768, hidden, self.config_audio.downsample_kernel, self.config_audio.projection_dropout)
         self.last_labels: torch.Tensor | None = None
         self.last_prefix_length: int | None = None
+        self.last_prefix_lengths: torch.Tensor | None = None
         self.last_audio_tokens_per_clip: tuple[int, int] | None = None
         self._freeze_wrapper_except_c2l()
         self.separator_token_id = self._resolve_separator()
@@ -408,7 +412,7 @@ class AudioMeshModel(nn.Module):
                 embedding = c2l(embedding)
         return embedding
 
-    def encode_audio(self, audio1: torch.Tensor, audio2: torch.Tensor | None = None, audio2_reused_mask: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    def encode_audio(self, audio1: torch.Tensor, audio2: torch.Tensor | None = None, audio2_reused_mask: torch.Tensor | None = None, *, skip_second_prefix: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         if audio1.ndim == 2:
             audio1 = audio1.unsqueeze(1)
         if audio2 is None:
@@ -429,10 +433,14 @@ class AudioMeshModel(nn.Module):
         else:
             with record_function("audio/waveform_embedding_audio2"):
                 second = self._waveform_embedding(audio2)
-        return self.bridge(first), self.bridge(second)
+        projected_first = self.bridge(first)
+        if skip_second_prefix:
+            return projected_first, projected_first
+        return projected_first, self.bridge(second)
 
-    def forward(self, *, audio1: torch.Tensor, audio2: torch.Tensor | None, text_ids: torch.Tensor, text_attention_mask: torch.Tensor, prompt_lengths: torch.Tensor, answer_lengths: torch.Tensor, answer_attention_mask: torch.Tensor | None = None, audio2_reused_mask: torch.Tensor | None = None) -> Any:
-        audio_prefix1, audio_prefix2 = self.encode_audio(audio1, audio2, audio2_reused_mask)
+    def forward(self, *, audio1: torch.Tensor, audio2: torch.Tensor | None, text_ids: torch.Tensor, text_attention_mask: torch.Tensor, prompt_lengths: torch.Tensor, answer_lengths: torch.Tensor, answer_attention_mask: torch.Tensor | None = None, audio2_reused_mask: torch.Tensor | None = None, single_audio_slot_mask: torch.Tensor | None = None) -> Any:
+        all_single = bool(self.config_audio.compact_single_audio_prefix and single_audio_slot_mask is not None and bool(single_audio_slot_mask.all()))
+        audio_prefix1, audio_prefix2 = self.encode_audio(audio1, audio2, audio2_reused_mask, skip_second_prefix=all_single)
         if int(audio_prefix1.shape[1]) != AUDIO_TOKENS_PER_CLIP or int(audio_prefix2.shape[1]) != AUDIO_TOKENS_PER_CLIP:
             raise RuntimeError(
                 "Audio MeSH requires exactly "
@@ -441,21 +449,60 @@ class AudioMeshModel(nn.Module):
             )
         if int(audio_prefix1.shape[-1]) != MESH_HIDDEN_SIZE or int(audio_prefix2.shape[-1]) != MESH_HIDDEN_SIZE:
             raise RuntimeError("Audio MeSH bridge output hidden size violates the 576-dimensional contract")
+        compact = bool(self.config_audio.compact_single_audio_prefix)
+        if compact:
+            if single_audio_slot_mask is None:
+                single_audio_slot_mask = torch.zeros((text_ids.shape[0],), dtype=torch.bool)
+            single_audio_slot_mask_cpu = single_audio_slot_mask.to("cpu", dtype=torch.bool)
+            single_audio_slot_mask = single_audio_slot_mask_cpu.to(text_ids.device)
         with record_function("mesh/text_and_prefix"):
             text_embeds = _find_embedding(self.mesh_model, text_ids)
             separator = _find_embedding(self.mesh_model, torch.full((text_ids.shape[0], 1), self.separator_token_id, dtype=torch.long, device=text_ids.device))
-            inputs_embeds = torch.cat((audio_prefix1, separator, audio_prefix2, separator, text_embeds), dim=1)
-            prefix_length = int(audio_prefix1.shape[1] + 1 + audio_prefix2.shape[1] + 1)
-        if prefix_length != AUDIO_PREFIX_TOKENS:
+            if not compact:
+                inputs_embeds = torch.cat((audio_prefix1, separator, audio_prefix2, separator, text_embeds), dim=1)
+                prefix_lengths = None
+                prefix_length = int(audio_prefix1.shape[1] + 1 + audio_prefix2.shape[1] + 1)
+            else:
+                rows = []
+                masks = []
+                prefix_values = torch.where(single_audio_slot_mask, text_ids.new_full((), AUDIO_SINGLE_PREFIX_TOKENS), text_ids.new_full((), AUDIO_DUAL_PREFIX_TOKENS))
+                for row in range(text_ids.shape[0]):
+                    text_len = int(text_attention_mask[row].sum().item())
+                    if text_len != int(prompt_lengths[row].item()) + int(answer_lengths[row].item()) or int(answer_lengths[row].item()) <= 0:
+                        raise AssertionError("compact prefix text/answer boundary mismatch")
+                    parts = [audio_prefix1[row], separator[row]]
+                    if not bool(single_audio_slot_mask_cpu[row]):
+                        parts += [audio_prefix2[row], separator[row]]
+                    parts.append(text_embeds[row, :text_len])
+                    rows.append(torch.cat(parts, dim=0))
+                    masks.append(torch.ones((rows[-1].shape[0],), dtype=torch.long, device=text_ids.device))
+                inputs_embeds = torch.nn.utils.rnn.pad_sequence(rows, batch_first=True, padding_value=0.0)
+                attention_mask = torch.nn.utils.rnn.pad_sequence(masks, batch_first=True, padding_value=0)
+                prefix_lengths = prefix_values
+                prefix_length = int(prefix_values.max().item())
+        if not compact and prefix_length != AUDIO_PREFIX_TOKENS:
             raise RuntimeError(
                 f"Audio MeSH requires total prefix length {AUDIO_PREFIX_TOKENS}, got {prefix_length}"
             )
         self.last_audio_tokens_per_clip = (int(audio_prefix1.shape[1]), int(audio_prefix2.shape[1]))
-        labels = build_labels(text_ids=text_ids, prompt_lengths=prompt_lengths, answer_lengths=answer_lengths, prefix_length=prefix_length)
+        if prefix_lengths is None:
+            labels = build_labels(text_ids=text_ids, prompt_lengths=prompt_lengths, answer_lengths=answer_lengths, prefix_length=prefix_length)
+        else:
+            label_rows = []
+            for row in range(text_ids.shape[0]):
+                text_len = int(text_attention_mask[row].sum().item())
+                row_labels = torch.full((int(prefix_lengths[row].item()) + text_len,), -100, dtype=torch.long, device=text_ids.device)
+                start = int(prefix_lengths[row].item()) + int(prompt_lengths[row].item())
+                answer_len = int(answer_lengths[row].item())
+                row_labels[start:start + answer_len] = text_ids[row, int(prompt_lengths[row].item()):int(prompt_lengths[row].item()) + answer_len]
+                label_rows.append(row_labels)
+            labels = torch.nn.utils.rnn.pad_sequence(label_rows, batch_first=True, padding_value=-100)
         self.last_labels = labels.detach()
         self.last_prefix_length = prefix_length
-        prefix_mask = torch.ones((inputs_embeds.shape[0], prefix_length), dtype=torch.long, device=inputs_embeds.device)
-        attention_mask = torch.cat((prefix_mask, text_attention_mask), dim=1)
+        self.last_prefix_lengths = prefix_lengths.detach() if prefix_lengths is not None else None
+        if not compact:
+            prefix_mask = torch.ones((inputs_embeds.shape[0], prefix_length), dtype=torch.long, device=inputs_embeds.device)
+            attention_mask = torch.cat((prefix_mask, text_attention_mask), dim=1)
         if tuple(attention_mask.shape) != tuple(inputs_embeds.shape[:2]):
             raise AssertionError(f"attention mask/embedding shape mismatch: mask={tuple(attention_mask.shape)} embeds={tuple(inputs_embeds.shape[:2])}")
         if labels.shape[1] != inputs_embeds.shape[1]:

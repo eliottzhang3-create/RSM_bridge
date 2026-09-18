@@ -615,7 +615,7 @@ def _load_model(args: argparse.Namespace, device: torch.device) -> tuple[AudioMe
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     wrapper, htsat, provenance = _load_mellow_wrapper(args.mellow_root, args.htsat_checkpoint, device)
-    model = AudioMeshModel(mesh.to(device), tokenizer, wrapper, htsat, AudioMeshConfig())
+    model = AudioMeshModel(mesh.to(device), tokenizer, wrapper, htsat, AudioMeshConfig(compact_single_audio_prefix=bool(getattr(args, "compact_single_audio_prefix", False))))
     if args.resume_from:
         audio_state = torch.load(args.resume_from / "audio_bridge.pt", map_location=device, weights_only=False)
         if not isinstance(audio_state.get("bridge"), dict) or not audio_state["bridge"]:
@@ -1025,14 +1025,17 @@ class _RankLocalStoreWaveforms:
         self.dataset_item_seconds += time.perf_counter() - started
         started = time.perf_counter()
         audio1, audio2 = self.dataset.audio_paths(row_index)
+        single_slot, same_waveform = self.dataset.audio_structure(row_index)
         self.audio_paths_seconds += time.perf_counter() - started
+        first = self._get(audio1)
         return {
-            "audio1": self._get(audio1),
-            "audio2": None if audio2 == audio1 else self._get(audio2),
+            "audio1": first,
+            "audio2": None if single_slot else (first if same_waveform else self._get(audio2)),
             "prompt": prompt,
             "answer": answer,
             "row_index": row_index,
-            "audio2_reused": audio2 == audio1,
+            "audio2_reused": same_waveform,
+            "single_audio_slot": single_slot,
         }
 
     def stats(self) -> dict[str, Any]:
