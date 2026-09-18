@@ -34,7 +34,7 @@ from audio_5_10x2_5_mesh_mellow.model import (
     AUDIO_DUAL_PREFIX_TOKENS,
 )
 
-CONTRACT = "component_partitions6_rank_ram_compact_audio_v1"
+CONTRACT = "component_partitions6_rank_ram_compact_audio_answer_eos_v2"
 SMOKE_SEGMENTS = ((2, 10), (0, 10), (1, 2))
 
 
@@ -162,7 +162,7 @@ def _formal_smoke_gate(args: argparse.Namespace, inventory: dict[str, Any]) -> d
         ("smoke20", initial, {"segment": 0, "segment_step": 0, "global_step": 0}, {"segment": 2, "segment_step": 0, "global_step": 20}),
         ("resume2", resumed, {"segment": 2, "segment_step": 0, "global_step": 20}, {"segment": 3, "segment_step": 0, "global_step": 22}),
     ):
-        if report.get("status") != "PASS" or report.get("mode") != "smoke" or report.get("hard_failures") or report.get("inventory") != inventory or report.get("start_cursor") != expected_start or report.get("end_cursor") != expected_end:
+        if report.get("status") != "PASS" or report.get("mode") != "smoke" or report.get("training_contract") != CONTRACT or report.get("hard_failures") or report.get("inventory") != inventory or report.get("start_cursor") != expected_start or report.get("end_cursor") != expected_end:
             raise RuntimeError(f"formal gate rejects {name} report")
         if len(report.get("segments", [])) != (2 if name == "smoke20" else 1):
             raise RuntimeError(f"formal gate rejects {name} segment count")
@@ -246,7 +246,7 @@ def _checkpoint(path: Path, model: Any, tokenizer: Any, optimizer: Any, schedule
         tokenizer.save_pretrained(tmp / "tokenizer")
         torch.save(base._trainable_state(model), tmp / "audio_bridge.pt")
         torch.save({"optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "global_step": cursor["global_step"], "cursor": cursor, "plan_hash": plan_hash, "rng_states_by_rank": {str(i): state for i, state in enumerate(rng)}}, tmp / "training_state.pt")
-        config = {"contract": CONTRACT, "architecture_contract": ARCHITECTURE_CONTRACT, "mapper_contract": MAPPER_CONTRACT, "compact_single_audio_prefix": True, "prefix_tokens": {"single": AUDIO_SINGLE_PREFIX_TOKENS, "dual": AUDIO_DUAL_PREFIX_TOKENS}, "mode": args.mode, "inventory": inventory, "schedule": schedule, "epochs": args.epochs, "world_size": world, "micro_batch_size": args.micro_batch_size, "gradient_accumulation_steps": args.gradient_accumulation_steps, "seed": args.seed, "max_lr": args.max_lr, "min_lr": args.min_lr, "warmup_steps": args.warmup_steps, "total_steps": sum(x["steps"] for x in schedule), "save_every": args.save_every, "checkpoint_retention": args.checkpoint_retention, "dist_timeout_minutes": args.dist_timeout_minutes, "release_min_fraction": args.release_min_fraction, "release_timeout_seconds": args.release_timeout_seconds, "htsat_checkpoint": str(args.htsat_checkpoint.resolve()), "mellow_root": str(args.mellow_root.resolve()), "mellow_provenance": model._audio_provenance}
+        config = {"contract": CONTRACT, "architecture_contract": ARCHITECTURE_CONTRACT, "mapper_contract": MAPPER_CONTRACT, "compact_single_audio_prefix": True, "answer_termination": {"token": "<|endoftext|>", "included_in_max_answer_tokens": True, "supervised": True}, "prefix_tokens": {"single": AUDIO_SINGLE_PREFIX_TOKENS, "dual": AUDIO_DUAL_PREFIX_TOKENS}, "mode": args.mode, "inventory": inventory, "schedule": schedule, "epochs": args.epochs, "world_size": world, "micro_batch_size": args.micro_batch_size, "gradient_accumulation_steps": args.gradient_accumulation_steps, "seed": args.seed, "max_lr": args.max_lr, "min_lr": args.min_lr, "warmup_steps": args.warmup_steps, "total_steps": sum(x["steps"] for x in schedule), "save_every": args.save_every, "checkpoint_retention": args.checkpoint_retention, "dist_timeout_minutes": args.dist_timeout_minutes, "release_min_fraction": args.release_min_fraction, "release_timeout_seconds": args.release_timeout_seconds, "htsat_checkpoint": str(args.htsat_checkpoint.resolve()), "mellow_root": str(args.mellow_root.resolve()), "mellow_provenance": model._audio_provenance}
         (tmp / "audio_mesh_config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         (tmp / "checkpoint_complete.json").write_text(json.dumps({"status": "complete", "global_step": cursor["global_step"], "contract": CONTRACT}) + "\n", encoding="utf-8")
         for file in ("mesh_model/config.json", "tokenizer/tokenizer_config.json", "audio_bridge.pt", "training_state.pt", "audio_mesh_config.json", "checkpoint_complete.json"):
@@ -297,7 +297,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if world > 1:
         dist.init_process_group("nccl", rank=rank, world_size=world, timeout=timedelta(minutes=args.dist_timeout_minutes))
     base._seed(args.seed, rank)
-    report: dict[str, Any] = {"status": "FAIL", "mode": args.mode, "rank": rank, "segments": [], "checkpoints": [], "hard_failures": []}
+    report: dict[str, Any] = {"status": "FAIL", "mode": args.mode, "training_contract": CONTRACT, "answer_termination": {"token": "<|endoftext|>", "included_in_max_answer_tokens": True, "supervised": True}, "rank": rank, "segments": [], "checkpoints": [], "hard_failures": []}
     output_available = not args.output_dir.exists() or not any(args.output_dir.iterdir())
     try:
         if not output_available:

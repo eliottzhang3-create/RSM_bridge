@@ -20,9 +20,25 @@ DATA = ROOT / "code/RSmol/audio_5_10x2_5_mesh_mellow/data.py"
 def functions(*names):
     tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
     selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
-    namespace = {"math": math, "random": random, "hashlib": hashlib, "json": json, "Path": Path}
+    namespace = {
+        "math": math,
+        "random": random,
+        "hashlib": hashlib,
+        "json": json,
+        "Path": Path,
+        "CONTRACT": "component_partitions6_rank_ram_compact_audio_answer_eos_v2",
+    }
     module = ast.fix_missing_locations(ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *selected], type_ignores=[]))
     exec(compile(module, str(SCRIPT), "exec"), namespace)
+    return [namespace[name] for name in names]
+
+
+def data_functions(*names):
+    tree = ast.parse(DATA.read_text(encoding="utf-8"))
+    selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+    module = ast.fix_missing_locations(ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *selected], type_ignores=[]))
+    namespace = {}
+    exec(compile(module, str(DATA), "exec"), namespace)
     return [namespace[name] for name in names]
 
 
@@ -85,6 +101,8 @@ class PartitionTrainingContracts(unittest.TestCase):
         self.assertIn("audio2_reused", data)
         self.assertIn("def audio_structure", data)
         self.assertIn("def close(self)", data)
+        self.assertIn('convert_tokens_to_ids("<|endoftext|>")', data)
+        self.assertIn("max_length=max_answer_tokens - 1", data)
         for filename in ("run_audio_partition_smoke20_5_10x2_5_mesh_mellow_5090.sh", "run_audio_partition_formal_5_10x2_5_mesh_mellow_5090.sh"):
             self.assertTrue((ROOT / "code/RSmol" / filename).is_file())
 
@@ -96,8 +114,8 @@ class PartitionTrainingContracts(unittest.TestCase):
             checkpoint = root / "checkpoint-000020"
             def segment(steps):
                 return {"segment": {"steps": steps}, "steps": [{}] * steps, "release": [{"passed": True}] * 8, "cgroup_release": {"anon_drop_bytes": 10, "required_bytes": 8}}
-            initial = {"status": "PASS", "mode": "smoke", "hard_failures": [], "inventory": inventory, "seed": 3, "first_step_gradient_audit": {"trace_matches_5_10_10_5": True}, "start_cursor": {"segment": 0, "segment_step": 0, "global_step": 0}, "end_cursor": {"segment": 2, "segment_step": 0, "global_step": 20}, "checkpoints": [str(checkpoint)], "segments": [segment(10), segment(10)]}
-            resumed = {"status": "PASS", "mode": "smoke", "hard_failures": [], "inventory": inventory, "seed": 3, "first_step_gradient_audit": {"trace_matches_5_10_10_5": True}, "start_cursor": initial["end_cursor"], "end_cursor": {"segment": 3, "segment_step": 0, "global_step": 22}, "resume_checkpoint": str(checkpoint.resolve()), "resume_verified_two_steps": True, "segments": [segment(2)]}
+            initial = {"status": "PASS", "mode": "smoke", "training_contract": "component_partitions6_rank_ram_compact_audio_answer_eos_v2", "hard_failures": [], "inventory": inventory, "seed": 3, "first_step_gradient_audit": {"trace_matches_5_10_10_5": True}, "start_cursor": {"segment": 0, "segment_step": 0, "global_step": 0}, "end_cursor": {"segment": 2, "segment_step": 0, "global_step": 20}, "checkpoints": [str(checkpoint)], "segments": [segment(10), segment(10)]}
+            resumed = {"status": "PASS", "mode": "smoke", "training_contract": "component_partitions6_rank_ram_compact_audio_answer_eos_v2", "hard_failures": [], "inventory": inventory, "seed": 3, "first_step_gradient_audit": {"trace_matches_5_10_10_5": True}, "start_cursor": initial["end_cursor"], "end_cursor": {"segment": 3, "segment_step": 0, "global_step": 22}, "resume_checkpoint": str(checkpoint.resolve()), "resume_verified_two_steps": True, "segments": [segment(2)]}
             first, second = root / "first.json", root / "second.json"
             first.write_text(json.dumps(initial), encoding="utf-8")
             second.write_text(json.dumps(resumed), encoding="utf-8")
@@ -107,6 +125,17 @@ class PartitionTrainingContracts(unittest.TestCase):
             second.write_text(json.dumps(resumed), encoding="utf-8")
             with self.assertRaises(RuntimeError):
                 gate(args, inventory)
+
+    def test_answer_termination_reserves_budget_and_deduplicates_tail(self):
+        (append_eos,) = data_functions("_append_terminal_endoftext")
+        class Tokenizer:
+            eos_token_id = 7
+            @staticmethod
+            def convert_tokens_to_ids(token):
+                return 7 if token == "<|endoftext|>" else 99
+        rows = append_eos([[1, 2], [3, 7], [4, 7, 7], []], Tokenizer(), max_answer_tokens=3)
+        self.assertEqual(rows, [[1, 2, 7], [3, 7], [4, 7], [7]])
+        self.assertTrue(all(len(row) <= 3 and row[-1] == 7 for row in rows))
 
 
 if __name__ == "__main__":

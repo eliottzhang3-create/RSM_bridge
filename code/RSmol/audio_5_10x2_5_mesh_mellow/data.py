@@ -557,6 +557,46 @@ class ShardAwareDistributedBatchSampler(Sampler[list[int]]):
         }
 
 
+def _append_terminal_endoftext(
+    answer_rows: list[list[int]],
+    tokenizer: Any,
+    *,
+    max_answer_tokens: int,
+) -> list[list[int]]:
+    """Terminate every answer with exactly one supervised SmolLM2 EOS.
+
+    The configured answer budget includes the terminal token.  Tokenization
+    therefore reserves one position for ``<|endoftext|>`` instead of silently
+    growing a 250-token answer to 251 tokens.
+    """
+    if int(max_answer_tokens) < 2:
+        raise ValueError("max_answer_tokens must leave room for answer content and terminal EOS")
+    eos_token_id = getattr(tokenizer, "eos_token_id", None)
+    if eos_token_id is None:
+        raise ValueError("tokenizer must define eos_token_id for answer termination")
+    eos_token_id = int(eos_token_id)
+    try:
+        literal_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
+    except Exception as exc:
+        raise ValueError("tokenizer cannot resolve required <|endoftext|> token") from exc
+    if literal_id is None or int(literal_id) != eos_token_id:
+        raise ValueError(
+            "tokenizer EOS contract mismatch: <|endoftext|> must equal eos_token_id, "
+            f"literal={literal_id!r} eos={eos_token_id}"
+        )
+    terminated: list[list[int]] = []
+    content_limit = int(max_answer_tokens) - 1
+    for row in answer_rows:
+        content = [int(token) for token in row[:content_limit]]
+        while content and content[-1] == eos_token_id:
+            content.pop()
+        result = [*content, eos_token_id]
+        if len(result) > int(max_answer_tokens) or result[-1] != eos_token_id:
+            raise AssertionError("answer terminal EOS construction failed")
+        terminated.append(result)
+    return terminated
+
+
 def collate_reasonaqa(
     items: list[dict[str, Any]],
     tokenizer: Any,
@@ -578,7 +618,9 @@ def collate_reasonaqa(
     phase_started = time.perf_counter()
     phase_cpu_started = time.thread_time()
     prompt = tokenizer(prompts, max_length=max_prompt_tokens, truncation=True, padding=False, return_tensors=None, add_special_tokens=True)
-    answer = tokenizer(answers, max_length=max_answer_tokens, truncation=True, padding=False, return_tensors=None, add_special_tokens=False)
+    if int(max_answer_tokens) < 2:
+        raise ValueError("max_answer_tokens must be at least 2")
+    answer = tokenizer(answers, max_length=max_answer_tokens - 1, truncation=True, padding=False, return_tensors=None, add_special_tokens=False)
     if timing_accumulator is not None:
         timing_accumulator["tokenize"] = timing_accumulator.get("tokenize", 0.0) + time.perf_counter() - phase_started
         timing_accumulator["tokenize_thread_cpu"] = timing_accumulator.get("tokenize_thread_cpu", 0.0) + time.thread_time() - phase_cpu_started
@@ -591,11 +633,16 @@ def collate_reasonaqa(
         return [list(row) for row in value]
 
     prompt_rows = _rows(prompt["input_ids"])
-    answer_rows = _rows(answer["input_ids"])
+    answer_rows = _append_terminal_endoftext(
+        _rows(answer["input_ids"]), tokenizer, max_answer_tokens=max_answer_tokens
+    )
     if len(prompt_rows) != len(items) or len(answer_rows) != len(items):
         raise ValueError("tokenizer returned a batch with the wrong number of rows")
     prompt_lengths = [len(row) for row in prompt_rows]
     answer_lengths = [len(row) for row in answer_rows]
+    eos_token_id = int(tokenizer.eos_token_id)
+    if not answer_rows or any(not row or row[-1] != eos_token_id for row in answer_rows):
+        raise AssertionError("every answer must end in supervised <|endoftext|>")
     text_rows = [p_row + a_row for p_row, a_row in zip(prompt_rows, answer_rows)]
     text_lengths = [len(row) for row in text_rows]
     max_text_length = max(text_lengths, default=0)
