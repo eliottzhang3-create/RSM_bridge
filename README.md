@@ -36,6 +36,7 @@ rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2
 - 2026-09-18 已把训练合同升级为 `component_partitions6_rank_ram_compact_audio_answer_eos_v2`：每条 answer 最后恰好有一个受监督的 `<|endoftext|>`。由于输入/标签合同发生改变，旧 v1 smoke 不能放行 v2 正式训练，必须按相同 20+2 流程重跑。
 - 正式训练：准备采用 10 epochs；EOS v2 smoke 和正式作业均尚未登记远程完成。
 - 正式训练入口会重新读取两个 smoke report，验证训练合同、step 游标、resume 关联、MeSH 30 层轨迹和全部 8 rank 内存释放；验证不通过则拒绝启动。
+- 原始 SmolLM2-135M 音频对比线已在本地改造成同一套六分区、compact-prefix、answer-EOS-v2、10-epoch 训练合同，训练 wrapper 使用 `pdgpu-3090`；当前状态为代码就绪，新的 20+2 smoke 与正式训练均尚未登记远程 PASS。
 
 文本模型默认初始化自第二轮低学习率 MeSH checkpoint：
 
@@ -589,14 +590,25 @@ rg --files code/RSmol | rg 'mmau|MMAU'
 
 ### 8.3 原始 SmolLM2 音频基线
 
-基线 checkpoint：
+当前新训练入口（代码就绪，尚无远程 PASS）：
+
+```text
+code/RSmol/scripts/train_audio_partitioned_smollm2_135m_mellow_ddp.py
+code/RSmol/run_audio_smollm2_135m_mellow_smoke20_3090.sh
+code/RSmol/run_audio_smollm2_135m_mellow_resume2_3090.sh
+code/RSmol/run_audio_smollm2_135m_mellow_formal_3090.sh
+```
+
+训练合同为 `smollm2_component_partitions6_rank_ram_compact_audio_answer_eos_v2`。除文本 backbone 是原始 30 个独立物理层的 SmolLM2-135M、没有 MeSH router/memory 外，六分区数据生命周期、130/260 compact prefix、answer EOS、batch/优化器/LR、20+2 smoke、严格内存释放、checkpoint/resume 和 10-epoch 正式配置均与当前 MeSH 主线一致。正式训练同样必须由本路线两个真实 PASS smoke report 放行。
+
+旧的三 epoch、固定 260-prefix checkpoint：
 
 ```text
 /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/
 formal_20260911_v1/checkpoint-011343
 ```
 
-它有独立 generation 与 MMAU 脚本，不能和 MeSH checkpoint 混用：
+该 checkpoint 只用于历史生成/评测，不能作为新 partition-v2 trainer 的 `--resume-from`。它有独立 generation 与 MMAU 脚本，不能和 MeSH checkpoint 混用：
 
 ```text
 code/RSmol/scripts/generate_audio_smollm2_checkpoint_reasonaqa.py
@@ -678,6 +690,22 @@ tests/test_reasonaqa_component_partitions.py
 tests/test_reasonaqa_partition_materialization.py
 ```
 
+### 10.3 原始 SmolLM2 partition 对比线
+
+```text
+code/RSmol/audio_smollm2_135m_mellow/model.py
+code/RSmol/audio_smollm2_135m_mellow/data.py
+code/RSmol/scripts/train_audio_partitioned_smollm2_135m_mellow_ddp.py
+code/RSmol/scripts/train_audio_smollm2_135m_mellow_smoke20_ddp.sh
+code/RSmol/scripts/train_audio_smollm2_135m_mellow_resume2_ddp.sh
+code/RSmol/scripts/train_audio_smollm2_135m_mellow_formal_ddp.sh
+code/RSmol/run_audio_smollm2_135m_mellow_smoke20_3090.sh
+code/RSmol/run_audio_smollm2_135m_mellow_resume2_3090.sh
+code/RSmol/run_audio_smollm2_135m_mellow_formal_3090.sh
+tests/test_audio_smollm2_partition_training_static.py
+tests/test_audio_smollm2_135m_mellow_static.py
+```
+
 ## 11. 已处理故障与不要重复的误诊
 
 1. SmolLM2 tied embedding 导致转换时缺 `lm_head.weight`：转换器已按 tied-weight 语义处理。
@@ -697,6 +725,7 @@ tests/test_reasonaqa_partition_materialization.py
 ## 12. 当前风险与后续注意事项
 
 - 旧 v1 两个 smoke 已由用户确认 PASS；当前 answer-EOS v2 合同必须重新跑 20+2 smoke，旧 report 会被正式 gate 拒绝。
+- 原始 SmolLM2 partition 对比线同样必须先在 `pdgpu-3090` 重跑本路线 EOS-v2 的 20+2 smoke；旧三 epoch checkpoint、旧 STAGE7 report 或 MeSH smoke report 都不能放行该路线正式训练。
 - 正式 10-epoch 训练尚未登记启动/完成。看到远程结果后及时写入 job、output dir、最终 checkpoint 和 report 状态。
 - 当前日志 loss 只是 rank 0 的四个 microbatch 平均，不是 8 rank 全局聚合 loss。
 - 当前训练没有周期性 validation；模型选择需要另行设计只读评测，不要把 train report 当验证集表现。

@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "code" / "RSmol" / "audio_smollm2_135m_mellow"
 TRAIN = ROOT / "code" / "RSmol" / "scripts" / "train_audio_smollm2_135m_mellow_ddp.py"
+PARTITION_TRAIN = ROOT / "code" / "RSmol" / "scripts" / "train_audio_partitioned_smollm2_135m_mellow_ddp.py"
 AUDIT = ROOT / "code" / "RSmol" / "scripts" / "audit_audio_smollm2_135m_mellow_checkpoint.py"
 INNER = tuple(ROOT / "code" / "RSmol" / "scripts" / name for name in (
     "train_audio_smollm2_135m_mellow_smoke20_ddp.sh",
@@ -17,16 +18,16 @@ INNER = tuple(ROOT / "code" / "RSmol" / "scripts" / name for name in (
     "audit_audio_smollm2_135m_mellow_checkpoint.sh",
 ))
 WRAPPERS = tuple(ROOT / "code" / "RSmol" / name for name in (
-    "run_audio_smollm2_135m_mellow_smoke20_5090.sh",
-    "run_audio_smollm2_135m_mellow_resume2_5090.sh",
-    "run_audio_smollm2_135m_mellow_formal_5090.sh",
+    "run_audio_smollm2_135m_mellow_smoke20_3090.sh",
+    "run_audio_smollm2_135m_mellow_resume2_3090.sh",
+    "run_audio_smollm2_135m_mellow_formal_3090.sh",
     "run_audio_smollm2_135m_mellow_checkpoint_audit_5090.sh",
 ))
 
 
 class SmolLM2AudioBaselineStaticTest(unittest.TestCase):
     def test_files_exist(self) -> None:
-        for path in (PKG / "__init__.py", PKG / "data.py", PKG / "model.py", PKG / "README.md", TRAIN, AUDIT, *INNER, *WRAPPERS):
+        for path in (PKG / "__init__.py", PKG / "data.py", PKG / "model.py", PKG / "README.md", TRAIN, PARTITION_TRAIN, AUDIT, *INNER, *WRAPPERS):
             self.assertTrue(path.is_file(), path)
 
     def test_standard_text_contract_is_explicit(self) -> None:
@@ -43,6 +44,9 @@ class SmolLM2AudioBaselineStaticTest(unittest.TestCase):
             "inputs_embeds=inputs_embeds",
             "AUDIO_TOKENS_PER_CLIP = 129",
             "AUDIO_PREFIX_TOKENS = 260",
+            "AUDIO_SINGLE_PREFIX_TOKENS = AUDIO_TOKENS_PER_CLIP + 1",
+            "compact_single_audio_prefix",
+            "single_audio_slot_mask",
             "all_text_trainable",
             'convert_tokens_to_ids("!")',
         ):
@@ -121,16 +125,14 @@ class SmolLM2AudioBaselineStaticTest(unittest.TestCase):
         smoke = INNER[0].read_text(encoding="utf-8")
         resume = INNER[1].read_text(encoding="utf-8")
         formal = INNER[2].read_text(encoding="utf-8")
-        self.assertIn("--max-steps 20", smoke)
-        self.assertIn("--schedule-total-steps 22", smoke)
-        self.assertIn("/smoke20", smoke)
-        self.assertIn("--max-steps 22", resume)
-        self.assertIn("--schedule-total-steps 22", resume)
+        self.assertIn("train_audio_partitioned_smollm2_135m_mellow_ddp.py", smoke)
+        self.assertIn("--mode smoke", smoke)
+        self.assertIn("--epochs 10", smoke)
+        self.assertIn("--mode smoke", resume)
+        self.assertIn("--epochs 10", resume)
         self.assertIn("--expected-resume-step 20", resume)
-        self.assertIn("/resume2_from20", resume)
-        self.assertEqual(smoke.count("--schedule-total-steps 22"), resume.count("--schedule-total-steps 22"))
-        self.assertNotIn("--schedule-total-steps", formal)
-        self.assertIn("/formal", formal)
+        self.assertIn("--mode formal", formal)
+        self.assertIn("--epochs 10", formal)
         self.assertIn("--save-every 500", formal)
 
     def test_short_scheduler_index_contract(self) -> None:
@@ -160,7 +162,9 @@ class SmolLM2AudioBaselineStaticTest(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertIn("vc submit", text)
             self.assertIn("docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1", text)
-            self.assertIn("-p pdgpu-5090", text)
+        for path in WRAPPERS[:3]:
+            self.assertIn("-p pdgpu-3090", path.read_text(encoding="utf-8"))
+        self.assertIn("-p pdgpu-5090", WRAPPERS[-1].read_text(encoding="utf-8"))
         self.assertIn("-g 1", WRAPPERS[-1].read_text(encoding="utf-8"))
         self.assertIn("-g 8", WRAPPERS[0].read_text(encoding="utf-8"))
 
@@ -202,19 +206,15 @@ class SmolLM2AudioBaselineStaticTest(unittest.TestCase):
             "SMOKE_OUT=",
             "RESUME_OUT=",
             "FORMAL_OUT=",
-            "FORMAL_RESUME_OUT=",
             "--resume-from",
             "--output-dir",
-            "--parent-checkpoint",
-            "--model-path",
-            "--manifest",
-            "--val-manifest",
-            "resume2_from20",
-            "checkpoint-000500",
-            "FORMAL checkpoint",
-            '--resume-from "$FORMAL_OUT/checkpoint-000500"',
-            "--expected-gate FORMAL",
-            "--expected-step 500",
+            "checkpoint-000020",
+            "checkpoint-000022",
+            "--smoke20-report",
+            "--smoke-resume-report",
+            "pdgpu-3090",
+            "37,810 optimizer steps",
+            "not a valid `--resume-from` source",
         ):
             self.assertIn(marker, text)
         self.assertNotIn("same output directory", text.lower())

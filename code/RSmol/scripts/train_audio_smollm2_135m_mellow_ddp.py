@@ -196,7 +196,15 @@ def _load_model(args: argparse.Namespace, device: torch.device) -> tuple[AudioSm
     if getattr(text_model.config, "pad_token_id", None) is None:
         text_model.config.pad_token_id = int(tokenizer.pad_token_id)
     wrapper, htsat, provenance = _load_mellow_wrapper(args.mellow_root, args.htsat_checkpoint, device)
-    model = AudioSmolLM2Model(text_model.to(device), tokenizer, wrapper, htsat, AudioSmolLM2Config())
+    model = AudioSmolLM2Model(
+        text_model.to(device),
+        tokenizer,
+        wrapper,
+        htsat,
+        AudioSmolLM2Config(
+            compact_single_audio_prefix=bool(getattr(args, "compact_single_audio_prefix", False))
+        ),
+    )
     if args.resume_from:
         audio_state = torch.load(args.resume_from / "audio_bridge.pt", map_location=device, weights_only=False)
         if not isinstance(audio_state.get("bridge"), dict) or not audio_state["bridge"]:

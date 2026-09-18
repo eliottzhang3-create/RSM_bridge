@@ -1,90 +1,114 @@
-# Original SmolLM2-135M audio baseline
+# Original SmolLM2-135M audio partition baseline
 
-This route is an isolated comparison line for the current ReasonAQA audio
-training contract.  It reuses the existing 32 kHz/10 second waveform path,
-Mellow c2l adapter, 768-to-576 projection bridge, 129-token-per-audio prefix,
-260-token multimodal prefix, unified dynamic padding, and answer-only labels.
+This is the isolated comparison route for the current Audio MeSH experiment.
+Its only intended model difference is the text backbone: it loads the original
+standard 30-layer SmolLM2-135M `LlamaForCausalLM` from
+`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2`. It has no MeSH memory,
+router, logical-layer reuse, or recursive parameters.
 
-The text backbone is loaded directly with `AutoModelForCausalLM` from the
-local original SmolLM2 directory and is validated as a standard
-`LlamaForCausalLM` with 30 independent decoder layers and hidden size 576.
-HTSAT is frozen; c2l, the audio bridge, and all original text-model
-parameters are trainable.  Checkpoints use `text_model/`, `tokenizer/`,
-`audio_bridge.pt`, `training_state.pt`, `audio_smollm2_config.json`, and an
-atomic `checkpoint_complete.json` marker.
-
-GPU execution goes through these repository wrappers:
+The current training contract is:
 
 ```text
-run_audio_smollm2_135m_mellow_smoke20_5090.sh
-run_audio_smollm2_135m_mellow_resume2_5090.sh
-run_audio_smollm2_135m_mellow_formal_5090.sh
-run_audio_smollm2_135m_mellow_checkpoint_audit_5090.sh
+smollm2_component_partitions6_rank_ram_compact_audio_answer_eos_v2
 ```
 
-The smoke run executes only through step 20 while using a shared short-run
-scheduler of 22 steps, and saves steps 10 and 20.  The resume wrapper restores
-step 20 and continues to step 22 in a separate output directory; its report
-also proves that representative text, bridge, and c2l parameters changed.
-The first formal invocation starts from the original
-`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2` directory.  A later formal
-invocation may resume only from a checkpoint whose gate is `FORMAL`; smoke
-checkpoints are never accepted as formal starting points.
-Every resume, including FORMAL resume, must use an output directory separate
-from both the source checkpoint and its parent directory.
+All other training behavior mirrors the current Audio MeSH partition route:
 
-For example, keep the smoke and resume artifacts isolated:
+- the audited six-component waveform store;
+- one complete partition cloned into anonymous CPU RAM per DDP rank;
+- strict per-rank RSS and cgroup-anon release before the next preload;
+- frozen HTSAT, trainable Mellow c2l, bridge, and complete text model;
+- compact 130-token single-audio and 260-token dual-audio prefixes;
+- prompt and answer joined before batch padding;
+- exactly one supervised `<|endoftext|>` at the end of every answer;
+- 8 GPUs, microbatch 8/GPU, gradient accumulation 4, global batch 256;
+- AdamW, max LR 1e-3, 5% warmup, cosine decay, gradient clipping 0.5;
+- 10 epochs, 37,810 optimizer steps, save every 500, retain four.
+
+The model keeps `compact_single_audio_prefix=False` by default so historical
+fixed-prefix checkpoints remain usable by their generation and evaluation
+scripts. The partition trainer explicitly enables compact mode.
+
+## Current files
+
+```text
+audio_smollm2_135m_mellow/model.py
+audio_smollm2_135m_mellow/data.py
+scripts/train_audio_partitioned_smollm2_135m_mellow_ddp.py
+scripts/train_audio_smollm2_135m_mellow_smoke20_ddp.sh
+scripts/train_audio_smollm2_135m_mellow_resume2_ddp.sh
+scripts/train_audio_smollm2_135m_mellow_formal_ddp.sh
+run_audio_smollm2_135m_mellow_smoke20_3090.sh
+run_audio_smollm2_135m_mellow_resume2_3090.sh
+run_audio_smollm2_135m_mellow_formal_3090.sh
+```
+
+All training jobs use `pdgpu-3090`, 32 CPU cores, 256 GiB RAM, and 8 GPUs.
+The old `_5090.sh` training filenames are compatibility forwarders to the
+canonical 3090 wrappers.
+
+## Required smoke and resume gate
+
+Use new, empty output directories:
 
 ```bash
-SMOKE_OUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/smoke20_20260911
-RESUME_OUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/resume2_from20_20260911
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
 
-bash code/RSmol/run_audio_smollm2_135m_mellow_smoke20_5090.sh \
+SMOKE_OUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/partition_smoke20_eos_v2_20260918
+RESUME_OUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/partition_resume2_eos_v2_20260918
+
+bash run_audio_smollm2_135m_mellow_smoke20_3090.sh \
   --output-dir "$SMOKE_OUT"
-bash code/RSmol/run_audio_smollm2_135m_mellow_resume2_5090.sh \
+
+bash run_audio_smollm2_135m_mellow_resume2_3090.sh \
   --resume-from "$SMOKE_OUT/checkpoint-000020" \
   --output-dir "$RESUME_OUT"
-bash code/RSmol/run_audio_smollm2_135m_mellow_checkpoint_audit_5090.sh \
-  --checkpoint "$RESUME_OUT/checkpoint-000022" \
-  --parent-checkpoint "$SMOKE_OUT/checkpoint-000020" \
-  --expected-parent-step 20 \
-  --model-path /hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2 \
-  --manifest /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl \
-  --val-manifest /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_val.jsonl
 ```
 
-The formal run uses its own output directory and the original model path:
+The first job executes `p2:10 -> release -> p0:10 -> release` and publishes
+`checkpoint-000020`. The second restores that complete checkpoint, executes
+`p1:2 -> release`, proves finite nonzero changes in representative text,
+bridge, and c2l parameters, and publishes `checkpoint-000022`.
+
+Both reports must be real remote `PASS` reports before formal training:
+
+```text
+$SMOKE_OUT/partition_training_report.json
+$RESUME_OUT/partition_training_report.json
+```
+
+## Formal training
 
 ```bash
-FORMAL_OUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/formal
-FORMAL_RESUME_OUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/formal_resume_from500
+FORMAL_OUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/partition_formal_eos_v2_10epochs_20260918
 
-bash code/RSmol/run_audio_smollm2_135m_mellow_formal_5090.sh \
-  --model-path /hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2 \
-  --output-dir "$FORMAL_OUT"
-
-# After an interruption, resume only from a FORMAL checkpoint (for example,
-# checkpoint-000500), and always use a separate continuation directory.
-bash code/RSmol/run_audio_smollm2_135m_mellow_formal_5090.sh \
-  --model-path /hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2 \
-  --resume-from "$FORMAL_OUT/checkpoint-000500" \
-  --output-dir "$FORMAL_RESUME_OUT"
+bash run_audio_smollm2_135m_mellow_formal_3090.sh \
+  --output-dir "$FORMAL_OUT" \
+  --smoke20-report "$SMOKE_OUT/partition_training_report.json" \
+  --smoke-resume-report "$RESUME_OUT/partition_training_report.json"
 ```
 
-Audit a formal checkpoint by supplying its actual global step; for a
-continuation, also supply the parent checkpoint so the immutable contract and
-gate are checked across the resume edge:
+The formal gate validates the baseline-specific training contract, partition
+inventory, seed, 0-to-20 and 20-to-22 cursors, resume lineage, all eight rank
+release records, cgroup anon release, standard 30-layer SmolLM2 gradients,
+compact prefixes, supervised EOS, and text/bridge/c2l resume updates.
 
-```bash
-bash code/RSmol/run_audio_smollm2_135m_mellow_checkpoint_audit_5090.sh \
-  --checkpoint "$FORMAL_OUT/checkpoint-000500" \
-  --expected-gate FORMAL --expected-step 500 \
-  --model-path /hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2 \
-  --manifest /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl \
-  --val-manifest /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_val.jsonl
+For a formal continuation, use a new empty output directory, pass the formal
+checkpoint via `--resume-from`, retain `--epochs 10` and every other contract
+value, and pass the same two smoke reports.
+
+## Historical checkpoint
+
+The completed historical baseline remains at:
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/
+formal_20260911_v1/checkpoint-011343
 ```
 
-The trainer records and validates `gate`/`run_kind` in every checkpoint and
-training state.  A STAGE7 smoke or resume checkpoint is rejected as a FORMAL
-resume source; a FORMAL continuation must retain the canonical three-epoch
-schedule, manifests, provenance, optimizer, batch, and checkpoint cadence.
+It belongs to the old fixed-260-prefix, online-data, three-epoch artifact
+contract. It remains available for historical generation/MMAU evaluation,
+but it is not a valid `--resume-from` source for partition-v2 training.
+
+The new partition route is currently code-ready only. Do not call it remote
+PASS until the two smoke jobs have produced and passed their reports.

@@ -6,7 +6,9 @@ loading the standard Hugging Face ``LlamaForCausalLM`` implementation.
 """
 
 from .model import (
+    AUDIO_DUAL_PREFIX_TOKENS,
     AUDIO_PREFIX_TOKENS,
+    AUDIO_SINGLE_PREFIX_TOKENS,
     AUDIO_TOKENS_PER_CLIP,
     ORIGINAL_SMOLLM2_CONTRACT,
     MAPPER_CONTRACT,
@@ -16,7 +18,9 @@ from .model import (
 )
 
 __all__ = [
+    "AUDIO_DUAL_PREFIX_TOKENS",
     "AUDIO_PREFIX_TOKENS",
+    "AUDIO_SINGLE_PREFIX_TOKENS",
     "AUDIO_TOKENS_PER_CLIP",
     "ORIGINAL_SMOLLM2_CONTRACT",
     "MAPPER_CONTRACT",
