@@ -12,9 +12,11 @@ DEFAULT_MESH="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_m
 DEFAULT_HTSAT="/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 DEFAULT_MELLOW="/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
 DEFAULT_MANIFEST="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl"
-DEFAULT_SHARED_WAVEFORM_STORE="/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v1"
+DEFAULT_SHARED_WAVEFORM_STORE="/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v2"
+DEFAULT_COMPONENT_PARTITION_STORE_ROOT="/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2"
 PERF20_RUN_ID="${PERF20_RUN_ID:-$(date +%Y%m%d_%H%M%S%N)-$$}"
 PERF20_INPUT_MODE="online"
+PERF20_PARTITION_ID="0"
 PERF20_ARGS=("$@")
 for ((argument_index=0; argument_index<${#PERF20_ARGS[@]}; argument_index++)); do
   argument="${PERF20_ARGS[$argument_index]}"
@@ -29,11 +31,25 @@ for ((argument_index=0; argument_index<${#PERF20_ARGS[@]}; argument_index++)); d
       argument_index=$((argument_index + 1))
       PERF20_INPUT_MODE="${PERF20_ARGS[$argument_index]:-}"
       ;;
+    --perf20-partition-id=*)
+      PERF20_PARTITION_ID="${argument#*=}"
+      ;;
+    --perf20-partition-id)
+      argument_index=$((argument_index + 1))
+      PERF20_PARTITION_ID="${PERF20_ARGS[$argument_index]:-}"
+      ;;
   esac
 done
 case "$PERF20_INPUT_MODE" in
   online|warm_online|waveform_preload|full_preload|shared_waveform_store|store_rank_ram_preload|store_rank_ram_prefetch)
     PERF20_OUTPUT_PREFIX="perf20_${PERF20_INPUT_MODE}"
+    ;;
+  partition_rank_ram_preload)
+    if [[ ! "$PERF20_PARTITION_ID" =~ ^[0-9]+$ ]]; then
+      echo "invalid PERF20 partition ID: $PERF20_PARTITION_ID" >&2
+      exit 2
+    fi
+    PERF20_OUTPUT_PREFIX="perf20_${PERF20_INPUT_MODE}_p${PERF20_PARTITION_ID}"
     ;;
   *)
     echo "invalid PERF20 input mode: $PERF20_INPUT_MODE" >&2
@@ -65,6 +81,7 @@ torchrun --standalone --nproc_per_node=8 "$SCRIPT_DIR/train_audio_5_10x2_5_mesh_
   --mellow-root "$DEFAULT_MELLOW" \
   --train-manifest "$DEFAULT_MANIFEST" \
   --shared-waveform-store-dir "$DEFAULT_SHARED_WAVEFORM_STORE" \
+  --perf20-partition-store-root "$DEFAULT_COMPONENT_PARTITION_STORE_ROOT" \
   --output-dir "$DEFAULT_OUTPUT_DIR" \
   --world-size 8 \
   --micro-batch-size 8 \

@@ -592,7 +592,7 @@ bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh --profiler
 ```
 
-七种 PERF20 输入模式全部使用同一个 `DistributedSampler(seed=0)`、相同逐 rank row stream、相同模型/优化器合同，并在准备后恢复 RNG 状态、执行同样的一次测量前 barrier。每个 report 都保存逐 rank row-index SHA256；各次运行同一 rank 的 SHA256 必须一致。2026-09-17 起 PERF20 DataLoader 使用独立 `torch.Generator`，避免不同模式创建 iterator 的时机改变模型 CPU RNG；报告还保存各 rank 首个 forward 前的 CPU/CUDA/Python RNG 指纹以及首个 CPU batch 的 row/tensor SHA。`online` 不主动预热文件，但操作系统缓存状态无法由普通作业强制清空，因此不得表述为“保证冷缓存”。命令为：
+前七种全量-manifest PERF20 输入模式使用同一个 `DistributedSampler(seed=0)`、相同逐 rank row stream、相同模型/优化器合同，并在准备后恢复 RNG 状态、执行同样的一次测量前 barrier。每个 report 都保存逐 rank row-index SHA256；各次运行同一有效 manifest、同一 rank 的 SHA256 必须一致。第八种 `partition_rank_ram_preload` 会有意切换到所选分区的 `rows.jsonl`，因此它与全量-manifest 模式不具备相同 row stream，只能结合独立报告的 row hash、实际 token 数和 step 时间评估。2026-09-17 起 PERF20 DataLoader 使用独立 `torch.Generator`，避免不同模式创建 iterator 的时机改变模型 CPU RNG；报告还保存各 rank 首个 forward 前的 CPU/CUDA/Python RNG 指纹以及首个 CPU batch 的 row/tensor SHA。`online` 不主动预热文件，但操作系统缓存状态无法由普通作业强制清空，因此不得表述为“保证冷缓存”。命令为：
 
 ```bash
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
@@ -617,11 +617,23 @@ bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
 # 每 rank 一个后台生产线程、最多8个待消费 microbatch、2 GiB 波形 LRU
 bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
   --perf20-input-mode store_rank_ram_prefetch
+
+# 六分区实验：每个 rank 在计时前完整加载 partition 0（约4.576 GiB/rank）
+bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
+  --perf20-input-mode partition_rank_ram_preload \
+  --perf20-partition-id 0
+
+# partition 0 达到预期速度后，再测 waveform 最大的 partition 2（约11.972 GiB/rank）
+bash code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh \
+  --perf20-input-mode partition_rank_ram_preload \
+  --perf20-partition-id 2
 ```
 
 `warm_online` 由 rank0 收集 8 个 rank 在这 20 步将访问的 audio1/audio2 文件并去重，按文件名排序、逐文件顺序读完全部字节，然后所有 rank barrier；训练计时中仍执行完全相同的在线 load/decode/resample/crop/pad 和 tokenization/collate。`waveform_preload` 只在每个 rank 的准备阶段解码其准确 640 条 row 的 waveform；计时阶段仍通过 DataLoader 执行 tokenization/collate。`full_preload` 则提前物化精确 80 个已 collate CPU microbatch，计时中不再访问 DataLoader 或共享存储；旧 `--preload-data` 仅作为 `full_preload` 兼容别名保留。`shared_waveform_store` 加载 manifest-scoped 单文件 store，严格核对 manifest/index/尺寸合同。首次完整 64.43 GiB 顺序预热的 step 中位数为 27.60 秒；只读准确的 5,642 条/6.73 GiB 区域后约 50.03 秒，major faults 几乎未降。这些运行波动大，不能单凭两次实验判定定向预热本身造成退化，但两者都远差于 rank-local RAM preload。
 
 新增 `store_rank_ram_preload`：各 rank 从 store mmap 按本 rank 20 步的 row 顺序读取并显式 `.clone()` 成进程持有的 CPU tensor，以唯一 audio_id 去重，计时前物化完毕；远程结果为约 1.619 秒/step，但最慢 rank 准备约 207 秒。`store_rank_ram_prefetch`：每 rank 一个后台线程按完全相同 row 顺序复制音频并填充有界 microbatch 队列（默认8个），主线程消费并执行原 collator；波形按 audio_id 放在有界 LRU 中（默认2 GiB/rank）。远程结果约 60.73 秒/step，零淘汰且只有约 1%–2% 命中，说明失败不来自缓存容量，但原始计时不足以区分 queue 等待、tokenizer/stack 和 producer/consumer 资源竞争。两个模式都只用于 PERF20，不改 FORMAL。
+
+新增 `partition_rank_ram_preload`：先严格验证六分区根 `materialization_report.json`、所选分区 metadata 和 report 中的 manifest/index/waveform hash 一致性，再把训练 manifest/store 切换到该分区。每个 rank 在测量前按本地 audio ID 顺序把该分区全部 waveform 从连续 store `.clone()` 到本进程匿名 CPU RAM，只为准确的20步 row 生成轻量 waveform item，随后恢复 RNG、执行统一 barrier 并开始计时。训练结束报告会核对 resident audio、字节数、miss/clone/eviction 计数在计时区间没有变化，并保存每 rank 准备时长、CPU tensor GiB、cgroup 内存与完整分区 provenance。默认根目录为已完成的 `.../rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2`，默认 partition ID 为0；该模式仍只用于 PERF20，不改 FORMAL。
 
 各模式分别使用 `perf20_<mode>_*` 输出目录。最新测量把 `queue.get()`、tokenizer、文本 tensor 构建、waveform `torch.stack`、batch metadata、store path locate、mmap view 与 `.clone()` 分开记录；tokenizer/text/stack/metadata 与 clone 同时报告墙钟和当前线程 CPU 时间，用于区分实际工作与调度等待。预取器保存每个 microbatch 消费前后的队列水位、空队列轮询数和每 step queue 等待。报告还记录 CPU affinity、PyTorch/OMP/MKL/Rayon/tokenizer 线程配置、进程 context switch/runqueue wait、cgroup CPU quota/throttling、内存 cache/anon/mapped 以及所有失败候选路径。cgroup 发现同时尝试 mountinfo 中的 v2/v1，失败不再静默转成空值。远程文件系统不一定把流量计入 `read_bytes`，因此该字段仍只是辅助证据。
 
@@ -762,7 +774,7 @@ python code/RSmol/scripts/materialize_reasonaqa_component_partitions.py
 python code/RSmol/scripts/materialize_reasonaqa_component_partitions.py --resume
 ```
 
-输出目录已存在时普通构建拒绝覆盖；一个已经完整 `PASS` 的目录也不会被 `--resume` 重写。最终报告为 `materialization_report.json`。当前代码只完成本地合成store测试，尚未执行远程64.43 GiB物化，也尚未把六区接入正式训练。
+输出目录已存在时普通构建拒绝覆盖；一个已经完整 `PASS` 的目录也不会被 `--resume` 重写。最终报告为 `materialization_report.json`。远程 v2 物化已经完成并通过审计：`/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2`，`source_payload_sha256_reverified=true`、`duplicated_audio=0`、总 waveform 64.42785263061523 GiB。当前只把它接入隔离的 `partition_rank_ram_preload` PERF20 模式，尚未改动 FORMAL 数据路径。
 
 ### 9.3.5 固定 5-10-5 recursive 音频正式训练
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import math
 import queue
 import tempfile
@@ -30,7 +31,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             self.assertTrue(path.is_file(), path)
         inner = INNER.read_text(encoding="utf-8")
         submit = SUBMIT.read_text(encoding="utf-8")
-        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID", "PERF20_OUTPUT_PREFIX", "store_rank_ram_preload|store_rank_ram_prefetch", "--shared-waveform-store-dir"):
+        for marker in ("--gate PERF20", "--micro-batch-size 8", "--gradient-accumulation-steps 4", "--num-workers 0", "--max-steps 20", "--epochs 1", "--no-profiler", "torch.bfloat16", "formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244", "stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl", "PERF20_RUN_ID", "PERF20_OUTPUT_PREFIX", "store_rank_ram_preload|store_rank_ram_prefetch", "partition_rank_ram_preload", "--shared-waveform-store-dir", "--perf20-partition-store-root"):
             self.assertIn(marker, inner)
         self.assertIn("vc submit", submit)
         self.assertIn("-c 32", submit)
@@ -167,7 +168,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         for marker in (
             '"--preload-data"',
             '"--perf20-input-mode"',
-            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch")',
+            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload")',
             "def _planned_perf20_rows",
             "def _warm_exact_perf20_files",
             "def _preload_perf20_waveforms",
@@ -179,7 +180,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             'input_preparation["consumed_preloaded_microbatches"] = int(preloaded_consumed)',
             '"row_indices_sha256"',
             '"cpu_tensor_bytes"',
-            '"preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload"}',
+            '"preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "partition_rank_ram_preload"}',
             '"training_dataloader_accesses": 0 if input_mode in {"full_preload", "store_rank_ram_prefetch"}',
             '"input_preparation_by_rank"',
             '"input_preparation_summary"',
@@ -211,7 +212,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             'handle.seek(audio_id * store.bytes_per_audio)',
             '"global_planned_unique_audio"',
             '"shared_store_waveform_sha256"',
-            '"shared_waveform_store_enabled": input_mode in {"shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch"}',
+            '"shared_waveform_store_enabled": input_mode in {"shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload"}',
             '_warm_shared_waveform_store(dataset, planned_rows, rank=rank, world=world)',
         ):
             self.assertIn(marker, text)
@@ -243,6 +244,133 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             self.assertEqual(result["shared_store_expected_bytes"], 8)
             self.assertEqual(result["warmed_file_bytes"], 8)
             self.assertEqual(result["global_audio_ids_sha256"], hashlib.sha256(b"0,2").hexdigest())
+
+    def test_component_partition_mode_preloads_the_whole_store_before_timing(self) -> None:
+        source = TRAIN.read_text(encoding="utf-8")
+        for marker in (
+            "DEFAULT_COMPONENT_PARTITION_STORE_ROOT",
+            '"--perf20-partition-store-root"',
+            '"--perf20-partition-id"',
+            '"partition_rank_ram_preload"',
+            "def _configure_perf20_partition_inputs",
+            "def _preload_partition_store_rank_ram",
+            'for audio_id in range(int(store.num_audio)):',
+            '"whole_partition_expected_bytes_per_rank"',
+            '"training_cache_population_unchanged"',
+            'args.train_manifest = manifest_path',
+            'args.shared_waveform_store_dir = partition_dir',
+        ):
+            self.assertIn(marker, source)
+
+        tree = ast.parse(source)
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "_preload_partition_store_rank_ram")
+        namespace = {
+            "Any": typing.Any,
+            "time": time,
+            "_RankLocalStoreWaveforms": object,
+            "_Perf20WaveformPreloadedDataset": object,
+        }
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
+
+        class Cache:
+            def __init__(self) -> None:
+                self.store = SimpleNamespace(num_audio=4, bytes_per_audio=16)
+                self.items: dict[int, object] = {}
+                self.current_bytes = 0
+                self.evictions = 0
+                self.hits = 0
+                self.misses = 0
+                self.cloned_bytes = 0
+
+            def _get_audio_id(self, audio_id: int) -> object:
+                if audio_id in self.items:
+                    self.hits += 1
+                    return self.items[audio_id]
+                value = object()
+                self.items[audio_id] = value
+                self.misses += 1
+                self.current_bytes += 16
+                self.cloned_bytes += 16
+                return value
+
+            def materialize_from_cached_metadata(self, row: int) -> dict[str, int]:
+                return {"row_index": row}
+
+            def stats(self) -> dict[str, int]:
+                return {
+                    "waveform_misses": self.misses,
+                    "waveform_hits": self.hits,
+                    "waveform_evictions": self.evictions,
+                    "resident_unique_audio": len(self.items),
+                    "cloned_bytes": self.cloned_bytes,
+                }
+
+        cache = Cache()
+        target = SimpleNamespace(items={})
+        result = namespace["_preload_partition_store_rank_ram"](
+            cache, target, [9, 10, 9], rank=1, world=8,
+        )
+        self.assertEqual(set(cache.items), {0, 1, 2, 3})
+        self.assertEqual(target.items, {9: {"row_index": 9}, 10: {"row_index": 10}})
+        self.assertEqual(result["whole_partition_unique_audio"], 4)
+        self.assertEqual(result["cpu_tensor_bytes"], 64)
+        self.assertEqual(result["whole_partition_expected_bytes_all_ranks"], 512)
+        self.assertEqual(result["loaded_rows"], 2)
+
+    def test_component_partition_selection_validates_and_replaces_effective_inputs(self) -> None:
+        tree = ast.parse(TRAIN.read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "_configure_perf20_partition_inputs")
+        namespace = {"argparse": SimpleNamespace(Namespace=object), "Any": typing.Any,
+                     "Path": Path, "json": json}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            partition = root / "partition_0"
+            partition.mkdir()
+            manifest_sha = "manifest"
+            index_sha = "index"
+            waveform_sha = "waveform"
+            metadata = {
+                "status": "PASS",
+                "format": "manifest_unique_fixed_waveform_store_v1",
+                "partition_materialization_format": "reasonaqa_component_partition_stores_v1",
+                "partition_id": 0,
+                "manifest_sha256": manifest_sha,
+                "index_sha256": index_sha,
+                "waveform_sha256": waveform_sha,
+                "partition_plan_sha256": "plan",
+                "num_unique_audio_files": 4,
+                "total_waveform_bytes": 64,
+                "waveform_verification": {"passed": True},
+            }
+            (partition / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+            (partition / "rows.jsonl").write_text('{}\n', encoding="utf-8")
+            report = {
+                "status": "PASS",
+                "format": "reasonaqa_component_partition_stores_v1",
+                "duplicated_audio": 0,
+                "source_payload_sha256_reverified": True,
+                "partitions": [{"partition_id": 0, "qa_rows": 9,
+                    "waveform_verification": {"passed": True}, **{
+                    key: metadata[key] for key in (
+                        "manifest_sha256", "index_sha256", "waveform_sha256",
+                        "num_unique_audio_files", "total_waveform_bytes",
+                    )
+                }}],
+            }
+            (root / "materialization_report.json").write_text(json.dumps(report), encoding="utf-8")
+            args = SimpleNamespace(
+                gate="PERF20", perf20_input_mode="partition_rank_ram_preload",
+                perf20_partition_id=0, perf20_partition_store_root=root,
+                train_manifest=Path("old.jsonl"), shared_waveform_store_dir=Path("old_store"),
+            )
+            selected = namespace["_configure_perf20_partition_inputs"](args)
+            self.assertEqual(args.train_manifest, partition / "rows.jsonl")
+            self.assertEqual(args.shared_waveform_store_dir, partition)
+            self.assertEqual(selected["qa_rows"], 9)
+            self.assertEqual(selected["total_waveform_bytes"], 64)
 
     def test_shared_store_warm_includes_other_rank_audio(self) -> None:
         tree = ast.parse(TRAIN.read_text(encoding="utf-8"))

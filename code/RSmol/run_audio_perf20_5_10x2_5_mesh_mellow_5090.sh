@@ -3,9 +3,11 @@ set -euo pipefail
 
 # Independent 8x5090 PERF20 launcher. Select one strict causal input control
 # with --perf20-input-mode: online, warm_online, waveform_preload,
-# full_preload, or shared_waveform_store.  The retired 64-shard mmap
-# experiment is not used. Pass --profiler only when an operator trace is
-# explicitly needed.
+# full_preload, shared_waveform_store, or partition_rank_ram_preload.  The
+# last mode selects a materialized component partition with
+# --perf20-partition-id (default 0) and copies that complete partition into
+# every rank's CPU RAM before timing.  Pass --profiler only when an operator
+# trace is explicitly needed.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 mkdir -p log

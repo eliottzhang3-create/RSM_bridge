@@ -55,9 +55,10 @@ from recursive_model_5_10x2_5_mesh import RecursiveLlamaForCausalLM, register_au
 DEFAULT_MESH = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244"
 DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
-DEFAULT_SHARED_WAVEFORM_STORE = "/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v1"
+DEFAULT_SHARED_WAVEFORM_STORE = "/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v2"
+DEFAULT_COMPONENT_PARTITION_STORE_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2"
 PERF20_STEPS = 20
-PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch")
+PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -99,6 +100,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="PERF20 shared-store and rank-RAM modes: manifest-scoped single-file float32 waveform store",
     )
     p.add_argument(
+        "--perf20-partition-store-root",
+        type=Path,
+        default=Path(DEFAULT_COMPONENT_PARTITION_STORE_ROOT),
+        help="partition_rank_ram_preload only: root containing audited partition_<id> stores",
+    )
+    p.add_argument(
+        "--perf20-partition-id",
+        type=int,
+        default=0,
+        help="partition_rank_ram_preload only: zero-based materialized component partition (default: 0)",
+    )
+    p.add_argument(
         "--preload-data",
         action="store_true",
         help="Deprecated PERF20 alias for --perf20-input-mode full_preload",
@@ -110,7 +123,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "PERF20 causal input control: online; exact-file warm_online; waveform-only "
             "rank-local preload with timed tokenization/collate; fully collated full_preload; "
-            "rank0-warmed shared mmap; store-to-rank-RAM preload; or bounded asynchronous store-to-rank-RAM prefetch"
+            "rank0-warmed shared mmap; exact-row store-to-rank-RAM preload; bounded asynchronous "
+            "store-to-rank-RAM prefetch; or whole-component-partition rank-RAM preload"
         ),
     )
     p.add_argument("--perf20-prefetch-microbatches", type=int, default=8,
@@ -950,6 +964,12 @@ class _RankLocalStoreWaveforms:
         started = time.perf_counter()
         audio_id = self.store.locate(path)
         self.locate_seconds += time.perf_counter() - started
+        return self._get_audio_id(audio_id)
+
+    def _get_audio_id(self, audio_id: int) -> torch.Tensor:
+        """Return an owned tensor, cloning the store row only on first use."""
+
+        audio_id = int(audio_id)
         value = self.items.get(audio_id)
         if value is not None:
             self.hits += 1
@@ -988,6 +1008,32 @@ class _RankLocalStoreWaveforms:
         item["audio1"] = self._get(audio1)
         item["audio2"] = None if audio2 == audio1 else self._get(audio2)
         return item
+
+    def materialize_from_cached_metadata(self, row: int) -> dict[str, Any]:
+        """Build a row without asking the base dataset to touch mmap waveform views."""
+
+        row_index = int(row)
+        started = time.perf_counter()
+        source = self.dataset.rows[row_index]
+        prompt = str(source.get("prompt") or source.get("question") or source.get("input") or "")
+        answer = str(
+            source.get("answer") or source.get("target") or source.get("output")
+            or source.get("caption1") or ""
+        )
+        if not answer:
+            raise ValueError(f"manifest row {row_index} lacks answer")
+        self.dataset_item_seconds += time.perf_counter() - started
+        started = time.perf_counter()
+        audio1, audio2 = self.dataset.audio_paths(row_index)
+        self.audio_paths_seconds += time.perf_counter() - started
+        return {
+            "audio1": self._get(audio1),
+            "audio2": None if audio2 == audio1 else self._get(audio2),
+            "prompt": prompt,
+            "answer": answer,
+            "row_index": row_index,
+            "audio2_reused": audio2 == audio1,
+        }
 
     def stats(self) -> dict[str, Any]:
         lookups = self.hits + self.misses
@@ -1562,6 +1608,64 @@ def _preload_store_rank_ram(
     }
 
 
+def _preload_partition_store_rank_ram(
+    cache: _RankLocalStoreWaveforms,
+    target: _Perf20WaveformPreloadedDataset,
+    rows: list[int],
+    *,
+    rank: int,
+    world: int,
+) -> dict[str, Any]:
+    """Clone the complete selected partition into each rank's anonymous RAM."""
+
+    store = cache.store
+    expected_bytes = int(store.num_audio) * int(store.bytes_per_audio)
+    preload_started = time.perf_counter()
+    for audio_id in range(int(store.num_audio)):
+        cache._get_audio_id(audio_id)
+        if int(rank) == 0 and (audio_id + 1) % 1024 == 0:
+            print(
+                "[audio-perf20] partition store-to-rank-RAM preload "
+                f"audio={audio_id + 1}/{store.num_audio} "
+                f"gib={cache.current_bytes / 1024**3:.3f}",
+                flush=True,
+            )
+    preload_seconds = time.perf_counter() - preload_started
+    if len(cache.items) != int(store.num_audio) or cache.current_bytes != expected_bytes:
+        raise RuntimeError(
+            "whole-partition rank-RAM preload cardinality/byte mismatch: "
+            f"resident={len(cache.items)}/{store.num_audio} "
+            f"bytes={cache.current_bytes}/{expected_bytes}"
+        )
+    if cache.evictions:
+        raise RuntimeError(f"whole-partition rank-RAM preload unexpectedly evicted {cache.evictions} tensors")
+
+    rows_started = time.perf_counter()
+    for row in dict.fromkeys(int(value) for value in rows):
+        target.items[row] = cache.materialize_from_cached_metadata(row)
+    row_materialization_seconds = time.perf_counter() - rows_started
+    stats = cache.stats()
+    if stats["waveform_misses"] != int(store.num_audio):
+        raise RuntimeError(
+            "whole-partition preload did not clone each store row exactly once: "
+            f"misses={stats['waveform_misses']} expected={store.num_audio}"
+        )
+    return {
+        "loaded_rows": len(target.items),
+        "cpu_tensor_bytes": cache.current_bytes,
+        "whole_partition_unique_audio": int(store.num_audio),
+        "whole_partition_expected_bytes_per_rank": expected_bytes,
+        "whole_partition_expected_gib_per_rank": expected_bytes / 1024**3,
+        "whole_partition_expected_bytes_all_ranks": expected_bytes * int(world),
+        "whole_partition_expected_gib_all_ranks": expected_bytes * int(world) / 1024**3,
+        "store_to_rank_ram_seconds": float(preload_seconds),
+        "planned_row_materialization_seconds": float(row_materialization_seconds),
+        "waveform_cache_stats_after_preload": stats,
+        "training_storage_reads_expected": 0,
+        "timed_tokenization_and_collate": True,
+    }
+
+
 def _preload_perf20_batches(
     loader: DataLoader,
     sampler: DistributedSampler,
@@ -1677,6 +1781,93 @@ def _actual_resume_audit(path: Path, args: argparse.Namespace, batch_cpu: dict[s
         _restore_rng_state(saved_rng, device)
 
 
+def _configure_perf20_partition_inputs(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Select and validate one self-contained materialized partition for PERF20."""
+
+    if args.gate != "PERF20" or args.perf20_input_mode != "partition_rank_ram_preload":
+        return None
+    partition_id = int(args.perf20_partition_id)
+    if partition_id < 0:
+        raise ValueError(f"--perf20-partition-id must be non-negative, got {partition_id}")
+    root = args.perf20_partition_store_root.expanduser().resolve(strict=True)
+    if (root / "BUILDING").exists():
+        raise RuntimeError(f"partition store root is still being built: {root}")
+    report_path = root / "materialization_report.json"
+    if not report_path.is_file():
+        raise FileNotFoundError(f"partition store root lacks materialization_report.json: {root}")
+    materialization_report = json.loads(report_path.read_text(encoding="utf-8"))
+    expected_root = {
+        "status": "PASS",
+        "format": "reasonaqa_component_partition_stores_v1",
+        "duplicated_audio": 0,
+        "source_payload_sha256_reverified": True,
+    }
+    root_mismatches = {
+        key: {"expected": expected, "actual": materialization_report.get(key)}
+        for key, expected in expected_root.items()
+        if materialization_report.get(key) != expected
+    }
+    if root_mismatches:
+        raise RuntimeError(f"partition store root contract mismatch: {root_mismatches}")
+
+    partition_dir = root / f"partition_{partition_id}"
+    metadata_path = partition_dir / "metadata.json"
+    manifest_path = partition_dir / "rows.jsonl"
+    if (partition_dir / "BUILDING").exists():
+        raise RuntimeError(f"selected partition is still being built: {partition_dir}")
+    if not metadata_path.is_file() or not manifest_path.is_file():
+        raise FileNotFoundError(f"selected partition lacks metadata.json or rows.jsonl: {partition_dir}")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    expected_partition = {
+        "status": "PASS",
+        "format": "manifest_unique_fixed_waveform_store_v1",
+        "partition_materialization_format": "reasonaqa_component_partition_stores_v1",
+        "partition_id": partition_id,
+    }
+    partition_mismatches = {
+        key: {"expected": expected, "actual": metadata.get(key)}
+        for key, expected in expected_partition.items()
+        if metadata.get(key) != expected
+    }
+    if partition_mismatches:
+        raise RuntimeError(f"selected partition contract mismatch: {partition_mismatches}")
+    if metadata.get("waveform_verification", {}).get("passed") is not True:
+        raise RuntimeError(f"selected partition has no passing waveform verification: {partition_dir}")
+    partition_reports = materialization_report.get("partitions", [])
+    report_entry = next(
+        (item for item in partition_reports if int(item.get("partition_id", -1)) == partition_id),
+        None,
+    )
+    if report_entry is None:
+        raise RuntimeError(f"materialization report has no partition {partition_id}")
+    if report_entry.get("waveform_verification", {}).get("passed") is not True:
+        raise RuntimeError(f"materialization report has no passing verification for partition {partition_id}")
+    for key in ("manifest_sha256", "index_sha256", "waveform_sha256", "num_unique_audio_files", "total_waveform_bytes"):
+        if report_entry.get(key) != metadata.get(key):
+            raise RuntimeError(
+                f"partition {partition_id} report/metadata mismatch for {key}: "
+                f"report={report_entry.get(key)!r} metadata={metadata.get(key)!r}"
+            )
+
+    args.train_manifest = manifest_path
+    args.shared_waveform_store_dir = partition_dir
+    return {
+        "partition_id": partition_id,
+        "partition_store_root": str(root),
+        "partition_store_dir": str(partition_dir),
+        "partition_manifest": str(manifest_path),
+        "partition_manifest_sha256": str(metadata["manifest_sha256"]),
+        "partition_index_sha256": str(metadata["index_sha256"]),
+        "partition_waveform_sha256": str(metadata["waveform_sha256"]),
+        "partition_plan_sha256": str(metadata.get("partition_plan_sha256")),
+        "qa_rows": int(report_entry["qa_rows"]),
+        "num_unique_audio_files": int(metadata["num_unique_audio_files"]),
+        "total_waveform_bytes": int(metadata["total_waveform_bytes"]),
+        "total_waveform_gib": int(metadata["total_waveform_bytes"]) / 1024**3,
+        "duplicated_audio_across_partitions": int(materialization_report["duplicated_audio"]),
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     rank, world, device = _init_dist(args)
     _seed(args.seed, rank)
@@ -1688,6 +1879,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     store_prefetcher: _Perf20StorePrefetcher | None = None
     profiler_artifacts: list[dict[str, Any]] = []
     perf_output_preexisting = False
+    partition_scope: dict[str, Any] | None = None
     try:
         if preload_alias_conflict:
             raise ValueError("--preload-data cannot be combined with a non-full --perf20-input-mode")
@@ -1776,6 +1968,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
         if args.gate != "PERF20" and args.shared_waveform_store_dir != Path(DEFAULT_SHARED_WAVEFORM_STORE):
             raise ValueError("--shared-waveform-store-dir is isolated to PERF20")
+        if args.gate != "PERF20" and (
+            args.perf20_partition_store_root != Path(DEFAULT_COMPONENT_PARTITION_STORE_ROOT)
+            or int(args.perf20_partition_id) != 0
+        ):
+            raise ValueError("--perf20-partition-store-root/--perf20-partition-id are isolated to PERF20")
+        partition_scope = _configure_perf20_partition_inputs(args)
+        report["configuration"] = vars(args)
+        if partition_scope is not None:
+            report["partition_scope"] = partition_scope
         model, tokenizer = _load_model(args, device)
         model.train()
         if not model.trainable_parameter_audit()["training_mode_contract"]:
@@ -1796,7 +1997,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             unique_waveform_store_dir=(
                 args.shared_waveform_store_dir
                 if args.gate == "PERF20" and args.perf20_input_mode in {
-                    "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch"}
+                    "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch",
+                    "partition_rank_ram_preload"}
                 else None
             ),
         )
@@ -1813,7 +2015,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         waveform_preloaded_dataset = (
             _Perf20WaveformPreloadedDataset(dataset)
-            if args.gate == "PERF20" and args.perf20_input_mode in {"waveform_preload", "store_rank_ram_preload"}
+            if args.gate == "PERF20" and args.perf20_input_mode in {
+                "waveform_preload", "store_rank_ram_preload", "partition_rank_ram_preload"}
             else None
         )
         loader_dataset = waveform_preloaded_dataset or dataset
@@ -1950,6 +2153,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     if args.perf20_input_mode == "shared_waveform_store" else
                     "exact rank-local store waveforms are copied into owned CPU tensors before timing"
                     if args.perf20_input_mode == "store_rank_ram_preload" else
+                    "the complete selected component partition is copied into every rank's owned CPU tensors before timing"
+                    if args.perf20_input_mode == "partition_rank_ram_preload" else
                     "bounded rank-local owned CPU tensor LRU plus asynchronous microbatch waveform prefetch"
                     if args.perf20_input_mode == "store_rank_ram_prefetch" else
                     "rank-local fully collated CPU batches are resident before timing"
@@ -1993,6 +2198,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         rank_ram_cache = _RankLocalStoreWaveforms(dataset)
                         input_preparation.update(_preload_store_rank_ram(
                             rank_ram_cache, waveform_preloaded_dataset, planned_rows,
+                        ))
+                    elif args.perf20_input_mode == "partition_rank_ram_preload":
+                        if waveform_preloaded_dataset is None:
+                            raise RuntimeError("partition rank-RAM preload did not install its dataset wrapper")
+                        if partition_scope is None:
+                            raise RuntimeError("partition rank-RAM preload has no validated partition scope")
+                        rank_ram_cache = _RankLocalStoreWaveforms(dataset)
+                        input_preparation.update(partition_scope)
+                        input_preparation.update(_preload_partition_store_rank_ram(
+                            rank_ram_cache, waveform_preloaded_dataset, planned_rows,
+                            rank=rank, world=world,
                         ))
                     elif args.perf20_input_mode == "store_rank_ram_prefetch":
                         if timed_collator is None:
@@ -2369,6 +2585,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     )
                 input_preparation["waveform_cache_stats_after_training"] = rank_ram_cache.stats()
                 input_preparation["prefetch_stats_after_training"] = store_prefetcher.stats()
+            elif rank_ram_cache is not None:
+                cache_after_training = rank_ram_cache.stats()
+                input_preparation["waveform_cache_stats_after_training"] = cache_after_training
+                if args.perf20_input_mode == "partition_rank_ram_preload":
+                    cache_after_preload = input_preparation["waveform_cache_stats_after_preload"]
+                    unchanged = all(
+                        cache_after_training[key] == cache_after_preload[key]
+                        for key in ("waveform_misses", "cloned_bytes", "waveform_evictions", "resident_unique_audio")
+                    )
+                    input_preparation["training_cache_population_unchanged"] = unchanged
+                    if not unchanged:
+                        raise RuntimeError(
+                            "partition rank-RAM cache population changed during measured training: "
+                            f"before={cache_after_preload} after={cache_after_training}"
+                        )
             input_preparation["process_faults_after_training"] = _process_fault_snapshot()
             input_preparation["process_io_after_training"] = _process_io_snapshot()
             input_preparation["cgroup_memory_after_training"] = _cgroup_memory_snapshot()
@@ -2408,12 +2639,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "shared_waveform_store": "node-shared fixed-stride waveform mmap after rank0 warmed the exact all-rank 20-step audio union by file offset",
                 "store_rank_ram_preload": "store mmap views cloned into rank-owned CPU tensors before timing; timed tokenization and collate",
                 "store_rank_ram_prefetch": "bounded rank-owned CPU waveform LRU with asynchronous producer and timed consumer-side collate",
+                "partition_rank_ram_preload": "complete selected component partition cloned into each rank's anonymous CPU RAM before timing; timed tokenization and collate",
             }[input_mode]
             report["data_pipeline"] = {
                 "mode": input_mode,
-                "preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload"},
+                "preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "partition_rank_ram_preload"},
                 "waveform_cache_enabled": False,
-                "shared_waveform_store_enabled": input_mode in {"shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch"},
+                "shared_waveform_store_enabled": input_mode in {"shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload"},
+                "whole_partition_rank_ram_enabled": input_mode == "partition_rank_ram_preload",
                 "retired_waveform_shard_experiment": True,
                 "timed_source": timed_source,
                 "training_dataloader_accesses": 0 if input_mode in {"full_preload", "store_rank_ram_prefetch"} else PERF20_STEPS * args.gradient_accumulation_steps,
@@ -2433,7 +2666,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "forward_backward_optimizer": "rank0 CUDA event elapsed time; DDP gradient collectives are included in backward; host enqueue fields are reported separately",
                 "metrics_collectives": "global token counts use one identical all_reduce sequence on every rank; no rank-specific collective is introduced, and its device timing is not the enqueue-only host latency",
                 "per_rank_timing": "all ranks retain local timings; per-rank distributions and straggler tables use exactly the same steady-state step set as rank0, and one gather_object runs only after the final measured optimizer step",
-                "causal_input_controls": "all PERF20 modes use the same per-rank row hash, restored model RNG state, dedicated DataLoader generator, first-forward RNG/batch fingerprints, and one pre-measurement barrier",
+                "causal_input_controls": "within a fixed effective manifest, PERF20 reruns preserve the per-rank row hash, restored model RNG state, dedicated DataLoader generator, first-forward RNG/batch fingerprints, and one pre-measurement barrier; partition_rank_ram_preload intentionally selects a partition manifest and must be compared by its separately reported row hash/token load",
                 "steady_state": "optimizer steps 6-20 by default, excluding profiler wait/warmup/active steps when profiling is enabled",
             }
     except Exception as exc:
