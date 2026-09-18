@@ -365,6 +365,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     break
                 step_started = time.perf_counter()
                 optimizer.zero_grad(set_to_none=True)
+                step_loss_sum = torch.zeros((), dtype=torch.float32, device=device)
                 chunk = chunks[local_step]
                 rank_rows = chunk[rank * 32:(rank + 1) * 32]
                 if len(rank_rows) != 32:
@@ -382,6 +383,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                             output = ddp(**{key: value for key, value in batch.items() if key not in {"row_indices", "audio2_reused"}})
                         if output.loss is None or not bool(torch.isfinite(output.loss)):
                             raise RuntimeError("nonfinite partition training loss")
+                        step_loss_sum.add_(output.loss.detach().float())
                         (output.loss / 4).backward()
                     del batch, output
                 owner = ddp.module
@@ -389,14 +391,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     first_audit = base._mesh_runtime_gradient_audit(owner, require_router_stats=False)
                     owner.mesh_model.model.gradient_audit_mode = False
                 torch.nn.utils.clip_grad_norm_(ddp.parameters(), .5, error_if_nonfinite=True)
+                lr_used = float(optimizer.param_groups[0]["lr"])
                 optimizer.step()
                 scheduler.step()
                 cursor = {"segment": segment_index, "segment_step": local_step + 1, "global_step": cursor["global_step"] + 1}
                 torch.cuda.synchronize(device)
-                segment_report["steps"].append({"global_step": cursor["global_step"], "partition_step": local_step + 1, "slot": "mixed" if len(slot_kind) == 2 else "single" if True in slot_kind else "dual", "seconds": time.perf_counter() - step_started})
-                if rank == 0:
-                    print(f"[partition-train] step={cursor['global_step']}/{total} p{pid} {local_step+1}/{segment['steps']} {segment_report['steps'][-1]['seconds']:.3f}s", flush=True)
+                step_loss = float((step_loss_sum / args.gradient_accumulation_steps).item())
+                segment_report["steps"].append({"global_step": cursor["global_step"], "partition_step": local_step + 1, "slot": "mixed" if len(slot_kind) == 2 else "single" if True in slot_kind else "dual", "loss": step_loss, "lr": lr_used, "seconds": time.perf_counter() - step_started})
                 at_boundary = local_step + 1 == segment["steps"]
+                if rank == 0 and (cursor["global_step"] % 10 == 0 or at_boundary):
+                    print(f"[partition-train] step={cursor['global_step']}/{total} p{pid} {local_step+1}/{segment['steps']} loss={step_loss:.6f} lr={lr_used:.8g} {segment_report['steps'][-1]['seconds']:.3f}s", flush=True)
                 if args.mode == "formal" and cursor["global_step"] % args.save_every == 0 and not at_boundary:
                     checkpoint = args.output_dir / f"checkpoint-{cursor['global_step']:06d}"
                     _checkpoint(checkpoint, owner, tokenizer, optimizer, scheduler, args, inventory, schedule, cursor, rank, world, device, plan_audit["plan_sha256"])
