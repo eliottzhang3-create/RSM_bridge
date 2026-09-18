@@ -739,6 +739,31 @@ python code/RSmol/scripts/plan_reasonaqa_component_partitions.py \
 
 输出 `partition_plan.json`、`partition_audit.json`、全局 `row_assignments.jsonl` 和六对 `partition_<0..5>_rows.jsonl` / `partition_<0..5>_audio.jsonl`。QA 文件原有字段不变，原 Dataset row ordinal（非空记录零基序号）及物理行号保存在 sidecar；音频清单保留原 store audio_id/offset，尚未物化六个 waveform 文件，也不能直接传给现有 store loader。完成前保留 `BUILDING`，失败/已有输出目录拒绝覆盖；重跑需换新目录。完成前重新读取输出 sidecar 核查覆盖、唯一性、本地引用，并核对每份 QA 与原始分配流的内容摘要。先检查 audit 的六份 QA/GiB/来源分布，再决定是否物化连续 waveform 分区和接入训练。
 
+远程真实规划已完成：规划完整性 `PASS`，968,059 条 QA、54,046 条唯一音频均恰好分配一次，音频复制、拆分连通分量及跨分区双音频 QA 均为 0。由于完整 Clotho 连通分量本身含 278,680 条 QA，零复制条件下六份 ±2% QA 平衡在数学上不可达，故 `balance_status=NOT_MET`；用户已明确接受该结果。partition 0 为 278,680 条 Clotho QA、3,839 音频、4.576 GiB；partition 1--5 各约 137,876 条 QA、10,040 音频、11.97 GiB。
+
+CPU-only 物化器 `code/RSmol/scripts/materialize_reasonaqa_component_partitions.py` 将上述已审计计划转换成六个自包含的标准 fixed-stride waveform store。它先重新核对 plan/audit/artifact/source index 哈希和每条 QA 的双音频本区性，然后按全局 audio ID 对源 `waveforms.f32` 做一次连续顺序读取，同时追加到六个目标文件；不解码音频、不重新划分、不复制音频。每区输出 `rows.jsonl`、使用 partition-local audio ID/offset 且保留 global ID/offset 的 `index.jsonl`、连续 `waveforms.f32` 和兼容 `UniqueWaveformStore` 的 `metadata.json`。最终重新核对源64.43 GiB payload SHA256、计算每区 payload SHA256并均匀逐字节抽检；六区物化字节总数必须严格等于源store。`status=PASS` 仅证明物化完整性，不代表CPU内存或训练性能 PASS。
+
+先做只读 dry run；它不创建输出：
+
+```bash
+conda activate rsmol
+python code/RSmol/scripts/materialize_reasonaqa_component_partitions.py --dry-run
+```
+
+确认路径和六区统计后，直接在CPU环境构建，无需 `vc submit`：
+
+```bash
+python code/RSmol/scripts/materialize_reasonaqa_component_partitions.py
+```
+
+默认读取 `.../outputs/RSmol/reasonaqa_component_partitions6_v1`，写入 `.../data/rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v1`。根目录和每区在完成前均有 `BUILDING`；每100条全局音频对六个文件统一 `fsync` 后原子记录全局游标及各区计数。中断后使用完全相同的输入并追加 `--resume`；工具会按持久游标截断未提交尾部、重建源SHA状态并继续：
+
+```bash
+python code/RSmol/scripts/materialize_reasonaqa_component_partitions.py --resume
+```
+
+输出目录已存在时普通构建拒绝覆盖；一个已经完整 `PASS` 的目录也不会被 `--resume` 重写。最终报告为 `materialization_report.json`。当前代码只完成本地合成store测试，尚未执行远程64.43 GiB物化，也尚未把六区接入正式训练。
+
 ### 9.3.5 固定 5-10-5 recursive 音频正式训练
 
 该路线使用无 MeSH router/memory 的历史固定 5-10-5 checkpoint：20 个物理层，执行 `prefix 5 + middle 10 × 2 + suffix 5` 的精确 30-entry schedule。音频、ReasonAQA、Mellow mapper、answer-only loss、batch、optimizer 和 scheduler 合同与现有 MeSH/原始 SmolLM2 音频实验保持一致；新入口只允许 FORMAL，不提供或要求 smoke gate。`--model-path` 是文本初始化，只有本路线生成的完整复合 checkpoint 才能传给 `--resume-from`。
@@ -869,6 +894,8 @@ code/RSmol/scripts/probe_audio_storage.py
 code/RSmol/scripts/probe_audio_storage_5090.sh
 code/RSmol/run_audio_storage_probe_5090.sh
 code/RSmol/scripts/prepare_audio_waveform_shards.py
+code/RSmol/scripts/plan_reasonaqa_component_partitions.py
+code/RSmol/scripts/materialize_reasonaqa_component_partitions.py
 code/RSmol/scripts/audit_audio_checkpoint_5_10x2_5_mesh_mellow.py
 code/RSmol/run_audio_*5_10x2_5_mesh_mellow_5090.sh
 tests/test_audio_5_10x2_5_mesh_mellow_static.py
@@ -876,6 +903,8 @@ tests/test_audio_perf20_static.py
 tests/test_audio_storage_probe_static.py
 tests/test_audio_waveform_shards_static.py
 tests/test_audio_waveform_cache_perf20_static.py
+tests/test_reasonaqa_component_partitions.py
+tests/test_reasonaqa_partition_materialization.py
 
 # 固定 5-10-5 recursive 音频正式对照（无 MeSH、FORMAL-only）
 code/RSmol/audio_5_10_5_recursive_mellow/data.py
