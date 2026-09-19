@@ -10,7 +10,7 @@ fi
 vc submit -p pdgpu-5090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 32 -m 256G -g 8 -n 1 \
-  -j audio-5-10-5-recursive-partition-formal-$(date +%m%d%H%M%S) \
+  -j audio-5-10-5-recursive-partition-smoke20-$(date +%m%d%H%M%S) \
   -d "$SCRIPT_DIR" \
-  JOB=1:1 "$SCRIPT_DIR/log/audio_5_10_5_recursive_partition_formal_5090.JOB.log" \
-  --cmd "bash scripts/train_audio_5_10_5_recursive_mellow_formal_ddp.sh $CMD_ARGS"
+  JOB=1:1 "$SCRIPT_DIR/log/audio_5_10_5_recursive_partition_smoke20_5090.JOB.log" \
+  --cmd "bash scripts/train_audio_5_10_5_recursive_mellow_smoke20_ddp.sh $CMD_ARGS"

@@ -6,5 +6,5 @@ source "$USER_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate rsmol
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 torchrun --standalone --nproc_per_node=8 "$SCRIPT_DIR/train_audio_partitioned_5_10_5_recursive_mellow_ddp.py" \
-  --mode formal --epochs 10 --micro-batch-size 8 --gradient-accumulation-steps 4 \
+  --mode smoke --epochs 10 --micro-batch-size 8 --gradient-accumulation-steps 4 \
   --save-every 500 --checkpoint-retention 4 "$@"

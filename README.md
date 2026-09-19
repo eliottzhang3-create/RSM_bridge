@@ -37,6 +37,7 @@ rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2
 - 正式训练：准备采用 10 epochs；EOS v2 smoke 和正式作业均尚未登记远程完成。
 - 正式训练入口会重新读取两个 smoke report，验证训练合同、step 游标、resume 关联、MeSH 30 层轨迹和全部 8 rank 内存释放；验证不通过则拒绝启动。
 - 原始 SmolLM2-135M 音频对比线已在本地改造成同一套六分区、compact-prefix、answer-EOS-v2、10-epoch 训练合同，训练 wrapper 使用 `pdgpu-3090`；当前状态为代码就绪，新的 20+2 smoke 与正式训练均尚未登记远程 PASS。
+- 固定 5-10-5 recursive 音频对比线也已改造成六分区、compact-prefix、answer-EOS-v2、10-epoch 合同；保持 20 个物理层和精确 `5-10-10-5` 逻辑轨迹、无 MeSH router/memory，训练 wrapper 使用 `pdgpu-5090`。当前仅代码就绪，新的 20+2 smoke 与正式训练尚未登记远程 PASS。
 
 文本模型默认初始化自第二轮低学习率 MeSH checkpoint：
 
@@ -648,6 +649,17 @@ code/RSmol/run_mmau_test_mini_audio_smollm2_5090.sh
 formal-epoch2-continue-20260902_184936/checkpoint-step-009244
 ```
 
+当前该路线使用新的 partition-v2 trainer，但仍从上述文本 checkpoint 初始化：
+
+```text
+code/RSmol/scripts/train_audio_partitioned_5_10_5_recursive_mellow_ddp.py
+code/RSmol/run_audio_5_10_5_recursive_mellow_smoke20_5090.sh
+code/RSmol/run_audio_5_10_5_recursive_mellow_resume2_5090.sh
+code/RSmol/run_audio_5_10_5_recursive_mellow_formal_5090.sh
+```
+
+训练合同为 `recursive_5_10_5_component_partitions6_rank_ram_compact_audio_answer_eos_v2`。它必须先完成本路线自己的 EOS-v2 20+2 smoke；旧三轮 composite checkpoint、MeSH/SmolLM2 smoke report 或文本初始化 checkpoint 都不能放行正式训练或作为新训练器的 resume source。
+
 Parcae 历史完成 checkpoint：
 
 ```text
@@ -706,6 +718,22 @@ tests/test_audio_smollm2_partition_training_static.py
 tests/test_audio_smollm2_135m_mellow_static.py
 ```
 
+### 10.4 固定 5-10-5 recursive partition 对比线
+
+```text
+code/RSmol/audio_5_10_5_recursive_mellow/model.py
+code/RSmol/audio_5_10_5_recursive_mellow/data.py
+code/RSmol/scripts/train_audio_partitioned_5_10_5_recursive_mellow_ddp.py
+code/RSmol/scripts/train_audio_5_10_5_recursive_mellow_smoke20_ddp.sh
+code/RSmol/scripts/train_audio_5_10_5_recursive_mellow_resume2_ddp.sh
+code/RSmol/scripts/train_audio_5_10_5_recursive_mellow_formal_ddp.sh
+code/RSmol/run_audio_5_10_5_recursive_mellow_smoke20_5090.sh
+code/RSmol/run_audio_5_10_5_recursive_mellow_resume2_5090.sh
+code/RSmol/run_audio_5_10_5_recursive_mellow_formal_5090.sh
+tests/test_audio_5_10_5_recursive_partition_training_static.py
+tests/test_audio_5_10_5_recursive_mellow_static.py
+```
+
 ## 11. 已处理故障与不要重复的误诊
 
 1. SmolLM2 tied embedding 导致转换时缺 `lm_head.weight`：转换器已按 tied-weight 语义处理。
@@ -726,6 +754,7 @@ tests/test_audio_smollm2_135m_mellow_static.py
 
 - 旧 v1 两个 smoke 已由用户确认 PASS；当前 answer-EOS v2 合同必须重新跑 20+2 smoke，旧 report 会被正式 gate 拒绝。
 - 原始 SmolLM2 partition 对比线同样必须先在 `pdgpu-3090` 重跑本路线 EOS-v2 的 20+2 smoke；旧三 epoch checkpoint、旧 STAGE7 report 或 MeSH smoke report 都不能放行该路线正式训练。
+- 固定 5-10-5 recursive partition 对比线必须在 `pdgpu-5090` 完成本路线自己的 EOS-v2 20+2 smoke；旧三轮 composite checkpoint、文本初始化 checkpoint 或其他路线 report 都不能放行它的正式训练。
 - 正式 10-epoch 训练尚未登记启动/完成。看到远程结果后及时写入 job、output dir、最终 checkpoint 和 report 状态。
 - 当前日志 loss 只是 rank 0 的四个 microbatch 平均，不是 8 rank 全局聚合 loss。
 - 当前训练没有周期性 validation；模型选择需要另行设计只读评测，不要把 train report 当验证集表现。

@@ -1,31 +1,116 @@
-# Fixed 5-10-5 recursive Mellow audio route
+# Fixed 5-10-5 recursive Mellow partition baseline
 
-This isolated comparison route trains the historical fixed SmolLM2 5-10-5
-checkpoint on the same ReasonAQA three-epoch contract as the MeSH and original
-SmolLM2 audio experiments.  The text model owns 20 physical decoder modules;
-the middle physical modules 5--14 are each executed twice, producing the exact
-30-entry logical schedule.  There are no MeSH memory slots or routers.
-
-The route exposes only FORMAL training.  Its default text initialization is:
+This is the isolated fixed-recursion comparison route for the current Audio
+MeSH experiment. Its text model owns twenty independent physical decoder
+modules. Physical modules 0--4 run once, modules 5--14 run twice, and modules
+15--19 run once, giving the exact thirty-entry logical schedule:
 
 ```text
-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10_5/formal-epoch2-continue-20260902_184936/checkpoint-step-009244
+0..14, 5..14, 15..19
 ```
 
-`--model-path` supplies this text-only initialization.  `--resume-from` is
-reserved for a complete composite checkpoint produced by this route; the two
-arguments are not interchangeable.  The formal contract is 8 GPUs, micro 8,
-GA 4, effective batch 256, three epochs, LR 1e-3 to zero, 5% warmup, BF16,
-save every 500 optimizer steps, and retention of the latest four complete
-checkpoints.  With the current drop12 manifest this is expected to be 11,343
-optimizer steps with 568 warmup steps.
+There are no MeSH memory slots or routers. The canonical text initialization
+remains:
 
-Submission entry point:
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10_5/
+formal-epoch2-continue-20260902_184936/checkpoint-step-009244
+```
+
+The current training contract is:
+
+```text
+recursive_5_10_5_component_partitions6_rank_ram_compact_audio_answer_eos_v2
+```
+
+Except for the fixed recursive text backbone, training matches the current
+Audio MeSH partition route:
+
+- audited six-component waveform store;
+- one complete partition cloned into anonymous CPU RAM per DDP rank;
+- strict per-rank RSS and cgroup-anon release before another preload;
+- frozen HTSAT, trainable Mellow c2l, bridge, and complete text model;
+- compact 130-token single-audio and 260-token dual-audio prefixes;
+- exactly one supervised `<|endoftext|>` at every answer end;
+- 8 GPUs, microbatch 8/GPU, gradient accumulation 4, global batch 256;
+- AdamW with betas 0.9/0.95, weight decay 0.1, max LR 1e-3;
+- 5% warmup, cosine decay, gradient clipping 0.5;
+- 10 epochs, 37,810 optimizer steps, save every 500, retain four;
+- no periodic validation.
+
+All jobs use `pdgpu-5090`, 32 CPU cores, 256 GiB RAM, and 8 GPUs.
+
+## Required smoke and resume gate
+
+Use new empty output directories:
 
 ```bash
-bash code/RSmol/run_audio_5_10_5_recursive_mellow_formal_5090.sh
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+
+SMOKE_OUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_recursive_mellow/partition_smoke20_eos_v2_20260919
+RESUME_OUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_recursive_mellow/partition_resume2_eos_v2_20260919
+
+bash run_audio_5_10_5_recursive_mellow_smoke20_5090.sh \
+  --output-dir "$SMOKE_OUT"
+
+bash run_audio_5_10_5_recursive_mellow_resume2_5090.sh \
+  --resume-from "$SMOKE_OUT/checkpoint-000020" \
+  --output-dir "$RESUME_OUT"
 ```
 
-User arguments are appended after the canonical defaults and may select an
-explicit fresh output directory or a valid FORMAL `--resume-from` checkpoint.
+The first job executes `p2:10 -> release -> p0:10 -> release` and publishes
+`checkpoint-000020`. The second restores that artifact, executes
+`p1:2 -> release`, proves finite nonzero changes in representative text,
+bridge, and c2l parameters, and publishes `checkpoint-000022`.
 
+Both reports must be real remote `PASS` reports:
+
+```text
+$SMOKE_OUT/partition_training_report.json
+$RESUME_OUT/partition_training_report.json
+```
+
+The first-step audit requires the exact 20-physical/30-logical schedule, both
+middle passes to carry finite gradients, all physical layers and audio mapper
+parameters to have finite gradients, HTSAT to remain frozen, no router/memory
+parameters, compact prefixes, and supervised answer EOS.
+
+## Formal training
+
+Formal training starts fresh from the canonical text initialization. Smoke
+checkpoints are evidence for the gate, not formal-training initial weights.
+
+```bash
+FORMAL_OUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_recursive_mellow/partition_formal_eos_v2_10epochs_20260919
+
+bash run_audio_5_10_5_recursive_mellow_formal_5090.sh \
+  --output-dir "$FORMAL_OUT" \
+  --smoke20-report "$SMOKE_OUT/partition_training_report.json" \
+  --smoke-resume-report "$RESUME_OUT/partition_training_report.json"
+```
+
+The formal gate rereads both reports and their checkpoint markers/configs. It
+validates the route-specific contract, inventory, seed, schedule, cursors,
+resume lineage, eight-rank RSS/cgroup release, recursive trace and gradients,
+compact prefix/EOS, and text/bridge/c2l resume updates.
+
+For a formal continuation, pass a formal checkpoint via `--resume-from`, keep
+all contract values unchanged, use a new empty output directory, and pass the
+same two smoke reports.
+
+## Historical contract
+
+The old trainer remains in the repository for historical inspection:
+
+```text
+scripts/train_audio_5_10_5_recursive_mellow_ddp.py
+audio_5_10_5_recursive_mellow_composite_v1
+```
+
+It used online manifests, fixed 260-token prefixes, three epochs, 11,343
+steps, and a different checkpoint format. Any checkpoint from that contract,
+a text-only checkpoint, a MeSH checkpoint, or another baseline is not a valid
+`--resume-from` source for partition-v2 training.
+
+The partition-v2 route is code-ready only until the two remote smoke reports
+are actually `PASS`.

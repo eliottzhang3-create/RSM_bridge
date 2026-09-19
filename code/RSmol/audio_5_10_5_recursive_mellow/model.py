@@ -14,7 +14,9 @@ import torch
 from torch import nn
 
 from audio_smollm2_135m_mellow.model import (
+    AUDIO_DUAL_PREFIX_TOKENS,
     AUDIO_PREFIX_TOKENS,
+    AUDIO_SINGLE_PREFIX_TOKENS,
     AUDIO_TOKENS_PER_CLIP,
     MAPPER_CONTRACT,
     AudioSmolLM2Config,
@@ -172,17 +174,49 @@ class AudioRecursive5_10_5Model(AudioSmolLM2Model):
             config or AudioRecursive5_10_5Config(),
         )
         self.last_forward_trace: list[int] = []
+        self.last_middle_input_refs: list[torch.Tensor] = []
+        self.last_middle_output_refs: list[torch.Tensor] = []
         self._capture_schedule_once = True
 
     def forward(self, **kwargs: Any) -> Any:
         if not self._capture_schedule_once:
             return super().forward(**kwargs)
         trace: list[int] = []
+        middle_inputs: list[torch.Tensor] = []
+        middle_outputs: list[torch.Tensor] = []
         handles = []
+
+        def capture(
+            _module: nn.Module,
+            inputs: tuple[Any, ...],
+            output: Any,
+            *,
+            physical_index: int,
+        ) -> None:
+            logical_index = len(trace)
+            trace.append(physical_index)
+            if logical_index in (5, 15):
+                hidden_input = inputs[0]
+                if not torch.is_tensor(hidden_input) or not hidden_input.requires_grad:
+                    raise RuntimeError("fixed 5-10-5 middle-loop input is not differentiable")
+                hidden_input.retain_grad()
+                middle_inputs.append(hidden_input)
+            if logical_index in (14, 24):
+                hidden_output = output[0] if isinstance(output, tuple) else output
+                if not torch.is_tensor(hidden_output) or not hidden_output.requires_grad:
+                    raise RuntimeError("fixed 5-10-5 middle-loop output is not differentiable")
+                hidden_output.retain_grad()
+                middle_outputs.append(hidden_output)
+
         for physical_index, layer in enumerate(self.text_model.model.layers):
             handles.append(
                 layer.register_forward_hook(
-                    lambda _module, _inputs, _output, index=physical_index: trace.append(index)
+                    lambda module, inputs, output, index=physical_index: capture(
+                        module,
+                        inputs,
+                        output,
+                        physical_index=index,
+                    )
                 )
             )
         succeeded = False
@@ -195,6 +229,8 @@ class AudioRecursive5_10_5Model(AudioSmolLM2Model):
                 handle.remove()
             if succeeded:
                 self.last_forward_trace = trace
+                self.last_middle_input_refs = middle_inputs
+                self.last_middle_output_refs = middle_outputs
                 self._capture_schedule_once = False
 
     def trainable_parameter_audit(self) -> dict[str, Any]:
@@ -238,6 +274,14 @@ class AudioRecursive5_10_5Model(AudioSmolLM2Model):
             "router" in name.lower() or "memory" in name.lower()
             for name, _ in self.named_parameters(remove_duplicate=False)
         )
+        middle_input_gradients = [
+            ref.grad is not None and bool(torch.isfinite(ref.grad).all())
+            for ref in self.last_middle_input_refs
+        ]
+        middle_output_gradients = [
+            ref.grad is not None and bool(torch.isfinite(ref.grad).all())
+            for ref in self.last_middle_output_refs
+        ]
         result.update(
             {
                 "expected_forward_trace": expected,
@@ -245,6 +289,14 @@ class AudioRecursive5_10_5Model(AudioSmolLM2Model):
                 "forward_trace_matches_exact_5_10x2_5": trace == expected,
                 "physical_layer_invocation_counts": counts,
                 "prefix_middle_suffix_invocation_counts_valid": invocation_counts_ok,
+                "middle_loop_input_finite_gradients": middle_input_gradients,
+                "middle_loop_output_finite_gradients": middle_output_gradients,
+                "both_middle_loops_have_finite_gradients": (
+                    len(middle_input_gradients) == 2
+                    and len(middle_output_gradients) == 2
+                    and all(middle_input_gradients)
+                    and all(middle_output_gradients)
+                ),
                 "no_mesh_router_or_memory_parameters": no_router_parameters,
                 "recursive_text_model": self.text_contract,
             }
@@ -253,15 +305,20 @@ class AudioRecursive5_10_5Model(AudioSmolLM2Model):
             (
                 result["forward_trace_matches_exact_5_10x2_5"],
                 result["prefix_middle_suffix_invocation_counts_valid"],
+                result["both_middle_loops_have_finite_gradients"],
                 result["no_mesh_router_or_memory_parameters"],
             )
         ):
             raise RuntimeError(f"fixed 5-10-5 runtime architecture audit failed: {result}")
+        self.last_middle_input_refs = []
+        self.last_middle_output_refs = []
         return result
 
 
 __all__ = [
+    "AUDIO_DUAL_PREFIX_TOKENS",
     "AUDIO_PREFIX_TOKENS",
+    "AUDIO_SINGLE_PREFIX_TOKENS",
     "AUDIO_TOKENS_PER_CLIP",
     "MAPPER_CONTRACT",
     "RECURSIVE_AUDIO_CONTRACT",
