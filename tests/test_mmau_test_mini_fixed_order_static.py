@@ -30,64 +30,12 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.module = load_module()
 
-    def test_parser_accepts_only_conservative_choice_forms(self) -> None:
-        choices = ["red", "red and blue", "Green", "A third option"]
-        self.assertEqual(self.module.parse_model_output("A", choices)["selected_option"], "red")
-        self.assertEqual(self.module.parse_model_output("(b)", choices)["selected_option"], "red and blue")
-        self.assertEqual(self.module.parse_model_output("C.", choices)["selected_option"], "Green")
-        self.assertEqual(self.module.parse_model_output("[D]", choices)["selected_option"], "A third option")
-        self.assertEqual(self.module.parse_model_output("(B)red and blue", choices)["selected_option"], "red and blue")
-        self.assertEqual(self.module.parse_model_output(" RED ", choices)["selected_option"], "red")
-        self.assertEqual(self.module.parse_model_output("red and blue", choices)["selected_option"], "red and blue")
-        self.assertEqual(self.module.parse_model_output("blue", choices)["selected_option"], "")
-        self.assertEqual(self.module.parse_model_output("The answer is A", choices)["selected_option"], "")
-        self.assertEqual(self.module.parse_model_output("X", ["one", "two", "three", "X"])["selected_option"], "X")
-
-    def test_parser_rejects_ambiguous_duplicate_text(self) -> None:
-        result = self.module.parse_model_output("same", ["same", "same"])
-        self.assertEqual(result["selected_option"], "")
-        self.assertEqual(result["parse_status"], "unparseable")
-        self.assertEqual(
-            self.module.parse_model_output("same long", ["same", "same long"])["selected_option"],
-            "same long",
-        )
-
-    def test_parser_uses_only_leading_label_or_exact_option(self) -> None:
-        first = self.module.parse_model_output(
-            "B) A goat Cd) A birdB) A goat Cd) A bird",
-            ["A human", "A goat", "A car", "A bird"],
-        )
-        self.assertEqual(first["selected_option"], "A goat")
-        self.assertEqual(first["parse_method"], "leading_label")
-
-        second = self.module.parse_model_output(
-            "D) Unusual soundD) Unusual sound) Unusual sound is a sound that lacks context",
-            ["Loudness", "Frequency range", "Duration", "Unusual sound"],
-        )
-        self.assertEqual(second["selected_option"], "Unusual sound")
-        self.assertEqual(second["parse_method"], "leading_label")
-
-        text_first = self.module.parse_model_output(
-            "Unusual soundD) Unusual sound continues",
-            ["Loudness", "Frequency range", "Duration", "Unusual sound"],
-        )
-        self.assertEqual(text_first["selected_option"], "")
-        self.assertEqual(text_first["parse_method"], "no_exact_match")
-
-        eos_v2 = self.module.parse_model_output(
-            "c) It is plausible",
-            ["It is impossible", "It is unlikely", "It is plausible", "It is certain"],
-        )
-        self.assertEqual(eos_v2["selected_option"], "It is plausible")
-        self.assertEqual(eos_v2["parse_method"], "leading_label")
-
-    def test_parser_does_not_search_for_an_answer_inside_explanation(self) -> None:
-        choices = ["Man", "Woman", "Child", "Robot"]
-        self.assertEqual(
-            self.module.parse_model_output("The answer is (A) Man", choices)["selected_option"],
-            "",
-        )
-        self.assertEqual(self.module.parse_model_output("Mango", choices)["selected_option"], "")
+    def test_model_output_preparser_is_absent(self) -> None:
+        self.assertFalse(hasattr(self.module, "parse_model_output"))
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertNotIn("selected_option", source)
+        self.assertNotIn("parse_method", source)
+        self.assertIn('model_output = str(generation.get("generated_text", ""))', source)
 
     def test_fixed_order_prompt_and_choice_alignment(self) -> None:
         prompt = self.module.build_fixed_order_prompt("Which one?", ["first", "second"])
@@ -216,14 +164,14 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             types.SimpleNamespace(
                 state={
                     "0": {
-                        "status": "parsed",
+                        "status": "generated",
                         "id": "long",
                         "audio_original_duration_seconds": 12.0,
                         "audio_was_cropped": True,
                         "audio_was_padded": False,
                     },
                     "1": {
-                        "status": "unparseable",
+                        "status": "generated",
                         "id": "short",
                         "audio_original_duration_seconds": 1.0,
                         "audio_was_cropped": False,
@@ -244,7 +192,7 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             with self.module.ProgressStore(output) as store:
                 store.append_raw(
                     {
-                        "status": "unparseable",
+                        "status": "generated",
                         "row_index": 4,
                         "id": "id-4",
                         "model_output": "",
@@ -253,7 +201,7 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
                 )
                 store.append_raw(
                     {
-                        "status": "parsed",
+                        "status": "generated",
                         "row_index": 1,
                         "id": "id-1",
                         "model_output": "x",
@@ -274,10 +222,10 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
     def test_full_materialization_keeps_official_denominator_and_order(self) -> None:
         state = [
             {
-                "status": "parsed",
+                "status": "generated",
                 "row_index": 1,
                 "id": "id-1",
-                "model_output": "second",
+                "model_output": "b) second",
             }
         ]
         official = [
@@ -286,18 +234,18 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
         ]
         predictions = self.module.materialize_predictions(state, official)
         self.assertEqual([item["id"] for item in predictions], ["id-0", "id-1"])
-        self.assertEqual([item["model_output"] for item in predictions], ["", "second"])
+        self.assertEqual([item["model_output"] for item in predictions], ["", "b) second"])
 
     def test_resume_recovers_raw_record_when_progress_append_was_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
             (output / "raw_generations.jsonl").write_text(
-                '{"status":"parsed","row_index":0,"id":"id-0","model_output":"x",'
+                '{"status":"generated","row_index":0,"id":"id-0","model_output":"x",'
                 '"official_record":{"id":"id-0","choices":["x","y"]}}\n',
                 encoding="utf-8",
             )
             (output / "progress.jsonl").write_text(
-                '{"status":"parsed","record":{"status":"parsed","row_index":1,"id":"id-1",'
+                '{"status":"generated","record":{"status":"generated","row_index":1,"id":"id-1",'
                 '"model_output":"y","official_record":{"id":"id-1","choices":["x","y"]}}}\n',
                 encoding="utf-8",
             )

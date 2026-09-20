@@ -7,9 +7,9 @@ physical row order, while the official JSON is used as the authoritative
 record (and as a small id index) for prompt metadata and scoring fields.
 
 Only the GPU/model path needs the project's torch/Transformers/Mellow
-environment.  The parser, metadata helpers, JSONL resume store, and output
+environment.  Metadata helpers, the JSONL resume store, and output
 materializer are dependency-light so they can be tested on a CPU-only
-checkout.
+checkout.  Model text is passed unchanged to the official scorer.
 """
 from __future__ import annotations
 
@@ -66,6 +66,7 @@ MMAU_METADATA_SHA256 = "9f18fda99f8dbc2bc5ecd6323fb5063309f54969810b5c6f1caeb3b8
 MMAU_METADATA_CANONICAL_SHA256 = "04c6b38739179ec7f3044b05435f5a734970f774ac60c86b00ac5a65ee439859"
 MMAU_EVALUATION_SHA256 = "85480e1c0dfe8ee1406e9c6e598eff0dca9e0216701f076faf69081c6aab1558"
 PROMPT_FORMAT = "reasonaqa_lowercase_labels_no_choices_prefix_v1"
+PREDICTION_FORMAT = "official_raw_generated_text_v1"
 
 
 class RowSkip(Exception):
@@ -178,7 +179,7 @@ def row_key(row_index: int, sample_id: Any) -> str:
 class ProgressStore:
     """Recover and persist row completion state without re-running inference."""
 
-    TERMINAL_STATUSES = frozenset({"parsed", "unparseable", "skipped"})
+    TERMINAL_STATUSES = frozenset({"generated", "skipped"})
 
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = output_dir
@@ -286,76 +287,6 @@ def _choice_label_index(value: Any) -> int | None:
         return None
     label = next(group for group in match.groups() if group is not None).upper()
     return ord(label) - ord("A")
-
-
-def _leading_choice_label(text: str) -> str | None:
-    """Return only an explicit option label anchored at generation start."""
-
-    match = re.match(
-        r"^\s*(?:\(([A-Za-z])\)|\[([A-Za-z])\]|([A-Za-z])(?:[.):]|\s*$))",
-        text,
-    )
-    if not match:
-        return None
-    return next(group for group in match.groups() if group is not None).upper()
-
-
-def parse_model_output(text: Any, choices: Sequence[Any]) -> dict[str, str]:
-    """Map EOS-v2 output to one choice without searching explanations.
-
-    The parser intentionally does not receive or inspect a gold answer.  The
-    current model emits ``c) option text<|endoftext|>``.  We therefore accept
-    only an explicit leading label or an exact option text; no substring,
-    repetitive-loop, or explanation recovery is performed.
-    """
-
-    original = [str(choice) for choice in choices]
-    raw = "" if text is None else str(text).strip()
-    if not original or not raw:
-        return {"selected_option": "", "parse_status": "unparseable", "parse_method": "none"}
-
-    leading_label = _leading_choice_label(raw)
-    if leading_label is not None:
-        index = ord(leading_label) - ord("A")
-        if 0 <= index < len(original):
-            return {
-                "selected_option": original[index],
-                "parse_status": "parsed",
-                "parse_method": "leading_label",
-            }
-        # An out-of-range single letter can still be the literal text of an
-        # option (for example choices=[..., "X"]).  It is not a valid label,
-        # so let the exact-text path below decide it.
-
-    normalized = [_normalize_text(choice) for choice in original]
-    exact_matches = [index for index, choice in enumerate(normalized) if choice == _normalize_text(raw)]
-    if len(exact_matches) == 1:
-        return {
-            "selected_option": original[exact_matches[0]],
-            "parse_status": "parsed",
-            "parse_method": "full_text",
-        }
-    if len(exact_matches) > 1:
-        return {"selected_option": "", "parse_status": "unparseable", "parse_method": "ambiguous_full_text"}
-
-    # A body-only match is useful when the official JSON choice carries a
-    # prefix but the model emits the body.
-    bodies = [_normalize_text(_strip_choice_label(choice)) for choice in original]
-    body_matches = [index for index, body in enumerate(bodies) if body == _normalize_text(raw)]
-    if len(body_matches) == 1:
-        return {
-            "selected_option": original[body_matches[0]],
-            "parse_status": "parsed",
-            "parse_method": "full_text_without_label",
-        }
-    if len(body_matches) > 1:
-        return {
-            "selected_option": "",
-            "parse_status": "unparseable",
-            "parse_method": "ambiguous_full_text_without_label",
-        }
-
-    return {"selected_option": "", "parse_status": "unparseable", "parse_method": "no_exact_match"}
 
 
 def choices_match_fixed_order(left: Sequence[Any], right: Sequence[Any]) -> bool:
@@ -1193,7 +1124,7 @@ def materialize_predictions(
     records: dict[str, Mapping[str, Any]] = {}
     for item in state:
         status = str(item.get("status", ""))
-        if status not in {"parsed", "unparseable"}:
+        if status != "generated":
             continue
         key = str(item.get("row_key") or row_key(int(item["row_index"]), item.get("id")))
         records[key] = item
@@ -1314,7 +1245,7 @@ def _counts(store: ProgressStore) -> dict[str, Any]:
     generated = [
         record
         for record in store.state.values()
-        if record.get("status") in {"parsed", "unparseable"}
+        if record.get("status") == "generated"
     ]
     durations: list[float] = []
     for record in generated:
@@ -1343,9 +1274,8 @@ def _counts(store: ProgressStore) -> dict[str, Any]:
         audio.update({"minimum_duration_seconds": min(durations), "maximum_duration_seconds": max(durations)})
     return {
         "terminal_records": int(sum(statuses.values())),
-        "generation_completed": int(statuses.get("parsed", 0) + statuses.get("unparseable", 0)),
-        "parsed": int(statuses.get("parsed", 0)),
-        "unparseable": int(statuses.get("unparseable", 0)),
+        "generation_completed": int(statuses.get("generated", 0)),
+        "generated": int(statuses.get("generated", 0)),
         "skipped": int(statuses.get("skipped", 0)),
         "skip_reasons": dict(sorted(reasons.items())),
         "audio": audio,
@@ -1369,6 +1299,7 @@ def _ensure_output_dir(args: argparse.Namespace) -> None:
         "max_prompt_tokens": int(args.max_prompt_tokens),
         "max_new_tokens": int(args.max_new_tokens),
         "prompt_format": PROMPT_FORMAT,
+        "prediction_format": PREDICTION_FORMAT,
         "protocol": "fixed-order; ReasonAQA lowercase labels; parquet physical order; single cuda:0; bf16; no permutation vote",
     }
     if config_path.is_file():
@@ -1462,6 +1393,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "mode_limit": SMOKE_ROWS if args.mode == "smoke" else None,
             "choice_order": "official JSON fixed order",
             "prompt_format": PROMPT_FORMAT,
+            "prediction_format": PREDICTION_FORMAT,
             "permutation_majority_vote": False,
             "audio_sample_rate": DEFAULT_SAMPLE_RATE,
             "audio_seconds": DEFAULT_AUDIO_SECONDS,
@@ -1529,10 +1461,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         max_prompt_tokens=args.max_prompt_tokens,
                         max_new_tokens=args.max_new_tokens,
                     )
-                    parsed = parse_model_output(generation.get("generated_text", ""), sample["choices"])
-                    status = parsed["parse_status"]
+                    model_output = str(generation.get("generated_text", ""))
                     record = {
-                        "status": status,
+                        "status": "generated",
                         "row_index": int(row_index),
                         "parquet_row_index": int(row_index),
                         "id": sample["id"],
@@ -1544,10 +1475,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         "parquet_question": sample["parquet_question"],
                         "parquet_answer": sample["parquet_answer"],
                         "official_record": sample["official_record"],
-                        "model_output": parsed["selected_option"],
-                        "selected_option": parsed["selected_option"],
-                        "parse_status": parsed["parse_status"],
-                        "parse_method": parsed["parse_method"],
+                        "model_output": model_output,
                         "audio2_reused": True,
                         "audio_payload_source": sample["audio_payload_source"],
                         **{key: value for key, value in sample.items() if key.startswith("audio_")},
@@ -1559,8 +1487,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                             {
                                 "row_index": row_index,
                                 "id": sample["id"],
-                                "status": status,
-                                "model_output": parsed["selected_option"],
+                                "status": "generated",
+                                "model_output": model_output,
                                 "generated_text": generation.get("generated_text", ""),
                             },
                             ensure_ascii=False,

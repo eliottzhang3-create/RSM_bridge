@@ -61,26 +61,17 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
             {"id": "1", "answer": "b", "choices": ["a", "b"]},
         ]
         state = [
-            {"id": "1", "row_index": 1, "status": "parsed", "answer_prediction": "b"},
+            {"id": "1", "row_index": 1, "status": "generated", "answer_prediction": "b) b"},
         ]
         predictions = self.module.materialize_predictions(state, official, full=True)
         self.assertEqual([item["id"] for item in predictions], ["0", "1"])
-        self.assertEqual([item["answer_prediction"] for item in predictions], ["", "b"])
+        self.assertEqual([item["answer_prediction"] for item in predictions], ["", "b) b"])
 
-    def test_eos_v2_choice_output_uses_strict_common_parser(self) -> None:
-        result = self.module.common.parse_model_output(
-            "c) It is plausible",
-            ["It is impossible", "It is unlikely", "It is plausible", "It is certain"],
-        )
-        self.assertEqual(result["selected_option"], "It is plausible")
-        self.assertEqual(result["parse_method"], "leading_label")
-        self.assertEqual(
-            self.module.common.parse_model_output(
-                "It is plausible because the event can occur",
-                ["It is impossible", "It is unlikely", "It is plausible", "It is certain"],
-            )["selected_option"],
-            "",
-        )
+    def test_raw_generation_is_forwarded_to_official_answer_prediction(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn('answer_prediction = str(generation.get("generated_text", ""))', source)
+        self.assertNotIn("parse_model_output", source)
+        self.assertNotIn("selected_option", source)
 
     def test_reasonaqa_prompt_supports_six_mmar_choices_without_prefix(self) -> None:
         prompt = self.module.common.build_fixed_order_prompt(

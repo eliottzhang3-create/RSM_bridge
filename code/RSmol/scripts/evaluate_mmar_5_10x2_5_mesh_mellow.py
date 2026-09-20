@@ -225,7 +225,7 @@ def materialize_predictions(
 ) -> list[dict[str, Any]]:
     by_id: dict[str, Mapping[str, Any]] = {}
     for item in state:
-        if str(item.get("status", "")) not in {"parsed", "unparseable"}:
+        if str(item.get("status", "")) != "generated":
             continue
         sample_id = str(item.get("id", "")).strip()
         if sample_id in by_id:
@@ -328,6 +328,7 @@ def _ensure_output_dir(args: argparse.Namespace) -> None:
         "max_prompt_tokens": int(args.max_prompt_tokens),
         "max_new_tokens": int(args.max_new_tokens),
         "prompt_format": common.PROMPT_FORMAT,
+        "prediction_format": common.PREDICTION_FORMAT,
         "protocol": "official order; ReasonAQA lowercase labels; compact single-audio prefix; single cuda:0; bf16; greedy",
     }
     if config_path.is_file():
@@ -394,6 +395,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "metadata_order": "official MMAR order",
             "choice_order": "official fixed order",
             "prompt_format": common.PROMPT_FORMAT,
+            "prediction_format": common.PREDICTION_FORMAT,
             "shuffle": False,
             "mode_limit": SMOKE_ROWS if args.mode == "smoke" else None,
             "audio_sample_rate": common.DEFAULT_SAMPLE_RATE,
@@ -456,9 +458,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         max_prompt_tokens=args.max_prompt_tokens,
                         max_new_tokens=args.max_new_tokens,
                     )
-                    parsed = common.parse_model_output(generation.get("generated_text", ""), sample["choices"])
+                    answer_prediction = str(generation.get("generated_text", ""))
                     record = {
-                        "status": parsed["parse_status"],
+                        "status": "generated",
                         "row_index": row_index,
                         "id": sample_id,
                         "row_key": common.row_key(row_index, sample_id),
@@ -466,10 +468,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         "choices": sample["choices"],
                         "prompt": sample["prompt"],
                         "official_record": sample["official_record"],
-                        "answer_prediction": parsed["selected_option"],
-                        "selected_option": parsed["selected_option"],
-                        "parse_status": parsed["parse_status"],
-                        "parse_method": parsed["parse_method"],
+                        "answer_prediction": answer_prediction,
                         "audio2_reused": True,
                         "single_audio_slot": True,
                         **{key: value for key, value in sample.items() if key.startswith("audio_")},
