@@ -605,7 +605,7 @@ RSMOL_MMAU_MODE=full RSMOL_MMAU_OUTPUT_DIR="$EVAL_DIR" \
 
 ### 8.3 MMAR
 
-MMAR 使用 Hugging Face 下载的 `MMAR-meta.json`、已解压的 `mmar-audio/audio/*.wav` 和下载包内官方 `code/evaluation.py`。入口逐条按官方 metadata 顺序生成，在运行前审计 1000 个唯一 ID、核心字段 canonical SHA256、modality/category 分布、全部音频存在性和官方 scorer SHA256。音频统一为 32 kHz，短音频补零、长音频取开头 10 秒；选择顺序不打乱。输出保持官方完整记录并新增 `answer_prediction`，由官方 scorer 原样计分。
+MMAR 使用 Hugging Face 下载的 `MMAR-meta.json`、已解压的 `mmar-audio/audio/*.wav` 和下载包内官方 `code/evaluation.py`。HF JSON 与 GitHub JSONL 的记录顺序及 scorer 文件字节并不完全相同，因此入口严格审计 1000 个官方 ID 的顺序无关集合 hash、modality/category 分布、全部音频存在性、官方 scorer 的 `answer_prediction`/`string_match` 评分语义，并将两种发布载体的 canonical/字节 hash 作为 provenance；不会再因官方 HF/GitHub 的排序、空干扰选项或文件字节差异而拒绝运行。音频统一为 32 kHz，短音频补零、长音频取开头 10 秒；选择顺序不打乱。输出保持 HF metadata 顺序和完整记录并新增 `answer_prediction`，由下载包中的官方 scorer 原样计分。
 
 ```text
 code/RSmol/scripts/evaluate_mmar_5_10x2_5_mesh_mellow.py

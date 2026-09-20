@@ -83,6 +83,31 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
             "What is heard? a) one b) two c) three d) four e) five f) six",
         )
         self.assertNotIn("Choices:", prompt)
+        self.assertEqual(
+            self.module.common.build_fixed_order_prompt("Binary?", ["yes", "no", ""]),
+            "Binary? a) yes b) no c)",
+        )
+
+    def test_official_scorer_is_audited_by_semantics_not_only_bytes(self) -> None:
+        source = (
+            "import re\n"
+            "def string_match(answer, prediction, choices):\n"
+            "    answer_tokens = set()\n"
+            "    prediction_tokens = set()\n"
+            "    incorrect_tokens = set()\n"
+            "    cond1 = answer_tokens.issubset(prediction_tokens)\n"
+            "    cond2 = prediction_tokens.isdisjoint(incorrect_tokens)\n"
+            "    return cond1 and cond2\n"
+            "output_key = 'answer_prediction'\n"
+            "modality_metrics = {}\n"
+            "category_metrics = {}\n"
+            "print('Total Accuracy:')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "evaluation.py"
+            path.write_text(source, encoding="utf-8")
+            audit = self.module._audit_mmar_scorer_semantics(path)
+        self.assertEqual(audit["status"], "PASS")
 
     def test_smoke_directory_can_resume_as_full(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -118,7 +143,9 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
         for marker in (
             "answer_prediction",
             "MMAR_CORE_CANONICAL_SHA256",
+            "MMAR_ID_SET_SHA256",
             "MMAR_EVALUATION_SHA256",
+            "MMAR_HF_EVALUATION_SHA256",
             "first 10 seconds",
             "compact single-audio prefix",
             "official MMAR order",

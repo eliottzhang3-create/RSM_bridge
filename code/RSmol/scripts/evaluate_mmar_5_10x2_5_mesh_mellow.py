@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 import gc
 import json
@@ -41,7 +42,10 @@ MMAR_MAX_PROMPT_TOKENS = (
 MMAR_OFFICIAL_COMMIT = "3bce090a967db576c8ad433b290a8da582d6d2a0"
 MMAR_GITHUB_METADATA_SHA256 = "1c9a343e7bebf1037482b935c54eacd43cc63df7b2c668724b5560caf1f84fad"
 MMAR_CORE_CANONICAL_SHA256 = "fc0527faaf8599f26e2b8dfcbe9c2efc59b3408b6c9996f24197192be57dff08"
+MMAR_CORE_BY_ID_CANONICAL_SHA256 = "ef334dd7627383817cea1155c540e371eaa166ef16d23727ef0249555e92d244"
+MMAR_ID_SET_SHA256 = "8774b4352a4d5d71e0cb399ca8b758b14218d15a1516201916f92b0d5cae2e15"
 MMAR_EVALUATION_SHA256 = "a3c57b829e40e67e3f7f0bbe7d54a112ea06ed7a781534241ecc5d3751486198"
+MMAR_HF_EVALUATION_SHA256 = "fb046e16b9c0d2482b5b0698bc242e75a34d24a8165ba2a8f344572e56ee7918"
 MMAR_CORE_KEYS = (
     "id",
     "audio_path",
@@ -71,6 +75,51 @@ EXPECTED_CATEGORIES = {
     "Semantic Layer": 412,
     "Signal Layer": 43,
 }
+
+
+def _audit_mmar_scorer_semantics(path: Path) -> dict[str, Any]:
+    """Validate the official scoring contract across GitHub/HF packaging."""
+
+    text = path.read_text(encoding="utf-8")
+    failures: list[str] = []
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except SyntaxError as exc:
+        return {"status": "FAIL", "failures": [f"evaluation.py is not valid Python: {exc}"]}
+
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+    string_match = functions.get("string_match")
+    if string_match is None:
+        failures.append("evaluation.py lacks string_match")
+    else:
+        arguments = [argument.arg for argument in string_match.args.args]
+        if arguments[:3] != ["answer", "prediction", "choices"]:
+            failures.append(f"string_match signature differs: {arguments}")
+
+    output_keys = {
+        node.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "output_key" for target in node.targets)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+    if "answer_prediction" not in output_keys:
+        failures.append(f"evaluation.py output_key differs: {sorted(output_keys)}")
+    for marker in (
+        "answer_tokens.issubset(prediction_tokens)",
+        "prediction_tokens.isdisjoint(incorrect_tokens)",
+        "Total Accuracy:",
+        "modality_metrics",
+        "category_metrics",
+    ):
+        if marker not in text:
+            failures.append(f"evaluation.py lacks official scoring marker: {marker}")
+    return {"status": "PASS" if not failures else "FAIL", "failures": failures}
 
 
 def load_mmar_records(path: Path) -> list[dict[str, Any]]:
@@ -120,12 +169,20 @@ def audit_mmar_artifacts(
     category_counts = Counter(str(record.get("category", "")) for record in records)
     core = [{key: record.get(key) for key in MMAR_CORE_KEYS} for record in records]
     core_sha256 = common._canonical_sha256(core)
+    core_by_id = [
+        {key: record.get(key) for key in MMAR_CORE_KEYS}
+        for record in sorted(records, key=_record_id)
+    ]
+    core_by_id_sha256 = common._canonical_sha256(core_by_id)
+    id_set_sha256 = common._canonical_sha256(sorted(ids))
     missing_audio: list[str] = []
     invalid_records: list[dict[str, Any]] = []
+    empty_choice_records: list[dict[str, Any]] = []
+    answers_not_exact_choices: list[dict[str, Any]] = []
     resolved_audio: list[Path] = []
     for index, record in enumerate(records):
         choices = record.get("choices")
-        answer = str(record.get("answer", ""))
+        answer_value = record.get("answer")
         try:
             audio_path = resolve_mmar_audio_path(audio_root, record.get("audio_path", ""))
             resolved_audio.append(audio_path)
@@ -138,22 +195,43 @@ def audit_mmar_artifacts(
             or not str(record.get("question", "")).strip()
             or not isinstance(choices, list)
             or not 2 <= len(choices) <= 6
-            or any(not str(choice).strip() for choice in choices or [])
-            or not answer
-            or answer not in [str(choice) for choice in choices or []]
+            or any(not isinstance(choice, str) for choice in choices or [])
+            or not isinstance(answer_value, str)
+            or not answer_value.strip()
         ):
-            invalid_records.append({"row_index": index, "id": ids[index], "error": "invalid MCQ schema"})
+            invalid_records.append({
+                "row_index": index,
+                "id": ids[index],
+                "error": "record is incompatible with the official string scorer",
+            })
+        elif any(not choice.strip() for choice in choices):
+            empty_choice_records.append({"row_index": index, "id": ids[index]})
+        if isinstance(choices, list) and isinstance(answer_value, str):
+            if answer_value not in choices:
+                answers_not_exact_choices.append({"row_index": index, "id": ids[index]})
 
     scorer_sha256 = common._sha256(evaluation_script)
+    scorer_semantics = _audit_mmar_scorer_semantics(evaluation_script)
     failures: list[str] = []
+    warnings: list[str] = []
     if len(records) != EXPECTED_FULL_ROWS or len(set(ids)) != EXPECTED_FULL_ROWS or any(not value for value in ids):
         failures.append(
             f"metadata ID coverage differs: rows={len(records)} unique_nonempty={len({value for value in ids if value})}"
         )
-    if core_sha256 != MMAR_CORE_CANONICAL_SHA256:
+    if id_set_sha256 != MMAR_ID_SET_SHA256:
         failures.append(
-            "MMAR core canonical SHA256 differs from official GitHub metadata: "
-            f"expected={MMAR_CORE_CANONICAL_SHA256} actual={core_sha256}"
+            "MMAR ID set differs from the official 1000-question release: "
+            f"expected={MMAR_ID_SET_SHA256} actual={id_set_sha256}"
+        )
+    if core_sha256 != MMAR_CORE_CANONICAL_SHA256:
+        warnings.append(
+            "metadata row order/fields differ from the GitHub JSONL publication; "
+            f"ordered_core_sha256={core_sha256}"
+        )
+    if core_by_id_sha256 != MMAR_CORE_BY_ID_CANONICAL_SHA256:
+        warnings.append(
+            "metadata core content differs from the GitHub publication after ID sorting; "
+            f"core_by_id_sha256={core_by_id_sha256}"
         )
     if dict(sorted(modality_counts.items())) != EXPECTED_MODALITIES:
         failures.append(f"modality distribution differs: {dict(sorted(modality_counts.items()))}")
@@ -163,10 +241,22 @@ def audit_mmar_artifacts(
         failures.append(f"invalid records: {invalid_records[:10]}")
     if missing_audio:
         failures.append(f"missing audio files: count={len(missing_audio)} first={missing_audio[:10]}")
-    if scorer_sha256 != MMAR_EVALUATION_SHA256:
-        failures.append(
-            "evaluation.py byte SHA256 differs from the current official scorer: "
-            f"expected={MMAR_EVALUATION_SHA256} actual={scorer_sha256}"
+    if scorer_semantics["status"] != "PASS":
+        failures.extend(scorer_semantics["failures"])
+    if scorer_sha256 not in {MMAR_EVALUATION_SHA256, MMAR_HF_EVALUATION_SHA256}:
+        warnings.append(
+            "evaluation.py byte SHA256 is an unregistered packaging variant; "
+            f"semantic audit passed with sha256={scorer_sha256}"
+        )
+    elif scorer_sha256 == MMAR_HF_EVALUATION_SHA256:
+        warnings.append("using the official Hugging Face evaluation.py packaging variant")
+    if empty_choice_records:
+        warnings.append(
+            f"official metadata contains {len(empty_choice_records)} records with empty distractor choices"
+        )
+    if answers_not_exact_choices:
+        warnings.append(
+            f"official metadata contains {len(answers_not_exact_choices)} answers not byte-equal to a choice"
         )
     report = {
         "status": "PASS" if not failures else "FAIL",
@@ -175,16 +265,22 @@ def audit_mmar_artifacts(
         "metadata_path": str(metadata_path),
         "metadata_sha256": common._sha256(metadata_path),
         "core_canonical_sha256": core_sha256,
+        "core_by_id_canonical_sha256": core_by_id_sha256,
+        "id_set_sha256": id_set_sha256,
         "audio_root": str(audio_root),
         "audio_files_resolved": len(resolved_audio),
         "unique_audio_files": len(set(resolved_audio)),
         "missing_audio_count": len(missing_audio),
         "evaluation_script": str(evaluation_script),
         "evaluation_sha256": scorer_sha256,
+        "evaluation_semantic_audit": scorer_semantics,
         "rows": len(records),
         "unique_ids": len(set(ids)),
         "modality_counts": dict(sorted(modality_counts.items())),
         "category_counts": dict(sorted(category_counts.items())),
+        "empty_choice_records": empty_choice_records,
+        "answers_not_exact_choices": answers_not_exact_choices,
+        "warnings": warnings,
         "failures": failures,
     }
     return report
