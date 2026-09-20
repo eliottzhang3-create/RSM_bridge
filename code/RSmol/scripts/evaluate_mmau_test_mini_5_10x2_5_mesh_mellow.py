@@ -17,6 +17,7 @@ import argparse
 import ast
 import copy
 import gc
+import hashlib
 import io
 import json
 import os
@@ -44,8 +45,8 @@ for import_root in (SCRIPT_DIR, ROOT):
 
 DEFAULT_CHECKPOINT = (
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
-    "audio_5_10x2_5_mesh_mellow/formal_restart_save500_20260910_105248/"
-    "checkpoint-011343"
+    "audio_5_10x2_5_mesh_mellow/partition_formal_answer_eos_v2_10epochs_20260918/"
+    "checkpoint-037810"
 )
 DEFAULT_DATASET_DIR = "/hpc_stor03/sjtu_home/jinwei.zhang/data/MMAU_test_mini"
 DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
@@ -55,9 +56,15 @@ DEFAULT_SOURCE_SAMPLE_RATE = 16_000
 DEFAULT_AUDIO_SECONDS = 10
 DEFAULT_MAX_PROMPT_TOKENS = 129
 DEFAULT_MAX_NEW_TOKENS = 16
-DEFAULT_AUDIO_PREFIX_TOKENS = 260
+DEFAULT_AUDIO_PREFIX_TOKENS = 130
 DEFAULT_MAX_CONTEXT_LENGTH = 768
 SMOKE_ROWS = 5
+EXPECTED_FULL_ROWS = 1000
+MMAU_VERSION = "MMAU-v05.15.25"
+MMAU_OFFICIAL_COMMIT = "110127f54c0dfba3faa5ec9feee4a7e4148679c5"
+MMAU_METADATA_SHA256 = "9f18fda99f8dbc2bc5ecd6323fb5063309f54969810b5c6f1caeb3b8d904cf1c"
+MMAU_METADATA_CANONICAL_SHA256 = "04c6b38739179ec7f3044b05435f5a734970f774ac60c86b00ac5a65ee439859"
+MMAU_EVALUATION_SHA256 = "85480e1c0dfe8ee1406e9c6e598eff0dca9e0216701f076faf69081c6aab1558"
 
 
 class RowSkip(Exception):
@@ -95,6 +102,24 @@ def _write_json(path: Path, payload: Any) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _canonical_sha256(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _read_jsonl(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
@@ -262,25 +287,11 @@ def _choice_label_index(value: Any) -> int | None:
     return ord(label) - ord("A")
 
 
-def _letter_from_output(text: str) -> str | None:
-    patterns = (
-        r"^\s*([A-Za-z])\s*$",
-        r"^\s*\(([A-Za-z])\)\s*$",
-        r"^\s*\[([A-Za-z])\]\s*$",
-        r"^\s*([A-Za-z])[.):]\s*$",
-    )
-    for pattern in patterns:
-        match = re.fullmatch(pattern, text)
-        if match:
-            return match.group(1).upper()
-    return None
-
-
 def _leading_choice_label(text: str) -> str | None:
-    """Return an explicit choice label anchored at the start of generation."""
+    """Return only an explicit option label anchored at generation start."""
 
     match = re.match(
-        r"^\s*(?:\(([A-Za-z])\)|\[([A-Za-z])\]|([A-Za-z])[.):])",
+        r"^\s*(?:\(([A-Za-z])\)|\[([A-Za-z])\]|([A-Za-z])(?:[.):]|\s*$))",
         text,
     )
     if not match:
@@ -288,38 +299,13 @@ def _leading_choice_label(text: str) -> str | None:
     return next(group for group in match.groups() if group is not None).upper()
 
 
-def _leading_choice_text(text: str, choices: Sequence[str]) -> int | None:
-    """Match a unique complete option at the start of a longer generation.
-
-    Prefer the longest matching option so a choice such as ``red`` cannot
-    steal a generation that begins with ``red and blue``.  A following
-    alphanumeric character is rejected unless it begins another explicit
-    choice label such as the model's observed ``Unusual soundD) ...`` loop.
-    """
-
-    normalized_text = _normalize_text(text)
-    bodies = [_normalize_text(_strip_choice_label(choice)) for choice in choices]
-    matches: list[int] = []
-    for index, body in enumerate(bodies):
-        if not body or not normalized_text.startswith(body):
-            continue
-        suffix = normalized_text[len(body) :]
-        if suffix and suffix[0].isalnum() and not re.match(r"^[A-Za-z][.):]", suffix):
-            continue
-        matches.append(index)
-    if not matches:
-        return None
-    longest = max(len(bodies[index]) for index in matches)
-    longest_matches = [index for index in matches if len(bodies[index]) == longest]
-    return longest_matches[0] if len(longest_matches) == 1 else None
-
-
 def parse_model_output(text: Any, choices: Sequence[Any]) -> dict[str, str]:
-    """Map the answer at the start of model text to one original choice.
+    """Map EOS-v2 output to one choice without searching explanations.
 
     The parser intentionally does not receive or inspect a gold answer.  The
-    untouched generation remains in ``generated_text`` for audit; only the
-    derived ``model_output`` is reduced to the selected benchmark option.
+    current model emits ``c) option text<|endoftext|>``.  We therefore accept
+    only an explicit leading label or an exact option text; no substring,
+    repetitive-loop, or explanation recovery is performed.
     """
 
     original = [str(choice) for choice in choices]
@@ -336,23 +322,9 @@ def parse_model_output(text: Any, choices: Sequence[Any]) -> dict[str, str]:
                 "parse_status": "parsed",
                 "parse_method": "leading_label",
             }
-        return {
-            "selected_option": "",
-            "parse_status": "unparseable",
-            "parse_method": "leading_label_out_of_range",
-        }
-
-    letter = _letter_from_output(raw)
-    if letter is not None:
-        index = ord(letter) - ord("A")
-        if 0 <= index < len(original):
-            return {
-                "selected_option": original[index],
-                "parse_status": "parsed",
-                "parse_method": "letter",
-            }
-        # If the benchmark has a literal one-letter option outside the
-        # available label range, let the exact-text path below handle it.
+        # An out-of-range single letter can still be the literal text of an
+        # option (for example choices=[..., "X"]).  It is not a valid label,
+        # so let the exact-text path below decide it.
 
     normalized = [_normalize_text(choice) for choice in original]
     exact_matches = [index for index, choice in enumerate(normalized) if choice == _normalize_text(raw)]
@@ -382,15 +354,7 @@ def parse_model_output(text: Any, choices: Sequence[Any]) -> dict[str, str]:
             "parse_method": "ambiguous_full_text_without_label",
         }
 
-    leading_text_index = _leading_choice_text(raw, original)
-    if leading_text_index is not None:
-        return {
-            "selected_option": original[leading_text_index],
-            "parse_status": "parsed",
-            "parse_method": "leading_full_text",
-        }
-    method = "no_match"
-    return {"selected_option": "", "parse_status": "unparseable", "parse_method": method}
+    return {"selected_option": "", "parse_status": "unparseable", "parse_method": "no_exact_match"}
 
 
 def choices_match_fixed_order(left: Sequence[Any], right: Sequence[Any]) -> bool:
@@ -556,6 +520,61 @@ def load_official_records(path: Path) -> list[dict[str, Any]]:
     if len(result) != len(records):
         raise ValueError("official MMAU JSON contains a non-object record")
     return result
+
+
+def audit_mmau_v051525(
+    metadata_path: Path,
+    evaluation_script: Path,
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Require the exact current official MMAU test-mini metadata/scorer."""
+
+    metadata_sha256 = _sha256(metadata_path)
+    canonical_sha256 = _canonical_sha256([dict(record) for record in records])
+    evaluation_sha256 = _sha256(evaluation_script)
+    task_counts = Counter(str(record.get("task", "")) for record in records)
+    difficulty_counts = Counter(str(record.get("difficulty", "")) for record in records)
+    ids = [_official_id(record) for record in records]
+    failures: list[str] = []
+    if metadata_sha256 != MMAU_METADATA_SHA256:
+        failures.append(
+            f"metadata byte SHA256 differs: expected={MMAU_METADATA_SHA256} actual={metadata_sha256}"
+        )
+    if canonical_sha256 != MMAU_METADATA_CANONICAL_SHA256:
+        failures.append(
+            "metadata canonical SHA256 differs: "
+            f"expected={MMAU_METADATA_CANONICAL_SHA256} actual={canonical_sha256}"
+        )
+    if evaluation_sha256 != MMAU_EVALUATION_SHA256:
+        failures.append(
+            f"evaluation.py SHA256 differs: expected={MMAU_EVALUATION_SHA256} actual={evaluation_sha256}"
+        )
+    if len(records) != EXPECTED_FULL_ROWS or len(set(ids)) != EXPECTED_FULL_ROWS or any(not value for value in ids):
+        failures.append(
+            f"metadata ID coverage differs: rows={len(records)} unique_nonempty={len({value for value in ids if value})}"
+        )
+    expected_tasks = {"music": 334, "sound": 333, "speech": 333}
+    expected_difficulties = {"easy": 224, "hard": 236, "medium": 540}
+    if dict(sorted(task_counts.items())) != expected_tasks:
+        failures.append(f"task distribution differs: {dict(sorted(task_counts.items()))}")
+    if dict(sorted(difficulty_counts.items())) != expected_difficulties:
+        failures.append(f"difficulty distribution differs: {dict(sorted(difficulty_counts.items()))}")
+    report = {
+        "status": "PASS" if not failures else "FAIL",
+        "version": MMAU_VERSION,
+        "official_commit": MMAU_OFFICIAL_COMMIT,
+        "metadata_path": str(metadata_path),
+        "metadata_sha256": metadata_sha256,
+        "metadata_canonical_sha256": canonical_sha256,
+        "evaluation_script": str(evaluation_script),
+        "evaluation_sha256": evaluation_sha256,
+        "rows": len(records),
+        "unique_ids": len(set(ids)),
+        "task_counts": dict(sorted(task_counts.items())),
+        "difficulty_counts": dict(sorted(difficulty_counts.items())),
+        "failures": failures,
+    }
+    return report
 
 
 def _official_id(record: Mapping[str, Any]) -> str:
@@ -1050,37 +1069,14 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, Any]:
     import torch
 
     if not torch.cuda.is_available():
-        raise RuntimeError("MMAU audio MeSH inference requires one CUDA GPU")
+        raise RuntimeError("Audio MeSH benchmark inference requires one CUDA GPU")
     device = torch.device("cuda", 0)
     torch.cuda.set_device(device)
-    from audio_5_10x2_5_mesh_mellow.model import (
-        ARCHITECTURE_CONTRACT,
-        AUDIO_PREFIX_TOKENS,
-        AUDIO_TOKENS_PER_CLIP,
-        MAPPER_CONTRACT,
-        MESH_HIDDEN_SIZE,
-    )
-    from train_audio_5_10x2_5_mesh_mellow_ddp import _audit_saved_checkpoint, _load_model
+    from generate_audio_checkpoint_reasonaqa import _validate_checkpoint_contract
+    from train_audio_5_10x2_5_mesh_mellow_ddp import _load_model
 
-    config_path = args.checkpoint / "audio_mesh_config.json"
-    if not config_path.is_file():
-        raise FileNotFoundError(f"checkpoint audio_mesh_config.json not found: {config_path}")
-    artifact_audit = _audit_saved_checkpoint(args.checkpoint)
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    expected = {
-        "architecture_contract": ARCHITECTURE_CONTRACT,
-        "mapper_contract": MAPPER_CONTRACT,
-        "mesh_hidden_size": MESH_HIDDEN_SIZE,
-        "audio_tokens_per_clip": AUDIO_TOKENS_PER_CLIP,
-        "audio_prefix_tokens_with_separators": AUDIO_PREFIX_TOKENS,
-    }
-    mismatches = {
-        key: {"expected": value, "actual": config.get(key)}
-        for key, value in expected.items()
-        if config.get(key) != value
-    }
-    if mismatches:
-        raise RuntimeError(f"checkpoint runtime contract mismatch: {mismatches}")
+    checkpoint_audit = _validate_checkpoint_contract(args)
+    config = dict(checkpoint_audit["audio_mesh_config"])
     saved_htsat = str(config.get("htsat_checkpoint", ""))
     saved_mellow = str(config.get("mellow_root", ""))
     if not saved_htsat:
@@ -1098,6 +1094,9 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, Any]:
         tokenizer_path=None,
         htsat_checkpoint=args.htsat_checkpoint,
         mellow_root=args.mellow_root,
+        compact_single_audio_prefix=bool(
+            checkpoint_audit["compact_single_audio_prefix"]
+        ),
     )
     model, tokenizer = _load_model(load_args, device)
     saved_provenance = config.get("mellow_provenance") or {}
@@ -1109,6 +1108,8 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, Any]:
                 f"saved={saved_provenance.get(key)!r} loaded={loaded_provenance.get(key)!r}"
             )
     model.eval()
+    if not bool(model.config_audio.compact_single_audio_prefix):
+        raise RuntimeError("Audio MeSH benchmark evaluation requires compact single-audio prefix")
     actual_context_length = int(getattr(model.config_audio, "max_context_length", 0))
     if actual_context_length != DEFAULT_MAX_CONTEXT_LENGTH:
         raise RuntimeError(
@@ -1130,7 +1131,7 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, Any]:
     if any(modes.values()):
         raise RuntimeError(f"inference requires all modules in eval mode: {modes}")
     config = dict(config)
-    config["checkpoint_artifact_audit"] = artifact_audit
+    config["checkpoint_artifact_audit"] = checkpoint_audit
     config["runtime_max_context_length"] = actual_context_length
     return model, tokenizer, device, config
 
@@ -1159,6 +1160,7 @@ def _run_model_generation(
         "audio1": sample["waveform"],
         "audio2": None,
         "audio2_reused": True,
+        "single_audio_slot": True,
     }
     with __import__("torch").inference_mode():
         audio_prefix, prefix_audit = _build_audio_prefix(
@@ -1180,8 +1182,11 @@ def _run_model_generation(
     return generated
 
 
-def materialize_predictions(state: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Materialize only terminal generation records in parquet row order."""
+def materialize_predictions(
+    state: Iterable[Mapping[str, Any]],
+    official_records: Sequence[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Materialize predictions without ever shrinking the official denominator."""
 
     records: dict[str, Mapping[str, Any]] = {}
     for item in state:
@@ -1191,21 +1196,42 @@ def materialize_predictions(state: Iterable[Mapping[str, Any]]) -> list[dict[str
         key = str(item.get("row_key") or row_key(int(item["row_index"]), item.get("id")))
         records[key] = item
     ordered = sorted(records.values(), key=lambda item: (int(item["row_index"]), str(item.get("id", ""))))
+    if official_records is not None:
+        by_id: dict[str, Mapping[str, Any]] = {}
+        for item in ordered:
+            sample_id = str(item.get("id", "")).strip()
+            if not sample_id:
+                continue
+            if sample_id in by_id:
+                raise RuntimeError(f"multiple terminal generations for official MMAU ID: {sample_id}")
+            by_id[sample_id] = item
+        predictions: list[dict[str, Any]] = []
+        for official in official_records:
+            sample_id = _official_id(official)
+            item = by_id.get(sample_id)
+            prediction = copy.deepcopy(dict(official))
+            prediction["model_output"] = "" if item is None else str(item.get("model_output", ""))
+            predictions.append(prediction)
+        return predictions
+
     predictions: list[dict[str, Any]] = []
     for item in ordered:
         official = item.get("official_record")
         if not isinstance(official, Mapping):
             continue
         prediction = copy.deepcopy(dict(official))
-        # The official scorer reads exactly this field.  No model_prediction
-        # alias is added, and skipped rows never enter this list.
+        # Backward-compatible dependency-light path used by unit tests.
         prediction["model_output"] = str(item.get("model_output", ""))
         predictions.append(prediction)
     return predictions
 
 
-def _materialize_from_store(store: ProgressStore, output_dir: Path) -> list[dict[str, Any]]:
-    predictions = materialize_predictions(store.state.values())
+def _materialize_from_store(
+    store: ProgressStore,
+    output_dir: Path,
+    official_records: Sequence[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    predictions = materialize_predictions(store.state.values(), official_records)
     _write_json(output_dir / "predictions_fixed_order.json", predictions)
     first_five = sorted(
         (record for record in store.state.values() if int(record.get("row_index", -1)) < SMOKE_ROWS),
@@ -1251,7 +1277,25 @@ def _run_official_evaluation(args: argparse.Namespace, output_dir: Path, predict
             f"{completed.stderr}\n"
         )
         path.write_text(content, encoding="utf-8")
-        result.update({"status": "PASS" if completed.returncode == 0 else "FAILED", "returncode": completed.returncode})
+        totals = [int(value) for value in re.findall(r"\bover\s+(\d+)\s+samples\b", completed.stdout)]
+        reported_total = totals[-1] if totals else None
+        accuracy_matches = re.findall(
+            r"Total Accuracy:\s*([0-9]+(?:\.[0-9]+)?)%\s+over\s+(\d+)\s+samples",
+            completed.stdout,
+        )
+        total_accuracy_percent = float(accuracy_matches[-1][0]) if accuracy_matches else None
+        passed = completed.returncode == 0 and reported_total == int(prediction_count)
+        result.update({
+            "status": "PASS" if passed else "FAILED",
+            "returncode": completed.returncode,
+            "reported_total": reported_total,
+            "total_accuracy_percent": total_accuracy_percent,
+        })
+        if completed.returncode == 0 and not passed:
+            result["error"] = (
+                "official scorer did not report the requested denominator: "
+                f"reported={reported_total} expected={prediction_count}"
+            )
     except Exception as exc:
         path.write_text(f"official evaluation invocation failed: {exc!r}\n", encoding="utf-8")
         result.update({"status": "FAILED", "returncode": None, "error": repr(exc)})
@@ -1428,10 +1472,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "records": {},
         "resumption": {},
         "official_evaluation": {},
+        "official_artifact_audit": {},
         "fatal_error": None,
     }
     with ProgressStore(args.output_dir) as store:
         report["resumption"]["recovered_jsonl_errors"] = store.load_errors
+        official_records: list[dict[str, Any]] = []
         try:
             if not args.checkpoint.is_dir():
                 raise FileNotFoundError(f"checkpoint directory not found: {args.checkpoint}")
@@ -1439,7 +1485,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise FileNotFoundError(f"MMAU parquet not found: {args.parquet}")
             if not args.metadata_json.is_file():
                 raise FileNotFoundError(f"MMAU metadata JSON not found: {args.metadata_json}")
+            if not args.evaluation_script.is_file():
+                raise FileNotFoundError(f"MMAU official evaluation.py not found: {args.evaluation_script}")
             official_records = load_official_records(args.metadata_json)
+            report["official_artifact_audit"] = audit_mmau_v051525(
+                args.metadata_json,
+                args.evaluation_script,
+                official_records,
+            )
+            if report["official_artifact_audit"]["status"] != "PASS":
+                raise RuntimeError(
+                    f"{MMAU_VERSION} official artifact audit failed: "
+                    f"{report['official_artifact_audit']['failures']}"
+                )
             metadata_index = build_metadata_index(official_records)
             report["metadata_index_records"] = len(metadata_index)
             # Load the exact checkpoint contract before consuming rows.  The
@@ -1542,11 +1600,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     torch.cuda.empty_cache()
                 except Exception:
                     pass
-            predictions = _materialize_from_store(store, args.output_dir)
+            predictions = _materialize_from_store(
+                store,
+                args.output_dir,
+                official_records if args.mode == "full" else None,
+            )
             report["records"].update(_counts(store))
             report["records"]["official_scoring_denominator"] = len(predictions)
             report["resumption"]["rows_not_repeated"] = int(report["records"].get("resumed_rows", 0))
             report["checkpoint_config"] = checkpoint_config
+            expected = EXPECTED_FULL_ROWS if args.mode == "full" else SMOKE_ROWS
+            if len(predictions) != expected:
+                raise RuntimeError(
+                    f"{args.mode} MMAU denominator must be {expected}, got {len(predictions)}"
+                )
+            if int(report["records"].get("terminal_records", 0)) != expected:
+                raise RuntimeError(
+                    f"{args.mode} MMAU terminal coverage is incomplete: "
+                    f"{report['records'].get('terminal_records')} / {expected}"
+                )
+            if int(report["records"].get("skipped", 0)) != 0:
+                raise RuntimeError(
+                    f"{args.mode} MMAU contains skipped rows: {report['records'].get('skip_reasons')}"
+                )
             report["official_evaluation"] = _run_official_evaluation(args, args.output_dir, len(predictions))
             if report["official_evaluation"].get("status") == "FAILED":
                 report["status"] = "FAILED"
@@ -1556,10 +1632,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             report["fatal_error"] = {"error": repr(exc), "traceback": traceback.format_exc()}
             # Even setup failures should leave the required output files and a
             # truthful report; no failed generation is silently scored.
-            predictions = _materialize_from_store(store, args.output_dir)
+            predictions = _materialize_from_store(
+                store,
+                args.output_dir,
+                official_records if official_records and args.mode == "full" else None,
+            )
             report["records"].update(_counts(store))
             report["records"]["official_scoring_denominator"] = len(predictions)
-            report["official_evaluation"] = _run_official_evaluation(args, args.output_dir, len(predictions))
+            report["official_evaluation"] = {
+                "requested": bool(args.run_official_evaluation),
+                "status": "BLOCKED_BY_PIPELINE_FAILURE",
+                "prediction_count": len(predictions),
+            }
             report["status"] = "FAILED"
         report["elapsed_seconds"] = time.time() - started
         _write_json(args.output_dir / "evaluation_report.json", report)

@@ -52,7 +52,7 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             "same long",
         )
 
-    def test_parser_extracts_answer_from_start_of_repetitive_generation(self) -> None:
+    def test_parser_uses_only_leading_label_or_exact_option(self) -> None:
         first = self.module.parse_model_output(
             "B) A goat Cd) A birdB) A goat Cd) A bird",
             ["A human", "A goat", "A car", "A bird"],
@@ -71,8 +71,15 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             "Unusual soundD) Unusual sound continues",
             ["Loudness", "Frequency range", "Duration", "Unusual sound"],
         )
-        self.assertEqual(text_first["selected_option"], "Unusual sound")
-        self.assertEqual(text_first["parse_method"], "leading_full_text")
+        self.assertEqual(text_first["selected_option"], "")
+        self.assertEqual(text_first["parse_method"], "no_exact_match")
+
+        eos_v2 = self.module.parse_model_output(
+            "c) It is plausible",
+            ["It is impossible", "It is unlikely", "It is plausible", "It is certain"],
+        )
+        self.assertEqual(eos_v2["selected_option"], "It is plausible")
+        self.assertEqual(eos_v2["parse_method"], "leading_label")
 
     def test_parser_does_not_search_for_an_answer_inside_explanation(self) -> None:
         choices = ["Man", "Woman", "Child", "Robot"]
@@ -198,6 +205,8 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             )
             result = self.module._run_official_evaluation(args, output, 1)
             self.assertEqual(result["status"], "PASS")
+            self.assertEqual(result["reported_total"], 1)
+            self.assertEqual(result["total_accuracy_percent"], 0.0)
             report = (output / "official_evaluation.txt").read_text(encoding="utf-8")
             self.assertIn("--input", report)
             self.assertIn("Total Accuracy", report)
@@ -262,6 +271,23 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             self.assertEqual(predictions[1]["model_output"], "")
             self.assertNotIn("official_record", predictions[0])
 
+    def test_full_materialization_keeps_official_denominator_and_order(self) -> None:
+        state = [
+            {
+                "status": "parsed",
+                "row_index": 1,
+                "id": "id-1",
+                "model_output": "second",
+            }
+        ]
+        official = [
+            {"id": "id-0", "choices": ["first", "second"], "answer": "first"},
+            {"id": "id-1", "choices": ["first", "second"], "answer": "second"},
+        ]
+        predictions = self.module.materialize_predictions(state, official)
+        self.assertEqual([item["id"] for item in predictions], ["id-0", "id-1"])
+        self.assertEqual([item["model_output"] for item in predictions], ["", "second"])
+
     def test_resume_recovers_raw_record_when_progress_append_was_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
@@ -298,11 +324,15 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             "progress.jsonl",
             "official_evaluation.txt",
             "_run_official_evaluation",
+            "MMAU-v05.15.25",
+            "MMAU_METADATA_CANONICAL_SHA256",
+            "compact_single_audio_prefix",
         ):
             self.assertIn(marker, text)
         self.assertIn('"permutation_majority_vote": False', text)
         self.assertNotIn("audio_id_path", text)
-        self.assertIn("No model_prediction", text)
+        self.assertNotIn("leading_full_text", text)
+        self.assertIn("checkpoint-037810", text)
         self.assertIn("conda activate rsmol", INNER_SH.read_text(encoding="utf-8"))
         submit = SUBMIT_SH.read_text(encoding="utf-8")
         self.assertIn("vc submit", submit)

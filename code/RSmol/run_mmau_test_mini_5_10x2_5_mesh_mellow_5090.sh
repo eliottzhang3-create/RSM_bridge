@@ -6,7 +6,7 @@ cd "$SCRIPT_DIR"
 mkdir -p log
 
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
-CHECKPOINT="${RSMOL_MMAU_CHECKPOINT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/formal_restart_save500_20260910_105248/checkpoint-011343}"
+CHECKPOINT="${RSMOL_MMAU_CHECKPOINT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/partition_formal_answer_eos_v2_10epochs_20260918/checkpoint-037810}"
 DATASET_DIR="${RSMOL_MMAU_DATASET_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/MMAU_test_mini}"
 PARQUET="${RSMOL_MMAU_PARQUET:-$DATASET_DIR/test_mini.parquet}"
 METADATA_JSON="${RSMOL_MMAU_METADATA_JSON:-$DATASET_DIR/mmau-test-mini.json}"

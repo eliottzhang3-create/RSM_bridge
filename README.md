@@ -577,7 +577,9 @@ code/RSmol/run_audio_checkpoint_reasonaqa_generation_3090.sh
 
 ### 8.2 MMAU test mini
 
-MeSH 音频 MMAU test mini 已实现官方 `evaluation.py --input ...` 调用。当前生成配置使用 `max_new_tokens=16`，parser 优先从回答开头解析选项，重复答案文本会按已实现规则截断/提取。
+MeSH 音频 MMAU test mini 已升级到当前 partition-v2 checkpoint，并调用官方 `evaluation.py --input ...`。入口在运行前严格审计 `MMAU-v05.15.25` 的 1000 条 metadata、ID/任务/难度分布、metadata 与 scorer SHA256；模型侧严格核对 compact 130-token 单音频 prefix、768 context、checkpoint completion marker 与 Mellow/HTSAT provenance。正式结果固定保留官方 1000 条分母，任何缺音频、字段错配或推理 skip 都会阻止官方计分。
+
+answer-EOS v2 模型的正常输出是 `c) It is plausible<|endoftext|>`；解码后的 `generated_text` 是 `c) It is plausible`。因此 parser 只接受回答开头的合法选项标签，或与某个选项完全相等的文本，不再从解释、重复题干或任意子串中猜答案。官方 MMAU 文件写入 `model_output`，原始生成同时保存在 append-only JSONL 中。
 
 当前 MeSH 文件：
 
@@ -587,13 +589,51 @@ code/RSmol/scripts/evaluate_mmau_test_mini_5_10x2_5_mesh_mellow.sh
 code/RSmol/run_mmau_test_mini_5_10x2_5_mesh_mellow_5090.sh
 ```
 
-新会话仍应先用以下命令核实文件没有改名：
+默认 checkpoint 是本节 8.1 的 `checkpoint-037810`，队列为 `pdgpu-5090`。smoke 与正式评测必须复用同一 output dir；第二次提交会从前 5 条继续，绝不重复推理已完成样本：
 
 ```bash
-rg --files code/RSmol | rg 'mmau|MMAU'
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+EVAL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/mmau_test_mini_checkpoint_037810
+
+RSMOL_MMAU_MODE=smoke RSMOL_MMAU_OUTPUT_DIR="$EVAL_DIR" \
+  bash run_mmau_test_mini_5_10x2_5_mesh_mellow_5090.sh
+
+# smoke PASS 后，以同一目录续跑全部 1000 条并执行官方计分
+RSMOL_MMAU_MODE=full RSMOL_MMAU_OUTPUT_DIR="$EVAL_DIR" \
+  bash run_mmau_test_mini_5_10x2_5_mesh_mellow_5090.sh
 ```
 
-### 8.3 原始 SmolLM2 音频基线
+### 8.3 MMAR
+
+MMAR 使用 Hugging Face 下载的 `MMAR-meta.json`、已解压的 `mmar-audio/audio/*.wav` 和下载包内官方 `code/evaluation.py`。入口逐条按官方 metadata 顺序生成，在运行前审计 1000 个唯一 ID、核心字段 canonical SHA256、modality/category 分布、全部音频存在性和官方 scorer SHA256。音频统一为 32 kHz，短音频补零、长音频取开头 10 秒；选择顺序不打乱。输出保持官方完整记录并新增 `answer_prediction`，由官方 scorer 原样计分。
+
+```text
+code/RSmol/scripts/evaluate_mmar_5_10x2_5_mesh_mellow.py
+code/RSmol/scripts/evaluate_mmar_5_10x2_5_mesh_mellow.sh
+code/RSmol/run_mmar_5_10x2_5_mesh_mellow_5090.sh
+```
+
+同样使用 `pdgpu-5090`，smoke→full 复用同一个目录完成续跑测试和正式评测：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+EVAL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/mmar_checkpoint_037810
+
+RSMOL_MMAR_MODE=smoke RSMOL_MMAR_OUTPUT_DIR="$EVAL_DIR" \
+  bash run_mmar_5_10x2_5_mesh_mellow_5090.sh
+
+# smoke PASS 后，以同一目录续跑全部 1000 条并执行官方计分
+RSMOL_MMAR_MODE=full RSMOL_MMAR_OUTPUT_DIR="$EVAL_DIR" \
+  bash run_mmar_5_10x2_5_mesh_mellow_5090.sh
+```
+
+两套评测均写出 `run_config.json`、`progress.jsonl`、`raw_generations.jsonl`、`skipped.jsonl`、`smoke_first5.jsonl`、`official_evaluation.txt` 与 `evaluation_report.json`。MMAU 的官方输入是 `predictions_fixed_order.json`；MMAR 的官方输入是 `predictions_answer_prediction.json`。新会话仍应先用以下命令核实文件没有改名：
+
+```bash
+rg --files code/RSmol | rg 'mmau|MMAU|mmar|MMAR'
+```
+
+### 8.4 原始 SmolLM2 音频基线
 
 当前新训练入口（代码就绪，尚无远程 PASS）：
 
@@ -762,7 +802,7 @@ tests/test_audio_5_10_5_recursive_mellow_static.py
 - 正式 10-epoch 训练尚未登记启动/完成。看到远程结果后及时写入 job、output dir、最终 checkpoint 和 report 状态。
 - 当前日志 loss 只是 rank 0 的四个 microbatch 平均，不是 8 rank 全局聚合 loss。
 - 当前训练没有周期性 validation；模型选择需要另行设计只读评测，不要把 train report 当验证集表现。
-- ReasonAQA samples generation 已兼容 compact-prefix checkpoint；MMAU 仍需完成同类 130-token 单槽适配后才能用于 partition-v2 checkpoint。
+- ReasonAQA samples generation、MMAU test-mini 与 MMAR 均已兼容 partition-v2 compact 130-token 单音频 prefix；远程正式分数仍以各自 `evaluation_report.json` 和 `official_evaluation.txt` 为准。
 - HTSAT checkpoint 和 Mellow 源码不打包进复合 checkpoint；远程清理外部文件会导致 resume 失败。
 - 10 epochs 很长；resume 时必须使用相同 epochs=10 和全部训练合同，否则 checkpoint 校验会拒绝。
 - output dir 必须是新的空目录；脚本拒绝覆盖已有输出。
