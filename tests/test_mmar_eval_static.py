@@ -125,6 +125,8 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
             "prompt_format",
         ):
             self.assertIn(marker, source)
+        self.assertNotIn("MMAR contains skipped rows", source)
+        self.assertIn("skipped_rows_scored_as_incorrect", source)
         self.assertIn("checkpoint-037810", self.module.DEFAULT_CHECKPOINT)
         common_source = Path(self.module.common.__file__).read_text(encoding="utf-8")
         self.assertIn("skipped.jsonl", common_source)

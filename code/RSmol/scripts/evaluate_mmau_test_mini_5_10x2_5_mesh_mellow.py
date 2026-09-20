@@ -1235,6 +1235,31 @@ def _run_official_evaluation(args: argparse.Namespace, output_dir: Path, predict
     return result
 
 
+def _block_official_evaluation(
+    args: argparse.Namespace,
+    output_dir: Path,
+    prediction_count: int,
+    error: BaseException,
+) -> dict[str, Any]:
+    """Overwrite any stale smoke score when a later run cannot be scored."""
+
+    path = output_dir / "official_evaluation.txt"
+    message = (
+        "Official evaluation was blocked by pipeline failure.\n"
+        f"mode: {args.mode}\n"
+        f"prediction_count: {int(prediction_count)}\n"
+        f"error: {error!r}\n"
+    )
+    path.write_text(message, encoding="utf-8")
+    return {
+        "requested": bool(args.run_official_evaluation),
+        "status": "BLOCKED_BY_PIPELINE_FAILURE",
+        "prediction_count": int(prediction_count),
+        "path": str(path),
+        "error": repr(error),
+    }
+
+
 def _counts(store: ProgressStore) -> dict[str, Any]:
     statuses = Counter(str(record.get("status", "unknown")) for record in store.state.values())
     reasons = Counter(
@@ -1409,6 +1434,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "resumption": {},
         "official_evaluation": {},
         "official_artifact_audit": {},
+        "warnings": [],
         "fatal_error": None,
     }
     with ProgressStore(args.output_dir) as store:
@@ -1542,6 +1568,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             report["resumption"]["rows_not_repeated"] = int(report["records"].get("resumed_rows", 0))
             report["checkpoint_config"] = checkpoint_config
             expected = EXPECTED_FULL_ROWS if args.mode == "full" else SMOKE_ROWS
+            if int(report["records"].get("rows_read", 0)) != expected:
+                raise RuntimeError(
+                    f"{args.mode} MMAU parquet traversal is incomplete: "
+                    f"{report['records'].get('rows_read')} / {expected}"
+                )
             if len(predictions) != expected:
                 raise RuntimeError(
                     f"{args.mode} MMAU denominator must be {expected}, got {len(predictions)}"
@@ -1551,11 +1582,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     f"{args.mode} MMAU terminal coverage is incomplete: "
                     f"{report['records'].get('terminal_records')} / {expected}"
                 )
-            if int(report["records"].get("skipped", 0)) != 0:
-                raise RuntimeError(
-                    f"{args.mode} MMAU contains skipped rows: {report['records'].get('skip_reasons')}"
-                )
+            skipped = int(report["records"].get("skipped", 0))
+            report["records"]["official_empty_predictions_from_skips"] = skipped
+            if skipped:
+                report["warnings"].append({
+                    "name": "skipped_rows_scored_as_incorrect",
+                    "count": skipped,
+                    "reasons": report["records"].get("skip_reasons", {}),
+                    "detail": (
+                        "Every parquet row was visited. Skipped rows retain an empty model_output "
+                        "and are counted as incorrect by the official scorer."
+                    ),
+                })
             report["official_evaluation"] = _run_official_evaluation(args, args.output_dir, len(predictions))
+            report["official_evaluation"]["empty_predictions_from_skips"] = skipped
             if report["official_evaluation"].get("status") == "FAILED":
                 report["status"] = "FAILED"
             else:
@@ -1571,11 +1611,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
             report["records"].update(_counts(store))
             report["records"]["official_scoring_denominator"] = len(predictions)
-            report["official_evaluation"] = {
-                "requested": bool(args.run_official_evaluation),
-                "status": "BLOCKED_BY_PIPELINE_FAILURE",
-                "prediction_count": len(predictions),
-            }
+            report["official_evaluation"] = _block_official_evaluation(
+                args,
+                args.output_dir,
+                len(predictions),
+                exc,
+            )
             report["status"] = "FAILED"
         report["elapsed_seconds"] = time.time() - started
         _write_json(args.output_dir / "evaluation_report.json", report)

@@ -412,6 +412,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "resumption": {},
         "official_artifact_audit": {},
         "official_evaluation": {},
+        "warnings": [],
         "fatal_error": None,
     }
     records: list[dict[str, Any]] = []
@@ -529,14 +530,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             report["resumption"]["rows_not_repeated"] = int(report["records"].get("resumed_rows", 0))
             report["checkpoint_config"] = checkpoint_config
             expected = EXPECTED_FULL_ROWS if args.mode == "full" else SMOKE_ROWS
+            if int(report["records"].get("rows_read", 0)) != expected:
+                raise RuntimeError(
+                    f"MMAR metadata traversal is incomplete: "
+                    f"{report['records'].get('rows_read')} / {expected}"
+                )
             if len(predictions) != expected or int(report["records"].get("terminal_records", 0)) != expected:
                 raise RuntimeError(
                     f"MMAR coverage mismatch: predictions={len(predictions)} "
                     f"terminal={report['records'].get('terminal_records')} expected={expected}"
                 )
-            if int(report["records"].get("skipped", 0)) != 0:
-                raise RuntimeError(f"MMAR contains skipped rows: {report['records'].get('skip_reasons')}")
+            skipped = int(report["records"].get("skipped", 0))
+            report["records"]["official_empty_predictions_from_skips"] = skipped
+            if skipped:
+                report["warnings"].append({
+                    "name": "skipped_rows_scored_as_incorrect",
+                    "count": skipped,
+                    "reasons": report["records"].get("skip_reasons", {}),
+                    "detail": (
+                        "Every metadata row was visited. Skipped rows retain an empty "
+                        "answer_prediction and are counted as incorrect by the official scorer."
+                    ),
+                })
             report["official_evaluation"] = _run_official_evaluation(args, predictions)
+            report["official_evaluation"]["empty_predictions_from_skips"] = skipped
             report["status"] = "PASS" if report["official_evaluation"]["status"] != "FAILED" else "FAILED"
         except Exception as exc:
             report["fatal_error"] = {"error": repr(exc), "traceback": traceback.format_exc()}
@@ -548,11 +565,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ) if records else []
             report["records"].update(common._counts(store))
             report["records"]["official_scoring_denominator"] = len(predictions)
-            report["official_evaluation"] = {
-                "requested": bool(args.run_official_evaluation),
-                "status": "BLOCKED_BY_PIPELINE_FAILURE",
-                "prediction_count": len(predictions),
-            }
+            report["official_evaluation"] = common._block_official_evaluation(
+                args,
+                args.output_dir,
+                len(predictions),
+                exc,
+            )
             report["status"] = "FAILED"
         report["elapsed_seconds"] = time.time() - started
         common._write_json(args.output_dir / "evaluation_report.json", report)

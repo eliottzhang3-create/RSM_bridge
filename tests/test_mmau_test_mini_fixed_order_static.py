@@ -159,6 +159,20 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             self.assertIn("--input", report)
             self.assertIn("Total Accuracy", report)
 
+    def test_pipeline_failure_overwrites_stale_smoke_score(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            log = output / "official_evaluation.txt"
+            log.write_text("Total Accuracy: 20.00% over 5 samples\n", encoding="utf-8")
+            args = types.SimpleNamespace(run_official_evaluation=True, mode="full")
+            error = RuntimeError("formal coverage mismatch")
+            result = self.module._block_official_evaluation(args, output, 1000, error)
+            self.assertEqual(result["status"], "BLOCKED_BY_PIPELINE_FAILURE")
+            content = log.read_text(encoding="utf-8")
+            self.assertNotIn("over 5 samples", content)
+            self.assertIn("prediction_count: 1000", content)
+            self.assertIn("formal coverage mismatch", content)
+
     def test_counts_report_audio_crop_and_padding_statistics(self) -> None:
         counts = self.module._counts(
             types.SimpleNamespace(
@@ -281,6 +295,8 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
         self.assertIn('"permutation_majority_vote": False', text)
         self.assertNotIn("audio_id_path", text)
         self.assertNotIn("leading_full_text", text)
+        self.assertNotIn("contains skipped rows", text)
+        self.assertIn("skipped_rows_scored_as_incorrect", text)
         self.assertIn("checkpoint-037810", text)
         self.assertIn("conda activate rsmol", INNER_SH.read_text(encoding="utf-8"))
         submit = SUBMIT_SH.read_text(encoding="utf-8")
