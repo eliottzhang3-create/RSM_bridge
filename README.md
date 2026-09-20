@@ -569,7 +569,11 @@ code/RSmol/scripts/generate_audio_checkpoint_reasonaqa.sh
 code/RSmol/run_audio_checkpoint_reasonaqa_generation_3090.sh
 ```
 
-支持默认前五个或 `--sample-indices` 指定五个 zero-based manifest 行号，并可导出所有 token 位置的 5 个 memory slots × 3 组 × write/read router 权重到 CSV。注意：这条历史 generation 路径可能仍按固定双音频 260 prefix 解释，若要评测新的 compact-prefix partition checkpoint，必须先核对加载 config 和单槽结构兼容性，不能直接假定兼容。
+支持默认前五个或 `--sample-indices` 指定 zero-based manifest 行号，并可导出所有 token 位置的 5 个 memory slots × 3 组 × write/read router 权重到 CSV。该入口现已兼容 partition-v2 checkpoint：严格核对 `component_partitions6_rank_ram_compact_audio_answer_eos_v2`、completion marker、130/260 prefix 和 answer-EOS 合同；结构单音频使用 `audio1 + separator1` 的 130-token prefix，显式双音频使用 260-token prefix，router CSV 也按每条样本的真实 prefix 标注 token region。当前默认 checkpoint 为：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/partition_formal_answer_eos_v2_10epochs_20260918/checkpoint-037810
+```
 
 ### 8.2 MMAU test mini
 
@@ -758,7 +762,7 @@ tests/test_audio_5_10_5_recursive_mellow_static.py
 - 正式 10-epoch 训练尚未登记启动/完成。看到远程结果后及时写入 job、output dir、最终 checkpoint 和 report 状态。
 - 当前日志 loss 只是 rank 0 的四个 microbatch 平均，不是 8 rank 全局聚合 loss。
 - 当前训练没有周期性 validation；模型选择需要另行设计只读评测，不要把 train report 当验证集表现。
-- compact-prefix checkpoint 的 generation/MMAU 兼容性必须核对；历史生成脚本可能默认固定 260 prefix。
+- ReasonAQA samples generation 已兼容 compact-prefix checkpoint；MMAU 仍需完成同类 130-token 单槽适配后才能用于 partition-v2 checkpoint。
 - HTSAT checkpoint 和 Mellow 源码不打包进复合 checkpoint；远程清理外部文件会导致 resume 失败。
 - 10 epochs 很长；resume 时必须使用相同 epochs=10 和全部训练合同，否则 checkpoint 校验会拒绝。
 - output dir 必须是新的空目录；脚本拒绝覆盖已有输出。

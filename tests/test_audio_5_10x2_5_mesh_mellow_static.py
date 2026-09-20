@@ -154,8 +154,16 @@ class AudioMeshStaticContractTest(unittest.TestCase):
             "model.eval()",
             "model.encode_audio",
             "separator_token_id",
-            "AUDIO_PREFIX_TOKENS",
-            "audio1 + separator + audio2 + separator + prompt + generated_tokens",
+            "AUDIO_SINGLE_PREFIX_TOKENS",
+            "AUDIO_DUAL_PREFIX_TOKENS",
+            "compact_single_audio_prefix_used",
+            "skip_second_prefix=compact_single_audio_prefix",
+            "partition checkpoint directory/global-step mismatch",
+            "checkpoint_compact_single_audio_prefix",
+            "prefix_token_count",
+            "audio1 + separator1 + prompt + generated_tokens",
+            "audio1 + separator1 + audio2 + separator2 + prompt + generated_tokens",
+            "component_partitions6_rank_ram_compact_audio_answer_eos_v2",
             "use_cache=False",
             "logits_to_keep=1",
             "torch.argmax",
@@ -178,7 +186,7 @@ class AudioMeshStaticContractTest(unittest.TestCase):
         self.assertIn("-p pdgpu-3090", submit)
         self.assertIn("-g 1", submit)
         self.assertIn("--num-samples 5", submit)
-        self.assertIn("checkpoint-011343", submit)
+        self.assertIn("checkpoint-037810", submit)
         self.assertIn("reasonaqa_test.jsonl", submit)
 
     def test_gpu_stages_have_submission_wrappers(self) -> None:

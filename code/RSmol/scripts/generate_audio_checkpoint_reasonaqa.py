@@ -22,7 +22,9 @@ if str(ROOT) not in sys.path:
 from audio_5_10x2_5_mesh_mellow.data import ReasonAQADataset  # noqa: E402
 from audio_5_10x2_5_mesh_mellow.model import (  # noqa: E402
     ARCHITECTURE_CONTRACT,
+    AUDIO_DUAL_PREFIX_TOKENS,
     AUDIO_PREFIX_TOKENS,
+    AUDIO_SINGLE_PREFIX_TOKENS,
     AUDIO_TOKENS_PER_CLIP,
     MAPPER_CONTRACT,
     MESH_HIDDEN_SIZE,
@@ -35,10 +37,16 @@ from train_audio_5_10x2_5_mesh_mellow_ddp import (  # noqa: E402
 )
 
 
-DEFAULT_CHECKPOINT = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/formal_restart_save500_20260910_105248/checkpoint-011343"
+DEFAULT_CHECKPOINT = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/partition_formal_answer_eos_v2_10epochs_20260918/checkpoint-037810"
 DEFAULT_TEST_MANIFEST = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_test.jsonl"
 DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
+PARTITION_CHECKPOINT_CONTRACT = "component_partitions6_rank_ram_compact_audio_answer_eos_v2"
+ANSWER_TERMINATION_CONTRACT = {
+    "token": "<|endoftext|>",
+    "included_in_max_answer_tokens": True,
+    "supervised": True,
+}
 
 ROUTER_ORDER = (
     "write_pre",
@@ -148,6 +156,8 @@ class RouterWeightCsvRecorder:
         self._sample_ordinal: int | None = None
         self._row_index: int | None = None
         self._prompt_token_count: int | None = None
+        self._prefix_token_count: int | None = None
+        self._single_audio_prefix: bool | None = None
         self._captured: dict[str, torch.Tensor] = {}
         self._handles: list[Any] = []
         self._token_text_cache: dict[int, str] = {}
@@ -218,10 +228,25 @@ class RouterWeightCsvRecorder:
         sample_ordinal: int,
         row_index: int,
         prompt_token_count: int,
+        prefix_token_count: int,
+        single_audio_prefix: bool,
     ) -> None:
         self._sample_ordinal = int(sample_ordinal)
         self._row_index = int(row_index)
         self._prompt_token_count = int(prompt_token_count)
+        self._prefix_token_count = int(prefix_token_count)
+        self._single_audio_prefix = bool(single_audio_prefix)
+        expected_prefix_tokens = (
+            AUDIO_SINGLE_PREFIX_TOKENS
+            if self._single_audio_prefix
+            else AUDIO_DUAL_PREFIX_TOKENS
+        )
+        if self._prefix_token_count != expected_prefix_tokens:
+            raise RuntimeError(
+                "router recorder prefix contract mismatch: "
+                f"single={self._single_audio_prefix} "
+                f"expected={expected_prefix_tokens} actual={self._prefix_token_count}"
+            )
 
     def begin_forward(self) -> None:
         if self._captured:
@@ -246,7 +271,9 @@ class RouterWeightCsvRecorder:
                 f"router capture mismatch: missing={missing} unexpected={unexpected}"
             )
         token_ids = [int(value) for value in text_ids.detach().cpu().reshape(-1).tolist()]
-        expected_sequence_length = AUDIO_PREFIX_TOKENS + len(token_ids)
+        if self._prefix_token_count is None or self._single_audio_prefix is None:
+            raise RuntimeError("start_sample must provide the effective audio-prefix layout")
+        expected_sequence_length = self._prefix_token_count + len(token_ids)
         router_rows: dict[str, list[list[float]]] = {}
         for name in ROUTER_ORDER:
             weights = self._captured[name]
@@ -270,9 +297,11 @@ class RouterWeightCsvRecorder:
         first_separator = AUDIO_TOKENS_PER_CLIP
         second_audio_start = first_separator + 1
         second_separator = second_audio_start + AUDIO_TOKENS_PER_CLIP
-        text_start = second_separator + 1
-        if text_start != AUDIO_PREFIX_TOKENS:
-            raise RuntimeError("audio-prefix token layout no longer matches its constants")
+        text_start = (
+            AUDIO_SINGLE_PREFIX_TOKENS
+            if self._single_audio_prefix
+            else AUDIO_DUAL_PREFIX_TOKENS
+        )
         separator_id = int(self.model.separator_token_id)
         separator_text = self._token_text(separator_id)
         assert self._prompt_token_count is not None
@@ -282,9 +311,9 @@ class RouterWeightCsvRecorder:
                 token_region, token_id, token_text = "audio1", "", ""
             elif position == first_separator:
                 token_region, token_id, token_text = "separator1", separator_id, separator_text
-            elif position < second_separator:
+            elif not self._single_audio_prefix and position < second_separator:
                 token_region, token_id, token_text = "audio2", "", ""
-            elif position == second_separator:
+            elif not self._single_audio_prefix and position == second_separator:
                 token_region, token_id, token_text = "separator2", separator_id, separator_text
             else:
                 text_position = position - text_start
@@ -328,19 +357,75 @@ class RouterWeightCsvRecorder:
             "weight_columns": list(ROUTER_WEIGHT_COLUMNS),
             "row_granularity": "one sample-generation-forward sequence position",
             "generation_step_zero_meaning": "forward that predicts the first generated token",
+            "supports_compact_single_audio_prefix": True,
         }
 
 
 def _validate_checkpoint_contract(args: argparse.Namespace) -> dict[str, Any]:
-    artifact = _audit_saved_checkpoint(args.checkpoint)
     config = _json(args.checkpoint / "audio_mesh_config.json")
-    expected = {
-        "architecture_contract": ARCHITECTURE_CONTRACT,
-        "mapper_contract": MAPPER_CONTRACT,
-        "mesh_hidden_size": MESH_HIDDEN_SIZE,
-        "audio_tokens_per_clip": AUDIO_TOKENS_PER_CLIP,
-        "audio_prefix_tokens_with_separators": AUDIO_PREFIX_TOKENS,
-    }
+    is_partition_checkpoint = config.get("contract") == PARTITION_CHECKPOINT_CONTRACT
+    if is_partition_checkpoint:
+        required = (
+            "mesh_model/config.json",
+            "tokenizer/tokenizer_config.json",
+            "audio_bridge.pt",
+            "training_state.pt",
+            "audio_mesh_config.json",
+            "checkpoint_complete.json",
+        )
+        missing = [name for name in required if not (args.checkpoint / name).is_file()]
+        if missing:
+            raise RuntimeError(f"partition checkpoint missing required files: {missing}")
+        empty = [name for name in required if (args.checkpoint / name).stat().st_size <= 0]
+        if empty:
+            raise RuntimeError(f"partition checkpoint contains empty required files: {empty}")
+        marker = _json(args.checkpoint / "checkpoint_complete.json")
+        if marker.get("status") != "complete" or marker.get("contract") != PARTITION_CHECKPOINT_CONTRACT:
+            raise RuntimeError(f"partition checkpoint completion marker is invalid: {marker}")
+        global_step = int(marker.get("global_step", -1))
+        if global_step <= 0 or global_step > int(config.get("total_steps", -1)):
+            raise RuntimeError(
+                "partition checkpoint global step is outside its training schedule: "
+                f"global_step={global_step} total_steps={config.get('total_steps')!r}"
+            )
+        checkpoint_suffix = args.checkpoint.name.removeprefix("checkpoint-")
+        if not checkpoint_suffix.isdigit() or int(checkpoint_suffix) != global_step:
+            raise RuntimeError(
+                "partition checkpoint directory/global-step mismatch: "
+                f"directory={args.checkpoint.name!r} global_step={global_step}"
+            )
+        expected = {
+            "contract": PARTITION_CHECKPOINT_CONTRACT,
+            "architecture_contract": ARCHITECTURE_CONTRACT,
+            "mapper_contract": MAPPER_CONTRACT,
+            "compact_single_audio_prefix": True,
+            "answer_termination": ANSWER_TERMINATION_CONTRACT,
+            "prefix_tokens": {
+                "single": AUDIO_SINGLE_PREFIX_TOKENS,
+                "dual": AUDIO_DUAL_PREFIX_TOKENS,
+            },
+        }
+        artifact = {
+            "passed": True,
+            "format": "partition_v2",
+            "path": str(args.checkpoint),
+            "global_step": global_step,
+            "required_files": list(required),
+            "required_file_sizes": {
+                name: int((args.checkpoint / name).stat().st_size) for name in required
+            },
+        }
+    else:
+        # Retain support for the historical fixed-260 checkpoint while making
+        # the current partition-v2 path use its own checkpoint schema.
+        artifact = _audit_saved_checkpoint(args.checkpoint)
+        expected = {
+            "architecture_contract": ARCHITECTURE_CONTRACT,
+            "mapper_contract": MAPPER_CONTRACT,
+            "mesh_hidden_size": MESH_HIDDEN_SIZE,
+            "audio_tokens_per_clip": AUDIO_TOKENS_PER_CLIP,
+            "audio_prefix_tokens_with_separators": AUDIO_PREFIX_TOKENS,
+        }
     mismatches = {
         key: {"expected": value, "actual": config.get(key)}
         for key, value in expected.items()
@@ -366,6 +451,8 @@ def _validate_checkpoint_contract(args: argparse.Namespace) -> dict[str, Any]:
         )
     return {
         **artifact,
+        "checkpoint_format": "partition_v2" if is_partition_checkpoint else "legacy_fixed_260",
+        "compact_single_audio_prefix": bool(config.get("compact_single_audio_prefix", False)),
         "audio_mesh_config": config,
         "external_htsat_verified": str(args.htsat_checkpoint.resolve()),
         "mellow_root_verified": str(args.mellow_root.resolve()),
@@ -390,9 +477,17 @@ def _build_audio_prefix(
     audio2 = item["audio2"]
     if audio2 is not None:
         audio2 = audio2.unsqueeze(0).to(device, non_blocking=True)
+    compact_enabled = bool(getattr(model.config_audio, "compact_single_audio_prefix", False))
+    single_audio_slot = bool(item.get("single_audio_slot", audio2 is None))
+    compact_single_audio_prefix = compact_enabled and single_audio_slot
     reused_mask = torch.tensor([bool(item["audio2_reused"])], dtype=torch.bool, device=device)
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=autocast_enabled):
-        first, second = model.encode_audio(audio1, audio2, reused_mask)
+        first, second = model.encode_audio(
+            audio1,
+            audio2,
+            reused_mask,
+            skip_second_prefix=compact_single_audio_prefix,
+        )
         separator_ids = torch.full(
             (1, 1),
             int(model.separator_token_id),
@@ -400,12 +495,20 @@ def _build_audio_prefix(
             device=device,
         )
         separator = _find_embedding(model.mesh_model, separator_ids)
-        prefix = torch.cat((first, separator, second, separator), dim=1)
+        if compact_single_audio_prefix:
+            prefix = torch.cat((first, separator), dim=1)
+        else:
+            prefix = torch.cat((first, separator, second, separator), dim=1)
     if tuple(first.shape[1:]) != (AUDIO_TOKENS_PER_CLIP, MESH_HIDDEN_SIZE):
         raise RuntimeError(f"audio1 prefix shape mismatch: {tuple(first.shape)}")
     if tuple(second.shape[1:]) != (AUDIO_TOKENS_PER_CLIP, MESH_HIDDEN_SIZE):
         raise RuntimeError(f"audio2 prefix shape mismatch: {tuple(second.shape)}")
-    if tuple(prefix.shape[1:]) != (AUDIO_PREFIX_TOKENS, MESH_HIDDEN_SIZE):
+    expected_prefix_tokens = (
+        AUDIO_SINGLE_PREFIX_TOKENS
+        if compact_single_audio_prefix
+        else AUDIO_DUAL_PREFIX_TOKENS
+    )
+    if tuple(prefix.shape[1:]) != (expected_prefix_tokens, MESH_HIDDEN_SIZE):
         raise RuntimeError(f"combined audio prefix shape mismatch: {tuple(prefix.shape)}")
     if not bool(torch.isfinite(prefix).all()):
         raise RuntimeError("combined audio prefix contains non-finite values")
@@ -413,6 +516,16 @@ def _build_audio_prefix(
         "audio1_prefix_shape": list(first.shape),
         "audio2_prefix_shape": list(second.shape),
         "combined_prefix_shape": list(prefix.shape),
+        "prefix_token_count": expected_prefix_tokens,
+        "prefix_layout": (
+            "audio1 + separator1"
+            if compact_single_audio_prefix
+            else "audio1 + separator1 + audio2 + separator2"
+        ),
+        "checkpoint_compact_single_audio_prefix": compact_enabled,
+        "single_audio_slot": single_audio_slot,
+        "compact_single_audio_prefix_used": compact_single_audio_prefix,
+        "audio2_prefix_materialized": not compact_single_audio_prefix,
         "separator_token_id": int(model.separator_token_id),
         "separator_token": model.tokenizer.decode(
             [int(model.separator_token_id)], skip_special_tokens=False
@@ -540,6 +653,8 @@ def _markdown(report: dict[str, Any]) -> str:
                 f"- Audio 1: `{sample['audio1_path']}`",
                 f"- Audio 2: `{sample['audio2_path']}`",
                 f"- Audio 2 reused: `{sample['audio2_reused']}`",
+                f"- Single-audio slot: `{sample['single_audio_slot']}`",
+                f"- Prefix layout: `{sample['prefix_layout']}` ({sample['prefix_token_count']} tokens)",
                 f"- Stop reason: `{sample['stop_reason']}`",
                 f"- Generated token IDs: `{sample['generated_token_ids']}`",
                 f"- Raw decode: `{sample['generated_text_raw']}`",
@@ -578,6 +693,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         tokenizer_path=None,
         htsat_checkpoint=args.htsat_checkpoint,
         mellow_root=args.mellow_root,
+        compact_single_audio_prefix=bool(
+            checkpoint_audit["compact_single_audio_prefix"]
+        ),
     )
     model, tokenizer = _load_model(load_args, device)
     saved_provenance = checkpoint_audit["audio_mesh_config"].get("mellow_provenance") or {}
@@ -589,6 +707,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 f"saved={saved_provenance.get(key)!r} loaded={loaded_provenance.get(key)!r}"
             )
     model.eval()
+    if bool(model.config_audio.compact_single_audio_prefix) != bool(
+        checkpoint_audit["compact_single_audio_prefix"]
+    ):
+        raise RuntimeError(
+            "loaded model compact-prefix mode differs from checkpoint contract: "
+            f"loaded={model.config_audio.compact_single_audio_prefix!r} "
+            f"checkpoint={checkpoint_audit['compact_single_audio_prefix']!r}"
+        )
     model.mesh_model.model.audit_mode = False
     model.mesh_model.model.gradient_audit_mode = False
     model.mesh_model.model.routing_stats_mode = False
@@ -640,11 +766,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             prompt_ids = torch.tensor(
                 [prompt_token_ids], dtype=torch.long, device=device
             )
-            router_recorder.start_sample(
-                sample_ordinal=ordinal,
-                row_index=row_index,
-                prompt_token_count=len(prompt_token_ids),
-            )
             router_rows_before = router_recorder.rows_written
             router_forwards_before = router_recorder.forwards_written
             audio_prefix, prefix_audit = _build_audio_prefix(
@@ -652,6 +773,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 item,
                 device,
                 autocast_enabled=autocast_enabled,
+            )
+            router_recorder.start_sample(
+                sample_ordinal=ordinal,
+                row_index=row_index,
+                prompt_token_count=len(prompt_token_ids),
+                prefix_token_count=int(prefix_audit["prefix_token_count"]),
+                single_audio_prefix=bool(
+                    prefix_audit["compact_single_audio_prefix_used"]
+                ),
             )
             generated = _greedy_decode(
                 model,
@@ -663,7 +793,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 router_recorder=router_recorder,
             )
             audio1_path = _manifest_path(row, first=True)
-            audio2_path = _manifest_path(row, first=False) or audio1_path
+            audio2_path = _manifest_path(row, first=False)
             record = {
                 "sample_ordinal": ordinal,
                 "row_index": row_index,
@@ -725,7 +855,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "seed": args.seed,
             "sample_selection": "explicit_indices" if args.sample_indices else "first_n_manifest_rows",
             "audio_encoded_once_per_sample": True,
-            "multimodal_prefix_order": "audio1 + separator + audio2 + separator + prompt + generated_tokens",
+            "checkpoint_compact_single_audio_prefix": bool(
+                checkpoint_audit["compact_single_audio_prefix"]
+            ),
+            "multimodal_prefix_order": {
+                "single_audio": "audio1 + separator1 + prompt + generated_tokens",
+                "dual_audio": "audio1 + separator1 + audio2 + separator2 + prompt + generated_tokens",
+            },
         },
         "router_weights": router_recorder.summary(),
         "samples": samples,
