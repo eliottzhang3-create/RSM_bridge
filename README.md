@@ -579,7 +579,7 @@ code/RSmol/run_audio_checkpoint_reasonaqa_generation_3090.sh
 
 MeSH 音频 MMAU test mini 已升级到当前 partition-v2 checkpoint，并调用官方 `evaluation.py --input ...`。入口在运行前严格审计 `MMAU-v05.15.25` 的 1000 条 metadata、ID/任务/难度分布、metadata 与 scorer SHA256；模型侧严格核对 compact 130-token 单音频 prefix、768 context、checkpoint completion marker 与 Mellow/HTSAT provenance。正式结果固定保留官方 1000 条分母：完整遍历后的逐样本 skip 会写入空 `model_output` 并由官方 scorer 计错，同时在 report 中保留原因；只有 metadata/parquet 未完整遍历、终态不足 1000 条或其他全局故障才会阻止官方计分。
 
-answer-EOS v2 模型的正常输出是 `c) It is plausible<|endoftext|>`；解码后的 `generated_text` 是 `c) It is plausible`。MMAU/MMAR prompt 已与 ReasonAQA 对齐为 `问题 a) ... b) ... c) ...`，不添加 `Choices:`；MMAR 的五、六选项自动使用 `e)`、`f)`。本地不再做任何选项识别或答案预解析：完整 `generated_text` 原样写入 MMAU 的 `model_output`；MMAR 则从实际官方 `evaluation.py` 自动读取 `output_key`（HF 包为 `model_prediction`，GitHub 当前版为 `answer_prediction`）后写入对应字段。全部匹配与评分交给官方 scorer；带特殊 token 的 `generated_text_raw` 只保存在 append-only 审计 JSONL 中。
+answer-EOS v2 模型的正常输出是 `c) It is plausible<|endoftext|>`；解码后的 `generated_text` 是 `c) It is plausible`。MMAU/MMAR prompt 已与 ReasonAQA 对齐为 `问题 a) ... b) ... c) ...`，不添加 `Choices:`；MMAR 的五、六选项自动使用 `e)`、`f)`。官方 scorer 使用词集合匹配而不是稳定的选择题字母解析，因此当前协议只在输出开头精确移除 `a)`/`b)`/`c)`/`d)`，再将剩余文本写入 MMAU 的 `model_output` 或 MMAR 自动探测出的官方预测字段；不猜选项、不改正文。原始 `generated_text` 与带特殊 token 的 `generated_text_raw` 均保存在 append-only 审计 JSONL 中。最大生成长度统一为 32 tokens。MMAU 的 parquet/metadata 选项核对只在 parquet 一侧按当前位置移除显式标签，避免把 `F. Scott Fitzgerald`、`J.D. Salinger`、`E-guitar`、`E-bass`、`B:maj/1` 等正文误判为选项标签。
 
 当前 MeSH 文件：
 
@@ -593,7 +593,7 @@ code/RSmol/run_mmau_test_mini_5_10x2_5_mesh_mellow_5090.sh
 
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
-EVAL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/mmau_test_mini_checkpoint_037810_reasonaqa_prompt_raw_v1
+EVAL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/mmau_test_mini_checkpoint_037810_strip_label_max32_v2
 
 RSMOL_MMAU_MODE=smoke RSMOL_MMAU_OUTPUT_DIR="$EVAL_DIR" \
   bash run_mmau_test_mini_5_10x2_5_mesh_mellow_5090.sh
@@ -617,7 +617,7 @@ code/RSmol/run_mmar_5_10x2_5_mesh_mellow_5090.sh
 
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
-EVAL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/mmar_checkpoint_037810_reasonaqa_prompt_raw_v1
+EVAL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/mmar_checkpoint_037810_strip_label_max32_v2
 
 RSMOL_MMAR_MODE=smoke RSMOL_MMAR_OUTPUT_DIR="$EVAL_DIR" \
   bash run_mmar_5_10x2_5_mesh_mellow_5090.sh
@@ -653,19 +653,19 @@ code/RSmol/run_audio_smollm2_135m_mellow_formal_3090.sh
 partition_formal_eos_v2_10epochs_20260918/checkpoint-037810
 ```
 
-基线评测与 MeSH 评测共享同一套官方数据审计、ReasonAQA 小写选项 prompt、原始 `generated_text` 直传、完整官方分母和 append-only resume 协议；模型后端独立审计标准 30 层 SmolLM2 partition-v2 artifact，并构造 130-token 单音频 compact prefix。两个提交入口均使用 `pdgpu-5090`：
+基线评测与 MeSH 评测共享同一套官方数据审计、ReasonAQA 小写选项 prompt、开头 `a)`-`d)` 去标签、32-token 生成上限、完整官方分母和 append-only resume 协议；原始生成文本仍完整留在审计记录中。模型后端独立审计标准 30 层 SmolLM2 partition-v2 artifact，并构造 130-token 单音频 compact prefix。两个提交入口均使用 `pdgpu-5090`：
 
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
 
-MMAU_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/mmau_test_mini_checkpoint_037810_reasonaqa_prompt_raw_v1
+MMAU_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/mmau_test_mini_checkpoint_037810_strip_label_max32_v2
 RSMOL_MMAU_MODE=smoke RSMOL_MMAU_SMOLLM2_OUTPUT_DIR="$MMAU_DIR" \
   bash run_mmau_test_mini_audio_smollm2_5090.sh
 # smoke PASS 后复用同一目录续跑 1000 条
 RSMOL_MMAU_MODE=full RSMOL_MMAU_SMOLLM2_OUTPUT_DIR="$MMAU_DIR" \
   bash run_mmau_test_mini_audio_smollm2_5090.sh
 
-MMAR_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/mmar_checkpoint_037810_reasonaqa_prompt_raw_v1
+MMAR_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/mmar_checkpoint_037810_strip_label_max32_v2
 RSMOL_MMAR_MODE=smoke RSMOL_MMAR_SMOLLM2_OUTPUT_DIR="$MMAR_DIR" \
   bash run_mmar_audio_smollm2_5090.sh
 # smoke PASS 后复用同一目录续跑 1000 条

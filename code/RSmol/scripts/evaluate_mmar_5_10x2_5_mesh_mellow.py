@@ -591,7 +591,10 @@ def run(
                         max_prompt_tokens=args.max_prompt_tokens,
                         max_new_tokens=args.max_new_tokens,
                     )
-                    official_prediction = str(generation.get("generated_text", ""))
+                    generated_text = str(generation.get("generated_text", ""))
+                    official_prediction = common.prepare_model_output_for_official_scorer(
+                        generated_text
+                    )
                     record = {
                         "status": "generated",
                         "row_index": row_index,

@@ -29,7 +29,7 @@ ARGS=(
   --output-dir "$OUTPUT_DIR"
   --parquet-batch-size 8
   --max-prompt-tokens 129
-  --max-new-tokens 16
+  --max-new-tokens 32
   --dtype bf16
   --run-official-evaluation
 )

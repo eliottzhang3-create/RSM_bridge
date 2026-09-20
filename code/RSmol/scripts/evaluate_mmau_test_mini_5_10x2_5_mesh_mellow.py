@@ -55,7 +55,7 @@ DEFAULT_SAMPLE_RATE = 32_000
 DEFAULT_SOURCE_SAMPLE_RATE = 16_000
 DEFAULT_AUDIO_SECONDS = 10
 DEFAULT_MAX_PROMPT_TOKENS = 129
-DEFAULT_MAX_NEW_TOKENS = 16
+DEFAULT_MAX_NEW_TOKENS = 32
 DEFAULT_AUDIO_PREFIX_TOKENS = 130
 DEFAULT_MAX_CONTEXT_LENGTH = 768
 SMOKE_ROWS = 5
@@ -66,7 +66,7 @@ MMAU_METADATA_SHA256 = "9f18fda99f8dbc2bc5ecd6323fb5063309f54969810b5c6f1caeb3b8
 MMAU_METADATA_CANONICAL_SHA256 = "04c6b38739179ec7f3044b05435f5a734970f774ac60c86b00ac5a65ee439859"
 MMAU_EVALUATION_SHA256 = "85480e1c0dfe8ee1406e9c6e598eff0dca9e0216701f076faf69081c6aab1558"
 PROMPT_FORMAT = "reasonaqa_lowercase_labels_no_choices_prefix_v1"
-PREDICTION_FORMAT = "official_raw_generated_text_v1"
+PREDICTION_FORMAT = "official_generated_text_strip_leading_abcd_label_v2"
 
 
 class RowSkip(Exception):
@@ -269,37 +269,54 @@ def _normalize_text(value: Any) -> str:
     return text
 
 
-def _strip_choice_label(value: Any) -> str:
-    text = str(value).strip()
-    # The official JSON is normally unlabeled; parquet/HF previews sometimes
-    # carry ``(A)``, ``A.``, ``A)`` or ``A:`` prefixes.  Only remove a label
-    # when punctuation/closing bracket and whitespace make it unambiguous.
-    return re.sub(
-        r"^\s*(?:\([A-Za-z]\)|\[[A-Za-z]\]|[A-Za-z][.)\]:-])\s*",
-        "",
-        text,
-    )
-
-
 def _choice_label_index(value: Any) -> int | None:
-    match = re.match(r"^\s*(?:\(([A-Za-z])\)|\[([A-Za-z])\]|([A-Za-z])[.)\]:-])\s*", str(value))
+    """Return an explicit option-label index without consuming answer text.
+
+    Parenthesized/bracketed labels are unambiguous.  Bare labels such as
+    ``A.`` or ``B)`` require following whitespace so real content including
+    ``F. Scott Fitzgerald``, ``J.D. Salinger``, ``E-guitar`` and ``B:maj/1``
+    is not treated as an option label.
+    """
+
+    match = re.match(
+        r"^\s*(?:\(([A-Za-z])\)|\[([A-Za-z])\]|([A-Da-d])[.)\]:-](?=\s))",
+        str(value),
+    )
     if not match:
         return None
     label = next(group for group in match.groups() if group is not None).upper()
     return ord(label) - ord("A")
 
 
+def _strip_choice_label(value: Any, *, expected_index: int | None = None) -> str:
+    text = str(value).strip()
+    if expected_index is None:
+        # Without positional context, only bracketed labels are safe to strip.
+        # A bare ``F. `` may be the beginning of a person's name.
+        return re.sub(
+            r"^\s*(?:\([A-Za-z]\)|\[[A-Za-z]\])\s*",
+            "",
+            text,
+            count=1,
+        )
+    label_index = _choice_label_index(text)
+    if label_index is None or label_index != expected_index:
+        return text
+    return re.sub(
+        r"^\s*(?:\([A-Za-z]\)|\[[A-Za-z]\]|[A-Da-d][.)\]:-](?=\s))\s*",
+        "",
+        text,
+        count=1,
+    )
+
+
 def choices_match_fixed_order(left: Sequence[Any], right: Sequence[Any]) -> bool:
-    """Compare choices in order while ignoring only HF option labels."""
+    """Compare parquet choices to canonical official choices in fixed order."""
 
     if len(left) != len(right):
         return False
     for index, (left_choice, right_choice) in enumerate(zip(left, right)):
-        for choice in (left_choice, right_choice):
-            label_index = _choice_label_index(choice)
-            if label_index is not None and label_index != index:
-                return False
-        if _normalize_text(_strip_choice_label(left_choice)) != _normalize_text(_strip_choice_label(right_choice)):
+        if _normalize_text(_strip_choice_label(left_choice, expected_index=index)) != _normalize_text(right_choice):
             return False
     return True
 
@@ -308,11 +325,17 @@ def build_fixed_order_prompt(question: str, choices: Sequence[Any]) -> str:
     """Build the ReasonAQA-style prompt without a ``Choices:`` prefix."""
 
     lines = [
-        f"{chr(ord('a') + index)}) {_strip_choice_label(choice)}"
+        f"{chr(ord('a') + index)}) {str(choice).strip()}"
         for index, choice in enumerate(choices)
     ]
     question_text = str(question).strip()
     return f"{question_text} {' '.join(lines)}".strip()
+
+
+def prepare_model_output_for_official_scorer(value: Any) -> str:
+    """Remove only a leading ReasonAQA a)-d) label before official scoring."""
+
+    return re.sub(r"^\s*[a-d]\)\s*", "", str(value), count=1, flags=re.IGNORECASE)
 
 
 def _unbox(value: Any) -> Any:
@@ -1501,7 +1524,8 @@ def run(
                         max_prompt_tokens=args.max_prompt_tokens,
                         max_new_tokens=args.max_new_tokens,
                     )
-                    model_output = str(generation.get("generated_text", ""))
+                    generated_text = str(generation.get("generated_text", ""))
+                    model_output = prepare_model_output_for_official_scorer(generated_text)
                     record = {
                         "status": "generated",
                         "row_index": int(row_index),

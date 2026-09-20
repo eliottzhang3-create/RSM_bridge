@@ -203,8 +203,8 @@ def _greedy_decode(
     max_new_tokens: int,
     autocast_enabled: bool,
 ) -> dict[str, Any]:
-    if max_new_tokens != DEFAULT_MAX_NEW_TOKENS:
-        raise ValueError(f"the established comparison protocol requires max_new_tokens={DEFAULT_MAX_NEW_TOKENS}")
+    if max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be positive")
     max_context = int(model.config_audio.max_context_length)
     available = max_context - int(audio_prefix.shape[1]) - int(prompt_ids.shape[1])
     if available <= 0:

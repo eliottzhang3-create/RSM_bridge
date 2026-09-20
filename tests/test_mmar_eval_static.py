@@ -73,9 +73,9 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
         self.assertEqual([item["model_prediction"] for item in predictions], ["", "b) b"])
         self.assertTrue(all("answer_prediction" not in item for item in predictions))
 
-    def test_raw_generation_is_forwarded_to_detected_official_key(self) -> None:
+    def test_leading_abcd_label_is_removed_for_detected_official_key(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
-        self.assertIn('official_prediction = str(generation.get("generated_text", ""))', source)
+        self.assertIn("prepare_model_output_for_official_scorer", source)
         self.assertIn('report["official_evaluation"]["prediction_key"] = prediction_key', source)
         self.assertNotIn("parse_model_output", source)
         self.assertNotIn("selected_option", source)
@@ -207,7 +207,8 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
         self.assertIn("-g 1", submit)
         self.assertIn("MMAR-meta.json", submit)
         self.assertIn("code/evaluation.py", submit)
-        self.assertIn("--max-prompt-tokens 622", submit)
+        self.assertIn("--max-prompt-tokens 606", submit)
+        self.assertIn("--max-new-tokens 32", submit)
 
 
 if __name__ == "__main__":

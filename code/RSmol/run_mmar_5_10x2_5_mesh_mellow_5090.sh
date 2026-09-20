@@ -27,8 +27,8 @@ ARGS=(
   --htsat-checkpoint "$HTSAT_CHECKPOINT"
   --mellow-root "$MELLOW_ROOT"
   --output-dir "$OUTPUT_DIR"
-  --max-prompt-tokens 622
-  --max-new-tokens 16
+  --max-prompt-tokens 606
+  --max-new-tokens 32
   --dtype bf16
   --run-official-evaluation
 )

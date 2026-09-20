@@ -30,12 +30,17 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.module = load_module()
 
-    def test_model_output_preparser_is_absent(self) -> None:
-        self.assertFalse(hasattr(self.module, "parse_model_output"))
+    def test_model_output_preparser_only_removes_leading_abcd_label(self) -> None:
+        self.assertTrue(hasattr(self.module, "prepare_model_output_for_official_scorer"))
         source = SOURCE.read_text(encoding="utf-8")
         self.assertNotIn("selected_option", source)
         self.assertNotIn("parse_method", source)
-        self.assertIn('model_output = str(generation.get("generated_text", ""))', source)
+        self.assertIn("prepare_model_output_for_official_scorer", source)
+        prepare = self.module.prepare_model_output_for_official_scorer
+        self.assertEqual(prepare("a) Wind and stream"), "Wind and stream")
+        self.assertEqual(prepare("  D) answer"), "answer")
+        self.assertEqual(prepare("e) fifth choice"), "e) fifth choice")
+        self.assertEqual(prepare("The answer is a) first"), "The answer is a) first")
 
     def test_fixed_order_prompt_and_choice_alignment(self) -> None:
         prompt = self.module.build_fixed_order_prompt("Which one?", ["first", "second"])
@@ -49,6 +54,21 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
         self.assertTrue(self.module.choices_match_fixed_order(["(A) first", "B. second"], ["first", "second"]))
         self.assertFalse(self.module.choices_match_fixed_order(["second", "first"], ["first", "second"]))
         self.assertFalse(self.module.choices_match_fixed_order(["(B) first", "A. second"], ["first", "second"]))
+
+    def test_real_choice_prefixes_are_not_misread_as_labels(self) -> None:
+        choices = [
+            "F. Scott Fitzgerald",
+            "J.D. Salinger",
+            "E-guitar",
+            "E-bass",
+            "B:maj/1",
+        ]
+        self.assertTrue(self.module.choices_match_fixed_order(choices, choices))
+        self.assertEqual(self.module._strip_choice_label("F. Scott Fitzgerald"), "F. Scott Fitzgerald")
+        self.assertEqual(self.module._strip_choice_label("E-guitar"), "E-guitar")
+        self.assertEqual(self.module._strip_choice_label("B:maj/1"), "B:maj/1")
+        labeled = [f"({chr(ord('A') + index)}) {choice}" for index, choice in enumerate(choices)]
+        self.assertTrue(self.module.choices_match_fixed_order(labeled, choices))
 
     def test_metadata_row_uses_other_attributes_id(self) -> None:
         sample_id = "row-1"
@@ -305,6 +325,7 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
         self.assertIn("-g 1", submit)
         self.assertIn("test_mini.parquet", submit)
         self.assertIn("mmau-test-mini.json", submit)
+        self.assertIn("--max-new-tokens 32", submit)
 
     def test_smoke_output_can_be_promoted_to_full(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -319,7 +340,7 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
                 htsat_checkpoint=Path("/models/htsat.ckpt"),
                 mellow_root=Path("/code/mellow"),
                 max_prompt_tokens=129,
-                max_new_tokens=16,
+                max_new_tokens=32,
             )
             self.module._ensure_output_dir(types.SimpleNamespace(mode="smoke", **common))
             self.module._ensure_output_dir(types.SimpleNamespace(mode="full", **common))

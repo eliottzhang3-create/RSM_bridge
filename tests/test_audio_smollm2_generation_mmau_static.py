@@ -43,7 +43,7 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
         self.assertIn("partition_formal_eos_v2_10epochs_20260918", evaluator)
         self.assertIn("checkpoint-037810", evaluator)
         self.assertIn("audio_smollm2_partition_config.json", evaluator)
-        self.assertIn("official_raw_generated_text_v1", evaluator + (SCRIPT_DIR / "evaluate_mmau_test_mini_5_10x2_5_mesh_mellow.py").read_text(encoding="utf-8"))
+        self.assertIn("official_generated_text_strip_leading_abcd_label_v2", evaluator + (SCRIPT_DIR / "evaluate_mmau_test_mini_5_10x2_5_mesh_mellow.py").read_text(encoding="utf-8"))
         self.assertIn("evaluate_mmau_test_mini_5_10x2_5_mesh_mellow", evaluator)
         self.assertNotIn("generate_audio_checkpoint_reasonaqa", generation)
 
@@ -79,13 +79,13 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
     def test_generation_args_lock_protocol(self) -> None:
         args = self.evaluator.parse_args(["--output-dir", "/tmp/mmau", "--mode", "full"])
         self.assertEqual(args.mode, "full")
-        self.assertEqual(args.max_new_tokens, 16)
+        self.assertEqual(args.max_new_tokens, 32)
         self.assertEqual(args.max_prompt_tokens, 129)
         self.assertEqual(args.checkpoint, Path(self.evaluator.DEFAULT_CHECKPOINT))
         with self.assertRaises(SystemExit):
             self.evaluator.parse_args(["--output-dir", "/tmp/mmau", "--max-new-tokens", "5"])
 
-    def test_prompt_and_raw_prediction_match_current_official_contract(self) -> None:
+    def test_prompt_and_scorer_prediction_match_current_official_contract(self) -> None:
         prompt = self.evaluator.build_fixed_order_prompt("Which one?", ["first", "second"])
         self.assertEqual(prompt, "Which one? a) first b) second")
         self.assertNotIn("Choices:", prompt)
@@ -129,6 +129,8 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
         self.assertIn("checkpoint-037810", eval_submit + mmar_submit)
         self.assertIn("audio_smollm2", gen_submit + eval_submit)
         self.assertNotIn("5_10x2_5_mesh_mellow", gen_submit + eval_submit)
+        self.assertIn("--max-new-tokens 32", eval_submit)
+        self.assertIn("--max-new-tokens 32", mmar_submit)
 
     def test_mmar_adapter_uses_the_same_baseline_backend_and_official_protocol(self) -> None:
         text = MMAR.read_text(encoding="utf-8")
