@@ -91,13 +91,13 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
 
     def test_fixed_order_prompt_and_choice_alignment(self) -> None:
         prompt = self.module.build_fixed_order_prompt("Which one?", ["first", "second"])
-        self.assertIn("(A) first", prompt)
-        self.assertIn("(B) second", prompt)
+        self.assertIn("a) first", prompt)
+        self.assertIn("b) second", prompt)
         self.assertEqual(
             prompt,
-            "Answer the following multiple-choice question based on the audio. Which one? "
-            "Choices: (A) first (B) second",
+            "Which one? a) first b) second",
         )
+        self.assertNotIn("Choices:", prompt)
         self.assertTrue(self.module.choices_match_fixed_order(["(A) first", "B. second"], ["first", "second"]))
         self.assertFalse(self.module.choices_match_fixed_order(["second", "first"], ["first", "second"]))
         self.assertFalse(self.module.choices_match_fixed_order(["(B) first", "A. second"], ["first", "second"]))
@@ -327,6 +327,7 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             "MMAU-v05.15.25",
             "MMAU_METADATA_CANONICAL_SHA256",
             "compact_single_audio_prefix",
+            "reasonaqa_lowercase_labels_no_choices_prefix_v1",
         ):
             self.assertIn(marker, text)
         self.assertIn('"permutation_majority_vote": False', text)

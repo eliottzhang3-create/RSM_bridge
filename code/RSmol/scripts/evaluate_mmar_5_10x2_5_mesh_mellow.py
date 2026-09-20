@@ -327,7 +327,8 @@ def _ensure_output_dir(args: argparse.Namespace) -> None:
         "mellow_root": str(args.mellow_root),
         "max_prompt_tokens": int(args.max_prompt_tokens),
         "max_new_tokens": int(args.max_new_tokens),
-        "protocol": "official order; compact single-audio prefix; single cuda:0; bf16; greedy",
+        "prompt_format": common.PROMPT_FORMAT,
+        "protocol": "official order; ReasonAQA lowercase labels; compact single-audio prefix; single cuda:0; bf16; greedy",
     }
     if config_path.is_file():
         existing = json.loads(config_path.read_text(encoding="utf-8"))
@@ -392,6 +393,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "protocol": {
             "metadata_order": "official MMAR order",
             "choice_order": "official fixed order",
+            "prompt_format": common.PROMPT_FORMAT,
             "shuffle": False,
             "mode_limit": SMOKE_ROWS if args.mode == "smoke" else None,
             "audio_sample_rate": common.DEFAULT_SAMPLE_RATE,

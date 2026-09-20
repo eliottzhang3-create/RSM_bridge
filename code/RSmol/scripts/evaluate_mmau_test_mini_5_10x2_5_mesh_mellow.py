@@ -65,6 +65,7 @@ MMAU_OFFICIAL_COMMIT = "110127f54c0dfba3faa5ec9feee4a7e4148679c5"
 MMAU_METADATA_SHA256 = "9f18fda99f8dbc2bc5ecd6323fb5063309f54969810b5c6f1caeb3b8d904cf1c"
 MMAU_METADATA_CANONICAL_SHA256 = "04c6b38739179ec7f3044b05435f5a734970f774ac60c86b00ac5a65ee439859"
 MMAU_EVALUATION_SHA256 = "85480e1c0dfe8ee1406e9c6e598eff0dca9e0216701f076faf69081c6aab1558"
+PROMPT_FORMAT = "reasonaqa_lowercase_labels_no_choices_prefix_v1"
 
 
 class RowSkip(Exception):
@@ -373,13 +374,14 @@ def choices_match_fixed_order(left: Sequence[Any], right: Sequence[Any]) -> bool
 
 
 def build_fixed_order_prompt(question: str, choices: Sequence[Any]) -> str:
-    """Build the single stable prompt used for every MMAU row."""
+    """Build the ReasonAQA-style prompt without a ``Choices:`` prefix."""
 
     lines = [
-        f"({chr(ord('A') + index)}) {_strip_choice_label(choice)}"
+        f"{chr(ord('a') + index)}) {_strip_choice_label(choice)}"
         for index, choice in enumerate(choices)
     ]
-    return "Answer the following multiple-choice question based on the audio. " + str(question).strip() + " Choices: " + " ".join(lines)
+    question_text = str(question).strip()
+    return f"{question_text} {' '.join(lines)}".strip()
 
 
 def _unbox(value: Any) -> Any:
@@ -1366,7 +1368,8 @@ def _ensure_output_dir(args: argparse.Namespace) -> None:
         "mellow_root": str(args.mellow_root),
         "max_prompt_tokens": int(args.max_prompt_tokens),
         "max_new_tokens": int(args.max_new_tokens),
-        "protocol": "fixed-order; parquet physical order; single cuda:0; bf16; no permutation vote",
+        "prompt_format": PROMPT_FORMAT,
+        "protocol": "fixed-order; ReasonAQA lowercase labels; parquet physical order; single cuda:0; bf16; no permutation vote",
     }
     if config_path.is_file():
         existing = json.loads(config_path.read_text(encoding="utf-8"))
@@ -1458,6 +1461,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "shuffle": False,
             "mode_limit": SMOKE_ROWS if args.mode == "smoke" else None,
             "choice_order": "official JSON fixed order",
+            "prompt_format": PROMPT_FORMAT,
             "permutation_majority_vote": False,
             "audio_sample_rate": DEFAULT_SAMPLE_RATE,
             "audio_seconds": DEFAULT_AUDIO_SECONDS,

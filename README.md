@@ -579,7 +579,7 @@ code/RSmol/run_audio_checkpoint_reasonaqa_generation_3090.sh
 
 MeSH 音频 MMAU test mini 已升级到当前 partition-v2 checkpoint，并调用官方 `evaluation.py --input ...`。入口在运行前严格审计 `MMAU-v05.15.25` 的 1000 条 metadata、ID/任务/难度分布、metadata 与 scorer SHA256；模型侧严格核对 compact 130-token 单音频 prefix、768 context、checkpoint completion marker 与 Mellow/HTSAT provenance。正式结果固定保留官方 1000 条分母，任何缺音频、字段错配或推理 skip 都会阻止官方计分。
 
-answer-EOS v2 模型的正常输出是 `c) It is plausible<|endoftext|>`；解码后的 `generated_text` 是 `c) It is plausible`。因此 parser 只接受回答开头的合法选项标签，或与某个选项完全相等的文本，不再从解释、重复题干或任意子串中猜答案。官方 MMAU 文件写入 `model_output`，原始生成同时保存在 append-only JSONL 中。
+answer-EOS v2 模型的正常输出是 `c) It is plausible<|endoftext|>`；解码后的 `generated_text` 是 `c) It is plausible`。MMAU/MMAR prompt 已与 ReasonAQA 对齐为 `问题 a) ... b) ... c) ...`，不添加 `Choices:`；MMAR 的五、六选项自动使用 `e)`、`f)`。parser 只接受回答开头的合法选项标签，或与某个选项完全相等的文本，不再从解释、重复题干或任意子串中猜答案。官方 MMAU 文件写入 `model_output`，原始生成同时保存在 append-only JSONL 中。
 
 当前 MeSH 文件：
 
@@ -593,7 +593,7 @@ code/RSmol/run_mmau_test_mini_5_10x2_5_mesh_mellow_5090.sh
 
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
-EVAL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/mmau_test_mini_checkpoint_037810
+EVAL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/mmau_test_mini_checkpoint_037810_reasonaqa_prompt_v1
 
 RSMOL_MMAU_MODE=smoke RSMOL_MMAU_OUTPUT_DIR="$EVAL_DIR" \
   bash run_mmau_test_mini_5_10x2_5_mesh_mellow_5090.sh
@@ -617,7 +617,7 @@ code/RSmol/run_mmar_5_10x2_5_mesh_mellow_5090.sh
 
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
-EVAL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/mmar_checkpoint_037810
+EVAL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/mmar_checkpoint_037810_reasonaqa_prompt_v1
 
 RSMOL_MMAR_MODE=smoke RSMOL_MMAR_OUTPUT_DIR="$EVAL_DIR" \
   bash run_mmar_5_10x2_5_mesh_mellow_5090.sh

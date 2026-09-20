@@ -82,6 +82,17 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
             "",
         )
 
+    def test_reasonaqa_prompt_supports_six_mmar_choices_without_prefix(self) -> None:
+        prompt = self.module.common.build_fixed_order_prompt(
+            "What is heard?",
+            ["one", "two", "three", "four", "five", "six"],
+        )
+        self.assertEqual(
+            prompt,
+            "What is heard? a) one b) two c) three d) four e) five f) six",
+        )
+        self.assertNotIn("Choices:", prompt)
+
     def test_smoke_directory_can_resume_as_full(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -120,6 +131,7 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
             "first 10 seconds",
             "compact single-audio prefix",
             "official MMAR order",
+            "prompt_format",
         ):
             self.assertIn(marker, source)
         self.assertIn("checkpoint-037810", self.module.DEFAULT_CHECKPOINT)
