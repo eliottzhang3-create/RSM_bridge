@@ -61,15 +61,22 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
             {"id": "1", "answer": "b", "choices": ["a", "b"]},
         ]
         state = [
-            {"id": "1", "row_index": 1, "status": "generated", "answer_prediction": "b) b"},
+            {"id": "1", "row_index": 1, "status": "generated", "official_prediction": "b) b"},
         ]
-        predictions = self.module.materialize_predictions(state, official, full=True)
+        predictions = self.module.materialize_predictions(
+            state,
+            official,
+            full=True,
+            output_key="model_prediction",
+        )
         self.assertEqual([item["id"] for item in predictions], ["0", "1"])
-        self.assertEqual([item["answer_prediction"] for item in predictions], ["", "b) b"])
+        self.assertEqual([item["model_prediction"] for item in predictions], ["", "b) b"])
+        self.assertTrue(all("answer_prediction" not in item for item in predictions))
 
-    def test_raw_generation_is_forwarded_to_official_answer_prediction(self) -> None:
+    def test_raw_generation_is_forwarded_to_detected_official_key(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
-        self.assertIn('answer_prediction = str(generation.get("generated_text", ""))', source)
+        self.assertIn('official_prediction = str(generation.get("generated_text", ""))', source)
+        self.assertIn('report["official_evaluation"]["prediction_key"] = prediction_key', source)
         self.assertNotIn("parse_model_output", source)
         self.assertNotIn("selected_option", source)
 
@@ -89,25 +96,60 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
         )
 
     def test_official_scorer_is_audited_by_semantics_not_only_bytes(self) -> None:
-        source = (
-            "import re\n"
-            "def string_match(answer, prediction, choices):\n"
-            "    answer_tokens = set()\n"
-            "    prediction_tokens = set()\n"
-            "    incorrect_tokens = set()\n"
-            "    cond1 = answer_tokens.issubset(prediction_tokens)\n"
-            "    cond2 = prediction_tokens.isdisjoint(incorrect_tokens)\n"
-            "    return cond1 and cond2\n"
-            "output_key = 'answer_prediction'\n"
-            "modality_metrics = {}\n"
-            "category_metrics = {}\n"
-            "print('Total Accuracy:')\n"
-        )
+        for output_key in ("answer_prediction", "model_prediction"):
+            source = (
+                "import re\n"
+                "def string_match(answer, prediction, choices):\n"
+                "    answer_tokens = set()\n"
+                "    prediction_tokens = set()\n"
+                "    incorrect_tokens = set()\n"
+                "    cond1 = answer_tokens.issubset(prediction_tokens)\n"
+                "    cond2 = prediction_tokens.isdisjoint(incorrect_tokens)\n"
+                "    return cond1 and cond2\n"
+                f"output_key = {output_key!r}\n"
+                "modality_metrics = {}\n"
+                "category_metrics = {}\n"
+                "print('Total Accuracy:')\n"
+            )
+            with tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "evaluation.py"
+                path.write_text(source, encoding="utf-8")
+                audit = self.module._audit_mmar_scorer_semantics(path)
+            self.assertEqual(audit["status"], "PASS")
+            self.assertEqual(audit["output_key"], output_key)
+
+    def test_hf_model_prediction_file_is_consumed_by_official_runner(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "evaluation.py"
-            path.write_text(source, encoding="utf-8")
-            audit = self.module._audit_mmar_scorer_semantics(path)
-        self.assertEqual(audit["status"], "PASS")
+            root = Path(temporary)
+            scorer = root / "evaluation.py"
+            scorer.write_text(
+                "import argparse, json\n"
+                "parser = argparse.ArgumentParser()\n"
+                "parser.add_argument('--input', required=True)\n"
+                "args = parser.parse_args()\n"
+                "records = json.load(open(args.input, encoding='utf-8'))\n"
+                "assert all('model_prediction' in item for item in records)\n"
+                "print(f'Total Accuracy: 0.00% over {len(records)} samples')\n",
+                encoding="utf-8",
+            )
+            predictions = [
+                {"id": "0", "model_prediction": "a) one"},
+                {"id": "1", "model_prediction": "b) two"},
+            ]
+            (root / "predictions_official.json").write_text(
+                json.dumps(predictions),
+                encoding="utf-8",
+            )
+            result = self.module._run_official_evaluation(
+                SimpleNamespace(
+                    output_dir=root,
+                    evaluation_script=scorer,
+                    run_official_evaluation=True,
+                ),
+                predictions,
+            )
+            self.assertEqual(result["status"], "PASS")
+            self.assertEqual(result["reported_total"], 2)
 
     def test_smoke_directory_can_resume_as_full(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -141,7 +183,7 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
     def test_source_and_wrappers_lock_official_contract(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
         for marker in (
-            "answer_prediction",
+            "detected_from_official_evaluation.py",
             "MMAR_CORE_CANONICAL_SHA256",
             "MMAR_ID_SET_SHA256",
             "MMAR_EVALUATION_SHA256",

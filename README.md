@@ -579,7 +579,7 @@ code/RSmol/run_audio_checkpoint_reasonaqa_generation_3090.sh
 
 MeSH 音频 MMAU test mini 已升级到当前 partition-v2 checkpoint，并调用官方 `evaluation.py --input ...`。入口在运行前严格审计 `MMAU-v05.15.25` 的 1000 条 metadata、ID/任务/难度分布、metadata 与 scorer SHA256；模型侧严格核对 compact 130-token 单音频 prefix、768 context、checkpoint completion marker 与 Mellow/HTSAT provenance。正式结果固定保留官方 1000 条分母：完整遍历后的逐样本 skip 会写入空 `model_output` 并由官方 scorer 计错，同时在 report 中保留原因；只有 metadata/parquet 未完整遍历、终态不足 1000 条或其他全局故障才会阻止官方计分。
 
-answer-EOS v2 模型的正常输出是 `c) It is plausible<|endoftext|>`；解码后的 `generated_text` 是 `c) It is plausible`。MMAU/MMAR prompt 已与 ReasonAQA 对齐为 `问题 a) ... b) ... c) ...`，不添加 `Choices:`；MMAR 的五、六选项自动使用 `e)`、`f)`。本地不再做任何选项识别或答案预解析：完整 `generated_text` 原样写入 MMAU 的 `model_output` 或 MMAR 的 `answer_prediction`，全部匹配与评分交给官方 `evaluation.py`；带特殊 token 的 `generated_text_raw` 只保存在 append-only 审计 JSONL 中。
+answer-EOS v2 模型的正常输出是 `c) It is plausible<|endoftext|>`；解码后的 `generated_text` 是 `c) It is plausible`。MMAU/MMAR prompt 已与 ReasonAQA 对齐为 `问题 a) ... b) ... c) ...`，不添加 `Choices:`；MMAR 的五、六选项自动使用 `e)`、`f)`。本地不再做任何选项识别或答案预解析：完整 `generated_text` 原样写入 MMAU 的 `model_output`；MMAR 则从实际官方 `evaluation.py` 自动读取 `output_key`（HF 包为 `model_prediction`，GitHub 当前版为 `answer_prediction`）后写入对应字段。全部匹配与评分交给官方 scorer；带特殊 token 的 `generated_text_raw` 只保存在 append-only 审计 JSONL 中。
 
 当前 MeSH 文件：
 
@@ -605,7 +605,7 @@ RSMOL_MMAU_MODE=full RSMOL_MMAU_OUTPUT_DIR="$EVAL_DIR" \
 
 ### 8.3 MMAR
 
-MMAR 使用 Hugging Face 下载的 `MMAR-meta.json`、已解压的 `mmar-audio/audio/*.wav` 和下载包内官方 `code/evaluation.py`。HF JSON 与 GitHub JSONL 的记录顺序及 scorer 文件字节并不完全相同，因此入口严格审计 1000 个官方 ID 的顺序无关集合 hash、modality/category 分布、全部音频存在性、官方 scorer 的 `answer_prediction`/`string_match` 评分语义，并将两种发布载体的 canonical/字节 hash 作为 provenance；不会再因官方 HF/GitHub 的排序、空干扰选项或文件字节差异而拒绝运行。音频统一为 32 kHz，短音频补零、长音频取开头 10 秒；选择顺序不打乱。输出保持 HF metadata 顺序和完整记录并新增 `answer_prediction`，由下载包中的官方 scorer 原样计分。
+MMAR 使用 Hugging Face 下载的 `MMAR-meta.json`、已解压的 `mmar-audio/audio/*.wav` 和下载包内官方 `code/evaluation.py`。HF JSON 与 GitHub JSONL 的记录顺序、scorer 文件字节及预测字段名并不完全相同，因此入口严格审计 1000 个官方 ID 的顺序无关集合 hash、modality/category 分布、全部音频存在性和官方 `string_match` 评分语义，并从 scorer AST 自动读取唯一的 `output_key`；不会再因官方 HF/GitHub 的排序、空干扰选项、文件字节或 `model_prediction`/`answer_prediction` 命名差异而拒绝运行。音频统一为 32 kHz，短音频补零、长音频取开头 10 秒；选择顺序不打乱。输出保持 HF metadata 顺序和完整记录，由下载包中的官方 scorer 原样计分。
 
 ```text
 code/RSmol/scripts/evaluate_mmar_5_10x2_5_mesh_mellow.py
@@ -627,7 +627,7 @@ RSMOL_MMAR_MODE=full RSMOL_MMAR_OUTPUT_DIR="$EVAL_DIR" \
   bash run_mmar_5_10x2_5_mesh_mellow_5090.sh
 ```
 
-两套评测均写出 `run_config.json`、`progress.jsonl`、`raw_generations.jsonl`、`skipped.jsonl`、`smoke_first5.jsonl`、`official_evaluation.txt` 与 `evaluation_report.json`。MMAU 的官方输入是 `predictions_fixed_order.json`；MMAR 的官方输入是 `predictions_answer_prediction.json`。若 full 在 scorer 前发生全局故障，代码会覆盖 smoke 留下的 `official_evaluation.txt` 并写入阻断原因，不再保留容易误认成 full 分数的 5 条旧日志。新会话仍应先用以下命令核实文件没有改名：
+两套评测均写出 `run_config.json`、`progress.jsonl`、`raw_generations.jsonl`、`skipped.jsonl`、`smoke_first5.jsonl`、`official_evaluation.txt` 与 `evaluation_report.json`。MMAU 的官方输入是 `predictions_fixed_order.json`；MMAR 的官方输入是动态字段名的 `predictions_official.json`。若 full 在 scorer 前发生全局故障，代码会覆盖 smoke 留下的 `official_evaluation.txt` 并写入阻断原因，不再保留容易误认成 full 分数的 5 条旧日志。新会话仍应先用以下命令核实文件没有改名：
 
 ```bash
 rg --files code/RSmol | rg 'mmau|MMAU|mmar|MMAR'

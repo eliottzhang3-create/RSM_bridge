@@ -108,8 +108,13 @@ def _audit_mmar_scorer_semantics(path: Path) -> dict[str, Any]:
         and isinstance(node.value, ast.Constant)
         and isinstance(node.value.value, str)
     }
-    if "answer_prediction" not in output_keys:
-        failures.append(f"evaluation.py output_key differs: {sorted(output_keys)}")
+    supported_output_keys = {"answer_prediction", "model_prediction"}
+    if len(output_keys) != 1 or not output_keys.issubset(supported_output_keys):
+        failures.append(
+            "evaluation.py must define exactly one supported output_key: "
+            f"actual={sorted(output_keys)} supported={sorted(supported_output_keys)}"
+        )
+    output_key = next(iter(output_keys)) if len(output_keys) == 1 else None
     for marker in (
         "answer_tokens.issubset(prediction_tokens)",
         "prediction_tokens.isdisjoint(incorrect_tokens)",
@@ -119,7 +124,11 @@ def _audit_mmar_scorer_semantics(path: Path) -> dict[str, Any]:
     ):
         if marker not in text:
             failures.append(f"evaluation.py lacks official scoring marker: {marker}")
-    return {"status": "PASS" if not failures else "FAIL", "failures": failures}
+    return {
+        "status": "PASS" if not failures else "FAIL",
+        "output_key": output_key,
+        "failures": failures,
+    }
 
 
 def load_mmar_records(path: Path) -> list[dict[str, Any]]:
@@ -318,6 +327,7 @@ def materialize_predictions(
     official_records: Sequence[Mapping[str, Any]],
     *,
     full: bool,
+    output_key: str,
 ) -> list[dict[str, Any]]:
     by_id: dict[str, Mapping[str, Any]] = {}
     for item in state:
@@ -332,7 +342,7 @@ def materialize_predictions(
     for official in source:
         item = by_id.get(_record_id(official))
         prediction = copy.deepcopy(dict(official))
-        prediction["answer_prediction"] = "" if item is None else str(item.get("answer_prediction", ""))
+        prediction[output_key] = "" if item is None else str(item.get("official_prediction", ""))
         predictions.append(prediction)
     return predictions
 
@@ -343,9 +353,15 @@ def _write_outputs(
     official_records: Sequence[Mapping[str, Any]],
     *,
     full: bool,
+    output_key: str,
 ) -> list[dict[str, Any]]:
-    predictions = materialize_predictions(list(store.state.values()), official_records, full=full)
-    common._write_json(output_dir / "predictions_answer_prediction.json", predictions)
+    predictions = materialize_predictions(
+        list(store.state.values()),
+        official_records,
+        full=full,
+        output_key=output_key,
+    )
+    common._write_json(output_dir / "predictions_official.json", predictions)
     smoke = sorted(
         (item for item in store.state.values() if int(item.get("row_index", -1)) < SMOKE_ROWS),
         key=lambda item: int(item.get("row_index", -1)),
@@ -370,7 +386,7 @@ def _run_official_evaluation(args: argparse.Namespace, predictions: Sequence[Map
         sys.executable,
         str(args.evaluation_script),
         "--input",
-        str(args.output_dir / "predictions_answer_prediction.json"),
+        str(args.output_dir / "predictions_official.json"),
     ]
     completed = subprocess.run(
         command,
@@ -502,7 +518,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "max_new_tokens": common.DEFAULT_MAX_NEW_TOKENS,
             "do_sample": False,
             "use_cache": False,
-            "prediction_key": "answer_prediction",
+            "prediction_key": "detected_from_official_evaluation.py",
         },
         "records": {},
         "resumption": {},
@@ -512,6 +528,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "fatal_error": None,
     }
     records: list[dict[str, Any]] = []
+    prediction_key = "answer_prediction"
     with common.ProgressStore(args.output_dir) as store:
         report["resumption"]["recovered_jsonl_errors"] = store.load_errors
         try:
@@ -537,6 +554,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "official MMAR artifact audit failed: "
                     f"{report['official_artifact_audit']['failures']}"
                 )
+            prediction_key = str(
+                report["official_artifact_audit"]["evaluation_semantic_audit"]["output_key"]
+            )
+            if prediction_key not in {"answer_prediction", "model_prediction"}:
+                raise RuntimeError(f"unsupported MMAR official prediction key: {prediction_key!r}")
+            report["protocol"]["prediction_key"] = prediction_key
             model, tokenizer, device, checkpoint_config = common._load_runtime_model(args)
             limit = SMOKE_ROWS if args.mode == "smoke" else len(records)
             for row_index, official in enumerate(records[:limit]):
@@ -555,7 +578,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         max_prompt_tokens=args.max_prompt_tokens,
                         max_new_tokens=args.max_new_tokens,
                     )
-                    answer_prediction = str(generation.get("generated_text", ""))
+                    official_prediction = str(generation.get("generated_text", ""))
                     record = {
                         "status": "generated",
                         "row_index": row_index,
@@ -565,7 +588,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         "choices": sample["choices"],
                         "prompt": sample["prompt"],
                         "official_record": sample["official_record"],
-                        "answer_prediction": answer_prediction,
+                        "official_prediction": official_prediction,
                         "audio2_reused": True,
                         "single_audio_slot": True,
                         **{key: value for key, value in sample.items() if key.startswith("audio_")},
@@ -578,7 +601,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                                 "row_index": row_index,
                                 "id": sample_id,
                                 "status": record["status"],
-                                "answer_prediction": record["answer_prediction"],
+                                "prediction_key": prediction_key,
+                                "official_prediction": record["official_prediction"],
                                 "generated_text": generation.get("generated_text", ""),
                             },
                             ensure_ascii=False,
@@ -620,6 +644,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 args.output_dir,
                 records,
                 full=args.mode == "full",
+                output_key=prediction_key,
             )
             report["records"].update(common._counts(store))
             report["records"]["official_scoring_denominator"] = len(predictions)
@@ -645,10 +670,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "reasons": report["records"].get("skip_reasons", {}),
                     "detail": (
                         "Every metadata row was visited. Skipped rows retain an empty "
-                        "answer_prediction and are counted as incorrect by the official scorer."
+                        f"{prediction_key} and are counted as incorrect by the official scorer."
                     ),
                 })
             report["official_evaluation"] = _run_official_evaluation(args, predictions)
+            report["official_evaluation"]["prediction_key"] = prediction_key
             report["official_evaluation"]["empty_predictions_from_skips"] = skipped
             report["status"] = "PASS" if report["official_evaluation"]["status"] != "FAILED" else "FAILED"
         except Exception as exc:
@@ -658,6 +684,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 args.output_dir,
                 records,
                 full=args.mode == "full",
+                output_key=prediction_key,
             ) if records else []
             report["records"].update(common._counts(store))
             report["records"]["official_scoring_denominator"] = len(predictions)
