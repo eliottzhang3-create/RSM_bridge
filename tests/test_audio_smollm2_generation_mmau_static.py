@@ -16,6 +16,9 @@ GEN_SUBMIT = ROOT / "code" / "RSmol" / "run_audio_smollm2_checkpoint_reasonaqa_g
 EVAL = SCRIPT_DIR / "evaluate_mmau_test_mini_audio_smollm2.py"
 EVAL_SH = SCRIPT_DIR / "evaluate_mmau_test_mini_audio_smollm2.sh"
 EVAL_SUBMIT = ROOT / "code" / "RSmol" / "run_mmau_test_mini_audio_smollm2_5090.sh"
+MMAR = SCRIPT_DIR / "evaluate_mmar_audio_smollm2.py"
+MMAR_SH = SCRIPT_DIR / "evaluate_mmar_audio_smollm2.sh"
+MMAR_SUBMIT = ROOT / "code" / "RSmol" / "run_mmar_audio_smollm2_5090.sh"
 
 
 def load_eval():
@@ -32,16 +35,16 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
         cls.evaluator = load_eval()
 
     def test_isolated_files_and_defaults(self) -> None:
-        for path in (GEN, GEN_SH, GEN_SUBMIT, EVAL, EVAL_SH, EVAL_SUBMIT):
+        for path in (GEN, GEN_SH, GEN_SUBMIT, EVAL, EVAL_SH, EVAL_SUBMIT, MMAR, MMAR_SH, MMAR_SUBMIT):
             self.assertTrue(path.is_file(), path)
         generation = GEN.read_text(encoding="utf-8")
         evaluator = EVAL.read_text(encoding="utf-8")
         self.assertIn("audio_smollm2_135m_mellow/formal_20260911_v1/checkpoint-011343", generation)
-        self.assertIn("audio_smollm2_135m_mellow/formal_20260911_v1/checkpoint-011343", evaluator)
-        self.assertIn("DEFAULT_MAX_NEW_TOKENS = 16", evaluator)
-        self.assertIn("audio_smollm2_config.json", generation + evaluator)
-        self.assertIn("evaluation_predictions.jsonl", evaluator)
-        self.assertNotIn("evaluate_mmau_test_mini_5_10x2_5_mesh_mellow", evaluator)
+        self.assertIn("partition_formal_eos_v2_10epochs_20260918", evaluator)
+        self.assertIn("checkpoint-037810", evaluator)
+        self.assertIn("audio_smollm2_partition_config.json", evaluator)
+        self.assertIn("official_raw_generated_text_v1", evaluator + (SCRIPT_DIR / "evaluate_mmau_test_mini_5_10x2_5_mesh_mellow.py").read_text(encoding="utf-8"))
+        self.assertIn("evaluate_mmau_test_mini_5_10x2_5_mesh_mellow", evaluator)
         self.assertNotIn("generate_audio_checkpoint_reasonaqa", generation)
 
     def test_standard_architecture_and_prefix_contract(self) -> None:
@@ -62,33 +65,33 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
             "logits_to_keep=1",
             "audio1 + separator + audio2 + separator + prompt + generated_tokens",
         ):
-            self.assertIn(marker, generation + evaluator)
+            if marker != "_audit_saved_checkpoint":
+                self.assertIn(marker, generation + evaluator)
         self.assertIn('"architecture_contract": ORIGINAL_SMOLLM2_CONTRACT', generation)
+        self.assertIn("_audit_partition_checkpoint", evaluator)
+        self.assertIn("compact_single_audio_prefix=True", evaluator)
+        self.assertIn("skip_second_prefix=True", evaluator)
+        self.assertIn("DEFAULT_AUDIO_PREFIX_TOKENS = 130", evaluator)
         self.assertNotIn("write_routers", generation + evaluator)
         self.assertNotIn("read_routers", generation + evaluator)
         self.assertNotIn("model.mesh_model", generation + evaluator)
 
     def test_generation_args_lock_protocol(self) -> None:
-        args = self.evaluator.parse_args(["--output-dir", "/tmp/mmau", "--mode", "formal"])
-        self.assertEqual(args.mode, "formal")
+        args = self.evaluator.parse_args(["--output-dir", "/tmp/mmau", "--mode", "full"])
+        self.assertEqual(args.mode, "full")
         self.assertEqual(args.max_new_tokens, 16)
         self.assertEqual(args.max_prompt_tokens, 129)
+        self.assertEqual(args.checkpoint, Path(self.evaluator.DEFAULT_CHECKPOINT))
         with self.assertRaises(SystemExit):
             self.evaluator.parse_args(["--output-dir", "/tmp/mmau", "--max-new-tokens", "5"])
 
-    def test_prompt_options_and_parser_match_established_contract(self) -> None:
+    def test_prompt_and_raw_prediction_match_current_official_contract(self) -> None:
         prompt = self.evaluator.build_fixed_order_prompt("Which one?", ["first", "second"])
-        self.assertEqual(
-            prompt,
-            "Answer the following multiple-choice question based on the audio. Which one? Choices: (A) first (B) second",
-        )
-        self.assertIn("(A) first", prompt)
-        self.assertIn("(B) second", prompt)
-        result = self.evaluator.parse_model_output(
-            "B) A goat Cd) A birdB) A goat", ["A human", "A goat", "A car", "A bird"]
-        )
-        self.assertEqual(result["selected_option"], "A goat")
-        self.assertEqual(result["parse_method"], "leading_label")
+        self.assertEqual(prompt, "Which one? a) first b) second")
+        self.assertNotIn("Choices:", prompt)
+        evaluator = EVAL.read_text(encoding="utf-8")
+        self.assertNotIn("parse_model_output", evaluator)
+        self.assertIn("run_model_generation=_run_model_generation", evaluator)
 
     def test_official_evaluation_uses_input_and_prediction_field(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -97,7 +100,8 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
             evaluator.write_text(
                 "import argparse, json\n"
                 "p=argparse.ArgumentParser(); p.add_argument('--input', required=True)\n"
-                "a=p.parse_args(); d=json.load(open(a.input)); assert all('model_output' in x for x in d)\n",
+                "a=p.parse_args(); d=json.load(open(a.input)); assert all('model_output' in x for x in d)\n"
+                "print(f'Total Accuracy: 0.00% over {len(d)} samples')\n",
                 encoding="utf-8",
             )
             (output / "predictions_fixed_order.json").write_text("[{\"model_output\": \"A\"}]", encoding="utf-8")
@@ -111,6 +115,7 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
     def test_submit_wrappers_are_isolated(self) -> None:
         gen_submit = GEN_SUBMIT.read_text(encoding="utf-8")
         eval_submit = EVAL_SUBMIT.read_text(encoding="utf-8")
+        mmar_submit = MMAR_SUBMIT.read_text(encoding="utf-8")
         self.assertIn("pdgpu-3090", gen_submit)
         self.assertIn("pdgpu-5090", eval_submit)
         self.assertIn("-g 1", gen_submit)
@@ -118,8 +123,19 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
         self.assertIn("test_mini.parquet", eval_submit)
         self.assertIn("mmau-test-mini.json", eval_submit)
         self.assertIn("evaluation.py", eval_submit)
+        self.assertIn("pdgpu-5090", mmar_submit)
+        self.assertIn("MMAR-meta.json", mmar_submit)
+        self.assertIn("mmar-audio", mmar_submit)
+        self.assertIn("checkpoint-037810", eval_submit + mmar_submit)
         self.assertIn("audio_smollm2", gen_submit + eval_submit)
         self.assertNotIn("5_10x2_5_mesh_mellow", gen_submit + eval_submit)
+
+    def test_mmar_adapter_uses_the_same_baseline_backend_and_official_protocol(self) -> None:
+        text = MMAR.read_text(encoding="utf-8")
+        self.assertIn("smollm2._load_runtime_model", text)
+        self.assertIn("smollm2._run_model_generation", text)
+        self.assertIn("mmar_audio_smollm2_official_accuracy", text)
+        self.assertNotIn("parse_model_output", text)
 
 
 if __name__ == "__main__":

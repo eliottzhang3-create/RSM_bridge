@@ -635,7 +635,7 @@ rg --files code/RSmol | rg 'mmau|MMAU|mmar|MMAR'
 
 ### 8.4 原始 SmolLM2 音频基线
 
-当前新训练入口（代码就绪，尚无远程 PASS）：
+当前 partition-v2 训练入口：
 
 ```text
 code/RSmol/scripts/train_audio_partitioned_smollm2_135m_mellow_ddp.py
@@ -646,6 +646,33 @@ code/RSmol/run_audio_smollm2_135m_mellow_formal_3090.sh
 
 训练合同为 `smollm2_component_partitions6_rank_ram_compact_audio_answer_eos_v2`。除文本 backbone 是原始 30 个独立物理层的 SmolLM2-135M、没有 MeSH router/memory 外，六分区数据生命周期、130/260 compact prefix、answer EOS、batch/优化器/LR、20+2 smoke、严格内存释放、checkpoint/resume 和 10-epoch 正式配置均与当前 MeSH 主线一致。正式训练同样必须由本路线两个真实 PASS smoke report 放行。
 
+当前 MMAU/MMAR 对比评测 checkpoint：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/
+partition_formal_eos_v2_10epochs_20260918/checkpoint-037810
+```
+
+基线评测与 MeSH 评测共享同一套官方数据审计、ReasonAQA 小写选项 prompt、原始 `generated_text` 直传、完整官方分母和 append-only resume 协议；模型后端独立审计标准 30 层 SmolLM2 partition-v2 artifact，并构造 130-token 单音频 compact prefix。两个提交入口均使用 `pdgpu-5090`：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+
+MMAU_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/mmau_test_mini_checkpoint_037810_reasonaqa_prompt_raw_v1
+RSMOL_MMAU_MODE=smoke RSMOL_MMAU_SMOLLM2_OUTPUT_DIR="$MMAU_DIR" \
+  bash run_mmau_test_mini_audio_smollm2_5090.sh
+# smoke PASS 后复用同一目录续跑 1000 条
+RSMOL_MMAU_MODE=full RSMOL_MMAU_SMOLLM2_OUTPUT_DIR="$MMAU_DIR" \
+  bash run_mmau_test_mini_audio_smollm2_5090.sh
+
+MMAR_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/mmar_checkpoint_037810_reasonaqa_prompt_raw_v1
+RSMOL_MMAR_MODE=smoke RSMOL_MMAR_SMOLLM2_OUTPUT_DIR="$MMAR_DIR" \
+  bash run_mmar_audio_smollm2_5090.sh
+# smoke PASS 后复用同一目录续跑 1000 条
+RSMOL_MMAR_MODE=full RSMOL_MMAR_SMOLLM2_OUTPUT_DIR="$MMAR_DIR" \
+  bash run_mmar_audio_smollm2_5090.sh
+```
+
 旧的三 epoch、固定 260-prefix checkpoint：
 
 ```text
@@ -653,13 +680,11 @@ code/RSmol/run_audio_smollm2_135m_mellow_formal_3090.sh
 formal_20260911_v1/checkpoint-011343
 ```
 
-该 checkpoint 只用于历史生成/评测，不能作为新 partition-v2 trainer 的 `--resume-from`。它有独立 generation 与 MMAU 脚本，不能和 MeSH checkpoint 混用：
+该 checkpoint 只用于历史 generation，不能作为新 partition-v2 trainer 的 `--resume-from`，也不能交给当前 partition-v2 MMAU/MMAR evaluator：
 
 ```text
 code/RSmol/scripts/generate_audio_smollm2_checkpoint_reasonaqa.py
-code/RSmol/scripts/evaluate_mmau_test_mini_audio_smollm2.py
 code/RSmol/run_audio_smollm2_checkpoint_reasonaqa_generation_3090.sh
-code/RSmol/run_mmau_test_mini_audio_smollm2_5090.sh
 ```
 
 ## 9. 历史与对照路线

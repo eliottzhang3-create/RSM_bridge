@@ -41,6 +41,10 @@ scripts/train_audio_smollm2_135m_mellow_formal_ddp.sh
 run_audio_smollm2_135m_mellow_smoke20_3090.sh
 run_audio_smollm2_135m_mellow_resume2_3090.sh
 run_audio_smollm2_135m_mellow_formal_3090.sh
+scripts/evaluate_mmau_test_mini_audio_smollm2.py
+scripts/evaluate_mmar_audio_smollm2.py
+run_mmau_test_mini_audio_smollm2_5090.sh
+run_mmar_audio_smollm2_5090.sh
 ```
 
 All training jobs use `pdgpu-3090`, 32 CPU cores, 256 GiB RAM, and 8 GPUs.
@@ -97,6 +101,21 @@ For a formal continuation, use a new empty output directory, pass the formal
 checkpoint via `--resume-from`, retain `--epochs 10` and every other contract
 value, and pass the same two smoke reports.
 
+## MMAU and MMAR evaluation
+
+The current evaluation target is:
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow/
+partition_formal_eos_v2_10epochs_20260918/checkpoint-037810
+```
+
+Both evaluators use one GPU on `pdgpu-5090`, audit the completed partition-v2
+checkpoint before inference, use the compact 130-token single-audio prefix,
+and share the current MeSH benchmark I/O/scoring protocol. Model text is
+passed unchanged to the official evaluator. Run smoke and full with the same
+output directory so the full job resumes after the first five rows.
+
 ## Historical checkpoint
 
 The completed historical baseline remains at:
@@ -107,8 +126,6 @@ formal_20260911_v1/checkpoint-011343
 ```
 
 It belongs to the old fixed-260-prefix, online-data, three-epoch artifact
-contract. It remains available for historical generation/MMAU evaluation,
-but it is not a valid `--resume-from` source for partition-v2 training.
-
-The new partition route is currently code-ready only. Do not call it remote
-PASS until the two smoke jobs have produced and passed their reports.
+contract. It remains available for historical ReasonAQA sample generation,
+but it is not a valid `--resume-from` source for partition-v2 training and is
+rejected by the current MMAU/MMAR evaluators.

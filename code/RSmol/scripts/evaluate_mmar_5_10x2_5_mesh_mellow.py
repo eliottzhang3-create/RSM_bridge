@@ -466,10 +466,15 @@ def _ensure_output_dir(args: argparse.Namespace) -> None:
         common._write_json(config_path, {**immutable, "mode": args.mode})
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(
+    argv: Sequence[str] | None = None,
+    *,
+    default_checkpoint: str | Path = DEFAULT_CHECKPOINT,
+    description: str | None = None,
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=description or __doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
-    parser.add_argument("--checkpoint", type=Path, default=Path(DEFAULT_CHECKPOINT))
+    parser.add_argument("--checkpoint", type=Path, default=Path(default_checkpoint))
     parser.add_argument("--dataset-dir", type=Path, default=Path(DEFAULT_DATASET_DIR))
     parser.add_argument("--metadata-json", type=Path)
     parser.add_argument("--audio-root", type=Path)
@@ -492,11 +497,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
+def run(
+    args: argparse.Namespace,
+    *,
+    load_runtime_model: Any | None = None,
+    run_model_generation: Any | None = None,
+    stage: str = "mmar_audio_mesh_official_accuracy",
+) -> dict[str, Any]:
+    load_runtime_model = load_runtime_model or common._load_runtime_model
+    run_model_generation = run_model_generation or common._run_model_generation
     started = time.time()
     _ensure_output_dir(args)
     report: dict[str, Any] = {
-        "stage": "mmar_audio_mesh_official_accuracy",
+        "stage": stage,
         "status": "FAILED",
         "mode": args.mode,
         "checkpoint": str(args.checkpoint),
@@ -560,7 +573,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if prediction_key not in {"answer_prediction", "model_prediction"}:
                 raise RuntimeError(f"unsupported MMAR official prediction key: {prediction_key!r}")
             report["protocol"]["prediction_key"] = prediction_key
-            model, tokenizer, device, checkpoint_config = common._load_runtime_model(args)
+            model, tokenizer, device, checkpoint_config = load_runtime_model(args)
             limit = SMOKE_ROWS if args.mode == "smoke" else len(records)
             for row_index, official in enumerate(records[:limit]):
                 sample_id = _record_id(official)
@@ -570,7 +583,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     continue
                 try:
                     sample = _prepare_sample(official, row_index, args.audio_root)
-                    generation = common._run_model_generation(
+                    generation = run_model_generation(
                         model,
                         tokenizer,
                         device,

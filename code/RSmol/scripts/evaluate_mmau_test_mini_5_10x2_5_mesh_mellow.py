@@ -1369,10 +1369,15 @@ def _ensure_output_dir(args: argparse.Namespace) -> None:
         _write_json(config_path, {**immutable, "mode": args.mode})
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(
+    argv: Sequence[str] | None = None,
+    *,
+    default_checkpoint: str | Path = DEFAULT_CHECKPOINT,
+    description: str | None = None,
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=description or __doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
-    parser.add_argument("--checkpoint", type=Path, default=Path(DEFAULT_CHECKPOINT))
+    parser.add_argument("--checkpoint", type=Path, default=Path(default_checkpoint))
     parser.add_argument("--dataset-dir", type=Path, default=Path(DEFAULT_DATASET_DIR))
     parser.add_argument("--parquet", type=Path)
     parser.add_argument("--metadata-json", type=Path)
@@ -1398,11 +1403,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
+def run(
+    args: argparse.Namespace,
+    *,
+    load_runtime_model: Any | None = None,
+    run_model_generation: Any | None = None,
+    stage: str = "mmau_test_mini_audio_mesh_fixed_order",
+    logical_trace: str = "5+10+10+5 per generation step",
+) -> dict[str, Any]:
+    load_runtime_model = load_runtime_model or _load_runtime_model
+    run_model_generation = run_model_generation or _run_model_generation
     started = time.time()
     _ensure_output_dir(args)
     report: dict[str, Any] = {
-        "stage": "mmau_test_mini_audio_mesh_fixed_order",
+        "stage": stage,
         "status": "FAILED",
         "mode": args.mode,
         "checkpoint": str(args.checkpoint),
@@ -1428,7 +1442,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "greedy": True,
             "do_sample": False,
             "use_cache": False,
-            "logical_trace": "5+10+10+5 per generation step",
+            "logical_trace": logical_trace,
         },
         "records": {},
         "resumption": {},
@@ -1466,7 +1480,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             # smoke mode therefore always validates model loading even when a
             # malformed first-five row is skipped, while parquet data itself
             # remains streamed only once in physical order.
-            model, tokenizer, device, checkpoint_config = _load_runtime_model(args)
+            model, tokenizer, device, checkpoint_config = load_runtime_model(args)
             for row_index, row in iter_parquet_rows(
                 args.parquet,
                 batch_size=args.parquet_batch_size,
@@ -1479,7 +1493,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     continue
                 try:
                     sample = _prepare_metadata_row(row, metadata_index=metadata_index, dataset_dir=args.dataset_dir)
-                    generation = _run_model_generation(
+                    generation = run_model_generation(
                         model,
                         tokenizer,
                         device,
