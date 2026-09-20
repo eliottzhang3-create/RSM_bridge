@@ -37,7 +37,7 @@ rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2
 - 正式训练：准备采用 10 epochs；EOS v2 smoke 和正式作业均尚未登记远程完成。
 - 正式训练入口会重新读取两个 smoke report，验证训练合同、step 游标、resume 关联、MeSH 30 层轨迹和全部 8 rank 内存释放；验证不通过则拒绝启动。
 - 原始 SmolLM2-135M 音频对比线已在本地改造成同一套六分区、compact-prefix、answer-EOS-v2、10-epoch 训练合同，训练 wrapper 使用 `pdgpu-3090`；当前状态为代码就绪，新的 20+2 smoke 与正式训练均尚未登记远程 PASS。
-- 固定 5-10-5 recursive 音频对比线也已改造成六分区、compact-prefix、answer-EOS-v2、10-epoch 合同；保持 20 个物理层和精确 `5-10-10-5` 逻辑轨迹、无 MeSH router/memory，训练 wrapper 使用 `pdgpu-5090`。当前仅代码就绪，新的 20+2 smoke 与正式训练尚未登记远程 PASS。
+- 固定 5-10-5 recursive 音频对比线也已改造成六分区、compact-prefix、answer-EOS-v2、10-epoch 合同；保持 20 个物理层和精确 `5-10-10-5` 逻辑轨迹、无 MeSH router/memory，训练 wrapper 使用 `pdgpu-5090`。用户已提供 `partition_formal_eos_v2_10epochs_20260919/checkpoint-037810` 作为完成训练产物；其独立 MMAU/MMAR full 评测代码已就绪，远程 artifact 审计与正式分数尚待评测作业确认。
 
 文本模型默认初始化自第二轮低学习率 MeSH checkpoint：
 
@@ -838,6 +838,8 @@ tests/test_audio_5_10_5_recursive_partition_training_static.py
 tests/test_audio_5_10_5_recursive_mellow_static.py
 ```
 
+该路线的 MMAU test-mini / MMAR 专用 full 评测入口也已单独新增，默认使用 `partition_formal_eos_v2_10epochs_20260919/checkpoint-037810`，不复用 MeSH 或 SmolLM2 的 checkpoint 加载器与输出目录。官方数据/scorer 层复用既有实现；每个生成 token 核对精确的 `0..14,5..14,15..19` 物理层轨迹，单音频为 130-token prefix、greedy、`use_cache=False`、最多 32 tokens。代码入口及提交命令见 `code/RSmol/audio_5_10_5_recursive_mellow/README.md`；远程评测结果尚未登记。
+
 ## 11. 已处理故障与不要重复的误诊
 
 1. SmolLM2 tied embedding 导致转换时缺 `lm_head.weight`：转换器已按 tied-weight 语义处理。
@@ -858,8 +860,8 @@ tests/test_audio_5_10_5_recursive_mellow_static.py
 
 - 旧 v1 两个 smoke 已由用户确认 PASS；当前 answer-EOS v2 合同必须重新跑 20+2 smoke，旧 report 会被正式 gate 拒绝。
 - 原始 SmolLM2 partition 对比线同样必须先在 `pdgpu-3090` 重跑本路线 EOS-v2 的 20+2 smoke；旧三 epoch checkpoint、旧 STAGE7 report 或 MeSH smoke report 都不能放行该路线正式训练。
-- 固定 5-10-5 recursive partition 对比线必须在 `pdgpu-5090` 完成本路线自己的 EOS-v2 20+2 smoke；旧三轮 composite checkpoint、文本初始化 checkpoint 或其他路线 report 都不能放行它的正式训练。
-- 正式 10-epoch 训练尚未登记启动/完成。看到远程结果后及时写入 job、output dir、最终 checkpoint 和 report 状态。
+- 固定 5-10-5 recursive partition 路线已有用户提供的 10-epoch `checkpoint-037810`；新 MMAU/MMAR evaluator 会重新审计其本路线 EOS-v2 合同、37,810 step 完整游标、20-physical/30-logical 结构和 bridge/c2l hash，不会接受旧三轮 composite、文本或其他路线 checkpoint。
+- MeSH/SmolLM2 等其余正式训练的远程完成状态仍以对应 checkpoint/report 为准；看到新结果后及时写入 job、output dir、最终 checkpoint 和 report 状态。
 - 当前日志 loss 只是 rank 0 的四个 microbatch 平均，不是 8 rank 全局聚合 loss。
 - 当前训练没有周期性 validation；模型选择需要另行设计只读评测，不要把 train report 当验证集表现。
 - ReasonAQA samples generation、MMAU test-mini 与 MMAR 均已兼容 partition-v2 compact 130-token 单音频 prefix；远程正式分数仍以各自 `evaluation_report.json` 和 `official_evaluation.txt` 为准。

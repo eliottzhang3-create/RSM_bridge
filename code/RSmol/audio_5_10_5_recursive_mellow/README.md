@@ -112,5 +112,39 @@ steps, and a different checkpoint format. Any checkpoint from that contract,
 a text-only checkpoint, a MeSH checkpoint, or another baseline is not a valid
 `--resume-from` source for partition-v2 training.
 
-The partition-v2 route is code-ready only until the two remote smoke reports
-are actually `PASS`.
+The user has since provided the completed formal artifact
+`partition_formal_eos_v2_10epochs_20260919/checkpoint-037810`. The evaluation
+entry points below independently re-audit its full partition-v2 contract;
+local code inspection alone is not recorded as a remote evaluation `PASS`.
+
+## MMAU test-mini and MMAR evaluation
+
+The isolated fixed-recursive evaluation entries are:
+
+```text
+scripts/evaluate_mmau_test_mini_audio_5_10_5_recursive_mellow.py
+scripts/evaluate_mmar_audio_5_10_5_recursive_mellow.py
+run_mmau_test_mini_audio_5_10_5_recursive_mellow_5090.sh
+run_mmar_audio_5_10_5_recursive_mellow_5090.sh
+```
+
+Both submission wrappers default directly to the complete 1,000-question
+official evaluation, one GPU in `pdgpu-5090`, and this route's completed
+`partition_formal_eos_v2_10epochs_20260919/checkpoint-037810`. They have
+separate append-only output directories under `audio_5_10_5_recursive_mellow`.
+The official data, prompt, scorer, and result materialization are shared with
+the established MMAU/MMAR pipelines, while model loading and checkpoint
+auditing use only the fixed-recursive model. Every generated token audits the
+exact 30-call physical-layer trace `0..14, 5..14, 15..19` under greedy,
+full-recompute, `use_cache=False`, 32-token inference. Inference exceptions
+invalidate the evaluation report instead of silently producing a low score.
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mmau_test_mini_audio_5_10_5_recursive_mellow_5090.sh
+bash run_mmar_audio_5_10_5_recursive_mellow_5090.sh
+```
+
+The default output directories must be new/empty on the first run. Existing
+owned directories resume append-only progress, so a rerun after a model-side
+failure should use a distinct output directory after fixing the issue.
