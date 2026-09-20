@@ -37,6 +37,9 @@ PREDICTION_FORMAT = official.PREDICTION_FORMAT
 PARTITION_CONFIG_FILENAME = "audio_smollm2_partition_config.json"
 PARTITION_CONTRACT = "smollm2_component_partitions6_rank_ram_compact_audio_answer_eos_v2"
 EXPECTED_FINAL_STEP = 37_810
+EVAL_ONLY_CONFIG_FILENAME = "mellow_audio_smollm2_eval_config.json"
+EVAL_ONLY_MARKER_FILENAME = "artifact_complete.json"
+EVAL_ONLY_CONTRACT = "mellow_v0_to_audio_smollm2_compact_eval_v1"
 
 # Re-export the dependency-light official data/scoring helpers. MMAU and MMAR
 # intentionally share these exact contracts; only model loading and generation
@@ -179,6 +182,7 @@ def _audit_partition_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("runtime compact audio-prefix constants changed")
     return {
         "status": "PASS",
+        "artifact_kind": "training_checkpoint",
         "path": str(checkpoint),
         "config_path": str(config_path),
         "config_sha256": _sha256(config_path),
@@ -193,6 +197,188 @@ def _audit_partition_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _artifact_config_path(checkpoint: Path) -> tuple[str, Path]:
+    """Select exactly one supported AudioSmolLM2 artifact contract."""
+
+    partition = checkpoint / PARTITION_CONFIG_FILENAME
+    eval_only = checkpoint / EVAL_ONLY_CONFIG_FILENAME
+    present = [("training_checkpoint", partition), ("eval_only_model", eval_only)]
+    found = [(kind, path) for kind, path in present if path.is_file()]
+    if len(found) != 1:
+        raise RuntimeError(
+            "AudioSmolLM2 evaluation requires exactly one supported artifact config; "
+            f"found={[str(path) for _, path in found]}"
+        )
+    return found[0]
+
+
+def _audit_eval_only_artifact(args: argparse.Namespace) -> dict[str, Any]:
+    """Validate a CPU-converted Mellow-v0 compact evaluation artifact."""
+
+    import torch
+
+    from audio_smollm2_135m_mellow.model import (
+        AUDIO_DUAL_PREFIX_TOKENS,
+        AUDIO_SINGLE_PREFIX_TOKENS,
+        AUDIO_TOKENS_PER_CLIP,
+        MAPPER_CONTRACT,
+        ORIGINAL_SMOLLM2_CONTRACT,
+        SMOLLM2_HIDDEN_SIZE,
+    )
+    from train_audio_smollm2_135m_mellow_ddp import _text_model_weight_files
+
+    checkpoint = args.checkpoint
+    config_path = checkpoint / EVAL_ONLY_CONFIG_FILENAME
+    marker_path = checkpoint / EVAL_ONLY_MARKER_FILENAME
+    required = [
+        "text_model/config.json",
+        "tokenizer/tokenizer_config.json",
+        "audio_bridge.pt",
+        EVAL_ONLY_CONFIG_FILENAME,
+        EVAL_ONLY_MARKER_FILENAME,
+    ]
+    missing = [name for name in required if not (checkpoint / name).is_file()]
+    if missing:
+        raise RuntimeError(f"Mellow eval-only artifact is incomplete: {missing}")
+    forbidden_training_files = [
+        name for name in ("training_state.pt", PARTITION_CONFIG_FILENAME, "checkpoint_complete.json")
+        if (checkpoint / name).exists()
+    ]
+    if forbidden_training_files:
+        raise RuntimeError(
+            "Mellow eval-only artifact must not be mixed with a training checkpoint: "
+            f"{forbidden_training_files}"
+        )
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    if (
+        config.get("artifact_contract") != EVAL_ONLY_CONTRACT
+        or config.get("artifact_kind") != "eval_only_model"
+    ):
+        raise RuntimeError(f"invalid Mellow eval-only config contract: {config.get('artifact_contract')!r}")
+    if (
+        marker.get("status") != "complete"
+        or marker.get("artifact_contract") != EVAL_ONLY_CONTRACT
+        or marker.get("artifact_kind") != "eval_only_model"
+        or marker.get("required") != required
+        or marker.get("config_sha256") != _sha256(config_path)
+        or marker.get("htsat_included") is not False
+    ):
+        raise RuntimeError(f"invalid Mellow eval-only completion marker: {marker}")
+
+    expected = {
+        "architecture_contract": ORIGINAL_SMOLLM2_CONTRACT,
+        "mapper_contract": MAPPER_CONTRACT,
+        "compact_single_audio_prefix": True,
+        "audio_tokens_per_clip": AUDIO_TOKENS_PER_CLIP,
+        "prefix_tokens": {
+            "single": AUDIO_SINGLE_PREFIX_TOKENS,
+            "dual": AUDIO_DUAL_PREFIX_TOKENS,
+        },
+        "sample_rate": DEFAULT_SAMPLE_RATE,
+        "audio_seconds": DEFAULT_AUDIO_SECONDS,
+        "max_prompt_tokens": DEFAULT_MAX_PROMPT_TOKENS,
+        "max_context_length": DEFAULT_MAX_CONTEXT_LENGTH,
+        "training_state_included": False,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": config.get(key)}
+        for key, value in expected.items()
+        if config.get(key) != value
+    }
+    if mismatches:
+        raise RuntimeError(f"Mellow eval-only artifact contract mismatch: {mismatches}")
+    external_htsat = config.get("external_htsat") or {}
+    if external_htsat.get("included") is not False or external_htsat.get("required_at_runtime") is not True:
+        raise RuntimeError("Mellow eval-only artifact must require the evaluator's external HTSAT")
+
+    standard = config.get("standard_text_contract") or {}
+    expected_standard = {
+        "model_type": "llama",
+        "hidden_size": SMOLLM2_HIDDEN_SIZE,
+        "num_hidden_layers": 30,
+        "physical_decoder_layer_count": 30,
+        "independent_decoder_layers": True,
+        "forbidden_custom_parameter_names": [],
+    }
+    standard_mismatches = {
+        key: {"expected": value, "actual": standard.get(key)}
+        for key, value in expected_standard.items()
+        if standard.get(key) != value
+    }
+    if standard_mismatches:
+        raise RuntimeError(f"converted Mellow SmolLM2 architecture mismatch: {standard_mismatches}")
+
+    text_config = json.loads((checkpoint / "text_model/config.json").read_text(encoding="utf-8"))
+    if (
+        text_config.get("model_type") != "llama"
+        or int(text_config.get("hidden_size", -1)) != SMOLLM2_HIDDEN_SIZE
+        or int(text_config.get("num_hidden_layers", -1)) != 30
+    ):
+        raise RuntimeError("converted text_model/config.json is not SmolLM2-135M")
+    weight_files = _text_model_weight_files(checkpoint / "text_model")
+    if not weight_files:
+        raise RuntimeError("Mellow eval-only artifact has no text-model weights")
+    if marker.get("text_model_weight_files") != [path.name for path in weight_files]:
+        raise RuntimeError("Mellow eval-only marker text-model weight inventory differs")
+
+    try:
+        audio_state = torch.load(
+            checkpoint / "audio_bridge.pt", map_location="cpu", weights_only=True
+        )
+    except TypeError:
+        audio_state = torch.load(checkpoint / "audio_bridge.pt", map_location="cpu")
+    if not isinstance(audio_state, Mapping) or set(audio_state) != {"bridge", "c2l"}:
+        raise RuntimeError("Mellow eval-only audio_bridge.pt must contain exactly bridge and c2l")
+    expected_shapes = {
+        "bridge": {
+            "linear1.weight": (576, 768),
+            "linear2.weight": (576, 576),
+            "norm.weight": (576,),
+            "norm.bias": (576,),
+        },
+        "c2l": {
+            "weight": (768, 527),
+            "bias": (768,),
+        },
+    }
+    for group_name, shapes in expected_shapes.items():
+        group = audio_state.get(group_name)
+        if not isinstance(group, Mapping) or set(group) != set(shapes):
+            raise RuntimeError(f"Mellow eval-only {group_name} state keys differ")
+        actual_shapes = {key: tuple(value.shape) for key, value in group.items()}
+        if actual_shapes != shapes:
+            raise RuntimeError(
+                f"Mellow eval-only {group_name} tensor shapes differ: "
+                f"expected={shapes} actual={actual_shapes}"
+            )
+    return {
+        "status": "PASS",
+        "artifact_kind": "eval_only_model",
+        "artifact_contract": EVAL_ONLY_CONTRACT,
+        "path": str(checkpoint),
+        "config_path": str(config_path),
+        "config_sha256": _sha256(config_path),
+        "required_files": required,
+        "text_model_weight_files": [str(path) for path in weight_files],
+        "source_checkpoint": config.get("source_checkpoint"),
+        "source_checkpoint_sha256": config.get("source_checkpoint_sha256"),
+        "external_htsat_checkpoint": str(args.htsat_checkpoint.resolve()),
+        "compact_single_audio_prefix": True,
+        "single_audio_prefix_tokens": AUDIO_SINGLE_PREFIX_TOKENS,
+        "dual_audio_prefix_tokens": AUDIO_DUAL_PREFIX_TOKENS,
+        "standard_text_contract": standard,
+    }
+
+
+def _audit_checkpoint_artifact(args: argparse.Namespace) -> dict[str, Any]:
+    kind, _ = _artifact_config_path(args.checkpoint)
+    if kind == "eval_only_model":
+        return _audit_eval_only_artifact(args)
+    return _audit_partition_checkpoint(args)
+
+
 def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[str, Any]]:
     import torch
 
@@ -203,10 +389,8 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[s
     from audio_smollm2_135m_mellow.model import SMOLLM2_HIDDEN_SIZE
     from train_audio_smollm2_135m_mellow_ddp import _load_model
 
-    checkpoint_audit = _audit_partition_checkpoint(args)
-    config = json.loads(
-        (args.checkpoint / PARTITION_CONFIG_FILENAME).read_text(encoding="utf-8")
-    )
+    checkpoint_audit = _audit_checkpoint_artifact(args)
+    config = json.loads(Path(checkpoint_audit["config_path"]).read_text(encoding="utf-8"))
     load_args = argparse.Namespace(
         resume_from=args.checkpoint,
         model_path=args.checkpoint / "text_model",
@@ -226,17 +410,26 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[s
         or runtime_text_contract.get("forbidden_custom_parameter_names") != []
     ):
         raise RuntimeError(f"loaded model is not the standard SmolLM2 contract: {runtime_text_contract}")
-    saved_provenance = config.get("mellow_provenance") or {}
     loaded_provenance = getattr(model, "_audio_provenance", {})
-    for key in ("module", "mellow_htsat_source", "mellow_htsat_sha256"):
-        if saved_provenance.get(key) != loaded_provenance.get(key):
+    if checkpoint_audit["artifact_kind"] == "training_checkpoint":
+        saved_provenance = config.get("mellow_provenance") or {}
+        for key in ("module", "mellow_htsat_source", "mellow_htsat_sha256"):
+            if saved_provenance.get(key) != loaded_provenance.get(key):
+                raise RuntimeError(
+                    f"Mellow provenance mismatch for {key}: "
+                    f"saved={saved_provenance.get(key)!r} loaded={loaded_provenance.get(key)!r}"
+                )
+    else:
+        saved_separator = int((config.get("tokenizer") or {}).get("separator_token_id", -1))
+        if saved_separator != int(model.separator_token_id):
             raise RuntimeError(
-                f"Mellow provenance mismatch for {key}: "
-                f"saved={saved_provenance.get(key)!r} loaded={loaded_provenance.get(key)!r}"
+                f"converted Mellow separator mismatch: saved={saved_separator} "
+                f"runtime={model.separator_token_id}"
             )
+        config["runtime_external_htsat_provenance"] = loaded_provenance
     model.eval()
     if not bool(model.config_audio.compact_single_audio_prefix):
-        raise RuntimeError("partition-v2 evaluation requires compact single-audio prefix")
+        raise RuntimeError("AudioSmolLM2 evaluation requires compact single-audio prefix")
     actual_context_length = int(getattr(model.config_audio, "max_context_length", 0))
     if actual_context_length != DEFAULT_MAX_CONTEXT_LENGTH:
         raise RuntimeError(
