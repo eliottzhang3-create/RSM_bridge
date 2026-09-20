@@ -1,6 +1,6 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
-> 最后同步：2026-09-18
+> 最后同步：2026-09-20
 > 本文件是新 Codex 会话的首要交接依据。新会话必须先完整阅读本文，再阅读“当前主线文件”中列出的代码与最新远程 report。若本文、旧聊天和代码冲突，以当前代码行为与最新远程证据为准，并及时把差异补回本文。
 
 ## 0. 当前状态：先读这一节
@@ -347,7 +347,7 @@ code/RSmol/scripts/train_audio_partition_formal_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/run_audio_partition_formal_5_10x2_5_mesh_mellow_5090.sh
 ```
 
-旧的 `train_audio_5_10x2_5_mesh_mellow_ddp.py --gate FORMAL` 是历史在线/固定 prefix 路线，不是当前推荐正式入口。
+六分区训练器仍是默认主线。`train_audio_5_10x2_5_mesh_mellow_ddp.py --gate FORMAL` 保留为在线读取原始音频的对照入口；2026-09-20 已升级到同一套 compact 130/260 prefix 与 answer-EOS-v2 输入/标签合同，但不会改变六分区训练器的数据调度、smoke gate 或 resume 合同。
 
 ### 6.1 Batch、优化器与调度器
 
@@ -513,6 +513,41 @@ bash run_audio_partition_formal_5_10x2_5_mesh_mellow_5090.sh \
 ```
 
 默认 seed 为 0。如果 smoke 使用了其他 seed，正式命令必须传同一 `--seed`。
+
+### 6.8 从六分区 checkpoint 仅初始化权重的在线训练对照
+
+在线入口新增 `--init-from-audio-checkpoint`，它与 `--resume-from` 互斥。初始化源必须是完整的 `component_partitions6_rank_ram_compact_audio_answer_eos_v2` checkpoint；入口严格核对 completion marker、MeSH/mapper、130/260 prefix、answer EOS、HTSAT/Mellow 路径与 provenance、checkpoint 目录名/marker/training-state/cursor 的 global step 一致性。
+
+该模式只加载 `mesh_model`、bridge 和 c2l；HTSAT 仍从当前命令指定的外部 checkpoint 加载并冻结，不加载源 checkpoint 的 optimizer、scheduler、RNG 或训练游标，新训练从 global step 0 开始。数据仍由 `ReasonAQADataset` 在线解码、mono、重采样到 32 kHz、截取前 10 秒并右侧补零；`DistributedSampler(shuffle=True)` 每个 epoch 对完整 manifest 全局重排，再为各 rank 分配互斥样本，不使用六分区 store。
+
+FORMAL 的 8 GPU、microbatch 8、GA 4、save every 500 和 retention 4 仍固定；`--epochs`、`--max-lr`、`--min-lr` 现在是显式可传超参数，warmup 强制为 `ceil(actual_total_optimizer_steps * 0.05)`。这一入口生成的新 checkpoint 合同为 `online_reasonaqa_full_shuffle_compact_audio_answer_eos_v2`，可以用 `--resume-from` 完整恢复，但旧在线 checkpoint 不能冒充新合同 resume。
+
+当前两轮对照训练的目标初始化源是：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/
+partition_formal_answer_eos_v2_10epochs_20260918/checkpoint-037810
+```
+
+提交命令：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+
+INIT_CHECKPOINT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/partition_formal_answer_eos_v2_10epochs_20260918/checkpoint-037810
+TRAIN_MANIFEST=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl
+OUTPUT_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/online_fullshuffle_init037810_2epochs_lr2e-4_2e-5_20260920
+
+bash run_audio_formal_5_10x2_5_mesh_mellow_5090.sh \
+  --init-from-audio-checkpoint "$INIT_CHECKPOINT" \
+  --train-manifest "$TRAIN_MANIFEST" \
+  --output-dir "$OUTPUT_DIR" \
+  --epochs 2 \
+  --max-lr 2e-4 \
+  --min-lr 2e-5
+```
+
+在当前 968,059 条 manifest、8×8×GA4 配置下，预期每 epoch 3,781 个 optimizer steps，两轮共 7,562 steps，warmup 自动计算为 379 steps。不要传 `--resume-from`，也无需手动传 `--warmup-steps`。
 
 ## 7. 性能优化实验：保留的结论
 

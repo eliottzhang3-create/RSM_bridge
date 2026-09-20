@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Submitted 8-GPU formal audio training: 3 epochs, microbatch 8/GPU, GA 4.
+# Submitted 8-GPU online-data audio training: caller-selected epochs/LRs,
+# microbatch 8/GPU, GA 4, and trainer-derived 5% warmup.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 mkdir -p log

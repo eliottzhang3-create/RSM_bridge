@@ -38,7 +38,9 @@ if str(SCRIPT_ROOT) not in sys.path:
 
 from audio_5_10x2_5_mesh_mellow.data import ReasonAQADataset, UniqueWaveformStore, collate_reasonaqa  # noqa: E402
 from audio_5_10x2_5_mesh_mellow.model import (  # noqa: E402
+    AUDIO_DUAL_PREFIX_TOKENS,
     AUDIO_PREFIX_TOKENS,
+    AUDIO_SINGLE_PREFIX_TOKENS,
     AUDIO_TOKENS_PER_CLIP,
     ARCHITECTURE_CONTRACT,
     MAPPER_CONTRACT,
@@ -59,6 +61,17 @@ DEFAULT_SHARED_WAVEFORM_STORE = "/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_r
 DEFAULT_COMPONENT_PARTITION_STORE_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2"
 PERF20_STEPS = 20
 PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload")
+PARTITION_V2_CONTRACT = "component_partitions6_rank_ram_compact_audio_answer_eos_v2"
+ONLINE_V2_CONTRACT = "online_reasonaqa_full_shuffle_compact_audio_answer_eos_v2"
+ANSWER_TERMINATION_CONTRACT = {
+    "token": "<|endoftext|>",
+    "included_in_max_answer_tokens": True,
+    "supervised": True,
+}
+PREFIX_TOKEN_CONTRACT = {
+    "single": AUDIO_SINGLE_PREFIX_TOKENS,
+    "dual": AUDIO_DUAL_PREFIX_TOKENS,
+}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -68,7 +81,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # submission wrappers and operator commands; keep ``--model-path`` as a
     # backward-compatible alias for older invocations.
     p.add_argument("--model-path", "--mesh-checkpoint", dest="model_path", type=Path, default=Path(DEFAULT_MESH))
-    p.add_argument("--resume-from", type=Path)
+    checkpoint_source = p.add_mutually_exclusive_group()
+    checkpoint_source.add_argument(
+        "--resume-from",
+        type=Path,
+        help="Resume model, optimizer, scheduler, cursor, and RNG from an online-v2 checkpoint",
+    )
+    checkpoint_source.add_argument(
+        "--init-from-audio-checkpoint",
+        type=Path,
+        help=(
+            "Initialize mesh, bridge, and c2l weights from a complete partition-v2 composite "
+            "checkpoint while starting a fresh optimizer/scheduler at global step zero"
+        ),
+    )
     p.add_argument("--tokenizer-path", type=Path)
     p.add_argument("--htsat-checkpoint", type=Path, default=Path(DEFAULT_HTSAT))
     p.add_argument("--mellow-root", type=Path, default=Path(DEFAULT_MELLOW))
@@ -605,29 +631,124 @@ def _seed(seed: int, rank: int) -> None:
     torch.cuda.manual_seed_all(value)
 
 
+def _checkpoint_step_from_name(path: Path) -> int | None:
+    suffix = path.name.removeprefix("checkpoint-")
+    return int(suffix) if path.name.startswith("checkpoint-") and suffix.isdigit() else None
+
+
+def _validate_initialization_artifacts(path: Path, args: argparse.Namespace) -> dict[str, Any]:
+    """Audit a partition-v2 checkpoint without restoring its training state.
+
+    Weight-only initialization is deliberately distinct from resume: the text
+    model, bridge, and c2l parameters are loaded, but optimizer/scheduler/RNG
+    state and the old global step are not.  Requiring the complete source
+    artifact prevents an interrupted checkpoint from silently becoming a new
+    training root.
+    """
+    if not path.is_dir():
+        raise FileNotFoundError(f"initialization checkpoint directory not found: {path}")
+    required = (
+        "mesh_model/config.json",
+        "tokenizer/tokenizer_config.json",
+        "audio_bridge.pt",
+        "training_state.pt",
+        "audio_mesh_config.json",
+        "checkpoint_complete.json",
+    )
+    missing = [name for name in required if not (path / name).is_file()]
+    if missing:
+        raise RuntimeError(f"initialization checkpoint is incomplete: missing {missing}")
+    marker = json.loads((path / "checkpoint_complete.json").read_text(encoding="utf-8"))
+    config = json.loads((path / "audio_mesh_config.json").read_text(encoding="utf-8"))
+    if marker.get("status") != "complete":
+        raise RuntimeError("initialization checkpoint completion marker is not complete")
+    if marker.get("contract") != PARTITION_V2_CONTRACT or config.get("contract") != PARTITION_V2_CONTRACT:
+        raise RuntimeError(
+            "weight-only initialization requires a complete current partition-v2 checkpoint: "
+            f"expected={PARTITION_V2_CONTRACT} marker={marker.get('contract')} config={config.get('contract')}"
+        )
+    if config.get("architecture_contract") != ARCHITECTURE_CONTRACT or config.get("mapper_contract") != MAPPER_CONTRACT:
+        raise RuntimeError("initialization checkpoint architecture/mapper contract mismatch")
+    if config.get("compact_single_audio_prefix") is not True or config.get("prefix_tokens") != PREFIX_TOKEN_CONTRACT:
+        raise RuntimeError("initialization checkpoint does not use the compact 130/260 prefix contract")
+    if config.get("answer_termination") != ANSWER_TERMINATION_CONTRACT:
+        raise RuntimeError("initialization checkpoint does not use the supervised answer-EOS-v2 contract")
+    if Path(str(config.get("htsat_checkpoint", ""))).resolve() != args.htsat_checkpoint.resolve():
+        raise RuntimeError("initialization checkpoint HTSAT checkpoint differs from the requested external HTSAT")
+    if Path(str(config.get("mellow_root", ""))).resolve() != args.mellow_root.resolve():
+        raise RuntimeError("initialization checkpoint Mellow root differs from the requested Mellow implementation")
+    if not config.get("mellow_provenance"):
+        raise RuntimeError("initialization checkpoint has no Mellow provenance")
+
+    audio = torch.load(path / "audio_bridge.pt", map_location="cpu", weights_only=False)
+    if not isinstance(audio.get("bridge"), dict) or not audio["bridge"]:
+        raise RuntimeError("initialization checkpoint has no non-empty bridge state")
+    if not isinstance(audio.get("c2l"), dict) or not audio["c2l"]:
+        raise RuntimeError("initialization checkpoint has no non-empty c2l state")
+    # The partition optimizer state is large and is intentionally *not*
+    # restored.  mmap keeps its tensors lazy while we read only the scalar
+    # cursor proof from the pickle metadata.
+    state = torch.load(path / "training_state.pt", map_location="cpu", weights_only=False, mmap=True)
+    if "global_step" not in state or "cursor" not in state:
+        raise RuntimeError("initialization checkpoint training state lacks global_step/cursor proof")
+    source_step = int(state["global_step"])
+    cursor_step = int(state["cursor"].get("global_step", -1))
+    marker_step = int(marker.get("global_step", -1))
+    path_step = _checkpoint_step_from_name(path)
+    if source_step != cursor_step or source_step != marker_step or (path_step is not None and source_step != path_step):
+        raise RuntimeError(
+            "initialization checkpoint global-step proof is inconsistent: "
+            f"path={path_step} marker={marker_step} state={source_step} cursor={cursor_step}"
+        )
+    return {
+        "passed": True,
+        "path": str(path.resolve()),
+        "source_contract": PARTITION_V2_CONTRACT,
+        "source_global_step": source_step,
+        "weights_loaded": ["mesh_model", "bridge", "c2l"],
+        "training_state_loaded": False,
+        "optimizer_scheduler_rng_loaded": False,
+        "fresh_global_step": 0,
+        "mellow_provenance": config["mellow_provenance"],
+    }
+
+
 def _load_model(args: argparse.Namespace, device: torch.device) -> tuple[AudioMeshModel, Any]:
     register_auto_class()
     from transformers import AutoTokenizer
-    model_path = args.resume_from / "mesh_model" if args.resume_from else args.model_path
-    tokenizer_path = args.tokenizer_path or (args.resume_from / "tokenizer" if args.resume_from else model_path)
+    resume_from = getattr(args, "resume_from", None)
+    init_from = getattr(args, "init_from_audio_checkpoint", None)
+    if resume_from is not None and init_from is not None:
+        raise ValueError("--resume-from and --init-from-audio-checkpoint are mutually exclusive")
+    if init_from is not None and args.tokenizer_path is not None and args.tokenizer_path.resolve() != (init_from / "tokenizer").resolve():
+        raise ValueError("weight-only checkpoint initialization must use the tokenizer stored in that checkpoint")
+    initialization_audit = _validate_initialization_artifacts(init_from, args) if init_from is not None else None
+    composite_source = resume_from or init_from
+    model_path = composite_source / "mesh_model" if composite_source is not None else args.model_path
+    tokenizer_path = args.tokenizer_path or (composite_source / "tokenizer" if composite_source is not None else model_path)
     mesh = RecursiveLlamaForCausalLM.from_pretrained(model_path, local_files_only=True)
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     wrapper, htsat, provenance = _load_mellow_wrapper(args.mellow_root, args.htsat_checkpoint, device)
+    if initialization_audit is not None:
+        source_provenance = initialization_audit["mellow_provenance"]
+        if source_provenance.get("mellow_htsat_sha256") != provenance.get("mellow_htsat_sha256"):
+            raise RuntimeError("initialization checkpoint Mellow implementation SHA256 mismatch")
     model = AudioMeshModel(mesh.to(device), tokenizer, wrapper, htsat, AudioMeshConfig(compact_single_audio_prefix=bool(getattr(args, "compact_single_audio_prefix", False))))
-    if args.resume_from:
-        audio_state = torch.load(args.resume_from / "audio_bridge.pt", map_location=device, weights_only=False)
+    if composite_source is not None:
+        audio_state = torch.load(composite_source / "audio_bridge.pt", map_location=device, weights_only=False)
         if not isinstance(audio_state.get("bridge"), dict) or not audio_state["bridge"]:
-            raise RuntimeError("resume checkpoint has no non-empty bridge state")
+            raise RuntimeError("composite checkpoint has no non-empty bridge state")
         if not isinstance(audio_state.get("c2l"), dict) or not audio_state["c2l"]:
-            raise RuntimeError("resume checkpoint has no non-empty c2l state")
+            raise RuntimeError("composite checkpoint has no non-empty c2l state")
         model.bridge.load_state_dict(audio_state["bridge"], strict=True)
         c2l = getattr(model.htsat_wrapper, "c2l", None)
         if c2l is None:
-            raise RuntimeError("resume checkpoint requires wrapper.c2l")
+            raise RuntimeError("composite checkpoint requires wrapper.c2l")
         c2l.load_state_dict(audio_state["c2l"], strict=True)
     model._audio_provenance = provenance
+    model._initialization_audit = initialization_audit
     return model.to(device), tokenizer
 
 
@@ -652,10 +773,49 @@ def _save_checkpoint(path: Path, model: AudioMeshModel, tokenizer: Any, optimize
             raise RuntimeError("refusing to save checkpoint with non-contract MeSH hidden size")
         if model.last_audio_tokens_per_clip is not None and tuple(model.last_audio_tokens_per_clip) != (AUDIO_TOKENS_PER_CLIP, AUDIO_TOKENS_PER_CLIP):
             raise RuntimeError("refusing to save checkpoint with non-contract audio token count")
+        init_from = getattr(args, "init_from_audio_checkpoint", None)
+        resume_from = getattr(args, "resume_from", None)
+        if init_from is not None:
+            initialization = {
+                "kind": "weight_only_composite_checkpoint",
+                "source": str(init_from.resolve()),
+                "source_contract": PARTITION_V2_CONTRACT,
+                "optimizer_scheduler_rng_loaded": False,
+                "fresh_global_step": 0,
+            }
+            mapper_initialization = "loaded_from_partition_v2_checkpoint"
+        elif resume_from is not None:
+            initialization = {
+                "kind": "full_state_resume",
+                "source": str(resume_from.resolve()),
+                "optimizer_scheduler_rng_loaded": True,
+            }
+            mapper_initialization = "loaded_from_online_v2_resume"
+        else:
+            initialization = {
+                "kind": "text_mesh_plus_random_audio_mapper",
+                "source": str(args.model_path),
+                "optimizer_scheduler_rng_loaded": False,
+                "fresh_global_step": 0,
+            }
+            mapper_initialization = "random_c2l_and_xavier_projection"
         config = {
+            "contract": ONLINE_V2_CONTRACT,
             "architecture_contract": ARCHITECTURE_CONTRACT,
             "mapper_contract": MAPPER_CONTRACT,
-            "mapper_initialization": "random_c2l_and_xavier_projection",
+            "mapper_initialization": mapper_initialization,
+            "initialization": initialization,
+            "compact_single_audio_prefix": True,
+            "answer_termination": ANSWER_TERMINATION_CONTRACT,
+            "prefix_tokens": PREFIX_TOKEN_CONTRACT,
+            "data_pipeline": {
+                "kind": "online_raw_audio",
+                "audio_decode_resample_crop_pad_in_dataset": True,
+                "shuffle_scope": "entire_manifest_before_disjoint_distributed_rank_partition",
+                "sampler": "torch.utils.data.DistributedSampler",
+                "shuffle": True,
+                "drop_last": True,
+            },
             "mesh_hidden_size": MESH_HIDDEN_SIZE,
             "audio_tokens_per_clip": AUDIO_TOKENS_PER_CLIP,
             "audio_prefix_tokens_with_separators": AUDIO_PREFIX_TOKENS,
@@ -663,7 +823,7 @@ def _save_checkpoint(path: Path, model: AudioMeshModel, tokenizer: Any, optimize
             "htsat_checkpoint": str(args.htsat_checkpoint.resolve()),
             "mellow_root": str(args.mellow_root.resolve()),
             "mellow_provenance": provenance,
-            "mesh_model_path": str(args.model_path),
+            "mesh_model_path": str((resume_from or init_from) / "mesh_model") if (resume_from or init_from) is not None else str(args.model_path),
             "epochs": args.epochs,
             "max_lr": args.max_lr,
             "min_lr": args.min_lr,
@@ -679,7 +839,7 @@ def _save_checkpoint(path: Path, model: AudioMeshModel, tokenizer: Any, optimize
             "checkpoint_retention": args.checkpoint_retention,
         }
         (temporary / "audio_mesh_config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-        (temporary / "checkpoint_complete.json").write_text(json.dumps({"status": "complete", "global_step": step, "required": ["mesh_model", "tokenizer", "audio_bridge.pt", "training_state.pt", "audio_mesh_config.json"]}, indent=2) + "\n", encoding="utf-8")
+        (temporary / "checkpoint_complete.json").write_text(json.dumps({"status": "complete", "global_step": step, "contract": ONLINE_V2_CONTRACT, "required": ["mesh_model", "tokenizer", "audio_bridge.pt", "training_state.pt", "audio_mesh_config.json"]}, indent=2) + "\n", encoding="utf-8")
         required = (temporary / "mesh_model" / "config.json", temporary / "tokenizer", temporary / "audio_bridge.pt", temporary / "training_state.pt", temporary / "audio_mesh_config.json", temporary / "checkpoint_complete.json")
         if any(not item.exists() for item in required):
             raise RuntimeError("refusing to publish incomplete checkpoint")
@@ -732,11 +892,17 @@ def _validate_resume_artifacts(path: Path) -> dict[str, Any]:
     if marker.get("status") != "complete":
         raise RuntimeError("resume checkpoint marker is not complete")
     config = json.loads((path / "audio_mesh_config.json").read_text(encoding="utf-8"))
-    for key in ("architecture_contract", "mapper_contract", "mesh_hidden_size", "audio_tokens_per_clip", "audio_prefix_tokens_with_separators", "manifest_sha256", "htsat_checkpoint", "mellow_root", "mellow_provenance", "world_size", "micro_batch_size", "gradient_accumulation_steps", "epochs", "max_lr", "min_lr", "warmup_steps", "total_steps", "save_every", "checkpoint_retention"):
+    for key in ("contract", "architecture_contract", "mapper_contract", "compact_single_audio_prefix", "answer_termination", "prefix_tokens", "mesh_hidden_size", "audio_tokens_per_clip", "audio_prefix_tokens_with_separators", "manifest_sha256", "htsat_checkpoint", "mellow_root", "mellow_provenance", "world_size", "micro_batch_size", "gradient_accumulation_steps", "epochs", "max_lr", "min_lr", "warmup_steps", "total_steps", "save_every", "checkpoint_retention"):
         if key not in config:
             raise RuntimeError(f"resume checkpoint config missing {key}")
+    if marker.get("contract") != ONLINE_V2_CONTRACT or config["contract"] != ONLINE_V2_CONTRACT:
+        raise RuntimeError("resume checkpoint is not a current online-v2 checkpoint")
     if config["architecture_contract"] != ARCHITECTURE_CONTRACT or config["mapper_contract"] != MAPPER_CONTRACT:
         raise RuntimeError("resume checkpoint architecture/mapper contract mismatch")
+    if config["compact_single_audio_prefix"] is not True or config["prefix_tokens"] != PREFIX_TOKEN_CONTRACT:
+        raise RuntimeError("resume checkpoint compact 130/260 prefix contract mismatch")
+    if config["answer_termination"] != ANSWER_TERMINATION_CONTRACT:
+        raise RuntimeError("resume checkpoint answer-EOS-v2 contract mismatch")
     if int(config["mesh_hidden_size"]) != MESH_HIDDEN_SIZE or int(config["audio_tokens_per_clip"]) != AUDIO_TOKENS_PER_CLIP or int(config["audio_prefix_tokens_with_separators"]) != AUDIO_PREFIX_TOKENS:
         raise RuntimeError("resume checkpoint audio shape contract mismatch")
     audio = torch.load(path / "audio_bridge.pt", map_location="cpu", weights_only=False)
@@ -1719,6 +1885,7 @@ def _actual_resume_audit(path: Path, args: argparse.Namespace, batch_cpu: dict[s
     saved_rng = _rng_state(device)
     reload_args = copy.copy(args)
     reload_args.resume_from = path
+    reload_args.init_from_audio_checkpoint = None
     reload_model, reload_tokenizer = _load_model(reload_args, device)
     try:
         saved_config = json.loads((path / "audio_mesh_config.json").read_text(encoding="utf-8"))
@@ -1743,6 +1910,7 @@ def _actual_resume_audit(path: Path, args: argparse.Namespace, batch_cpu: dict[s
             raise RuntimeError("reloaded checkpoint produced a nonfinite loss")
         labels = reload_model.last_labels
         prefix_length = int(reload_model.last_prefix_length or 0)
+        prefix_lengths = reload_model.last_prefix_lengths
         text_ids = moved["text_ids"]
         prompt_lengths = moved["prompt_lengths"]
         answer_lengths = moved["answer_lengths"]
@@ -1751,7 +1919,8 @@ def _actual_resume_audit(path: Path, args: argparse.Namespace, batch_cpu: dict[s
         for row_index in range(text_ids.shape[0]):
             prompt_length = int(prompt_lengths[row_index].item())
             answer_length = int(answer_lengths[row_index].item())
-            answer_start = prefix_length + prompt_length
+            row_prefix_length = int(prefix_lengths[row_index].item()) if prefix_lengths is not None else prefix_length
+            answer_start = row_prefix_length + prompt_length
             answer_end = answer_start + answer_length
             if bool((labels[row_index, :answer_start] != -100).any()) or bool((labels[row_index, answer_end:] != -100).any()):
                 raise RuntimeError("reloaded checkpoint violated answer-only label mask")
@@ -1874,6 +2043,10 @@ def _configure_perf20_partition_inputs(args: argparse.Namespace) -> dict[str, An
 def run(args: argparse.Namespace) -> dict[str, Any]:
     rank, world, device = _init_dist(args)
     _seed(args.seed, rank)
+    # The current online ReasonAQA path shares the partition-v2 input/label
+    # contract while retaining raw-audio online loading and global shuffling.
+    # PERF20 remains an isolated historical performance control.
+    args.compact_single_audio_prefix = args.gate != "PERF20"
     preload_alias_conflict = args.preload_data and args.perf20_input_mode not in {"online", "full_preload"}
     if args.preload_data and not preload_alias_conflict:
         args.perf20_input_mode = "full_preload"
@@ -1890,6 +2063,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(f"world size mismatch: launcher={world} requested={args.world_size}")
         if args.gate != "PERF20" and (args.save_every <= 0 or args.checkpoint_retention <= 0):
             raise ValueError("save_every and checkpoint_retention must be positive")
+        if args.epochs <= 0:
+            raise ValueError("epochs must be positive")
+        if args.max_lr <= 0 or args.min_lr < 0 or args.min_lr > args.max_lr:
+            raise ValueError("learning rates must satisfy 0 <= min_lr <= max_lr and max_lr > 0")
         if args.gate == "PERF20":
             canonical = {
                 "world_size": 8,
@@ -1905,6 +2082,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     raise ValueError(f"PERF20 requires {key}={expected}, got {getattr(args, key)}")
             if args.resume_from is not None:
                 raise ValueError("PERF20 starts from the text MeSH checkpoint and does not accept --resume-from")
+            if getattr(args, "init_from_audio_checkpoint", None) is not None:
+                raise ValueError("PERF20 starts from the text MeSH checkpoint and does not accept --init-from-audio-checkpoint")
             if args.max_steps is not None and int(args.max_steps) != PERF20_STEPS:
                 raise ValueError(f"PERF20 requires --max-steps {PERF20_STEPS}")
             args.max_steps = PERF20_STEPS
@@ -1946,9 +2125,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "world_size": 8,
                 "micro_batch_size": 8,
                 "gradient_accumulation_steps": 4,
-                "epochs": 3,
-                "max_lr": 1e-3,
-                "min_lr": 0.0,
                 "save_every": 500,
                 "checkpoint_retention": 4,
             }
@@ -1981,6 +2157,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if partition_scope is not None:
             report["partition_scope"] = partition_scope
         model, tokenizer = _load_model(args, device)
+        if getattr(model, "_initialization_audit", None) is not None:
+            report["weight_only_initialization"] = model._initialization_audit
         model.train()
         if not model.trainable_parameter_audit()["training_mode_contract"]:
             raise RuntimeError(f"audio training mode contract failed: {model.trainable_parameter_audit()}")
@@ -2042,9 +2220,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         sampler_audit: dict[str, Any] = {
             "kind": "torch_distributed_sampler",
+            "scope": "entire_manifest_before_disjoint_distributed_rank_partition",
             "shuffle": True,
             "seed": int(args.seed),
             "drop_last": True,
+            "reshuffle_each_epoch": True,
+            "partition_store_used": False,
             "batches_per_rank": len(loader),
         }
         if args.gradient_accumulation_steps <= 0:
@@ -2625,7 +2806,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         per_rank_timing = _gather_perf20_rank_timings(
             rank, world, metrics, input_preparation, args=args, max_steps=max_steps,
         ) if args.gate == "PERF20" else None
-        report.update({"status": "PASS", "start_step": start_step, "end_step": optimizer_step, "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "dropped_microbatches_per_epoch": dropped_microbatches, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "effective_global_batch_size": int(args.micro_batch_size * world * args.gradient_accumulation_steps), "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "routing_stats": {"enabled": args.gate != "PERF20", "mode": "disabled_for_perf20" if args.gate == "PERF20" else "continuous_per_forward", "reported_in_each_step": args.gate != "PERF20", "reason": "per-router .cpu() statistics would add CUDA synchronizations to the PERF20 timing path" if args.gate == "PERF20" else None}, "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "runtime_gradient_audit": runtime_gradient_audit, "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
+        report.update({"status": "PASS", "training_contract": ONLINE_V2_CONTRACT if args.gate != "PERF20" else None, "start_step": start_step, "end_step": optimizer_step, "optimizer_steps": optimizer_step, "steps_per_epoch": steps_epoch, "dropped_microbatches_per_epoch": dropped_microbatches, "total_formal_steps": formal_steps, "warmup_steps": args.warmup_steps, "effective_global_batch_size": int(args.micro_batch_size * world * args.gradient_accumulation_steps), "metrics": metrics if rank == 0 else [], "ddp_broadcast_buffers": False, "router_policy": "warning_only", "routing_stats": {"enabled": args.gate != "PERF20", "mode": "disabled_for_perf20" if args.gate == "PERF20" else "continuous_per_forward", "reported_in_each_step": args.gate != "PERF20", "reason": "per-router .cpu() statistics would add CUDA synchronizations to the PERF20 timing path" if args.gate == "PERF20" else None}, "model_trainable_audit": (ddp.module if hasattr(ddp, "module") else ddp).trainable_parameter_audit(), "runtime_gradient_audit": runtime_gradient_audit, "resume_position": {"epoch": epoch, "batch_in_epoch": batch_in_epoch}, "checkpoints": report.get("checkpoints", [])})
+        if args.gate != "PERF20":
+            report["data_pipeline"] = {
+                "mode": "online_raw_audio",
+                "audio_preprocessing": "decode, mono mixdown, 32kHz resample, first-10s crop, right zero-pad in ReasonAQADataset.__getitem__",
+                "manifest_rows": len(dataset),
+                "sampler": sampler_audit,
+                "compact_prefix_tokens": PREFIX_TOKEN_CONTRACT,
+                "answer_termination": ANSWER_TERMINATION_CONTRACT,
+            }
         report["correctness_audit"] = {
             "mesh_runtime_gradient_audit": runtime_gradient_audit,
             "answer_only_labels": "build_labels enforces -100 outside real answer intervals and exact answer token count",
