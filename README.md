@@ -1,6 +1,12 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
-> 最后同步：2026-09-20
+## 2026-09-21：隔离的固定 260-token 运行时静音槽实验
+
+新增隔离训练线 `code/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/`。每条样本固定保留两个音频槽和 260-token prefix；单音频样本的第二槽使用模型 forward 内在 GPU 即时创建的全零 waveform，每个含单音频样本的 microbatch 只编码一个静音 waveform，再在 trainable bridge 前展开。它不会新增静音文件、partition store 条目或 CPU→GPU 静音传输。显式双音频样本仍使用两个真实槽；显式相同路径可以复用第一路 HTSAT embedding，但不会被当作静音槽。
+
+独立训练合同为 `component_partitions6_rank_ram_fixed260_runtime_silence_second_slot_answer_eos_v2`，LR 为 `1e-3` 经 5% warmup 后 cosine decay 到 `1e-4`。该线拥有独立 model/data 模块、trainer、checkpoint config、20+2 smoke 门禁、report、输出目录和 `pdgpu-5090` 提交入口；拒绝 compact MeSH、SmolLM2 和 recursive checkpoint 跨合同 resume。完整命令和审计项见 `code/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/README.md`。
+
+> 最后同步：2026-09-21
 > 本文件是新 Codex 会话的首要交接依据。新会话必须先完整阅读本文，再阅读“当前主线文件”中列出的代码与最新远程 report。若本文、旧聊天和代码冲突，以当前代码行为与最新远程证据为准，并及时把差异补回本文。
 
 ## 0. 当前状态：先读这一节
