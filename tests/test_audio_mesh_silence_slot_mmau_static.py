@@ -41,6 +41,8 @@ class SilenceSlotMMAUStaticTest(unittest.TestCase):
             self.assertIn(marker, self.source)
         self.assertNotIn("_validate_checkpoint_contract(args)", self.source)
         self.assertNotIn("compact_single_audio_prefix=True", self.source)
+        self.assertIn("model = model.to(device)", self.source)
+        self.assertIn("trainable parameters are not colocated", self.source)
 
     def test_generation_contract_and_submission_isolation(self):
         for marker in ("max_new_tokens", "--max-new-tokens 32", "--run-official-evaluation", "pdgpu-5090"):

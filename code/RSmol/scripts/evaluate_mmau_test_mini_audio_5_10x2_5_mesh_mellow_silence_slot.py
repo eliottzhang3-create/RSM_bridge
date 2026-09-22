@@ -220,6 +220,11 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[s
     for key in ("module", "mellow_htsat_source", "mellow_htsat_sha256"):
         if saved_provenance.get(key) != provenance.get(key):
             raise RuntimeError(f"Mellow provenance mismatch for {key}")
+    # The bridge is constructed after the text model and external audio
+    # modules, so explicitly move the composite once after restoring its
+    # trainable state.  Without this, bridge weights remain on CPU while
+    # HTSAT embeddings are on cuda:0 and every row fails at linear1.
+    model = model.to(device)
     model.eval()
     owner = model.mesh_model.model
     owner.audit_mode = False
@@ -239,6 +244,16 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[s
         raise RuntimeError("silence-slot evaluator must never use compact single-audio prefixes")
     if int(model.config_audio.max_context_length) != DEFAULT_MAX_CONTEXT_LENGTH:
         raise RuntimeError("silence-slot inference context contract differs from 768")
+    parameter_devices = {
+        str(parameter.device)
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    }
+    if parameter_devices != {str(device)}:
+        raise RuntimeError(
+            "silence-slot trainable parameters are not colocated with inference device: "
+            f"expected={device} actual={sorted(parameter_devices)}"
+        )
     config = dict(config)
     config["checkpoint_artifact_audit"] = checkpoint_audit
     config["runtime_max_context_length"] = int(model.config_audio.max_context_length)
