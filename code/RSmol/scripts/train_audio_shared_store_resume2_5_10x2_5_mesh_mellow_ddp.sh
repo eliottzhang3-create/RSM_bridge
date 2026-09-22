@@ -15,9 +15,9 @@ if [[ "$RESUME_SEEN" -ne 1 ]]; then
 fi
 exec bash "$SCRIPT_DIR/stage_audio_shared_store_5_10x2_5_mesh_mellow.sh" smoke \
   --output-dir "$DEFAULT_OUTPUT" \
+  --epochs 3 \
   --max-lr 1e-3 \
-  --min-lr 0 \
+  --min-lr 1e-4 \
   --save-every 500 \
   --checkpoint-retention 4 \
   "$@"
-

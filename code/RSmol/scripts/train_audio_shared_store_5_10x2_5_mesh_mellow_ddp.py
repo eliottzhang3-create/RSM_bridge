@@ -29,7 +29,6 @@ from audio_5_10x2_5_mesh_mellow_shared_store.model import (
     ARCHITECTURE_CONTRACT,
     MAPPER_CONTRACT,
     AUDIO_PREFIX_TOKENS,
-    AUDIO_SINGLE_PREFIX_TOKENS,
     AUDIO_DUAL_PREFIX_TOKENS,
     AUDIO_TOKENS_PER_CLIP,
     MESH_HIDDEN_SIZE,
@@ -49,9 +48,15 @@ ANSWER_TERMINATION = {
     "included_in_max_answer_tokens": True,
     "supervised": True,
 }
-PREFIX_TOKENS = {"single": AUDIO_SINGLE_PREFIX_TOKENS, "dual": AUDIO_DUAL_PREFIX_TOKENS}
+PREFIX_TOKENS = {"single": AUDIO_DUAL_PREFIX_TOKENS, "dual": AUDIO_DUAL_PREFIX_TOKENS}
 SMOKE_TOTAL_STEPS = 22
 SMOKE_FIRST_STOP = 20
+FORMAL_EPOCHS = 3
+CANONICAL_MAX_LR = 1e-3
+CANONICAL_MIN_LR = 1e-4
+AUDIO_SLOT_SEMANTICS = (
+    "fixed260_second_slot_reuses_audio1_htsat_embedding_then_runs_bridge_separately"
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -82,7 +87,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--gradient-accumulation-steps", type=int, default=4)
     p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--max-lr", type=float, default=1e-3)
-    p.add_argument("--min-lr", type=float, default=0.0)
+    p.add_argument("--min-lr", type=float, default=1e-4)
     p.add_argument("--save-every", type=int, default=500)
     p.add_argument("--checkpoint-retention", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
@@ -209,18 +214,13 @@ def _staging_rank_audit(inventory: dict[str, Any], rank: int, world: int) -> lis
 
 def _training_shape(args: argparse.Namespace, dataset_rows: int) -> dict[str, int]:
     global_batch = args.world_size * args.micro_batch_size * args.gradient_accumulation_steps
-    if args.mode == "smoke":
-        epochs = 1
-        steps_per_epoch = dataset_rows // global_batch
-        total_steps = SMOKE_TOTAL_STEPS
-    else:
-        epochs = 10 if args.epochs is None else int(args.epochs)
-        steps_per_epoch = dataset_rows // global_batch
-        total_steps = steps_per_epoch * epochs
+    epochs = FORMAL_EPOCHS if args.epochs is None else int(args.epochs)
+    steps_per_epoch = dataset_rows // global_batch
+    total_steps = steps_per_epoch * epochs
     if epochs <= 0 or steps_per_epoch <= 0:
         raise ValueError("epochs and steps_per_epoch must be positive")
-    if args.mode == "smoke" and args.epochs not in (None, 1):
-        raise ValueError("smoke fixes epochs=1")
+    if epochs != FORMAL_EPOCHS:
+        raise ValueError(f"shared-store fixed260 route requires epochs={FORMAL_EPOCHS}")
     args.epochs = epochs
     return {
         "global_batch_size": global_batch,
@@ -231,7 +231,8 @@ def _training_shape(args: argparse.Namespace, dataset_rows: int) -> dict[str, in
     }
 
 
-def _formal_gate(args: argparse.Namespace, inventory: dict[str, Any]) -> dict[str, Any] | None:
+def _formal_gate(args: argparse.Namespace, inventory: dict[str, Any],
+                 shape: dict[str, int]) -> dict[str, Any] | None:
     if args.mode != "formal":
         return None
     if args.smoke20_report is None or args.smoke_resume_report is None:
@@ -246,7 +247,18 @@ def _formal_gate(args: argparse.Namespace, inventory: dict[str, Any]) -> dict[st
                 or report.get("training_contract") != TRAINING_CONTRACT
                 or report.get("start_global_step") != start
                 or report.get("end_global_step") != end
-                or report.get("hard_failures")):
+                or report.get("hard_failures")
+                or report.get("epochs") != FORMAL_EPOCHS
+                or report.get("max_lr") != CANONICAL_MAX_LR
+                or report.get("min_lr") != CANONICAL_MIN_LR
+                or report.get("compact_single_audio_prefix") is not False
+                or report.get("prefix_tokens") != PREFIX_TOKENS
+                or report.get("single_audio_slot_semantics") != AUDIO_SLOT_SEMANTICS
+                or report.get("shape") != shape
+                or report.get("warmup_steps") != args.warmup_steps
+                or report.get("warmup_default_ceil_5_percent") != args.warmup_steps
+                or report.get("sampler", {}).get("seed") != args.seed
+                or report.get("initialization", {}).get("fresh_source") != str(args.model_path.resolve())):
             raise RuntimeError(f"formal gate rejects {label} report")
         report_inventory = report.get("store_inventory", {})
         for key in ("manifest_sha256", "index_sha256", "waveform_sha256", "total_waveform_bytes"):
@@ -256,6 +268,8 @@ def _formal_gate(args: argparse.Namespace, inventory: dict[str, Any]) -> dict[st
             raise RuntimeError(f"formal gate rejects {label} gradient trace")
         if report.get("answer_only_label_audit", {}).get("passed") is not True:
             raise RuntimeError(f"formal gate rejects {label} label audit")
+        if report.get("answer_only_label_audit", {}).get("terminal_eos_supervised") is not True:
+            raise RuntimeError(f"formal gate rejects {label} terminal EOS audit")
     first_checkpoint = str(Path(first["checkpoints"][-1]).resolve())
     if resumed.get("resume_checkpoint") != first_checkpoint or resumed.get("resume_verified_two_steps") is not True:
         raise RuntimeError("resume smoke does not prove exact continuation from checkpoint-000020")
@@ -274,7 +288,8 @@ def _checkpoint_config(args: argparse.Namespace, inventory: dict[str, Any], shap
         "mapper_contract": MAPPER_CONTRACT,
         "mapper_initialization": "random_c2l_and_xavier_projection",
         "mesh_model_path": str(args.model_path.resolve()),
-        "compact_single_audio_prefix": True,
+        "compact_single_audio_prefix": False,
+        "single_audio_slot_semantics": AUDIO_SLOT_SEMANTICS,
         "answer_termination": ANSWER_TERMINATION,
         "prefix_tokens": PREFIX_TOKENS,
         "mesh_hidden_size": MESH_HIDDEN_SIZE,
@@ -381,8 +396,9 @@ def _resume(path: Path, args: argparse.Namespace, inventory: dict[str, Any], sha
     expected = _checkpoint_config(args, inventory, shape, provenance)
     for key in (
         "contract", "architecture_contract", "mapper_contract", "mapper_initialization",
-        "mesh_model_path", "compact_single_audio_prefix",
-        "answer_termination", "prefix_tokens", "store_identity", "mode", "epochs", "world_size",
+        "mesh_model_path", "compact_single_audio_prefix", "mesh_hidden_size",
+        "audio_tokens_per_clip", "audio_prefix_tokens_with_separators",
+        "single_audio_slot_semantics", "answer_termination", "prefix_tokens", "store_identity", "mode", "epochs", "world_size",
         "micro_batch_size", "gradient_accumulation_steps", "num_workers", "seed", "max_lr",
         "min_lr", "warmup_steps", "total_steps", "steps_per_epoch", "save_every",
         "checkpoint_retention", "dist_timeout_minutes", "htsat_checkpoint", "mellow_root",
@@ -415,23 +431,43 @@ def _resume(path: Path, args: argparse.Namespace, inventory: dict[str, Any], sha
 def _answer_label_audit(model: Any, batch: dict[str, Any]) -> dict[str, Any]:
     labels = model.last_labels
     prefix_lengths = model.last_prefix_lengths
-    if labels is None or prefix_lengths is None:
-        raise RuntimeError("model did not expose labels/prefix lengths")
+    if labels is None:
+        raise RuntimeError("model did not expose labels")
+    if prefix_lengths is None:
+        prefix_length = model.last_prefix_length
+        if prefix_length is None:
+            raise RuntimeError("model did not expose fixed prefix length")
+        prefix_lengths = torch.full(
+            (labels.shape[0],), int(prefix_length), dtype=torch.long, device=labels.device
+        )
     text_ids = batch["text_ids"]
     prompts = batch["prompt_lengths"]
     answers = batch["answer_lengths"]
     supervised = 0
     for row in range(text_ids.shape[0]):
         prefix = int(prefix_lengths[row].item())
+        if prefix != AUDIO_PREFIX_TOKENS:
+            raise RuntimeError("shared-store training requires fixed 260-token prefixes")
         prompt = int(prompts[row].item())
         answer = int(answers[row].item())
+        if answer <= 0:
+            raise RuntimeError("answer has no supervised terminal EOS")
         start, end = prefix + prompt, prefix + prompt + answer
         if bool((labels[row, :start] != -100).any()) or bool((labels[row, end:] != -100).any()):
             raise RuntimeError("answer-only label mask has supervision outside the answer interval")
         if not torch.equal(labels[row, start:end], text_ids[row, prompt:prompt + answer]):
             raise RuntimeError("answer-only labels are not aligned to answer tokens")
+        eos_id = int(model.tokenizer.eos_token_id)
+        if int(labels[row, end - 1].item()) != eos_id:
+            raise RuntimeError("answer terminal EOS is not supervised")
+        if answer > 1 and int(labels[row, end - 2].item()) == eos_id:
+            raise RuntimeError("answer has duplicate trailing EOS tokens")
         supervised += answer
-    return {"passed": True, "rows": int(text_ids.shape[0]), "supervised_answer_tokens": supervised}
+    return {
+        "passed": True, "rows": int(text_ids.shape[0]),
+        "prefix_tokens": AUDIO_PREFIX_TOKENS,
+        "supervised_answer_tokens": supervised, "terminal_eos_supervised": True,
+    }
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -455,10 +491,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 or args.micro_batch_size != 8 or args.gradient_accumulation_steps != 4
                 or args.num_workers != 0):
             raise RuntimeError("shared-store training requires 8 GPUs, microbatch 8, GA 4, num_workers 0")
-        if (args.max_lr <= 0 or args.min_lr < 0 or args.min_lr > args.max_lr
+        if (args.max_lr != CANONICAL_MAX_LR or args.min_lr != CANONICAL_MIN_LR
                 or args.save_every <= 0 or args.checkpoint_retention <= 0
                 or args.dist_timeout_minutes < 30):
-            raise ValueError("invalid LR, checkpoint, retention, or distributed timeout")
+            raise ValueError(
+                "fixed260 shared-store route requires max_lr=1e-3 and min_lr=1e-4; "
+                "checkpoint, retention, and distributed timeout must also be valid"
+            )
         torch.cuda.set_device(local_rank)
         device = torch.device("cuda", local_rank)
         dist.init_process_group("nccl", rank=rank, world_size=world,
@@ -467,8 +506,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
         inventory = _store_inventory(args)
         rank_staging_audit = _staging_rank_audit(inventory, rank, world)
-        formal_gate = _formal_gate(args, inventory)
-        args.compact_single_audio_prefix = True
+        # The shared-store route changes only waveform residency and delivery.
+        # Keep the historical fixed-260 two-slot model contract: a structural
+        # single-audio row reuses audio1's HTSAT embedding, then both slots run
+        # through the trainable bridge independently.
+        args.compact_single_audio_prefix = False
         args.init_from_audio_checkpoint = None
         dataset_started = time.perf_counter()
         # This constructor re-hashes the staged manifest, verifies it against
@@ -482,8 +524,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         shape = _training_shape(args, len(dataset))
         default_warmup = math.ceil(shape["total_steps"] * 0.05)
         args.warmup_steps = default_warmup if args.warmup_steps is None else int(args.warmup_steps)
-        if args.warmup_steps < 0 or args.warmup_steps > shape["total_steps"]:
-            raise ValueError("warmup_steps must be within the optimizer-step budget")
+        if args.warmup_steps != default_warmup:
+            raise ValueError(f"warmup_steps must equal ceil(total_steps * 0.05)={default_warmup}")
+        formal_gate = _formal_gate(args, inventory, shape)
 
         model, tokenizer = base._load_model(args, device)
         dataset.tokenizer = tokenizer
@@ -549,6 +592,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "warmup_default_ceil_5_percent": default_warmup,
             "max_lr": args.max_lr,
             "min_lr": args.min_lr,
+            "compact_single_audio_prefix": False,
+            "prefix_tokens": PREFIX_TOKENS,
+            "single_audio_slot_semantics": AUDIO_SLOT_SEMANTICS,
             "initialization": {
                 "kind": "text_mesh_plus_random_audio_mapper" if args.resume_from is None else "full_state_resume",
                 "fresh_source": str(args.model_path.resolve()),
@@ -587,8 +633,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 last_batch: dict[str, Any] | None = None
                 for micro in range(args.gradient_accumulation_steps):
                     batch = next(iterator)
-                    device_keys = {"audio1", "audio2", "text_ids"}
-                    batch = {key: (value.to(device) if torch.is_tensor(value) and key in device_keys else value)
+                    # Every tensor consumed by AudioMeshModel must share the
+                    # rank device; fixed-260 mode concatenates text masks with
+                    # the GPU audio prefix.
+                    batch = {key: (value.to(device) if torch.is_tensor(value) else value)
                              for key, value in batch.items()}
                     last_batch = batch
                     synchronization = ddp.no_sync() if micro + 1 < args.gradient_accumulation_steps else contextlib.nullcontext()

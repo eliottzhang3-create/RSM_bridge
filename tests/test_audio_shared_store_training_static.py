@@ -6,14 +6,17 @@ import argparse
 import json
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock, call
 
 
 ROOT = Path(__file__).resolve().parents[1]
 RSMOL = ROOT / "code" / "RSmol"
 PACKAGE = RSMOL / "audio_5_10x2_5_mesh_mellow_shared_store"
+BASE_PACKAGE = RSMOL / "audio_5_10x2_5_mesh_mellow"
 TRAIN = RSMOL / "scripts" / "train_audio_shared_store_5_10x2_5_mesh_mellow_ddp.py"
 STAGE = RSMOL / "scripts" / "stage_audio_shared_store_5_10x2_5_mesh_mellow.sh"
 SMOKE = RSMOL / "scripts" / "train_audio_shared_store_smoke20_5_10x2_5_mesh_mellow_ddp.sh"
@@ -24,7 +27,8 @@ SUBMITS = (
     RSMOL / "run_audio_shared_store_resume2_5_10x2_5_mesh_mellow_5090.sh",
     RSMOL / "run_audio_shared_store_formal_5_10x2_5_mesh_mellow_5090.sh",
 )
-CONTRACT = "node_shared_unique_store_fullshuffle_compact_audio_answer_eos_v2"
+CONTRACT = "node_shared_unique_store_fullshuffle_fixed260_audio_reuse_answer_eos_v2"
+AUDIO_SLOT_SEMANTICS = "fixed260_second_slot_reuses_audio1_htsat_embedding_then_runs_bridge_separately"
 
 
 class AudioSharedStoreTrainingStaticTest(unittest.TestCase):
@@ -84,34 +88,66 @@ class AudioSharedStoreTrainingStaticTest(unittest.TestCase):
         self.assertNotIn("ShardAwareDistributedBatchSampler", text)
         self.assertNotIn("RankLocal", text)
 
-    def test_complete_manifest_step_budget_is_37810(self) -> None:
+    def test_complete_manifest_step_budget_is_three_epochs(self) -> None:
         tree = ast.parse(TRAIN.read_text(encoding="utf-8"))
         node = next(item for item in tree.body if isinstance(item, ast.FunctionDef)
                     and item.name == "_training_shape")
         namespace = {
             "argparse": argparse,
-            "SMOKE_TOTAL_STEPS": 22,
+            "FORMAL_EPOCHS": 3,
         }
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
         formal_args = SimpleNamespace(
-            mode="formal", epochs=10, world_size=8,
+            mode="formal", epochs=3, world_size=8,
             micro_batch_size=8, gradient_accumulation_steps=4,
         )
         formal = namespace["_training_shape"](formal_args, 968_059)
         self.assertEqual(formal["global_batch_size"], 256)
         self.assertEqual(formal["steps_per_epoch"], 3_781)
-        self.assertEqual(formal["total_steps"], 37_810)
+        self.assertEqual(formal["total_steps"], 11_343)
         self.assertEqual(formal["dropped_rows_per_epoch"], 123)
         smoke_args = SimpleNamespace(
             mode="smoke", epochs=None, world_size=8,
             micro_batch_size=8, gradient_accumulation_steps=4,
         )
-        self.assertEqual(namespace["_training_shape"](smoke_args, 968_059)["total_steps"], 22)
+        smoke = namespace["_training_shape"](smoke_args, 968_059)
+        self.assertEqual(smoke["total_steps"], 11_343)
+        self.assertEqual(smoke_args.epochs, 3)
+        formal_args.epochs = 10
+        with self.assertRaises(ValueError):
+            namespace["_training_shape"](formal_args, 968_059)
+
+    def test_single_embedding_is_reused_but_bridge_runs_twice(self) -> None:
+        tree = ast.parse((BASE_PACKAGE / "model.py").read_text(encoding="utf-8"))
+        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+                   and node.name == "AudioMeshModel")
+        node = next(node for node in cls.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "encode_audio")
+        namespace = {"torch": SimpleNamespace(Tensor=object),
+                     "record_function": lambda _: nullcontext()}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(TRAIN), "exec"), namespace)
+        wave1 = SimpleNamespace(ndim=3, data_ptr=lambda: 1)
+        wave2 = SimpleNamespace(ndim=3, data_ptr=lambda: 2)
+        for audio2, mask in ((None, None), (wave2, SimpleNamespace(all=lambda: True))):
+            with self.subTest(audio2=audio2, mask=mask):
+                embedding, slot1, slot2 = object(), object(), object()
+                owner = SimpleNamespace(_waveform_embedding=Mock(return_value=embedding),
+                                        bridge=Mock(side_effect=[slot1, slot2]))
+                result = namespace["encode_audio"](owner, wave1, audio2, mask)
+                owner._waveform_embedding.assert_called_once_with(wave1)
+                self.assertEqual(owner.bridge.call_args_list, [call(embedding), call(embedding)])
+                self.assertEqual(result, (slot1, slot2))
+        first, second = object(), object()
+        owner = SimpleNamespace(_waveform_embedding=Mock(side_effect=[first, second]),
+                                bridge=Mock(side_effect=["slot1", "slot2"]))
+        namespace["encode_audio"](owner, wave1, wave2)
+        self.assertEqual(owner._waveform_embedding.call_args_list, [call(wave1), call(wave2)])
+        self.assertEqual(owner.bridge.call_args_list, [call(first), call(second)])
 
     def test_model_and_loss_contract_is_unchanged(self) -> None:
         train = TRAIN.read_text(encoding="utf-8")
-        model = (PACKAGE / "model.py").read_text(encoding="utf-8")
-        data = (PACKAGE / "data.py").read_text(encoding="utf-8")
+        model = (BASE_PACKAGE / "model.py").read_text(encoding="utf-8")
+        data = (BASE_PACKAGE / "data.py").read_text(encoding="utf-8")
         for marker in (
             "AUDIO_SINGLE_PREFIX_TOKENS", "AUDIO_DUAL_PREFIX_TOKENS",
             "AUDIO_TOKENS_PER_CLIP", "MESH_HIDDEN_SIZE", "AudioMeshModel",
@@ -120,10 +156,21 @@ class AudioSharedStoreTrainingStaticTest(unittest.TestCase):
         self.assertIn("ReasonAQADataset", data)
         self.assertIn("collate_reasonaqa", data)
         for marker in (
+            "single_audio_slot", "audio2_waveform = None if single_slot",
+            "second = first", "projected_first = self.bridge(first)",
+            "return projected_first, self.bridge(second)",
+        ):
+            self.assertIn(marker, data + model)
+        for marker in (
             '"token": "<|endoftext|>"', '"supervised": True',
             "_answer_label_audit", "answer-only label mask",
             "_mesh_runtime_gradient_audit(owner, require_router_stats=False)",
             '"trace_matches_5_10_10_5"',
+            '"compact_single_audio_prefix": False',
+            '"single_audio_slot_semantics"',
+            'AUDIO_SLOT_SEMANTICS',
+            'PREFIX_TOKENS = {"single": AUDIO_DUAL_PREFIX_TOKENS, "dual": AUDIO_DUAL_PREFIX_TOKENS}',
+            'batch = {key: (value.to(device) if torch.is_tensor(value) else value)',
         ):
             self.assertIn(marker, train)
 
@@ -131,6 +178,7 @@ class AudioSharedStoreTrainingStaticTest(unittest.TestCase):
         text = TRAIN.read_text(encoding="utf-8")
         for marker in (
             "SMOKE_FIRST_STOP = 20", "SMOKE_TOTAL_STEPS = 22",
+            "FORMAL_EPOCHS = 3", "CANONICAL_MIN_LR = 1e-4",
             '{"epoch": 0, "batch_in_epoch": 80, "global_step": 20}',
             'cursor["global_step"] in {20, 22}',
             'f"checkpoint-{cursor[\'global_step\']:06d}"',
@@ -154,12 +202,18 @@ class AudioSharedStoreTrainingStaticTest(unittest.TestCase):
             "Path": Path,
             "json": json,
             "TRAINING_CONTRACT": CONTRACT,
+            "FORMAL_EPOCHS": 3,
+            "CANONICAL_MAX_LR": 1e-3,
+            "CANONICAL_MIN_LR": 1e-4,
+            "AUDIO_SLOT_SEMANTICS": AUDIO_SLOT_SEMANTICS,
+            "PREFIX_TOKENS": {"single": 260, "dual": 260},
         }
         exec(compile(ast.Module(body=selected, type_ignores=[]), str(TRAIN), "exec"), namespace)
         inventory = {
             "manifest_sha256": "manifest", "index_sha256": "index",
             "waveform_sha256": "waveform", "total_waveform_bytes": 123,
         }
+        shape = {"steps_per_epoch": 3781, "total_steps": 11343}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             checkpoint = root / "smoke" / "checkpoint-000020"
@@ -167,8 +221,16 @@ class AudioSharedStoreTrainingStaticTest(unittest.TestCase):
             common = {
                 "status": "PASS", "mode": "smoke", "training_contract": CONTRACT,
                 "hard_failures": [], "store_inventory": inventory,
+                "epochs": 3, "max_lr": 1e-3, "min_lr": 1e-4,
+                "compact_single_audio_prefix": False,
+                "prefix_tokens": {"single": 260, "dual": 260},
+                "single_audio_slot_semantics": AUDIO_SLOT_SEMANTICS,
+                "shape": shape,
+                "warmup_steps": 568, "warmup_default_ceil_5_percent": 568,
+                "sampler": {"seed": 0},
+                "initialization": {"fresh_source": str(root.resolve())},
                 "first_step_gradient_audit": {"trace_matches_5_10_10_5": True},
-                "answer_only_label_audit": {"passed": True},
+                "answer_only_label_audit": {"passed": True, "terminal_eos_supervised": True},
             }
             first = {**common, "start_global_step": 0, "end_global_step": 20,
                      "checkpoints": [str(checkpoint)]}
@@ -179,17 +241,25 @@ class AudioSharedStoreTrainingStaticTest(unittest.TestCase):
             first_path.write_text(json.dumps(first), encoding="utf-8")
             resumed_path.write_text(json.dumps(resumed), encoding="utf-8")
             args = SimpleNamespace(mode="formal", smoke20_report=first_path,
-                                   smoke_resume_report=resumed_path)
-            result = namespace["_formal_gate"](args, inventory)
+                                   smoke_resume_report=resumed_path, warmup_steps=568,
+                                   seed=0, model_path=root)
+            result = namespace["_formal_gate"](args, inventory, shape)
             self.assertEqual(result["checkpoint20"], str(checkpoint.resolve()))
-            resumed["start_global_step"] = 19
-            resumed_path.write_text(json.dumps(resumed), encoding="utf-8")
-            with self.assertRaises(RuntimeError):
-                namespace["_formal_gate"](args, inventory)
+            for key, stale in (
+                ("start_global_step", 19), ("compact_single_audio_prefix", True),
+                ("prefix_tokens", {"single": 130, "dual": 260}),
+                ("shape", {"steps_per_epoch": 3781, "total_steps": 22}),
+                ("warmup_steps", 2), ("min_lr", 0), ("sampler", {"seed": 1}),
+                ("answer_only_label_audit", {"passed": True}),
+            ):
+                with self.subTest(key=key):
+                    resumed_path.write_text(json.dumps({**resumed, key: stale}), encoding="utf-8")
+                    with self.assertRaises(RuntimeError):
+                        namespace["_formal_gate"](args, inventory, shape)
 
     def test_formal_defaults_and_5090_submission_are_isolated(self) -> None:
         formal = FORMAL.read_text(encoding="utf-8")
-        for marker in ("--epochs 10", "--max-lr 1e-3", "--min-lr 0",
+        for marker in ("--epochs 3", "--max-lr 1e-3", "--min-lr 1e-4",
                        "--save-every 500", "--checkpoint-retention 4"):
             self.assertIn(marker, formal)
         self.assertIn("--smoke20-report", TRAIN.read_text(encoding="utf-8"))

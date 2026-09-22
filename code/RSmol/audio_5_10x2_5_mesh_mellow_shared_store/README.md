@@ -6,11 +6,14 @@ sampling route.  It does not import or modify the six-partition trainer.
 
 ## Fixed contract
 
-- Contract: `node_shared_unique_store_fullshuffle_compact_audio_answer_eos_v2`.
+- Contract: `node_shared_unique_store_fullshuffle_fixed260_audio_reuse_answer_eos_v2`.
 - Initial weights: the current MeSH text checkpoint `checkpoint-009244`.
-- Audio/model semantics: the audited Mellow HTSAT + c2l + bridge path, compact
-  single/dual prefix (130/260 tokens), and answer-only loss including terminal
-  `<|endoftext|>`.
+- Audio/model semantics: the audited Mellow HTSAT + c2l + bridge path, fixed
+  260-token single/dual prefix, and answer-only loss including terminal
+  `<|endoftext|>`. A structural single-audio row reuses audio1's HTSAT
+  embedding for slot two, then runs both embeddings through the bridge
+  independently with the same weights and separate dropout draws, matching
+  the historical 3-epoch route. Dual rows use both real audio embeddings.
 - Topology: one node, 8 GPUs, micro batch 8 per rank, gradient accumulation 4,
   effective global batch 256, and `num_workers=0`.
 - Sampling: one `DistributedSampler` over the complete canonical manifest,
@@ -19,7 +22,9 @@ sampling route.  It does not import or modify the six-partition trainer.
 - Storage: the complete immutable v3 unique waveform store is copied once from
   persistent storage to a run-unique directory below `/dev/shm`.  All eight
   ranks mmap the same `waveforms.f32` inode.  There is no rank-local copy of
-  the full store.  Store staging time is reported separately from training.
+  the full store. No additional decode/resample/crop/pad is applied before
+  HTSAT; its internal feature extraction remains unchanged. Store staging
+  time is reported separately from training.
 - Checkpoints do not contain the dataset/store.  They contain model, tokenizer,
   bridge/c2l, optimizer, scheduler, exact epoch/batch/global-step cursor, and
   every rank's RNG state.
@@ -39,6 +44,11 @@ ranks see the same staged file device/inode/size.
 
 ## Required release sequence
 
+The previous compact shared-store smoke/resume passed according to the user.
+This fixed260 contract requires new smoke/resume reports and rejects old
+compact checkpoints. Use fresh output directories for the commands below.
+Formal training initializes from the text checkpoint, not the smoke weights.
+
 Run from the remote repository root:
 
 ```bash
@@ -54,7 +64,7 @@ bash run_audio_shared_store_resume2_5_10x2_5_mesh_mellow_5090.sh \
 bash run_audio_shared_store_formal_5_10x2_5_mesh_mellow_5090.sh \
   --smoke20-report /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/smoke20_20260922/shared_store_training_report.json \
   --smoke-resume-report /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/resume2_20260922/shared_store_training_report.json \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/formal_10epochs_20260922
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/formal_3epochs_20260922
 ```
 
 The first smoke stops at optimizer step 20 and publishes
@@ -64,11 +74,13 @@ exactly two steps, and publishes `checkpoint-000022`.  Formal training refuses
 to start unless both reports are `PASS`, use this exact contract and store
 identity, and pass the answer-mask and MeSH 5-10-10-5 gradient/trace audits.
 
-Defaults for formal training are 10 epochs, maximum LR `1e-3`, minimum LR `0`,
+The fixed formal schedule is 3 epochs, maximum LR `1e-3`, minimum LR `1e-4`,
 5% warmup rounded up to whole optimizer steps, save every 500 steps, and retain
-the newest four complete checkpoints.  CLI arguments placed after the wrapper
-defaults may override these values, but smoke and its resume must use identical
-resume-validated settings.
+the newest four complete checkpoints. Smoke and its resume use the same
+3-epoch scheduler horizon and resume-validated settings. For 968,059 manifest
+rows this is 3,781 steps/epoch, 11,343 total steps and 568 warmup steps. Smoke
+only stops early; it does not compress this schedule into 22 steps. The final
+formal checkpoint is `checkpoint-011343`.
 
 Every run writes `shared_store_training_report.json` to its output directory.
 Output directories must be new or empty.  `/dev/shm` staging is removed on job

@@ -10,15 +10,16 @@ metadata/index 与 waveform store 一起暂存，canonical manifest 单独暂存
 与 store metadata 绑定。训练使用完整 manifest 上的 `DistributedSampler(shuffle=True)`，
 每个 epoch 重新生成全局排列后分配互不重叠的 rank slice，不使用六分区 schedule。
 
-该路线保持当前 MeSH 音频模型合同不变：Mellow HTSAT/c2l/bridge、compact
-single/dual 130/260-token prefix、answer-only loss 和受监督的终止
+该路线恢复旧 3-epoch 的音频槽语义：Mellow HTSAT/c2l/bridge、固定
+260-token single/dual prefix、answer-only loss 和受监督的终止
 `<|endoftext|>`。独立合同是
-`node_shared_unique_store_fullshuffle_compact_audio_answer_eos_v2`，拥有自己的 trainer、
+`node_shared_unique_store_fullshuffle_fixed260_audio_reuse_answer_eos_v2`，拥有自己的 trainer、
 checkpoint config、report、20+2 精确 resume gate、输出根目录与 `pdgpu-5090` 三个提交入口，
-不会修改六分区或 online trainer。正式入口默认 10 epochs、LR `1e-3 -> 0`、5% warmup
+不会修改六分区或 online trainer。单音频第二槽复用 audio1 的 HTSAT embedding，再由 bridge 分别计算；正式入口固定 3 epochs、LR `1e-3 -> 1e-4`、5% warmup
 向上取整、每 500 step 保存、保留 4 个 checkpoint。完整命令和审计合同见
-`code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/README.md`。远程 smoke20、resume2
-与正式训练尚未运行；本地仅完成静态/语法验证，不能记为 GPU PASS。
+`code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/README.md`。用户已确认改动前的共享存储
+smoke/resume 跑通；本次 fixed260 合同尚待远程重新运行 20+2，旧 compact report/checkpoint
+不能用于本次放行或续训。本地检查不代表新合同 GPU PASS。
 
 ## 2026-09-21：隔离的固定 260-token 运行时静音槽实验
 
@@ -622,7 +623,7 @@ bash run_audio_formal_5_10x2_5_mesh_mellow_5090.sh \
 
 ### 6.9 Shared-store 全量 shuffle 隔离训练线
 
-这是最新新增的独立路线，合同为 `node_shared_unique_store_fullshuffle_compact_audio_answer_eos_v2`。它保持当前 MeSH model/data、compact 130/260、answer-EOS 和 optimizer 语义，只更换数据驻留与分发方式：完整 v3 unique store 每个作业只复制一次到节点 `/dev/shm`，8 个 rank mmap 同一个 `waveforms.f32` inode；不使用六分区 schedule，不给每个 rank 克隆完整 store。
+当前实验直接复用这条独立路线，合同为 `node_shared_unique_store_fullshuffle_fixed260_audio_reuse_answer_eos_v2`。恢复旧 3-epoch 的固定 260-token 双槽，单音频复用 HTSAT embedding 后分别调用同一个 bridge（保留两次 dropout），并保留 answer-EOS 监督。完整 v3 unique store 每个作业只复制一次到节点 `/dev/shm`，8 个 rank mmap 同一个 `waveforms.f32` inode；不使用六分区 schedule，不给每个 rank 克隆完整 store，不重复解码/重采样/crop/pad。
 
 实现和完整合同：
 
@@ -643,7 +644,7 @@ code/RSmol/run_audio_shared_store_resume2_5_10x2_5_mesh_mellow_5090.sh
 code/RSmol/run_audio_shared_store_formal_5_10x2_5_mesh_mellow_5090.sh
 ```
 
-smoke 初始运行固定 step 0→20，发布 `checkpoint-000020`；resume 必须从 `epoch=0,batch_in_epoch=80,global_step=20` 开始，恢复 optimizer/scheduler/RNG，运行 20→22 并发布 `checkpoint-000022`。formal gate 检查两个 report 的合同、store identity、完整 manifest sampler、MeSH 轨迹/梯度审计和 answer-only mask。formal 默认 10 epochs、max LR `1e-3`、min LR `0`、5% warmup 向上取整、每 500 step 保存、保留 4 个 checkpoint。
+smoke 初始运行固定 step 0→20，发布 `checkpoint-000020`；resume 必须从 `epoch=0,batch_in_epoch=80,global_step=20` 开始，恢复 optimizer/scheduler/RNG，运行 20→22 并发布 `checkpoint-000022`。formal gate 检查两个 report 的合同、store identity、seed、初始化源、调度、MeSH 轨迹/梯度审计和 answer-only/EOS mask。三种运行均固定 3 epochs 调度、max LR `1e-3`、min LR `1e-4`、5% warmup 向上取整；当前 968,059 条数据对应 3,781 step/epoch、11,343 总步数、568 warmup steps。formal 从文本 MeSH 初始化重新训练，每 500 step 保存、保留 4 个 checkpoint。
 
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
@@ -659,10 +660,10 @@ bash run_audio_shared_store_resume2_5_10x2_5_mesh_mellow_5090.sh \
 bash run_audio_shared_store_formal_5_10x2_5_mesh_mellow_5090.sh \
   --smoke20-report "$SHARED/smoke20_YYYYMMDD/shared_store_training_report.json" \
   --smoke-resume-report "$SHARED/resume2_YYYYMMDD/shared_store_training_report.json" \
-  --output-dir "$SHARED/formal_10epochs_YYYYMMDD"
+  --output-dir "$SHARED/formal_3epochs_YYYYMMDD"
 ```
 
-本路线本地已通过 Python 编译和独立静态合同测试；远程 smoke20、resume2 和 formal 尚未登记 PASS。staging 时间单独写入 report，不计入 optimizer step timing；退出时只删除本次精确的 `/dev/shm/rsmol_shared_train_<RUN_ID>` 目录。
+本路线本地已通过 Python 编译和独立静态合同测试；用户确认旧 compact 共享路线 smoke/resume 跑通，本次 fixed260 版本须用新输出目录重新运行，formal 从头初始化，不能延续旧 10-epoch 音频权重。staging 时间单独写入 report，不计入 optimizer step timing；退出时只删除本次精确的 `/dev/shm/rsmol_shared_train_<RUN_ID>` 目录。
 
 ## 7. 性能优化实验：保留的结论
 
