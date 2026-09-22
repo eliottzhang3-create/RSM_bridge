@@ -1,5 +1,19 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-23：shared-store 可传 epochs 的隔离训练副本
+
+在不修改原 3-epoch shared-store 入口和当前作业的前提下，新增隔离的
+configurable-epochs 提交线。新入口要求显式传入正整数 `--epochs`；模型、完整 manifest
+shuffle、固定 260-token prefix、单音频复用 audio1 HTSAT embedding 后两次独立 bridge、
+answer-EOS、8×8×GA4、LR `1e-3 -> 1e-4`、checkpoint/resume 和 formal gate 均保持不变。
+真实调度按 `steps_per_epoch=floor(rows/256)`、`total_steps=steps_per_epoch*epochs`、
+`warmup_steps=ceil(total_steps*0.05)` 计算。当前 968,059 条数据传 `--epochs 10` 时为
+3,781 step/epoch、37,810 总步数、1,891 warmup steps。10-epoch smoke20、resume2 和 formal
+必须全部显式传 `--epochs 10`；旧 3-epoch report/checkpoint 会因 epochs、shape、warmup 或
+checkpoint config 不一致而被拒绝。完整命令见
+`code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/README.md`。该路线当前是本地代码就绪，
+不表示 10-epoch 远程 smoke/formal 已 PASS。
+
 ## 2026-09-22：隔离的整库 node-shared `/dev/shm` 全量打乱训练线
 
 在 shared-store PERF20 通过后，新增隔离训练线
@@ -27,7 +41,7 @@ smoke/resume 跑通；本次 fixed260 合同尚待远程重新运行 20+2，旧 
 
 独立训练合同为 `component_partitions6_rank_ram_fixed260_runtime_silence_second_slot_answer_eos_v2`，LR 为 `1e-3` 经 5% warmup 后 cosine decay 到 `1e-4`。该线拥有独立 model/data 模块、trainer、checkpoint config、20+2 smoke 门禁、report、输出目录和 `pdgpu-5090` 提交入口；拒绝 compact MeSH、SmolLM2 和 recursive checkpoint 跨合同 resume。完整命令和审计项见 `code/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/README.md`。
 
-> 最后同步：2026-09-22
+> 最后同步：2026-09-23
 > 本文件是新 Codex 会话的首要交接依据。新会话必须先完整阅读本文，再阅读“当前主线文件”中列出的代码与最新远程 report。若本文、旧聊天和代码冲突，以当前代码行为与最新远程证据为准，并及时把差异补回本文。
 
 ## 0. 当前状态：先读这一节
@@ -925,6 +939,14 @@ code/RSmol/scripts/materialize_reasonaqa_component_partitions.py
 code/RSmol/scripts/train_audio_5_10x2_5_mesh_mellow_ddp.py
 code/RSmol/scripts/stage_audio_shared_store_5_10x2_5_mesh_mellow.sh
 code/RSmol/scripts/train_audio_shared_store_5_10x2_5_mesh_mellow_ddp.py
+code/RSmol/scripts/stage_audio_shared_store_configurable_epochs_5_10x2_5_mesh_mellow.sh
+code/RSmol/scripts/train_audio_shared_store_configurable_epochs_5_10x2_5_mesh_mellow_ddp.py
+code/RSmol/scripts/train_audio_shared_store_smoke20_configurable_epochs_5_10x2_5_mesh_mellow_ddp.sh
+code/RSmol/scripts/train_audio_shared_store_resume2_configurable_epochs_5_10x2_5_mesh_mellow_ddp.sh
+code/RSmol/scripts/train_audio_shared_store_formal_configurable_epochs_5_10x2_5_mesh_mellow_ddp.sh
+code/RSmol/run_audio_shared_store_smoke20_configurable_epochs_5_10x2_5_mesh_mellow_5090.sh
+code/RSmol/run_audio_shared_store_resume2_configurable_epochs_5_10x2_5_mesh_mellow_5090.sh
+code/RSmol/run_audio_shared_store_formal_configurable_epochs_5_10x2_5_mesh_mellow_5090.sh
 code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/README.md
 code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/data.py
 code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/model.py
@@ -933,6 +955,7 @@ code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
 tests/test_audio_perf20_static.py
 tests/test_audio_waveform_cache_perf20_static.py
 tests/test_audio_shared_store_training_static.py
+tests/test_audio_shared_store_configurable_epochs_static.py
 tests/test_reasonaqa_component_partitions.py
 tests/test_reasonaqa_partition_materialization.py
 ```
@@ -1012,9 +1035,11 @@ python -m py_compile code/RSmol/audio_5_10x2_5_mesh_mellow/data.py
 python -m py_compile code/RSmol/audio_5_10x2_5_mesh_mellow/model.py
 python -m py_compile code/RSmol/scripts/train_audio_partitioned_5_10x2_5_mesh_mellow_ddp.py
 python -m py_compile code/RSmol/scripts/train_audio_shared_store_5_10x2_5_mesh_mellow_ddp.py
+python -m py_compile code/RSmol/scripts/train_audio_shared_store_configurable_epochs_5_10x2_5_mesh_mellow_ddp.py
 python -m unittest discover -s tests -p "test_audio_partition_training_static.py"
 python -m unittest discover -s tests -p "test_audio_5_10x2_5_mesh_mellow_static.py"
 python -m unittest discover -s tests -p "test_audio_shared_store_training_static.py"
+python -m unittest discover -s tests -p "test_audio_shared_store_configurable_epochs_static.py"
 python -m unittest discover -s tests -p "test_unique_audio_waveform_store_static.py"
 git diff --check
 ```

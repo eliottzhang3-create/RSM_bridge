@@ -85,3 +85,50 @@ formal checkpoint is `checkpoint-011343`.
 Every run writes `shared_store_training_report.json` to its output directory.
 Output directories must be new or empty.  `/dev/shm` staging is removed on job
 exit; the persistent v3 store is never modified.
+
+## Isolated configurable-epoch copy
+
+The original three-epoch entrypoints above remain unchanged so an existing job
+is not affected.  A separate copied entrypoint family accepts an explicit
+positive `--epochs` value while preserving this package's fixed-260 model,
+full-manifest sampler, shared-store staging, optimizer, LR endpoints,
+checkpoint, exact-resume, and formal-gate contracts.
+
+For every run, the scheduler horizon is calculated from the real complete
+optimizer-step budget:
+
+```text
+steps_per_epoch = floor(dataset_rows / (world_size * micro_batch * GA))
+total_steps     = steps_per_epoch * epochs
+warmup_steps    = ceil(total_steps * 0.05)
+```
+
+With 968,059 rows, 8 ranks, microbatch 8 and GA 4, `--epochs 10` means 3,781
+steps/epoch, 37,810 total optimizer steps, and 1,891 warmup steps.  Smoke20,
+resume2, and formal must all use `--epochs 10`; reports or checkpoints created
+with the old three-epoch horizon are rejected by shape, epoch, warmup, and
+checkpoint configuration checks.
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow_shared_store_configurable_epochs
+
+bash run_audio_shared_store_smoke20_configurable_epochs_5_10x2_5_mesh_mellow_5090.sh \
+  --epochs 10 \
+  --output-dir "$ROOT/smoke20_10epochs_YYYYMMDD"
+
+bash run_audio_shared_store_resume2_configurable_epochs_5_10x2_5_mesh_mellow_5090.sh \
+  --epochs 10 \
+  --resume-from "$ROOT/smoke20_10epochs_YYYYMMDD/checkpoint-000020" \
+  --output-dir "$ROOT/resume2_10epochs_YYYYMMDD"
+
+bash run_audio_shared_store_formal_configurable_epochs_5_10x2_5_mesh_mellow_5090.sh \
+  --epochs 10 \
+  --smoke20-report "$ROOT/smoke20_10epochs_YYYYMMDD/shared_store_training_report.json" \
+  --smoke-resume-report "$ROOT/resume2_10epochs_YYYYMMDD/shared_store_training_report.json" \
+  --output-dir "$ROOT/formal_10epochs_YYYYMMDD"
+```
+
+The formal run starts fresh from the configured text MeSH checkpoint.  The
+smoke checkpoint is used only to prove exact step-20 to step-22 resume and to
+release the formal gate.
