@@ -1,5 +1,25 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-22：隔离的整库 node-shared `/dev/shm` 全量打乱训练线
+
+在 shared-store PERF20 通过后，新增隔离训练线
+`code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/`。它把完整 v3 unique waveform
+store 在每个作业开始时只复制一次到该计算节点的 `/dev/shm`，8 个 rank 通过 mmap
+共享同一个 `waveforms.f32` inode；不会给每个 rank 克隆一份完整 waveform store。
+metadata/index 与 waveform store 一起暂存，canonical manifest 单独暂存并通过 SHA256
+与 store metadata 绑定。训练使用完整 manifest 上的 `DistributedSampler(shuffle=True)`，
+每个 epoch 重新生成全局排列后分配互不重叠的 rank slice，不使用六分区 schedule。
+
+该路线保持当前 MeSH 音频模型合同不变：Mellow HTSAT/c2l/bridge、compact
+single/dual 130/260-token prefix、answer-only loss 和受监督的终止
+`<|endoftext|>`。独立合同是
+`node_shared_unique_store_fullshuffle_compact_audio_answer_eos_v2`，拥有自己的 trainer、
+checkpoint config、report、20+2 精确 resume gate、输出根目录与 `pdgpu-5090` 三个提交入口，
+不会修改六分区或 online trainer。正式入口默认 10 epochs、LR `1e-3 -> 0`、5% warmup
+向上取整、每 500 step 保存、保留 4 个 checkpoint。完整命令和审计合同见
+`code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/README.md`。远程 smoke20、resume2
+与正式训练尚未运行；本地仅完成静态/语法验证，不能记为 GPU PASS。
+
 ## 2026-09-21：隔离的固定 260-token 运行时静音槽实验
 
 新增隔离训练线 `code/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/`。每条样本固定保留两个音频槽和 260-token prefix；单音频样本的第二槽使用模型 forward 内在 GPU 即时创建的全零 waveform，每个含单音频样本的 microbatch 只编码一个静音 waveform，再在 trainable bridge 前展开。它不会新增静音文件、partition store 条目或 CPU→GPU 静音传输。显式双音频样本仍使用两个真实槽；显式相同路径可以复用第一路 HTSAT embedding，但不会被当作静音槽。
