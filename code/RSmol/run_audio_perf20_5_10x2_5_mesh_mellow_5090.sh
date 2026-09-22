@@ -3,8 +3,9 @@ set -euo pipefail
 
 # Independent 8x5090 PERF20 launcher. Select one strict causal input control
 # with --perf20-input-mode: online, warm_online, waveform_preload,
-# full_preload, shared_waveform_store, or partition_rank_ram_preload.  The
-# last mode selects a materialized component partition with
+# full_preload, shared_waveform_store, shared_waveform_store_tmpfs, or
+# partition_rank_ram_preload.  The tmpfs mode stages the complete v3 store in
+# node-shared /dev/shm before timing.  The last mode selects a materialized component partition with
 # --perf20-partition-id (default 0) and copies that complete partition into
 # every rank's CPU RAM before timing.  Pass --profiler only when an operator
 # trace is explicitly needed.

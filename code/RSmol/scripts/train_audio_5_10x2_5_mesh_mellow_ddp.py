@@ -57,10 +57,10 @@ from recursive_model_5_10x2_5_mesh import RecursiveLlamaForCausalLM, register_au
 DEFAULT_MESH = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244"
 DEFAULT_HTSAT = "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 DEFAULT_MELLOW = "/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main"
-DEFAULT_SHARED_WAVEFORM_STORE = "/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v2"
+DEFAULT_SHARED_WAVEFORM_STORE = "/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v3"
 DEFAULT_COMPONENT_PARTITION_STORE_ROOT = "/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2"
 PERF20_STEPS = 20
-PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload")
+PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "shared_waveform_store_tmpfs", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload")
 PARTITION_V2_CONTRACT = "component_partitions6_rank_ram_compact_audio_answer_eos_v2"
 ONLINE_V2_CONTRACT = "online_reasonaqa_full_shuffle_compact_audio_answer_eos_v2"
 ANSWER_TERMINATION_CONTRACT = {
@@ -149,7 +149,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "PERF20 causal input control: online; exact-file warm_online; waveform-only "
             "rank-local preload with timed tokenization/collate; fully collated full_preload; "
-            "rank0-warmed shared mmap; exact-row store-to-rank-RAM preload; bounded asynchronous "
+            "rank0-warmed shared mmap; full-store node-shared /dev/shm mmap; exact-row store-to-rank-RAM preload; bounded asynchronous "
             "store-to-rank-RAM prefetch; or whole-component-partition rank-RAM preload"
         ),
     )
@@ -1727,6 +1727,8 @@ def _warm_shared_waveform_store(
         "shared_store_manifest_sha256": str(store.metadata.get("manifest_sha256")),
         "shared_store_waveform_sha256": str(store.metadata.get("waveform_sha256")),
         "shared_store_unique_audio": int(store.num_audio),
+        "shared_store_total_bytes": int(store.metadata.get("total_waveform_bytes", store.num_audio * store.bytes_per_audio)),
+        "shared_store_total_gib": int(store.metadata.get("total_waveform_bytes", store.num_audio * store.bytes_per_audio)) / 1024**3,
         "local_planned_unique_audio": len(local_ids),
         "global_planned_unique_audio": len(global_ids),
         "global_audio_ids_sha256": hashlib.sha256(",".join(map(str, global_ids)).encode("ascii")).hexdigest(),
@@ -2178,7 +2180,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             unique_waveform_store_dir=(
                 args.shared_waveform_store_dir
                 if args.gate == "PERF20" and args.perf20_input_mode in {
-                    "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch",
+                    "shared_waveform_store", "shared_waveform_store_tmpfs", "store_rank_ram_preload", "store_rank_ram_prefetch",
                     "partition_rank_ram_preload"}
                 else None
             ),
@@ -2335,6 +2337,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     if args.perf20_input_mode == "waveform_preload" else
                     "rank0 reads only the all-rank bounded-run unique decoded waveform regions into node page cache before timing"
                     if args.perf20_input_mode == "shared_waveform_store" else
+                    "full manifest-scoped unique waveform store is staged on node-shared /dev/shm before torchrun; mmap views are node-shared and the exact bounded-run union is warmed before timing"
+                    if args.perf20_input_mode == "shared_waveform_store_tmpfs" else
                     "exact rank-local store waveforms are copied into owned CPU tensors before timing"
                     if args.perf20_input_mode == "store_rank_ram_preload" else
                     "the complete selected component partition is copied into every rank's owned CPU tensors before timing"
@@ -2370,9 +2374,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                             target=waveform_preloaded_dataset,
                         )
                         input_preparation.update(waveform_metadata)
-                    elif args.perf20_input_mode == "shared_waveform_store":
+                    elif args.perf20_input_mode in {"shared_waveform_store", "shared_waveform_store_tmpfs"}:
                         if dataset.unique_waveform_store is None:
                             raise RuntimeError("shared_waveform_store mode did not install its store reader")
+                        if args.perf20_input_mode == "shared_waveform_store_tmpfs":
+                            store_path = args.shared_waveform_store_dir.resolve()
+                            if Path("/dev/shm") not in store_path.parents:
+                                raise RuntimeError(
+                                    "shared_waveform_store_tmpfs requires --shared-waveform-store-dir under /dev/shm; "
+                                    f"got {store_path}"
+                                )
+                            input_preparation["shared_store_residency"] = "node_shared_tmpfs"
+                            input_preparation["shared_store_staged_path"] = str(store_path)
                         input_preparation.update(
                             _warm_shared_waveform_store(dataset, planned_rows, rank=rank, world=world)
                         )
@@ -2830,15 +2843,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "waveform_preload": "rank-local waveform RAM lookup plus timed tokenization/collate",
                 "full_preload": "rank-local fully collated CPU batch list",
                 "shared_waveform_store": "node-shared fixed-stride waveform mmap after rank0 warmed the exact all-rank 20-step audio union by file offset",
+                "shared_waveform_store_tmpfs": "full manifest-scoped unique waveform store copied into node-shared /dev/shm before torchrun, then fixed-stride mmap with exact all-rank 20-step union warm",
                 "store_rank_ram_preload": "store mmap views cloned into rank-owned CPU tensors before timing; timed tokenization and collate",
                 "store_rank_ram_prefetch": "bounded rank-owned CPU waveform LRU with asynchronous producer and timed consumer-side collate",
                 "partition_rank_ram_preload": "complete selected component partition cloned into each rank's anonymous CPU RAM before timing; timed tokenization and collate",
             }[input_mode]
             report["data_pipeline"] = {
                 "mode": input_mode,
-                "preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "partition_rank_ram_preload"},
+                "preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store", "shared_waveform_store_tmpfs", "store_rank_ram_preload", "partition_rank_ram_preload"},
                 "waveform_cache_enabled": False,
-                "shared_waveform_store_enabled": input_mode in {"shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload"},
+                "shared_waveform_store_enabled": input_mode in {"shared_waveform_store", "shared_waveform_store_tmpfs", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload"},
                 "whole_partition_rank_ram_enabled": input_mode == "partition_rank_ram_preload",
                 "retired_waveform_shard_experiment": True,
                 "timed_source": timed_source,

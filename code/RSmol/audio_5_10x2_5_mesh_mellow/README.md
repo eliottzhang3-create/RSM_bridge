@@ -66,6 +66,16 @@ its unique output directory starts with `perf20_preloaded_`. The report records
 per-rank preload duration, barrier wait, CPU tensor bytes, row-order hash, and
 exact loaded/consumed counts. Any count other than 80 is a hard failure.
 
+The persistent unique waveform store default is the manifest-scoped v3 store
+(`rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v3`).  In addition to the
+ordinary `shared_waveform_store` mmap control, the isolated
+`shared_waveform_store_tmpfs` control copies the complete validated store into
+the node's `/dev/shm` before `torchrun`, then all eight ranks open the same
+node-shared files.  The wrapper checks `metadata.json.status=PASS`, rejects an
+unfinished `BUILDING` store, verifies `/dev/shm` capacity with a 5 GiB safety
+margin, and removes only its uniquely named staging directory on exit.  This
+mode is opt-in and does not change the persistent-store or partition controls.
+
 Each PERF20 report includes rank0 CUDA-aware device timings and explicitly
 named host timings for data wait (including `next(data_iter)`), scheduler, and
 metrics enqueue; the metrics/collectives device timing includes the one unified

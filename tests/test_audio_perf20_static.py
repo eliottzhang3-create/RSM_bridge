@@ -168,7 +168,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         for marker in (
             '"--preload-data"',
             '"--perf20-input-mode"',
-            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload")',
+            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "shared_waveform_store_tmpfs", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload")',
             "def _planned_perf20_rows",
             "def _warm_exact_perf20_files",
             "def _preload_perf20_waveforms",
@@ -180,7 +180,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             'input_preparation["consumed_preloaded_microbatches"] = int(preloaded_consumed)',
             '"row_indices_sha256"',
             '"cpu_tensor_bytes"',
-            '"preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "partition_rank_ram_preload"}',
+            '"preloaded": input_mode in {"waveform_preload", "full_preload", "shared_waveform_store", "shared_waveform_store_tmpfs", "store_rank_ram_preload", "partition_rank_ram_preload"}',
             '"training_dataloader_accesses": 0 if input_mode in {"full_preload", "store_rank_ram_prefetch"}',
             '"input_preparation_by_rank"',
             '"input_preparation_summary"',
@@ -212,7 +212,7 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
             'handle.seek(audio_id * store.bytes_per_audio)',
             '"global_planned_unique_audio"',
             '"shared_store_waveform_sha256"',
-            '"shared_waveform_store_enabled": input_mode in {"shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload"}',
+            '"shared_waveform_store_enabled": input_mode in {"shared_waveform_store", "shared_waveform_store_tmpfs", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload"}',
             '_warm_shared_waveform_store(dataset, planned_rows, rank=rank, world=world)',
         ):
             self.assertIn(marker, text)
@@ -221,6 +221,30 @@ class AudioPerf20StaticContractTest(unittest.TestCase):
         step_timer = "step_started = time.perf_counter()"
         self.assertLess(text.index(warm_call), text.index(profiler_entry))
         self.assertLess(text.index(warm_call), text.index(step_timer))
+
+    def test_tmpfs_store_control_is_explicit_and_audited(self) -> None:
+        text = TRAIN.read_text(encoding="utf-8")
+        inner = INNER.read_text(encoding="utf-8")
+        for marker in (
+            '"shared_waveform_store_tmpfs"',
+            'Path("/dev/shm") not in store_path.parents',
+            'input_preparation["shared_store_residency"] = "node_shared_tmpfs"',
+            'full manifest-scoped unique waveform store is staged on node-shared /dev/shm',
+        ):
+            self.assertIn(marker, text)
+        for marker in (
+            'shared_waveform_store_tmpfs)',
+            'SHARED_STORE_SOURCE="$DEFAULT_SHARED_WAVEFORM_STORE"',
+            'STORE_REQUIRED_KIB=',
+            'cp -a "$SHARED_STORE_SOURCE"/. "$SHM_STORE_DIR"/',
+            'STAGED_STORE_BYTES=$(stat -c \'%s\' "$SHM_STORE_DIR/waveforms.f32")',
+            'staged waveform store size mismatch',
+            'rm -rf -- "$SHM_STORE_DIR"',
+            'SHARED_STORE_OVERRIDE_ARGS=(--shared-waveform-store-dir "$SHM_STORE_DIR")',
+        ):
+            self.assertIn(marker, inner)
+        self.assertIn("_f32_v3", inner)
+        self.assertIn("_f32_v3", text)
 
     def test_shared_store_warm_reads_only_unique_planned_offsets(self) -> None:
         tree = ast.parse(TRAIN.read_text(encoding="utf-8"))

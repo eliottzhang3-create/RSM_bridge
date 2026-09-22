@@ -86,7 +86,7 @@ class AudioWaveformCachePerf20StaticTest(unittest.TestCase):
             '"--waveform-cache-dir"',
             "the 64-shard mmap experiment is abandoned",
             '"retired_waveform_shard_experiment": True',
-            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload")',
+            'PERF20_INPUT_MODES = ("online", "warm_online", "waveform_preload", "full_preload", "shared_waveform_store", "shared_waveform_store_tmpfs", "store_rank_ram_preload", "store_rank_ram_prefetch", "partition_rank_ram_preload")',
         ):
             self.assertIn(marker, train)
         self.assertIn('"shards_per_rank"', DATA.read_text(encoding="utf-8"))
