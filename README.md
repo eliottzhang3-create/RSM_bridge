@@ -26,10 +26,12 @@ checkpoint config、report、20+2 精确 resume gate、输出根目录与 `pdgpu
 
 独立训练合同为 `component_partitions6_rank_ram_fixed260_runtime_silence_second_slot_answer_eos_v2`，LR 为 `1e-3` 经 5% warmup 后 cosine decay 到 `1e-4`。该线拥有独立 model/data 模块、trainer、checkpoint config、20+2 smoke 门禁、report、输出目录和 `pdgpu-5090` 提交入口；拒绝 compact MeSH、SmolLM2 和 recursive checkpoint 跨合同 resume。完整命令和审计项见 `code/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/README.md`。
 
-> 最后同步：2026-09-21
+> 最后同步：2026-09-22
 > 本文件是新 Codex 会话的首要交接依据。新会话必须先完整阅读本文，再阅读“当前主线文件”中列出的代码与最新远程 report。若本文、旧聊天和代码冲突，以当前代码行为与最新远程证据为准，并及时把差异补回本文。
 
 ## 0. 当前状态：先读这一节
+
+> 状态口径：`远程 PASS` 只表示已有真实 report/log/checkpoint 证据；`代码就绪` 表示本地实现和静态检查完成，不能写成 GPU PASS。新 Codex 必须先读本节，再读对应路线的代码和测试。
 
 项目最初在 SmolLM2-135M 上研究循环语言模型，目前唯一默认主线是 ReasonAQA 音频训练：
 
@@ -43,7 +45,7 @@ checkpoint config、report、20+2 精确 resume gate、输出根目录与 `pdgpu
   -> 只对 answer token 计算 causal-LM loss
 ```
 
-当前正式训练不再在线随机读取原始 wav，也不再使用早期 64-shard mmap 方案。它使用已经完成并审计通过的六个连通分量 waveform partition：
+当前默认正式训练是六个连通分量 waveform partition；online full-shuffle 和 node-shared `/dev/shm` 是独立对照/实验路线。早期 64-shard mmap 不再是正式方案。
 
 ```text
 /hpc_stor03/sjtu_home/jinwei.zhang/data/
@@ -61,9 +63,21 @@ rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2
   - 从 step-20 checkpoint resume；p1 加载 → 2 步 → 释放；保存 step-22 checkpoint。
 - 2026-09-18 已把训练合同升级为 `component_partitions6_rank_ram_compact_audio_answer_eos_v2`：每条 answer 最后恰好有一个受监督的 `<|endoftext|>`。由于输入/标签合同发生改变，旧 v1 smoke 不能放行 v2 正式训练，必须按相同 20+2 流程重跑。
 - 正式训练：准备采用 10 epochs；EOS v2 smoke 和正式作业均尚未登记远程完成。
+- 最新新增的 shared-store 路线已完成本地代码、package README 和静态合同测试，但远程 smoke20/resume2/formal 尚未运行；它不影响六分区或 online trainer。
+- shared-store `/dev/shm` PERF20 已有远程 `PASS`：`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/perf20_shared_waveform_store_tmpfs_20260922_024229830446654-20/perf20_report.json`。该 report 证明共享 store 链路和稳态读取可运行；4090/pdgpu 变更属于当次性能作业，不能直接当作 5090 正式训练结果。
 - 正式训练入口会重新读取两个 smoke report，验证训练合同、step 游标、resume 关联、MeSH 30 层轨迹和全部 8 rank 内存释放；验证不通过则拒绝启动。
 - 原始 SmolLM2-135M 音频对比线已在本地改造成同一套六分区、compact-prefix、answer-EOS-v2、10-epoch 训练合同，训练 wrapper 使用 `pdgpu-3090`；当前状态为代码就绪，新的 20+2 smoke 与正式训练均尚未登记远程 PASS。
 - 固定 5-10-5 recursive 音频对比线也已改造成六分区、compact-prefix、answer-EOS-v2、10-epoch 合同；保持 20 个物理层和精确 `5-10-10-5` 逻辑轨迹、无 MeSH router/memory，训练 wrapper 使用 `pdgpu-5090`。用户已提供 `partition_formal_eos_v2_10epochs_20260919/checkpoint-037810` 作为完成训练产物；其独立 MMAU/MMAR full 评测代码已就绪，远程 artifact 审计与正式分数尚待评测作业确认。
+
+路线隔离摘要：
+
+| 路线 | 数据/模型定义 | 当前用途 |
+|---|---|---|
+| MeSH 六分区 | partition store、rank-local CPU RAM preload/release | 默认正式训练 |
+| MeSH shared-store | 完整 v3 store 一次复制到节点 `/dev/shm`，8 rank 共享 mmap，全量 manifest shuffle | 新性能/数据生命周期实验 |
+| MeSH online | 原始音频在线 decode/resample/crop/pad，完整 manifest shuffle | 速度和初始化后续训对照 |
+| MeSH silence-slot | 六分区 + 固定 260，单音频第二槽 GPU 内 zero waveform | 独立槽位实验 |
+| SmolLM2 / fixed recursive | 各自文本 backbone 和独立 checkpoint contract | 对比基线 |
 
 文本模型默认初始化自第二轮低学习率 MeSH checkpoint：
 
@@ -173,6 +187,15 @@ stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl
 /hpc_stor03/sjtu_home/jinwei.zhang/data/
 rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2
 ```
+
+完整 unique waveform store（shared-store 路线）：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/data/
+rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v3
+```
+
+v3 store 的固定文件是 `metadata.json`、`index.jsonl` 和 `waveforms.f32`；metadata 必须为 `status=PASS`、`format=manifest_unique_fixed_waveform_store_v1`，并记录 manifest/index/waveform identity。v3 是预处理 waveform，不是 HTSAT feature。shared-store 作业会把它连同 metadata/index 复制到本节点 `/dev/shm`，不会修改 persistent store。
 
 ## 3. 当前文本 backbone：5-10x2-5 MeSH
 
@@ -363,9 +386,31 @@ code/RSmol/scripts/plan_reasonaqa_component_partitions.py
 code/RSmol/scripts/materialize_reasonaqa_component_partitions.py
 ```
 
-## 6. 当前正式训练合同
+### 5.1 三种数据读取链路（必须区分）
 
-唯一当前正式入口：
+| 路线 | 完整 waveform 的位置 | rank 如何取样 | 当前用途 |
+|---|---|---|---|
+| online | 远程/本地文件系统的原始 wav | 完整 manifest 上的 `DistributedSampler` | 速度对照、初始化后在线训练 |
+| six-partition | 每次加载一个 partition；每个 rank clone 到自己的匿名 CPU RAM | partition schedule + rank-local row slice | 当前默认正式训练 |
+| shared-store | 完整 v3 store 一次复制到本节点 `/dev/shm`；8 rank mmap 同一文件 inode | 完整 manifest 上的 `DistributedSampler(shuffle=True)` | 新的共享内存/全量 shuffle 实验 |
+
+shared-store 的完整链路是：
+
+```text
+远程 persistent v3 store + canonical manifest
+  -> 作业启动时复制到 /dev/shm/rsmol_shared_train_<RUN_ID>
+  -> metadata/index/manifest SHA256、格式、文件大小审计
+  -> 8 rank mmap 同一个 waveforms.f32 inode
+  -> 每个 epoch set_epoch，完整 manifest 全局打乱并分发互斥 row indices
+  -> 每个 rank 当前 microbatch 读取 8 条 waveform，stack 成小型 CPU batch
+  -> CPU batch 搬到本 rank GPU，进入 HTSAT/c2l/bridge/文本模型
+```
+
+这里“共享一份”指完整 `waveforms.f32` 的底层 `/dev/shm` 文件和 mmap inode 共享；每个 rank 仍有自己的 manifest/index Python 对象、DataLoader、当前 CPU batch 和 GPU tensor。shared-store 固定 `num_workers=0`，不会有 DataLoader worker 预取历史 batch；当前 microbatch 结束后 waveform batch 失去引用并由 allocator 复用。allocator 不保证 RSS 立刻下降，但不应随 step 线性增长。GA=4 累积的是 GPU 参数梯度，不是四份 CPU waveform。
+
+## 6. 当前正式训练合同：MeSH 六分区默认主线
+
+默认六分区正式入口：
 
 ```text
 code/RSmol/scripts/train_audio_partitioned_5_10x2_5_mesh_mellow_ddp.py
@@ -373,7 +418,7 @@ code/RSmol/scripts/train_audio_partition_formal_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/run_audio_partition_formal_5_10x2_5_mesh_mellow_5090.sh
 ```
 
-六分区训练器仍是默认主线。`train_audio_5_10x2_5_mesh_mellow_ddp.py --gate FORMAL` 保留为在线读取原始音频的对照入口；2026-09-20 已升级到同一套 compact 130/260 prefix 与 answer-EOS-v2 输入/标签合同，但不会改变六分区训练器的数据调度、smoke gate 或 resume 合同。
+六分区训练器是默认主线。`train_audio_5_10x2_5_mesh_mellow_ddp.py --gate FORMAL` 是独立的 online full-shuffle 对照入口；它与六分区的 store、数据生命周期、smoke gate、checkpoint contract 不同，不要混用。
 
 ### 6.1 Batch、优化器与调度器
 
@@ -575,6 +620,50 @@ bash run_audio_formal_5_10x2_5_mesh_mellow_5090.sh \
 
 在当前 968,059 条 manifest、8×8×GA4 配置下，预期每 epoch 3,781 个 optimizer steps，两轮共 7,562 steps，warmup 自动计算为 379 steps。不要传 `--resume-from`，也无需手动传 `--warmup-steps`。
 
+### 6.9 Shared-store 全量 shuffle 隔离训练线
+
+这是最新新增的独立路线，合同为 `node_shared_unique_store_fullshuffle_compact_audio_answer_eos_v2`。它保持当前 MeSH model/data、compact 130/260、answer-EOS 和 optimizer 语义，只更换数据驻留与分发方式：完整 v3 unique store 每个作业只复制一次到节点 `/dev/shm`，8 个 rank mmap 同一个 `waveforms.f32` inode；不使用六分区 schedule，不给每个 rank 克隆完整 store。
+
+实现和完整合同：
+
+```text
+code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/README.md
+code/RSmol/scripts/stage_audio_shared_store_5_10x2_5_mesh_mellow.sh
+code/RSmol/scripts/train_audio_shared_store_5_10x2_5_mesh_mellow_ddp.py
+code/RSmol/run_audio_shared_store_smoke20_5_10x2_5_mesh_mellow_5090.sh
+code/RSmol/run_audio_shared_store_resume2_5_10x2_5_mesh_mellow_5090.sh
+code/RSmol/run_audio_shared_store_formal_5_10x2_5_mesh_mellow_5090.sh
+```
+
+入口：
+
+```text
+code/RSmol/run_audio_shared_store_smoke20_5_10x2_5_mesh_mellow_5090.sh
+code/RSmol/run_audio_shared_store_resume2_5_10x2_5_mesh_mellow_5090.sh
+code/RSmol/run_audio_shared_store_formal_5_10x2_5_mesh_mellow_5090.sh
+```
+
+smoke 初始运行固定 step 0→20，发布 `checkpoint-000020`；resume 必须从 `epoch=0,batch_in_epoch=80,global_step=20` 开始，恢复 optimizer/scheduler/RNG，运行 20→22 并发布 `checkpoint-000022`。formal gate 检查两个 report 的合同、store identity、完整 manifest sampler、MeSH 轨迹/梯度审计和 answer-only mask。formal 默认 10 epochs、max LR `1e-3`、min LR `0`、5% warmup 向上取整、每 500 step 保存、保留 4 个 checkpoint。
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+SHARED=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow_shared_store
+
+bash run_audio_shared_store_smoke20_5_10x2_5_mesh_mellow_5090.sh \
+  --output-dir "$SHARED/smoke20_YYYYMMDD"
+
+bash run_audio_shared_store_resume2_5_10x2_5_mesh_mellow_5090.sh \
+  --resume-from "$SHARED/smoke20_YYYYMMDD/checkpoint-000020" \
+  --output-dir "$SHARED/resume2_YYYYMMDD"
+
+bash run_audio_shared_store_formal_5_10x2_5_mesh_mellow_5090.sh \
+  --smoke20-report "$SHARED/smoke20_YYYYMMDD/shared_store_training_report.json" \
+  --smoke-resume-report "$SHARED/resume2_YYYYMMDD/shared_store_training_report.json" \
+  --output-dir "$SHARED/formal_10epochs_YYYYMMDD"
+```
+
+本路线本地已通过 Python 编译和独立静态合同测试；远程 smoke20、resume2 和 formal 尚未登记 PASS。staging 时间单独写入 report，不计入 optimizer step timing；退出时只删除本次精确的 `/dev/shm/rsmol_shared_train_<RUN_ID>` 目录。
+
 ## 7. 性能优化实验：保留的结论
 
 详细历史 report 位于远程输出目录和旧聊天，本文只保留对当前设计有用的因果结论。
@@ -595,6 +684,9 @@ bash run_audio_formal_5_10x2_5_mesh_mellow_5090.sh \
 - 一个 64.4 GiB 共享 mmap + rank0 page-cache warm：仍产生大量 major/minor faults与 rank 长尾；不用于正式训练。
 - 小容量在线 LRU/prefetch：音频命中率低且 producer/consumer 争用，曾约 60 秒/step；不用于正式训练。
 - 完整全量 waveform 每 rank 预加载：训练快但 8 rank 内存总量不可接受。
+- 完整 v3 store 暂存到节点 `/dev/shm`、8 rank 共享同一 mmap inode 的 shared-store PERF20 已通过；这证明链路可运行，但不等于正式训练已 PASS，也不等于每 rank 有匿名 RAM 副本。
+
+该 PERF20 report 的关键解读：初始化/首次访问开销集中在前几步，稳态 step time 约 0.537 s/step，rank 间平衡良好；它测量的是共享 store 输入链路，不包含正式 trainer 的 20+2 gate、长程 checkpoint 或 10-epoch 训练证明。
 
 ### 7.3 当前方案的依据
 
@@ -666,7 +758,7 @@ RSMOL_MMAU_MODE=full RSMOL_MMAU_OUTPUT_DIR="$EVAL_DIR" \
 
 ### 8.3 MMAR
 
-MMAR 使用 Hugging Face 下载的 `MMAR-meta.json`、已解压的 `mmar-audio/audio/*.wav` 和下载包内官方 `code/evaluation.py`。HF JSON 与 GitHub JSONL 的记录顺序、scorer 文件字节及预测字段名并不完全相同，因此入口严格审计 1000 个官方 ID 的顺序无关集合 hash、modality/category 分布、全部音频存在性和官方 `string_match` 评分语义，并从 scorer AST 自动读取唯一的 `output_key`；不会再因官方 HF/GitHub 的排序、空干扰选项、文件字节或 `model_prediction`/`answer_prediction` 命名差异而拒绝运行。音频统一为 32 kHz，短音频补零、长音频取开头 10 秒；选择顺序不打乱。输出保持 HF metadata 顺序和完整记录，由下载包中的官方 scorer 原样计分。
+MMAR 使用 Hugging Face 下载的 `MMAR-meta.json`、已解压的 `mmar-audio/audio/*.wav` 和下载包内官方 `code/evaluation.py`。HF JSON 与 GitHub JSONL 在顺序、canonical artifact 和预测字段上可能不同；入口会审计官方 ID 集合、modality/category 分布、音频存在性、scorer AST 语义和当前实际 output key，并把预测写成 scorer 可直接接受的 schema。不能手工把 `model_prediction` 或 `answer_prediction` 当作固定字段。音频统一为 32 kHz，短音频补零、长音频取开头 10 秒；选择顺序不打乱。输出保持完整记录，由官方 scorer 原样计分；逐样本 skip 保留在完整官方分母中，只有全局 pipeline failure 才阻断 scorer。
 
 ```text
 code/RSmol/scripts/evaluate_mmar_5_10x2_5_mesh_mellow.py
@@ -808,6 +900,12 @@ README.md
 code/RSmol/recursive_model_5_10x2_5_mesh.py
 code/RSmol/audio_5_10x2_5_mesh_mellow/model.py
 code/RSmol/audio_5_10x2_5_mesh_mellow/data.py
+code/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/README.md
+code/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/data.py
+code/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/model.py
+code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/README.md
+code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/data.py
+code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/model.py
 code/RSmol/scripts/train_audio_partitioned_5_10x2_5_mesh_mellow_ddp.py
 code/RSmol/scripts/train_audio_partition_smoke20_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/scripts/train_audio_partition_formal_5_10x2_5_mesh_mellow_ddp.sh
@@ -824,10 +922,16 @@ code/RSmol/scripts/prepare_unique_audio_waveform_store.py
 code/RSmol/scripts/plan_reasonaqa_component_partitions.py
 code/RSmol/scripts/materialize_reasonaqa_component_partitions.py
 code/RSmol/scripts/train_audio_5_10x2_5_mesh_mellow_ddp.py
+code/RSmol/scripts/stage_audio_shared_store_5_10x2_5_mesh_mellow.sh
+code/RSmol/scripts/train_audio_shared_store_5_10x2_5_mesh_mellow_ddp.py
+code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/README.md
+code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/data.py
+code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/model.py
 code/RSmol/scripts/train_audio_perf20_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
 tests/test_audio_perf20_static.py
 tests/test_audio_waveform_cache_perf20_static.py
+tests/test_audio_shared_store_training_static.py
 tests/test_reasonaqa_component_partitions.py
 tests/test_reasonaqa_partition_materialization.py
 ```
@@ -895,6 +999,7 @@ tests/test_audio_5_10_5_recursive_mellow_static.py
 - 10 epochs 很长；resume 时必须使用相同 epochs=10 和全部训练合同，否则 checkpoint 校验会拒绝。
 - output dir 必须是新的空目录；脚本拒绝覆盖已有输出。
 - 若正式训练某个分区 release 失败，不要放宽阈值后直接继续；先检查该 rank 是否仍持有 batch/cache/tensor 引用以及 cgroup anon/RSS 证据。
+- shared-store 的 `/dev/shm` staging、mmap 和 persistent store identity 失败时不要退回到六分区或在线路径“顺便继续”；先保留独立 output/report，修复本路线问题后重新从 smoke20 开始。
 
 ## 13. 本地质量检查
 
@@ -905,8 +1010,11 @@ python -m py_compile code/RSmol/recursive_model_5_10x2_5_mesh.py
 python -m py_compile code/RSmol/audio_5_10x2_5_mesh_mellow/data.py
 python -m py_compile code/RSmol/audio_5_10x2_5_mesh_mellow/model.py
 python -m py_compile code/RSmol/scripts/train_audio_partitioned_5_10x2_5_mesh_mellow_ddp.py
+python -m py_compile code/RSmol/scripts/train_audio_shared_store_5_10x2_5_mesh_mellow_ddp.py
 python -m unittest discover -s tests -p "test_audio_partition_training_static.py"
 python -m unittest discover -s tests -p "test_audio_5_10x2_5_mesh_mellow_static.py"
+python -m unittest discover -s tests -p "test_audio_shared_store_training_static.py"
+python -m unittest discover -s tests -p "test_unique_audio_waveform_store_static.py"
 git diff --check
 ```
 
@@ -914,16 +1022,17 @@ git diff --check
 
 ## 14. 新 Codex 会话接手清单
 
-1. 完整阅读本文。
+1. 完整阅读本文，先看第 0 节的路线状态和实验边界。
 2. 执行 `git status --short`，保护用户已有修改；不要 reset/checkout 覆盖。
-3. 阅读第 10.1 节的当前主线实现和测试，不要只根据 README 猜代码。
-4. 明确任务属于当前 partition 正式训练、历史 PERF20、评测，还是固定 5-10-5/SmolLM2 对照。
-5. 当前音频新训练默认文本初始化必须是第二轮 MeSH checkpoint-009244。
-6. 区分 `--mesh-checkpoint` 与 `--resume-from`。
-7. 正式训练必须使用 partitioned trainer，不要误用旧 `--gate FORMAL`。
-8. 任何正式提交都要核对两个 smoke report 的实际绝对路径、seed 和 `PASS`。
-9. 远程失败时先找最早的 Python traceback/rank；末尾 NCCL `ChildFailedError` 通常只是连带结果。
-10. 新的远程 PASS、job、output dir、checkpoint 或超参数确认后立即更新本文。
+3. 阅读目标路线的 model/data/trainer/README/static test，不要只根据 README 猜代码。
+4. 明确任务属于六分区正式训练、shared-store、online、silence-slot、历史 PERF20、评测，还是固定 5-10-5/SmolLM2 对照。
+5. 当前 MeSH 新训练默认文本初始化是第二轮 MeSH `checkpoint-009244`；已有音频 checkpoint 只能按其 contract 作为 init/resume。
+6. 区分 `--model-path`、`--init-from-audio-checkpoint` 与 `--resume-from`。
+7. 默认主线使用 partitioned trainer；shared-store 和 online trainer 是隔离路线，不要交叉使用 smoke report 或 checkpoint。
+8. shared-store 必须确认 v3 store、manifest SHA、`/dev/shm` 空间和 8 rank 同 inode 审计。
+9. 任何正式提交都要核对两个同路线 smoke report 的实际绝对路径、seed、contract 和 `PASS`。
+10. 远程失败时先找最早的 Python traceback/rank；末尾 NCCL `ChildFailedError` 通常只是连带结果。
+11. 新的远程 PASS、job、output dir、checkpoint 或超参数确认后立即更新本文。
 
 ## 15. 参考资料
 
