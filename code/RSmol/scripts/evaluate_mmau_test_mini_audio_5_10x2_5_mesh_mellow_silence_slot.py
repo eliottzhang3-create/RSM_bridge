@@ -212,6 +212,11 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[s
     model = AudioMeshSilenceSlotModel(
         mesh.to(device), tokenizer, wrapper, htsat, config=AudioMeshSilenceSlotConfig()
     )
+    if not hasattr(model, "mesh_model") or hasattr(model, "text_model"):
+        raise RuntimeError(
+            "silence-slot evaluator requires the MeSH backend attribute mesh_model "
+            "and must not use the SmolLM2 text_model contract"
+        )
     audio_state = torch.load(args.checkpoint / "audio_bridge.pt", map_location=device, weights_only=False)
     model.bridge.load_state_dict(audio_state["bridge"], strict=True)
     model.htsat_wrapper.c2l.load_state_dict(audio_state["c2l"], strict=True)
@@ -307,7 +312,10 @@ def _run_model_generation(
     max_new_tokens: int,
 ) -> dict[str, Any]:
     import torch
-    from generate_audio_smollm2_checkpoint_reasonaqa import _greedy_decode
+    # This is the MeSH decoder: it reads model.mesh_model and verifies the
+    # 5-10-10-5 trace.  The similarly named SmolLM2 helper reads text_model
+    # and is intentionally incompatible with this route.
+    from generate_audio_checkpoint_reasonaqa import _greedy_decode
 
     prompt_ids_cpu, prompt_token_count = _tokenize_without_truncation(
         tokenizer, str(sample["prompt"]), max_prompt_tokens=max_prompt_tokens

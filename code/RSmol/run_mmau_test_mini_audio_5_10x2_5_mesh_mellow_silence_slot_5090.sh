@@ -13,7 +13,7 @@ METADATA_JSON="${RSMOL_MMAU_METADATA_JSON:-$DATASET_DIR/mmau-test-mini.json}"
 EVALUATION_SCRIPT="${RSMOL_MMAU_EVALUATION_SCRIPT:-$DATASET_DIR/evaluation.py}"
 HTSAT_CHECKPOINT="${RSMOL_HTSAT_CHECKPOINT:-/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt}"
 MELLOW_ROOT="${RSMOL_MELLOW_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main}"
-OUTPUT_DIR="${RSMOL_MMAU_SILENCE_SLOT_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/mmau_test_mini_checkpoint_037810_fixed260_runtime_silence_v2}"
+OUTPUT_DIR="${RSMOL_MMAU_SILENCE_SLOT_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/mmau_test_mini_checkpoint_037810_fixed260_runtime_silence_v3}"
 JOB_LOG="$SCRIPT_DIR/log/mmau_audio_silence_slot_5090.${RUN_TAG}.JOB.log"
 
 ARGS=(

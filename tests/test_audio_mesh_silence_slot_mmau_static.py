@@ -41,13 +41,16 @@ class SilenceSlotMMAUStaticTest(unittest.TestCase):
             self.assertIn(marker, self.source)
         self.assertNotIn("_validate_checkpoint_contract(args)", self.source)
         self.assertNotIn("compact_single_audio_prefix=True", self.source)
+        self.assertIn("generate_audio_checkpoint_reasonaqa import _greedy_decode", self.source)
+        self.assertIn("model.mesh_model", self.source)
+        self.assertNotIn("generate_audio_smollm2_checkpoint_reasonaqa import _greedy_decode", self.source)
         self.assertIn("model = model.to(device)", self.source)
         self.assertIn("trainable parameters are not colocated", self.source)
 
     def test_generation_contract_and_submission_isolation(self):
         for marker in ("max_new_tokens", "--max-new-tokens 32", "--run-official-evaluation", "pdgpu-5090"):
             self.assertIn(marker, self.source + self.submit)
-        self.assertIn("audio_5_10x2_5_mesh_mellow_silence_slot/mmau_test_mini_checkpoint_037810_fixed260_runtime_silence_v1", self.submit)
+        self.assertIn("audio_5_10x2_5_mesh_mellow_silence_slot/mmau_test_mini_checkpoint_037810_fixed260_runtime_silence_v3", self.submit)
         self.assertIn("evaluate_mmau_test_mini_audio_5_10x2_5_mesh_mellow_silence_slot.sh", self.submit)
         self.assertTrue(RUNTIME.is_file())
 
