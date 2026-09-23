@@ -4,8 +4,10 @@
 The benchmark traversal, fixed-order prompt, append-only resumption, complete
 denominator, and official scorer are shared with the established MMAU path.
 This adapter strictly loads the full released Mellow checkpoint (including
-HTSAT), places the same MMAU waveform into both native audio slots, encodes the
-two slots separately, and uses deterministic greedy decoding without top-p.
+HTSAT) and reproduces the protocol posted by Mellow's authors in GitHub issue
+#5.  The same source audio is independently preprocessed and encoded in the
+two native slots.  Generation applies top-p filtering and then argmax exactly
+as MellowWrapper does; it is therefore deterministic rather than sampling.
 """
 from __future__ import annotations
 
@@ -31,17 +33,17 @@ import evaluate_mmau_test_mini_5_10x2_5_mesh_mellow as official  # noqa: E402
 DEFAULT_DATASET_DIR = Path(official.DEFAULT_DATASET_DIR)
 DEFAULT_OUTPUT_DIR = Path(
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/"
-    "mmau_test_mini_matched_protocol_audio1x2_verbatim_v1"
+    "mmau_test_mini_mellow_author_reply_protocol_v1"
 )
 DEFAULT_MAX_PROMPT_TOKENS = 129
-DEFAULT_MAX_NEW_TOKENS = 32
+DEFAULT_MAX_NEW_TOKENS = 300
 MELLOW_AUDIO_TOKENS_PER_SLOT = 129
 MELLOW_PROMPT_TOKENS = 129
 MELLOW_AUDIO_PREFIX_TOKENS = 260
 MELLOW_PREFIX_TOKENS = 389
 MELLOW_HIDDEN_SIZE = 576
-PREDICTION_FORMAT = "native_mellow_v0_generated_text_verbatim_v1"
-PROTOCOL_CONTRACT = "mellow_v0_mmau_matched_protocol_audio1x2_greedy_v1"
+PREDICTION_FORMAT = "mellow_author_reply_raw_generation_choice_label_scoring_v1"
+PROTOCOL_CONTRACT = "mellow_v0_mmau_github_issue5_author_reply_reproduction_v1"
 MODEL_CONTRACT_FILENAME = "mellow_v0_model_contract.json"
 SMOKE_GATE_FILENAME = "mellow_v0_smoke_gate.json"
 SHARED_STORAGE_PREFIXES = ("/hpc_stor03", "/mnt/cloudstorfs")
@@ -175,17 +177,18 @@ def _model_contract(args: argparse.Namespace, preflight_report: Mapping[str, Any
         "mellow_checkpoint": _shared_storage_identity(args.mellow_checkpoint),
         "mellow_checkpoint_sha256": preflight_report["mellow_checkpoint_sha256"],
         "base_smollm2": _shared_storage_identity(args.base_smollm2),
-        "single_audio_policy": "same_waveform_in_two_native_slots_encoded_separately",
-        "audio_preprocessing": "mono_32khz_first10s_right_zero_pad",
+        "single_audio_policy": "same_source_independently_preprocessed_and_encoded_in_two_native_slots",
+        "audio_preprocessing": official.MELLOW_AUTHOR_REPLY_AUDIO_FORMAT,
         "prompt_tokens": MELLOW_PROMPT_TOKENS,
         "prefix_tokens": MELLOW_PREFIX_TOKENS,
         "generation": {
-            "decoder": "greedy_full_recompute",
+            "decoder": "mellow_wrapper_top_p_filter_then_argmax_default_lm_cache",
             "do_sample": False,
-            "top_p": None,
-            "temperature": 0.0,
-            "use_cache": False,
+            "top_p": 0.8,
+            "temperature": 1.0,
+            "use_cache": "language_model_default_exactly_as_wrapper",
             "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
+            "inference_dtype": "float32",
         },
         "prediction_format": PREDICTION_FORMAT,
     }
@@ -197,7 +200,12 @@ def _ensure_mellow_output_contract(
 ) -> None:
     # Let the common evaluator claim/check the directory first, then add the
     # native-Mellow identity that its generic run_config.json does not know.
-    official._ensure_output_dir(args, prediction_format=PREDICTION_FORMAT)
+    official._ensure_output_dir(
+        args,
+        prediction_format=PREDICTION_FORMAT,
+        prompt_format=official.MELLOW_AUTHOR_REPLY_PROMPT_FORMAT,
+        protocol=PROTOCOL_CONTRACT,
+    )
     path = args.output_dir / MODEL_CONTRACT_FILENAME
     requested = _model_contract(args, preflight_report)
     if path.is_file():
@@ -318,33 +326,33 @@ def _padded_prompt(
 ) -> tuple[dict[str, Any], int]:
     import torch
 
-    prompt_ids_cpu, prompt_token_count = official._tokenize_without_truncation(
-        tokenizer,
+    encoded = tokenizer(
         prompt,
-        max_prompt_tokens=max_prompt_tokens,
+        truncation=True,
+        padding="max_length",
+        max_length=max_prompt_tokens,
+        add_special_tokens=True,
+        return_tensors="pt",
     )
+    untruncated = tokenizer(
+        prompt,
+        truncation=False,
+        padding=False,
+        add_special_tokens=True,
+        return_tensors="pt",
+    )
+    prompt_ids_cpu = encoded["input_ids"]
+    prompt_token_count = len(official._token_rows(untruncated["input_ids"]))
     if tokenizer.pad_token_id is None:
         raise RuntimeError("native Mellow tokenizer has no pad token")
-    padding = max_prompt_tokens - prompt_token_count
     prompt_ids = prompt_ids_cpu.to(device)
-    if padding:
-        pad = torch.full(
-            (1, padding),
-            int(tokenizer.pad_token_id),
-            dtype=torch.long,
-            device=device,
-        )
-        prompt_ids = torch.cat((prompt_ids, pad), dim=1)
-    attention_mask = torch.cat(
-        (
-            torch.ones((1, prompt_token_count), dtype=torch.long, device=device),
-            torch.zeros((1, padding), dtype=torch.long, device=device),
-        ),
-        dim=1,
-    )
+    attention_mask = encoded["attention_mask"].to(device)
     if tuple(prompt_ids.shape) != (1, MELLOW_PROMPT_TOKENS):
         raise RuntimeError(f"native Mellow padded prompt shape mismatch: {tuple(prompt_ids.shape)}")
-    return {"input_ids": prompt_ids, "attention_mask": attention_mask}, prompt_token_count
+    return {
+        "input_ids": prompt_ids,
+        "attention_mask": attention_mask,
+    }, prompt_token_count
 
 
 def _build_native_prefix(
@@ -355,15 +363,15 @@ def _build_native_prefix(
 ) -> tuple[Any, dict[str, Any]]:
     import torch
 
-    audio = waveform.to(device, non_blocking=True)
-    if tuple(audio.shape) != (1, official.DEFAULT_SAMPLE_RATE * official.DEFAULT_AUDIO_SECONDS):
-        raise RuntimeError(f"native Mellow waveform shape mismatch: {tuple(audio.shape)}")
-    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
-        prefix, _, _ = model.generate_prefix_inference({
-            "audio1": audio,
-            "audio2": audio,
-            "input": dict(text_input),
-        })
+    audio1_cpu, audio1_segment = official.mellow_author_reply_audio_segment(waveform)
+    audio2_cpu, audio2_segment = official.mellow_author_reply_audio_segment(waveform)
+    audio1 = audio1_cpu.to(device, non_blocking=True)
+    audio2 = audio2_cpu.to(device, non_blocking=True)
+    prefix, _, _ = model.generate_prefix_inference({
+        "audio1": audio1,
+        "audio2": audio2,
+        "input": dict(text_input),
+    })
     if tuple(prefix.shape) != (1, MELLOW_PREFIX_TOKENS, MELLOW_HIDDEN_SIZE):
         raise RuntimeError(f"native Mellow prefix shape mismatch: {tuple(prefix.shape)}")
     if not bool(torch.isfinite(prefix).all()):
@@ -371,30 +379,19 @@ def _build_native_prefix(
     first = prefix[:, :MELLOW_AUDIO_TOKENS_PER_SLOT, :]
     second_start = MELLOW_AUDIO_TOKENS_PER_SLOT + 1
     second = prefix[:, second_start:second_start + MELLOW_AUDIO_TOKENS_PER_SLOT, :]
-    maximum_slot_difference = float(
-        (first.float() - second.float()).abs().max().detach().cpu().item()
-    )
-    slots_match = bool(
-        torch.allclose(first.float(), second.float(), rtol=1e-4, atol=1e-4)
-    )
-    if not slots_match:
-        raise RuntimeError(
-            "same MMAU waveform produced inconsistent native Mellow slot embeddings in eval mode: "
-            f"maximum_absolute_difference={maximum_slot_difference}"
-        )
     return prefix, {
         "audio1_prefix_shape": list(first.shape),
         "audio2_prefix_shape": list(second.shape),
         "combined_prefix_shape": list(prefix.shape),
         "prefix_token_count": MELLOW_PREFIX_TOKENS,
-        "prefix_layout": "audio1_129 + separator + separately_encoded_same_audio_129 + separator + padded_prompt_129",
+        "prefix_layout": "audio1_independent_mellow_preprocess_129 + separator + audio2_independent_mellow_preprocess_129 + separator + truncated_padded_prompt_129",
         "single_audio_slot": True,
-        "audio2_same_waveform": True,
+        "audio2_same_source": True,
         "audio2_reused": False,
+        "audio1_segment": audio1_segment,
+        "audio2_segment": audio2_segment,
         "audio2_encoded_separately": True,
         "native_audio_encoder_invocations": 2,
-        "separate_slot_embeddings_match": slots_match,
-        "separate_slot_maximum_absolute_difference": maximum_slot_difference,
         "compact_single_audio_prefix_used": False,
     }
 
@@ -405,6 +402,8 @@ def _greedy_decode_native(
     prefix: Any,
     *,
     max_new_tokens: int,
+    top_p: float = 0.8,
+    temperature: float = 1.0,
 ) -> dict[str, Any]:
     import torch
 
@@ -414,22 +413,24 @@ def _greedy_decode_native(
     started = time.perf_counter()
     stop_reason = "max_new_tokens"
     for _ in range(max_new_tokens):
-        attention_mask = torch.ones(
-            generated.shape[:2], dtype=torch.long, device=generated.device
-        )
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
-            output = model.caption_decoder.lm(
-                inputs_embeds=generated,
-                attention_mask=attention_mask,
-                use_cache=False,
-                return_dict=True,
-                logits_to_keep=1,
-            )
-        if tuple(output.logits.shape[:2]) != (1, 1):
-            raise RuntimeError(f"native Mellow last-token logits shape mismatch: {tuple(output.logits.shape)}")
+        # Keep the LM call identical to MellowWrapper._generate_batch.  The
+        # wrapper does not pass attention_mask/use_cache/logits_to_keep and
+        # recomputes from the full growing embedding sequence on every step.
+        output = model.caption_decoder.lm(inputs_embeds=generated)
+        if output.logits.ndim != 3 or output.logits.shape[0] != 1:
+            raise RuntimeError(f"native Mellow logits shape mismatch: {tuple(output.logits.shape)}")
         if not bool(torch.isfinite(output.logits).all()):
             raise RuntimeError("native Mellow generation logits contain non-finite values")
-        next_token = int(torch.argmax(output.logits[:, -1, :], dim=-1).item())
+        logits = output.logits[:, -1, :] / (temperature if temperature > 0 else 1.0)
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+        sorted_indices_to_remove = cumulative_probs > top_p
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = False
+        for batch_index in range(sorted_indices_to_remove.shape[0]):
+            indices_to_remove = sorted_indices[batch_index][sorted_indices_to_remove[batch_index]]
+            logits[batch_index, indices_to_remove] = -float("inf")
+        next_token = int(torch.argmax(logits, dim=-1).item())
         generated_ids.append(next_token)
         token_tensor = torch.tensor([[next_token]], dtype=torch.long, device=generated.device)
         token_embed = model.caption_decoder.lm.model.embed_tokens(token_tensor)
@@ -440,7 +441,9 @@ def _greedy_decode_native(
     elapsed = time.perf_counter() - started
     return {
         "generated_token_ids": generated_ids,
-        "generated_text": tokenizer.decode(generated_ids, skip_special_tokens=True),
+        "generated_text": tokenizer.decode(
+            generated_ids, skip_special_tokens=False
+        ).split(tokenizer.eos_token or "<|endoftext|>")[0],
         "generated_text_raw": tokenizer.decode(generated_ids, skip_special_tokens=False),
         "stop_reason": stop_reason,
         "eos_token_ids": [eos_id],
@@ -448,11 +451,11 @@ def _greedy_decode_native(
         "effective_token_budget": int(max_new_tokens),
         "generation_seconds": elapsed,
         "tokens_per_second": len(generated_ids) / max(elapsed, 1e-9),
-        "decoder": "greedy_full_recompute_use_cache_false_no_top_p",
+        "decoder": "mellow_wrapper_top_p_filter_then_argmax_default_lm_cache",
         "do_sample": False,
-        "top_p": None,
-        "temperature": 0.0,
-        "use_cache": False,
+        "top_p": float(top_p),
+        "temperature": float(temperature),
+        "use_cache": "language_model_default_exactly_as_wrapper",
     }
 
 
@@ -488,6 +491,7 @@ def _run_model_generation(
         )
     generated["prompt_token_count"] = prompt_token_count
     generated["padded_prompt_token_count"] = MELLOW_PROMPT_TOKENS
+    generated["prompt_truncated"] = prompt_token_count > MELLOW_PROMPT_TOKENS
     generated.update(prefix_audit)
     return generated
 
@@ -504,16 +508,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--parquet", type=Path)
     parser.add_argument("--metadata-json", type=Path)
     parser.add_argument("--evaluation-script", type=Path)
+    parser.add_argument("--audio-root", type=Path)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--parquet-batch-size", type=int, default=8)
     parser.add_argument("--max-prompt-tokens", type=int, default=DEFAULT_MAX_PROMPT_TOKENS)
     parser.add_argument("--max-new-tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
-    parser.add_argument("--dtype", choices=("bf16",), default="bf16")
+    parser.add_argument("--dtype", choices=("fp32",), default="fp32")
     parser.add_argument("--run-official-evaluation", action="store_true")
     args = parser.parse_args(argv)
     args.parquet = args.parquet or args.dataset_dir / "test_mini.parquet"
     args.metadata_json = args.metadata_json or args.dataset_dir / "mmau-test-mini.json"
     args.evaluation_script = args.evaluation_script or args.dataset_dir / "evaluation.py"
+    args.audio_root = args.audio_root or args.dataset_dir / "test-mini-audios"
     if args.max_prompt_tokens != DEFAULT_MAX_PROMPT_TOKENS:
         parser.error(f"--max-prompt-tokens is fixed at {DEFAULT_MAX_PROMPT_TOKENS}")
     if args.max_new_tokens != DEFAULT_MAX_NEW_TOKENS:
@@ -540,6 +546,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         run_model_generation=_run_model_generation,
         prepare_prediction=prepare_model_output_for_official_scorer,
         prediction_format=PREDICTION_FORMAT,
+        prompt_builder=official.build_mellow_author_reply_prompt,
+        audio_decoder=official.decode_mellow_author_reply_audio,
+        audio_root=args.audio_root,
+        prefer_official_audio_file=True,
+        prompt_format=official.MELLOW_AUTHOR_REPLY_PROMPT_FORMAT,
+        audio_format=official.MELLOW_AUTHOR_REPLY_AUDIO_FORMAT,
+        protocol_contract=PROTOCOL_CONTRACT,
+        generation_protocol={
+            "decoder": "mellow_wrapper_top_p_filter_then_argmax_default_lm_cache",
+            "top_p": 0.8,
+            "temperature": 1.0,
+            "do_sample": False,
+            "use_cache": "language_model_default_exactly_as_wrapper",
+            "inference_dtype": "float32",
+        },
         audio_prefix_tokens=MELLOW_AUDIO_PREFIX_TOKENS,
         stage="mmau_test_mini_native_mellow_v0_matched_protocol",
         logical_trace="native Mellow-v0 30-layer SmolLM2; two separately encoded same-waveform audio slots",
@@ -553,6 +574,36 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         report["fatal_error"] = {
             "error": f"{inference_failures} native Mellow generation failures were recorded as skips",
             "detail": "Inspect skipped.jsonl; the official score is not a valid model comparison.",
+        }
+        official._write_json(args.output_dir / "evaluation_report.json", report)
+    predictions_path = args.output_dir / "predictions_fixed_order.json"
+    if predictions_path.is_file() and report.get("inference_coverage", {}).get("status") == "PASS":
+        predictions = json.loads(predictions_path.read_text(encoding="utf-8"))
+        author_score = official.write_mellow_author_reply_evaluation(args.output_dir, predictions)
+        payload_sources = report.get("records", {}).get("audio", {}).get("payload_sources", {})
+        fallback_audio_rows = sum(
+            int(count)
+            for source, count in payload_sources.items()
+            if source != "official_id_wav"
+        )
+        report["mellow_author_reply_evaluation"] = author_score
+        report["mellow_author_reply_context"] = official.MELLOW_AUTHOR_REPLY_CONTEXT
+        report["primary_comparison_score"] = {
+            "scorer": official.MELLOW_AUTHOR_REPLY_SCORER,
+            "comparable": bool(
+                args.mode == "full"
+                and inference_failures == 0
+                and int(author_score["total"]["total"]) == official.EXPECTED_FULL_ROWS
+                and fallback_audio_rows == 0
+            ),
+            **author_score["total"],
+        }
+        report["mmau_v051525_evaluation"] = report.get("official_evaluation", {})
+        report["mellow_author_reply_protocol_audit"] = {
+            "official_id_wav_rows": int(payload_sources.get("official_id_wav", 0)),
+            "fallback_audio_rows": fallback_audio_rows,
+            "payload_sources": payload_sources,
+            "status": "PASS" if fallback_audio_rows == 0 else "NONCOMPARABLE_FALLBACK",
         }
         official._write_json(args.output_dir / "evaluation_report.json", report)
     if (
@@ -576,6 +627,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": report.get("status"),
         "mode": report.get("mode"),
         "records": report.get("records", {}),
+        "primary_comparison_score": report.get("primary_comparison_score", {}),
         "official_evaluation": report.get("official_evaluation", {}),
         "report": str(args.output_dir / "evaluation_report.json"),
     }, ensure_ascii=False, default=official._json_default))

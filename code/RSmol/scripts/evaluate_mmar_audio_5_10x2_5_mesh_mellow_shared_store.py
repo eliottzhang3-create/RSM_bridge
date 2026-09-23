@@ -19,8 +19,9 @@ import evaluate_mmau_test_mini_audio_5_10x2_5_mesh_mellow_shared_store as shared
 
 
 DEFAULT_CHECKPOINT = shared.DEFAULT_CHECKPOINT
+MMAR_MAX_NEW_TOKENS = 32
 FIXED260_MAX_PROMPT_TOKENS = (
-    shared.DEFAULT_MAX_CONTEXT_LENGTH - 260 - shared.DEFAULT_MAX_NEW_TOKENS
+    shared.DEFAULT_MAX_CONTEXT_LENGTH - 260 - MMAR_MAX_NEW_TOKENS
 )
 
 

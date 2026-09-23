@@ -543,6 +543,8 @@ def _greedy_decode(
     max_new_tokens: int,
     autocast_enabled: bool,
     router_recorder: RouterWeightCsvRecorder | None = None,
+    top_p: float | None = None,
+    temperature: float = 0.0,
 ) -> dict[str, Any]:
     if max_new_tokens <= 0:
         raise ValueError("max-new-tokens must be positive")
@@ -590,7 +592,20 @@ def _greedy_decode(
                 generation_step=generation_step,
                 text_ids=text_ids,
             )
-        next_token = int(torch.argmax(output.logits[:, -1, :], dim=-1).item())
+        logits = output.logits[:, -1, :]
+        if top_p is not None:
+            if not 0.0 < float(top_p) <= 1.0:
+                raise ValueError(f"top_p must be in (0, 1], got {top_p}")
+            logits = logits / (float(temperature) if temperature > 0 else 1.0)
+            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+            cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+            sorted_indices_to_remove = cumulative_probs > float(top_p)
+            sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+            sorted_indices_to_remove[..., 0] = False
+            for batch_index in range(sorted_indices_to_remove.shape[0]):
+                indices_to_remove = sorted_indices[batch_index][sorted_indices_to_remove[batch_index]]
+                logits[batch_index, indices_to_remove] = -float("inf")
+        next_token = int(torch.argmax(logits, dim=-1).item())
         generated.append(next_token)
         text_ids = torch.cat(
             (text_ids, torch.tensor([[next_token]], dtype=torch.long, device=text_ids.device)),
@@ -612,6 +627,9 @@ def _greedy_decode(
         "generation_seconds": elapsed,
         "tokens_per_second": len(generated) / max(elapsed, 1e-9),
         "decoder": "greedy_full_recompute_use_cache_false",
+        "do_sample": False,
+        "top_p": float(top_p) if top_p is not None else None,
+        "temperature": float(temperature),
         "logical_trace_verified": True,
         "logical_trace": expected_trace,
     }

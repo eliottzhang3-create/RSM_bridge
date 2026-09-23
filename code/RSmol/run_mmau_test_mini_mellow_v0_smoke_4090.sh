@@ -6,7 +6,7 @@ cd "$SCRIPT_DIR"
 mkdir -p log
 
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
-OUTPUT_DIR="${RSMOL_MELLOW_V0_MMAU_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/mmau_test_mini_matched_protocol_audio1x2_verbatim_v1}"
+OUTPUT_DIR="${RSMOL_MELLOW_V0_MMAU_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/mmau_test_mini_mellow_author_reply_protocol_v1}"
 PREFLIGHT_REPORT="${RSMOL_MELLOW_V0_PREFLIGHT_REPORT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/preflight/mellow_v0_artifact_preflight.json}"
 JOB_LOG="$SCRIPT_DIR/log/mmau_mellow_v0_smoke_4090.${RUN_TAG}.JOB.log"
 
@@ -16,8 +16,8 @@ ARGS=(
   --output-dir "$OUTPUT_DIR"
   --parquet-batch-size 8
   --max-prompt-tokens 129
-  --max-new-tokens 32
-  --dtype bf16
+  --max-new-tokens 300
+  --dtype fp32
 )
 if (($#)); then
   ARGS+=("$@")

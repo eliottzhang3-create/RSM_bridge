@@ -21,6 +21,7 @@ import hashlib
 import io
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -68,6 +69,20 @@ MMAU_EVALUATION_SHA256 = "85480e1c0dfe8ee1406e9c6e598eff0dca9e0216701f076faf6908
 PROMPT_FORMAT = "reasonaqa_lowercase_labels_no_choices_prefix_v1"
 PREDICTION_FORMAT = "official_generated_text_strip_leading_abcd_label_v2"
 INFERENCE_ONLY_STATUS = "INFERENCE_ONLY"
+MELLOW_AUTHOR_REPLY_PROMPT_FORMAT = "mellow_github_issue5_lowercase_questionmark_labels_v1"
+MELLOW_AUTHOR_REPLY_AUDIO_FORMAT = "mellow_wrapper_repeat_or_independent_random_crop_v1"
+MELLOW_AUTHOR_REPLY_SCORER = "mellow_github_issue5_choice_label_prefix_exact_v1"
+MELLOW_AUTHOR_REPLY_CONTEXT = {
+    "source": "soham97/mellow GitHub issue #5 author reply",
+    "issue_opened": "2025-04-16",
+    "evaluated_benchmark": MMAU_VERSION,
+    "evaluated_benchmark_release": "2025-05-15",
+    "paper_score_exact_reproduction": False,
+    "reason": (
+        "the author-reply protocol predates MMAU-v05.15.25; the current benchmark revised "
+        "questions, answers, and audio, so this is protocol reproduction on the revised set"
+    ),
+}
 
 
 class RowSkip(Exception):
@@ -331,6 +346,140 @@ def build_fixed_order_prompt(question: str, choices: Sequence[Any]) -> str:
     ]
     question_text = str(question).strip()
     return f"{question_text} {' '.join(lines)}".strip()
+
+
+def build_mellow_author_reply_prompt(question: str, choices: Sequence[Any]) -> str:
+    """Reproduce the prompt construction posted by Mellow's authors in issue #5."""
+
+    question_text = str(question)
+    question_text = question_text[:-1] + "? "
+    choices_text = " ".join(
+        f"{chr(ord('a') + index)}) {str(choice)}"
+        for index, choice in enumerate(choices)
+    )
+    return (question_text + choices_text).lower()
+
+
+def mellow_author_reply_labeled_answer(answer: Any, choices: Sequence[Any]) -> str:
+    """Attach the choice letter exactly as in the Mellow author's reply code."""
+
+    answer_text = str(answer).lower()
+    matches = [
+        index
+        for index, choice in enumerate(choices)
+        if answer_text == str(choice).lower()
+    ]
+    if not matches:
+        raise ValueError(
+            "Mellow author-reply scorer requires the answer to match a choice: "
+            f"answer={answer!r} choices={list(choices)!r} matches={matches}"
+        )
+    return f"{chr(ord('a') + matches[0])}) {answer_text}"
+
+
+def mellow_author_reply_choice_is_correct(prediction: Any, labeled_answer: Any) -> bool:
+    """Use the exact label-prefix comparison from the Mellow GitHub response."""
+
+    return (
+        str(prediction).split(")")[0].lower()
+        == str(labeled_answer).split(")")[0].lower()
+    )
+
+
+def evaluate_mellow_author_reply_predictions(
+    predictions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Score fixed-order predictions with the Mellow author's published helper."""
+
+    task_metrics = {name: [0, 0] for name in ("sound", "music", "speech")}
+    difficulty_metrics = {name: [0, 0] for name in ("easy", "hard", "medium")}
+    correct = 0
+    scored_rows: list[dict[str, Any]] = []
+    for row_index, record in enumerate(predictions):
+        task = str(record.get("task", ""))
+        difficulty = str(record.get("difficulty", ""))
+        if task not in task_metrics or difficulty not in difficulty_metrics:
+            raise ValueError(
+                f"invalid MMAU metadata at row {row_index}: task={task!r} difficulty={difficulty!r}"
+            )
+        choices = _coerce_choices(record.get("choices"))
+        labeled_answer = mellow_author_reply_labeled_answer(record.get("answer", ""), choices)
+        prediction = str(record.get("model_output", ""))
+        matched = mellow_author_reply_choice_is_correct(prediction, labeled_answer)
+        if matched:
+            task_metrics[task][0] += 1
+            difficulty_metrics[difficulty][0] += 1
+            correct += 1
+        task_metrics[task][1] += 1
+        difficulty_metrics[difficulty][1] += 1
+        scored_rows.append({
+            "row_index": row_index,
+            "id": record.get("id"),
+            "prediction": prediction,
+            "labeled_answer": labeled_answer,
+            "correct": matched,
+            "task": task,
+            "difficulty": difficulty,
+        })
+
+    def summarize(metrics: Mapping[str, Sequence[int]]) -> dict[str, Any]:
+        return {
+            name: {
+                "correct": int(values[0]),
+                "total": int(values[1]),
+                "accuracy_percent": (
+                    float(values[0]) / float(values[1]) * 100.0 if values[1] else 0.0
+                ),
+            }
+            for name, values in metrics.items()
+        }
+
+    total = len(predictions)
+    return {
+        "status": "PASS",
+        "scorer": MELLOW_AUTHOR_REPLY_SCORER,
+        "total": {
+            "correct": correct,
+            "total": total,
+            "accuracy_percent": correct / total * 100.0 if total else 0.0,
+        },
+        "task": summarize(task_metrics),
+        "difficulty": summarize(difficulty_metrics),
+        "rows": scored_rows,
+    }
+
+
+def write_mellow_author_reply_evaluation(
+    output_dir: Path,
+    predictions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Persist the author-reply score separately from MMAU-v05.15.25 scoring."""
+
+    score = evaluate_mellow_author_reply_predictions(predictions)
+    _write_json(output_dir / "mellow_author_reply_evaluation.json", score)
+    lines = ["Mellow author-reply choice-label evaluation", "", "Task-wise Accuracy:"]
+    for name in ("sound", "music", "speech"):
+        item = score["task"][name]
+        lines.append(
+            f"{name} : {item['accuracy_percent']:.2f}% over {item['total']} samples"
+        )
+    lines.extend(["", "Difficulty-wise Accuracy:"])
+    for name in ("easy", "hard", "medium"):
+        item = score["difficulty"][name]
+        lines.append(
+            f"{name} : {item['accuracy_percent']:.2f}% over {item['total']} samples"
+        )
+    total = score["total"]
+    lines.extend([
+        "",
+        f"Total Accuracy: {total['accuracy_percent']:.2f}% over {total['total']} samples",
+        "",
+    ])
+    (output_dir / "mellow_author_reply_evaluation.txt").write_text(
+        "\n".join(lines),
+        encoding="utf-8",
+    )
+    return score
 
 
 def prepare_model_output_for_official_scorer(value: Any) -> str:
@@ -910,11 +1059,106 @@ def decode_and_normalize_audio(
     }
 
 
+def decode_mellow_author_reply_audio(
+    payload: Any,
+    *,
+    base_dir: Path,
+    source_rate: int = DEFAULT_SOURCE_SAMPLE_RATE,
+    target_rate: int = DEFAULT_SAMPLE_RATE,
+) -> tuple[Any, dict[str, Any]]:
+    """Decode/resample before MellowWrapper-style repeat or random cropping."""
+
+    import torch
+
+    waveform, actual_rate, source = _decode_audio_payload(
+        payload,
+        base_dir=base_dir,
+        default_rate=source_rate,
+    )
+    if actual_rate <= 0:
+        raise RuntimeError(f"invalid source sampling rate: {actual_rate}")
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    if waveform.ndim != 2:
+        raise RuntimeError(f"decoded waveform must be [channels,samples], got {tuple(waveform.shape)}")
+    waveform = waveform.float()
+    if not bool(torch.isfinite(waveform).all()):
+        raise RuntimeError("decoded waveform contains non-finite values")
+    original_channels = int(waveform.shape[0])
+    original_samples_per_channel = int(waveform.shape[-1])
+    original_duration = original_samples_per_channel / float(actual_rate)
+    waveform = _resample_waveform(waveform, actual_rate, target_rate)
+    # MellowWrapper calls reshape(-1), rather than averaging channels.
+    waveform = waveform.reshape(1, -1).contiguous()
+    if waveform.shape[-1] <= 0:
+        raise RuntimeError("decoded waveform is empty")
+    return waveform, {
+        "audio_source": source,
+        "audio_original_sample_rate": int(actual_rate),
+        "audio_original_num_samples": original_samples_per_channel,
+        "audio_original_channels": original_channels,
+        "audio_original_duration_seconds": original_duration,
+        "audio_resampled": bool(actual_rate != target_rate),
+        "audio_resampled_num_samples": int(waveform.shape[-1]),
+        "audio_target_sample_rate": int(target_rate),
+        "audio_target_duration_seconds": float(DEFAULT_AUDIO_SECONDS),
+        "audio_channel_policy": "mellow_wrapper_reshape_channels",
+        "audio_segment_policy": MELLOW_AUTHOR_REPLY_AUDIO_FORMAT,
+    }
+
+
+def mellow_author_reply_audio_segment(
+    waveform: Any,
+    *,
+    target_rate: int = DEFAULT_SAMPLE_RATE,
+    seconds: int = DEFAULT_AUDIO_SECONDS,
+    rng: Any = random,
+) -> tuple[Any, dict[str, Any]]:
+    """Apply MellowWrapper's exact repeat-or-random-crop length policy."""
+
+    import torch
+
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    if waveform.ndim != 2 or waveform.shape[0] != 1:
+        raise RuntimeError(f"Mellow audio source must be [1,samples], got {tuple(waveform.shape)}")
+    source_samples = int(waveform.shape[-1])
+    if source_samples <= 0:
+        raise RuntimeError("Mellow audio source is empty")
+    target_samples = int(target_rate * seconds)
+    repeat_factor = 1
+    crop_start = 0
+    if target_samples >= source_samples:
+        repeat_factor = int((target_samples + source_samples - 1) // source_samples)
+        segment = waveform.repeat(1, repeat_factor)[..., :target_samples]
+        policy = "repeat_then_trim"
+    else:
+        crop_start = int(rng.randrange(source_samples - target_samples))
+        segment = waveform[..., crop_start:crop_start + target_samples]
+        policy = "random_crop"
+    if tuple(segment.shape) != (1, target_samples):
+        raise RuntimeError(f"Mellow audio segment shape mismatch: {tuple(segment.shape)}")
+    if not bool(torch.isfinite(segment).all()):
+        raise RuntimeError("Mellow audio segment contains non-finite values")
+    return segment.contiguous(), {
+        "source_samples": source_samples,
+        "target_samples": target_samples,
+        "policy": policy,
+        "repeat_factor": repeat_factor,
+        "crop_start": crop_start,
+        "crop_end": crop_start + target_samples,
+    }
+
+
 def _prepare_metadata_row(
     row: Mapping[str, Any],
     *,
     metadata_index: Mapping[str, Mapping[str, Any]],
     dataset_dir: Path,
+    prompt_builder: Any = build_fixed_order_prompt,
+    audio_decoder: Any = decode_and_normalize_audio,
+    audio_root: Path | None = None,
+    prefer_official_audio_file: bool = False,
 ) -> dict[str, Any]:
     sample_id, id_source = extract_row_id(row)
     if not sample_id:
@@ -959,15 +1203,32 @@ def _prepare_metadata_row(
     row_answer = extract_row_answer(row)
     if not row_answer:
         raise RowSkip("data", "missing_answer", "parquet row has no answer field")
-    payload, payload_source = extract_audio_payload(row)
+    effective_base_dir = dataset_dir
+    if prefer_official_audio_file and audio_root is not None:
+        # Match the Mellow issue #5 code exactly: ``data[i]["id"] + ".wav"``.
+        # Do not silently substitute another metadata field for the filename.
+        filename = f"{sample_id}.wav"
+        official_audio_path = audio_root / filename
+        if official_audio_path.is_file():
+            payload = official_audio_path
+            payload_source = "official_id_wav"
+            effective_base_dir = audio_root
+        else:
+            payload, payload_source = extract_audio_payload(row)
+            payload_source = f"{payload_source}:fallback_missing_official_wav"
+    else:
+        payload, payload_source = extract_audio_payload(row)
     if payload is None:
-        raise RowSkip("audio", "audio_missing", "parquet row has no embedded audio payload")
+        raise RowSkip("audio", "audio_missing", "MMAU row has neither official WAV nor embedded audio")
     try:
-        waveform, audio_info = decode_and_normalize_audio(payload, base_dir=dataset_dir)
+        waveform, audio_info = audio_decoder(
+            payload,
+            base_dir=effective_base_dir,
+        )
     except Exception as exc:
         raise RowSkip("audio", "audio_decode_failed", str(exc), audio_payload_source=payload_source) from exc
 
-    prompt = build_fixed_order_prompt(question, choices)
+    prompt = prompt_builder(question, choices)
     return {
         "id": sample_id,
         "id_source": id_source,
@@ -1020,6 +1281,42 @@ def _tokenize_without_truncation(tokenizer: Any, prompt: str, *, max_prompt_toke
     import torch
 
     return torch.tensor([token_rows], dtype=torch.long), token_count
+
+
+def tokenize_mellow_author_reply_prompt(
+    tokenizer: Any,
+    prompt: str,
+    *,
+    max_prompt_tokens: int,
+) -> tuple[Any, int, bool]:
+    """Mirror MellowWrapper ``encode_plus`` truncation while retaining an audit count."""
+
+    encoded = tokenizer(
+        prompt,
+        truncation=True,
+        padding=False,
+        max_length=max_prompt_tokens,
+        add_special_tokens=True,
+        return_tensors="pt",
+    )
+    untruncated = tokenizer(
+        prompt,
+        truncation=False,
+        padding=False,
+        add_special_tokens=True,
+        return_tensors="pt",
+    )
+    token_rows = _token_rows(encoded["input_ids"])
+    original_rows = _token_rows(untruncated["input_ids"])
+    if not token_rows:
+        raise RowSkip("prompt", "empty_prompt_tokens", "tokenizer returned an empty prompt")
+    import torch
+
+    return (
+        torch.tensor([token_rows], dtype=torch.long),
+        len(original_rows),
+        len(original_rows) > len(token_rows),
+    )
 
 
 def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, Any]:
@@ -1333,6 +1630,10 @@ def _counts(store: ProgressStore) -> dict[str, Any]:
         "cropped_records": len(cropped_ids),
         "cropped_ids": cropped_ids,
         "padded_records": sum(bool(record.get("audio_was_padded")) for record in generated),
+        "payload_sources": dict(sorted(Counter(
+            str(record.get("audio_payload_source", "unknown"))
+            for record in generated
+        ).items())),
     }
     if durations:
         audio.update({"minimum_duration_seconds": min(durations), "maximum_duration_seconds": max(durations)})
@@ -1350,6 +1651,8 @@ def _ensure_output_dir(
     args: argparse.Namespace,
     *,
     prediction_format: str = PREDICTION_FORMAT,
+    prompt_format: str = PROMPT_FORMAT,
+    protocol: str | None = None,
 ) -> None:
     output_dir = args.output_dir
     if output_dir.exists() and not output_dir.is_dir():
@@ -1366,10 +1669,12 @@ def _ensure_output_dir(
         "mellow_root": str(args.mellow_root),
         "max_prompt_tokens": int(args.max_prompt_tokens),
         "max_new_tokens": int(args.max_new_tokens),
-        "prompt_format": PROMPT_FORMAT,
+        "prompt_format": prompt_format,
         "prediction_format": prediction_format,
-        "protocol": "fixed-order; ReasonAQA lowercase labels; parquet physical order; single cuda:0; bf16; no permutation vote",
+        "protocol": protocol or "fixed-order; ReasonAQA lowercase labels; parquet physical order; single cuda:0; bf16; no permutation vote",
     }
+    if hasattr(args, "audio_root"):
+        immutable["audio_root"] = str(args.audio_root)
     if config_path.is_file():
         existing = json.loads(config_path.read_text(encoding="utf-8"))
         existing_mode = str(existing.get("mode", ""))
@@ -1416,6 +1721,8 @@ def parse_args(
     argv: Sequence[str] | None = None,
     *,
     default_checkpoint: str | Path = DEFAULT_CHECKPOINT,
+    default_max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+    add_audio_root: bool = False,
     description: str | None = None,
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=description or __doc__)
@@ -1425,22 +1732,26 @@ def parse_args(
     parser.add_argument("--parquet", type=Path)
     parser.add_argument("--metadata-json", type=Path)
     parser.add_argument("--evaluation-script", type=Path)
+    if add_audio_root:
+        parser.add_argument("--audio-root", type=Path)
     parser.add_argument("--htsat-checkpoint", type=Path, default=Path(DEFAULT_HTSAT))
     parser.add_argument("--mellow-root", type=Path, default=Path(DEFAULT_MELLOW))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--parquet-batch-size", type=int, default=8)
     parser.add_argument("--max-prompt-tokens", type=int, default=DEFAULT_MAX_PROMPT_TOKENS)
-    parser.add_argument("--max-new-tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
-    parser.add_argument("--dtype", choices=("bf16",), default="bf16")
+    parser.add_argument("--max-new-tokens", type=int, default=default_max_new_tokens)
+    parser.add_argument("--dtype", choices=("bf16", "fp32"), default="bf16")
     parser.add_argument("--run-official-evaluation", action="store_true")
     args = parser.parse_args(argv)
     args.parquet = args.parquet or args.dataset_dir / "test_mini.parquet"
     args.metadata_json = args.metadata_json or args.dataset_dir / "mmau-test-mini.json"
     args.evaluation_script = args.evaluation_script or args.dataset_dir / "evaluation.py"
+    if add_audio_root:
+        args.audio_root = args.audio_root or args.dataset_dir / "test-mini-audios"
     if args.max_prompt_tokens != DEFAULT_MAX_PROMPT_TOKENS:
         parser.error(f"--max-prompt-tokens is fixed at {DEFAULT_MAX_PROMPT_TOKENS} for this checkpoint")
-    if args.max_new_tokens != DEFAULT_MAX_NEW_TOKENS:
-        parser.error(f"--max-new-tokens is fixed at {DEFAULT_MAX_NEW_TOKENS}")
+    if args.max_new_tokens != default_max_new_tokens:
+        parser.error(f"--max-new-tokens is fixed at {default_max_new_tokens}")
     if args.parquet_batch_size <= 0:
         parser.error("--parquet-batch-size must be positive")
     return args
@@ -1453,6 +1764,14 @@ def run(
     run_model_generation: Any | None = None,
     prepare_prediction: Any | None = None,
     prediction_format: str = PREDICTION_FORMAT,
+    prompt_builder: Any = build_fixed_order_prompt,
+    audio_decoder: Any = decode_and_normalize_audio,
+    audio_root: Path | None = None,
+    prefer_official_audio_file: bool = False,
+    prompt_format: str = PROMPT_FORMAT,
+    audio_format: str = "mono_32khz_first10s_right_zero_pad",
+    protocol_contract: str | None = None,
+    generation_protocol: Mapping[str, Any] | None = None,
     audio_prefix_tokens: int = DEFAULT_AUDIO_PREFIX_TOKENS,
     stage: str = "mmau_test_mini_audio_mesh_fixed_order",
     logical_trace: str = "5+10+10+5 per generation step",
@@ -1461,7 +1780,20 @@ def run(
     run_model_generation = run_model_generation or _run_model_generation
     prepare_prediction = prepare_prediction or prepare_model_output_for_official_scorer
     started = time.time()
-    _ensure_output_dir(args, prediction_format=prediction_format)
+    _ensure_output_dir(
+        args,
+        prediction_format=prediction_format,
+        prompt_format=prompt_format,
+        protocol=protocol_contract,
+    )
+    generation_contract = {
+        "max_new_tokens": int(args.max_new_tokens),
+        "greedy": True,
+        "do_sample": False,
+        "use_cache": False,
+    }
+    if generation_protocol:
+        generation_contract.update(dict(generation_protocol))
     report: dict[str, Any] = {
         "stage": stage,
         "status": "FAILED",
@@ -1472,23 +1804,24 @@ def run(
         "metadata_json": str(args.metadata_json),
         "evaluation_script": str(args.evaluation_script),
         "device": "cuda:0",
-        "dtype": "bfloat16",
+        "dtype": "float32" if args.dtype == "fp32" else "bfloat16",
         "protocol": {
             "parquet_order": "physical row order via pyarrow.ParquetFile.iter_batches",
             "shuffle": False,
             "mode_limit": SMOKE_ROWS if args.mode == "smoke" else None,
             "choice_order": "official JSON fixed order",
-            "prompt_format": PROMPT_FORMAT,
+            "prompt_format": prompt_format,
             "prediction_format": prediction_format,
             "permutation_majority_vote": False,
             "audio_sample_rate": DEFAULT_SAMPLE_RATE,
             "audio_seconds": DEFAULT_AUDIO_SECONDS,
             "audio_prefix_tokens": int(audio_prefix_tokens),
             "max_prompt_tokens": DEFAULT_MAX_PROMPT_TOKENS,
-            "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
-            "greedy": True,
-            "do_sample": False,
-            "use_cache": False,
+            "max_new_tokens": int(args.max_new_tokens),
+            "audio_preprocessing": audio_format,
+            "official_audio_files": bool(prefer_official_audio_file),
+            "audio_root": str(audio_root) if audio_root is not None else None,
+            **generation_contract,
             "logical_trace": logical_trace,
         },
         "records": {},
@@ -1541,7 +1874,15 @@ def run(
                     report["records"]["resumed_rows"] = int(report["records"].get("resumed_rows", 0) + 1)
                     continue
                 try:
-                    sample = _prepare_metadata_row(row, metadata_index=metadata_index, dataset_dir=args.dataset_dir)
+                    sample = _prepare_metadata_row(
+                        row,
+                        metadata_index=metadata_index,
+                        dataset_dir=args.dataset_dir,
+                        prompt_builder=prompt_builder,
+                        audio_decoder=audio_decoder,
+                        audio_root=audio_root,
+                        prefer_official_audio_file=prefer_official_audio_file,
+                    )
                     generation = run_model_generation(
                         model,
                         tokenizer,
@@ -1622,10 +1963,15 @@ def run(
                     torch.cuda.empty_cache()
                 except Exception:
                     pass
+            scoring_records = (
+                official_records
+                if args.mode == "full"
+                else official_records[:SMOKE_ROWS]
+            )
             predictions = _materialize_from_store(
                 store,
                 args.output_dir,
-                official_records if args.mode == "full" else None,
+                scoring_records,
             )
             report["records"].update(_counts(store))
             report["records"]["official_scoring_denominator"] = len(predictions)
@@ -1653,9 +1999,15 @@ def run(
                 )
             )
             report["records"]["official_empty_predictions_from_skips"] = skipped
+            truncated_prompts = sum(
+                bool(record.get("prompt_truncated"))
+                for record in store.state.values()
+                if record.get("status") == "generated"
+            )
             report["prompt_length_audit"] = {
                 "max_prompt_tokens": int(args.max_prompt_tokens),
                 "prompt_exceeds_max_tokens": prompt_too_long,
+                "prompt_truncated_records": truncated_prompts,
                 "status": "PASS" if prompt_too_long == 0 else "WARNING",
             }
             if skipped:
@@ -1704,7 +2056,13 @@ def run(
             predictions = _materialize_from_store(
                 store,
                 args.output_dir,
-                official_records if official_records and args.mode == "full" else None,
+                (
+                    official_records
+                    if official_records and args.mode == "full"
+                    else official_records[:SMOKE_ROWS]
+                    if official_records
+                    else None
+                ),
             )
             report["records"].update(_counts(store))
             report["records"]["official_scoring_denominator"] = len(predictions)

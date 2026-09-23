@@ -1,5 +1,38 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-23：MMAU 改为 Mellow 作者回复协议并保留新版官方诊断
+
+Mellow 原生线与 10-epoch shared-store checkpoint-037810 的 MMAU test-mini 评测已切换到
+Mellow 作者在 GitHub issue #5 中给出的复现协议：问题末字符替换为 `?`、拼接小写
+`a) ... b) ...` 选项并将整个 prompt 转小写；prompt 按 MellowWrapper 截断到 129 tokens；
+音频使用 MellowWrapper 的 32 kHz/10 秒策略，短音频重复后截断，长音频随机截取；生成
+最多 300 tokens，执行 `top_p=0.8`、`temperature=1.0` 的 nucleus filter 后 argmax，
+不是随机采样。主要比较分数使用作者回复的选择字母规则，即比较预测和带标签答案在首个
+`)` 之前的前缀。1000 条仍全部进入分母，skip 仍写空预测并计错。
+
+当前 `MMAU-v05.15.25` 的官方 `evaluation.py` 使用答案正文 token-set `string_match`，与
+作者回复的字母 scorer 不同；评测会同时保存两套结果：
+`mellow_author_reply_evaluation.{json,txt}` 是与 Mellow 论文/issue 比较的主结果，
+`official_evaluation.txt` 和 report 中的 `mmau_v051525_evaluation` 是新版官方诊断结果。
+需要注意，issue 发布于 2025-04-16，而 `MMAU-v05.15.25` 发布于 2025-05-15，后者约修改
+25% 问答和 5% 音频；因此这是“作者推理/计分协议在新版数据上的复现”，不能声称精确复现
+论文中的 52.11。
+
+shared-store 评测仅改变 MMAU 输入/生成/评分协议，模型槽位仍严格保持训练合同：同一个
+audio1 的 Mellow/HTSAT embedding 复用到第二槽，然后 bridge 分别执行两次。Mellow-v0
+原生评测仍将同一音频源分别走两个 MellowWrapper 风格预处理与 audio encoder。两条路线
+均使用新的输出目录，禁止续用旧 32-token/新版 scorer 输出。
+
+如需先判断旧输出到底有多少差异来自 scorer，可在不加载模型、不重新推理的情况下离线重算
+作者字母规则（这不等于完整协议复现）：
+
+```bash
+python code/RSmol/scripts/rescore_mmau_mellow_author_reply.py \
+  /path/to/old_output/predictions_fixed_order.json \
+  --expected-rows 1000 \
+  --output-dir /path/to/old_output/author_reply_rescore
+```
+
 ## 2026-09-23：Mellow-v0 原生 MMAU test-mini 隔离评测线
 
 新增一条不转换权重、不影响现有 RSmol 评测的原生 Mellow-v0 路线。执行顺序固定为：
@@ -8,11 +41,13 @@ CPU-only artifact preflight → MMAU parquet 物理顺序前 5 条 smoke → 同
 离线加载本地 SmolLM2-135M 和完整 `v0.ckpt`，严格覆盖 HTSAT、c2l、projection 与
 text decoder；只检查 artifact，不运行仓库中的两个 example 音频。
 
-评测沿用当前 MMAU 的官方 metadata/scorer 审计、固定顺序 prompt、mono 32 kHz/10 秒
-首段截断与右侧补零、129-token prompt 上限、append-only resume 和完整分母语义。MMAU
-单音频波形同时传入 Mellow 的两个原生槽，但两个槽分别调用 audio encoder；prefix 为
-`129 + 1 + 129 + 1 + 129 = 389` tokens。生成固定 greedy、`use_cache=False`、最多 32
-tokens，不使用 top-p；解码文本不删除开头 `a)`--`d)`，原样写入官方 `model_output`。
+评测沿用当前 MMAU 的官方 metadata/scorer artifact 审计、append-only resume 和完整分母
+语义，但推理与主评分改为上节所述 Mellow 作者回复协议。优先读取
+`test-mini-audios/<id>.wav`；目录或单个 WAV 缺失时，回退到经 ID/选项审计的 parquet 内嵌
+音频。MMAU 单音频源分别执行两次 MellowWrapper 风格 repeat/random-crop，再分别调用
+audio encoder；prefix 为 `129 + 1 + 129 + 1 + 129 = 389` tokens。推理使用 FP32、
+`top_p=0.8` filter 后 argmax、`temperature=1.0`、LM 默认 cache 参数、最多 300 tokens；
+解码文本不删除开头 `a)`--`d)`。
 smoke 未请求官方 scorer，因此只能是 `INFERENCE_ONLY_PASS`；full 才能产生可比较的
 官方 `PASS`。成功 smoke 会持久化独立 gate；full 缺少该 gate 或 artifact identity 已变化时
 会拒绝启动，full 中断后则仍可依靠同一 gate 和 append-only progress 继续。GPU 提交入口
@@ -25,7 +60,7 @@ bash code/RSmol/run_mmau_test_mini_mellow_v0_full_4090.sh
 ```
 
 默认输出目录为
-`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/mmau_test_mini_matched_protocol_audio1x2_verbatim_v1`；
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/mmau_test_mini_mellow_author_reply_protocol_v1`；
 full 会复用 smoke 已完成的前 5 条，不重新推理。远程 preflight/smoke/full 尚未运行，
 本地静态检查不能写成远程 GPU PASS。
 

@@ -54,7 +54,7 @@ class SharedStoreEvaluationStaticTest(unittest.TestCase):
             self.assertEqual(self.mmau.prepare_model_output_for_official_scorer(value), value)
         self.assertEqual(
             self.mmau.PREDICTION_FORMAT,
-            "official_generated_text_verbatim_no_leading_label_preparse_v1",
+            "mellow_author_reply_raw_generation_choice_label_scoring_v1",
         )
         for source in (self.mmau_source, self.mmar_source):
             self.assertIn("prepare_prediction=", source)
@@ -79,7 +79,37 @@ class SharedStoreEvaluationStaticTest(unittest.TestCase):
         self.assertNotIn("official._run_model_generation(", self.mmau_source)
         self.assertNotIn("_validate_checkpoint_contract(args)", self.mmau_source)
 
+    def test_mmau_uses_mellow_author_reply_protocol_without_changing_slot_contract(self):
+        for marker in (
+            "MMAU_PROTOCOL_CONTRACT",
+            "build_mellow_author_reply_prompt",
+            "decode_mellow_author_reply_audio",
+            "mellow_author_reply_audio_segment",
+            "top_p=0.8",
+            "temperature=1.0",
+            "mellow_wrapper_decode_then_split_stop_token",
+            "write_mellow_author_reply_evaluation",
+            '"mmau_v051525_evaluation"',
+            '"comparable": bool(',
+        ):
+            self.assertIn(marker, self.mmau_source)
+        self.assertIn("htsat_audio1_embedding_reused_for_slot2", self.mmau_source)
+        self.assertIn("--max-new-tokens 300", self.mmau_submit)
+        self.assertIn("--dtype fp32", self.mmau_submit)
+        self.assertIn("mellow_author_reply_protocol_v1", self.mmau_submit)
+        self.assertIn(
+            "run_model_generation=_run_mmau_author_reply_generation",
+            self.mmau_source,
+        )
+
+    def test_mmar_keeps_the_legacy_generation_path(self):
+        self.assertIn("run_model_generation=shared._run_model_generation", self.mmar_source)
+        self.assertNotIn("_run_mmau_author_reply_generation", self.mmar_source)
+        self.assertIn("autocast_enabled=True", self.mmau_source)
+        self.assertIn("autocast_enabled=False", self.mmau_source)
+
     def test_mmar_uses_context_safe_fixed260_prompt_budget(self):
+        self.assertEqual(self.mmar.MMAR_MAX_NEW_TOKENS, 32)
         self.assertEqual(self.mmar.FIXED260_MAX_PROMPT_TOKENS, 476)
         args = self.mmar.parse_args(["--output-dir", "/tmp/shared-store-mmar"])
         self.assertEqual(args.mode, "full")

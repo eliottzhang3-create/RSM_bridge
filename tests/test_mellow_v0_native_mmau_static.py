@@ -73,22 +73,37 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
         ):
             self.assertIn(marker, self.evaluator_text)
 
-    def test_generation_is_greedy_without_top_p_and_prediction_is_verbatim(self) -> None:
+    def test_author_reply_protocol_covers_prompt_audio_generation_and_dual_scoring(self) -> None:
+        for marker in (
+            "build_mellow_author_reply_prompt",
+            "decode_mellow_author_reply_audio",
+            "mellow_author_reply_audio_segment",
+            "DEFAULT_MAX_NEW_TOKENS = 300",
+            "write_mellow_author_reply_evaluation",
+            '"mellow_author_reply_evaluation"',
+            '"mmau_v051525_evaluation"',
+            "MELLOW_AUTHOR_REPLY_CONTEXT",
+        ):
+            self.assertIn(marker, self.evaluator_text)
+
+    def test_generation_matches_author_reply_top_p_argmax_and_is_verbatim(self) -> None:
         prepare = self.evaluator.prepare_model_output_for_official_scorer
         for value in ("a) answer", "  D) untouched  ", "free text"):
             self.assertEqual(prepare(value), value)
         common = Path(self.evaluator.official.__file__).read_text(encoding="utf-8")
         for marker in (
             "torch.argmax",
-            "use_cache=False",
+            "language_model_default_exactly_as_wrapper",
+            "model.caption_decoder.lm(inputs_embeds=generated)",
             '"do_sample": False',
-            '"top_p": None',
-            '"temperature": 0.0',
+            '"top_p": 0.8',
+            '"comparable": bool(',
+            '"temperature": 1.0',
+            "cumulative_probs",
+            "sorted_indices_to_remove",
             "generated_text = str(generation.get",
         ):
             self.assertIn(marker, self.evaluator_text + "\n" + common)
-        self.assertNotIn("cumulative_probs", self.evaluator_text)
-        self.assertNotIn("sorted_indices_to_remove", self.evaluator_text)
 
     def test_preflight_report_is_a_required_fresh_artifact_gate(self) -> None:
         for marker in (
@@ -207,7 +222,7 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
     def test_smoke_and_full_share_output_and_respect_scheduler_limits(self) -> None:
         default_output = (
             "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/"
-            "mmau_test_mini_matched_protocol_audio1x2_verbatim_v1"
+            "mmau_test_mini_mellow_author_reply_protocol_v1"
         )
         for wrapper in (self.smoke, self.full):
             self.assertIn(default_output, wrapper)
@@ -215,7 +230,8 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
             self.assertIn("-c 8 -m 32G -g 1", wrapper)
             self.assertIn("--preflight-report", wrapper)
             self.assertIn("--max-prompt-tokens 129", wrapper)
-            self.assertIn("--max-new-tokens 32", wrapper)
+            self.assertIn("--max-new-tokens 300", wrapper)
+            self.assertIn("--dtype fp32", wrapper)
         self.assertIn("--mode smoke", self.smoke)
         self.assertNotIn("--run-official-evaluation", self.smoke)
         self.assertIn("--mode full", self.full)

@@ -33,7 +33,7 @@ DEFAULT_DATASET_DIR = official.DEFAULT_DATASET_DIR
 DEFAULT_HTSAT = official.DEFAULT_HTSAT
 DEFAULT_MELLOW = official.DEFAULT_MELLOW
 DEFAULT_MAX_PROMPT_TOKENS = official.DEFAULT_MAX_PROMPT_TOKENS
-DEFAULT_MAX_NEW_TOKENS = official.DEFAULT_MAX_NEW_TOKENS
+DEFAULT_MAX_NEW_TOKENS = 300
 DEFAULT_MAX_CONTEXT_LENGTH = official.DEFAULT_MAX_CONTEXT_LENGTH
 CONFIG_FILENAME = "audio_mesh_config.json"
 CONTRACT = "node_shared_unique_store_fullshuffle_fixed260_audio_reuse_answer_eos_v2"
@@ -50,7 +50,8 @@ ANSWER_TERMINATION = {
 SINGLE_AUDIO_SLOT_SEMANTICS = (
     "fixed260_second_slot_reuses_audio1_htsat_embedding_then_runs_bridge_separately"
 )
-PREDICTION_FORMAT = "official_generated_text_verbatim_no_leading_label_preparse_v1"
+PREDICTION_FORMAT = "mellow_author_reply_raw_generation_choice_label_scoring_v1"
+MMAU_PROTOCOL_CONTRACT = "shared_store_mmau_github_issue5_author_reply_reproduction_v1"
 
 RowSkip = official.RowSkip
 ProgressStore = official.ProgressStore
@@ -323,6 +324,8 @@ def _build_fixed260_reused_audio1_prefix(
     model: Any,
     waveform: Any,
     device: Any,
+    *,
+    autocast_enabled: bool = True,
 ) -> tuple[Any, dict[str, Any]]:
     """Build both slots from one audio1 HTSAT embedding, then bridge twice."""
     import torch
@@ -335,7 +338,11 @@ def _build_fixed260_reused_audio1_prefix(
 
     audio1 = waveform.unsqueeze(0).to(device, non_blocking=True)
     reused_mask = torch.ones((1,), dtype=torch.bool, device=device)
-    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
+    with torch.autocast(
+        device_type="cuda",
+        dtype=torch.bfloat16,
+        enabled=autocast_enabled,
+    ):
         first, second = model.encode_audio(
             audio1,
             None,
@@ -394,6 +401,7 @@ def _run_model_generation(
     max_prompt_tokens: int,
     max_new_tokens: int,
 ) -> dict[str, Any]:
+    """Run the pre-existing shared-store decoder used by non-MMAU adapters."""
     import torch
     from generate_audio_checkpoint_reasonaqa import _greedy_decode
 
@@ -405,7 +413,10 @@ def _run_model_generation(
     prompt_ids = prompt_ids_cpu.to(device)
     with torch.inference_mode():
         prefix, prefix_audit = _build_fixed260_reused_audio1_prefix(
-            model, sample["waveform"], device
+            model,
+            sample["waveform"],
+            device,
+            autocast_enabled=True,
         )
         generation = _greedy_decode(
             model,
@@ -417,6 +428,11 @@ def _run_model_generation(
         )
     generation["prompt_token_count"] = prompt_token_count
     generation.update(prefix_audit)
+    _validate_fixed260_generation(generation)
+    return generation
+
+
+def _validate_fixed260_generation(generation: Mapping[str, Any]) -> None:
     if (
         int(generation.get("prefix_token_count", -1)) != 260
         or generation.get("combined_prefix_shape", [None, None])[1] != 260
@@ -427,6 +443,71 @@ def _run_model_generation(
         or int(generation.get("bridge_invocations_for_reused_embedding", -1)) != 2
     ):
         raise RuntimeError(f"shared-store fixed260 inference prefix audit failed: {generation}")
+
+
+def _run_mmau_author_reply_generation(
+    model: Any,
+    tokenizer: Any,
+    device: Any,
+    sample: Mapping[str, Any],
+    *,
+    max_prompt_tokens: int,
+    max_new_tokens: int,
+) -> dict[str, Any]:
+    """Run only MMAU with the protocol from Mellow issue #5's author reply."""
+    import torch
+    from generate_audio_checkpoint_reasonaqa import _greedy_decode
+
+    prompt_ids_cpu, prompt_original_token_count, prompt_truncated = (
+        official.tokenize_mellow_author_reply_prompt(
+            tokenizer,
+            str(sample["prompt"]),
+            max_prompt_tokens=max_prompt_tokens,
+        )
+    )
+    prompt_ids = prompt_ids_cpu.to(device)
+    with torch.inference_mode():
+        waveform, audio_segment = official.mellow_author_reply_audio_segment(
+            sample["waveform"]
+        )
+        prefix, prefix_audit = _build_fixed260_reused_audio1_prefix(
+            model,
+            waveform,
+            device,
+            autocast_enabled=False,
+        )
+        generation = _greedy_decode(
+            model,
+            tokenizer,
+            prefix,
+            prompt_ids,
+            max_new_tokens=max_new_tokens,
+            autocast_enabled=False,
+            top_p=0.8,
+            temperature=1.0,
+        )
+    # MellowWrapper decodes with special tokens present and then splits on its
+    # stop-token string; do not reuse the generic RSmol skip-special-tokens
+    # rendering for the author-protocol score.
+    generated_text_raw = tokenizer.decode(
+        generation["generated_token_ids"],
+        skip_special_tokens=False,
+    )
+    generation["generated_text_raw"] = generated_text_raw
+    generation["generated_text"] = generated_text_raw.split(
+        tokenizer.eos_token or "<|endoftext|>"
+    )[0]
+    generation["decode_policy"] = "mellow_wrapper_decode_then_split_stop_token"
+    generation["prompt_token_count"] = int(prompt_ids.shape[1])
+    generation["prompt_original_token_count"] = prompt_original_token_count
+    generation["prompt_truncated"] = prompt_truncated
+    generation["audio1_segment"] = audio_segment
+    generation["audio2_segment"] = {
+        **audio_segment,
+        "policy": "reuse_audio1_segment_and_htsat_embedding",
+    }
+    generation.update(prefix_audit)
+    _validate_fixed260_generation(generation)
     return generation
 
 
@@ -434,16 +515,43 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     raw = list(sys.argv[1:] if argv is None else argv)
     if not any(item == "--mode" or item.startswith("--mode=") for item in raw):
         raw = ["--mode", "full", *raw]
-    return official.parse_args(raw, default_checkpoint=DEFAULT_CHECKPOINT, description=__doc__)
+    return official.parse_args(
+        raw,
+        default_checkpoint=DEFAULT_CHECKPOINT,
+        default_max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
+        add_audio_root=True,
+        description=__doc__,
+    )
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     report = official.run(
         args,
         load_runtime_model=_load_runtime_model,
-        run_model_generation=_run_model_generation,
+        run_model_generation=_run_mmau_author_reply_generation,
         prepare_prediction=prepare_model_output_for_official_scorer,
         prediction_format=PREDICTION_FORMAT,
+        prompt_builder=official.build_mellow_author_reply_prompt,
+        audio_decoder=official.decode_mellow_author_reply_audio,
+        audio_root=args.audio_root,
+        prefer_official_audio_file=True,
+        prompt_format=official.MELLOW_AUTHOR_REPLY_PROMPT_FORMAT,
+        audio_format=(
+            official.MELLOW_AUTHOR_REPLY_AUDIO_FORMAT
+            + "__single_segment_reused_to_match_shared_store_training_contract"
+        ),
+        protocol_contract=MMAU_PROTOCOL_CONTRACT,
+        generation_protocol={
+            "decoder": "mellow_wrapper_top_p_filter_then_argmax_full_recompute",
+            "top_p": 0.8,
+            "temperature": 1.0,
+            "do_sample": False,
+            "use_cache": False,
+            "inference_dtype": "float32",
+            "author_reply_difference": (
+                "audio1 segment and HTSAT embedding reuse preserve this checkpoint's training contract"
+            ),
+        },
         audio_prefix_tokens=260,
         stage="mmau_test_mini_audio_5_10x2_5_mesh_mellow_shared_store_fixed260",
         logical_trace="exact MeSH 5-10-10-5 trace verified by shared greedy decoder",
@@ -453,9 +561,40 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     if inference_failures:
         report["status"] = "FAILED"
+        report["comparable_official_score"] = False
         report["fatal_error"] = {
             "error": f"{inference_failures} shared-store generation failures were recorded as skipped rows",
             "detail": "Inspect skipped.jsonl; do not interpret official accuracy as a valid model score.",
+        }
+        official._write_json(args.output_dir / "evaluation_report.json", report)
+    predictions_path = args.output_dir / "predictions_fixed_order.json"
+    if predictions_path.is_file() and report.get("inference_coverage", {}).get("status") == "PASS":
+        predictions = json.loads(predictions_path.read_text(encoding="utf-8"))
+        author_score = official.write_mellow_author_reply_evaluation(args.output_dir, predictions)
+        payload_sources = report.get("records", {}).get("audio", {}).get("payload_sources", {})
+        fallback_audio_rows = sum(
+            int(count)
+            for source, count in payload_sources.items()
+            if source != "official_id_wav"
+        )
+        report["mellow_author_reply_evaluation"] = author_score
+        report["mellow_author_reply_context"] = official.MELLOW_AUTHOR_REPLY_CONTEXT
+        report["primary_comparison_score"] = {
+            "scorer": official.MELLOW_AUTHOR_REPLY_SCORER,
+            "comparable": bool(
+                args.mode == "full"
+                and inference_failures == 0
+                and int(author_score["total"]["total"]) == official.EXPECTED_FULL_ROWS
+                and fallback_audio_rows == 0
+            ),
+            **author_score["total"],
+        }
+        report["mmau_v051525_evaluation"] = report.get("official_evaluation", {})
+        report["mellow_author_reply_protocol_audit"] = {
+            "official_id_wav_rows": int(payload_sources.get("official_id_wav", 0)),
+            "fallback_audio_rows": fallback_audio_rows,
+            "payload_sources": payload_sources,
+            "status": "PASS" if fallback_audio_rows == 0 else "NONCOMPARABLE_FALLBACK",
         }
         official._write_json(args.output_dir / "evaluation_report.json", report)
     return report
@@ -469,6 +608,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": report.get("status"),
         "mode": report.get("mode"),
         "records": report.get("records", {}),
+        "primary_comparison_score": report.get("primary_comparison_score", {}),
         "official_evaluation": report.get("official_evaluation", {}),
         "report": str(args.output_dir / "evaluation_report.json"),
     }, ensure_ascii=False, default=_json_default))

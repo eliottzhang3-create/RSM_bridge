@@ -55,6 +55,77 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
         self.assertFalse(self.module.choices_match_fixed_order(["second", "first"], ["first", "second"]))
         self.assertFalse(self.module.choices_match_fixed_order(["(B) first", "A. second"], ["first", "second"]))
 
+    def test_mellow_author_reply_prompt_and_choice_label_metric(self) -> None:
+        prompt = self.module.build_mellow_author_reply_prompt(
+            "Which Sound!",
+            ["Dog", "CAT"],
+        )
+        self.assertEqual(prompt, "which sound? a) dog b) cat")
+        labeled = self.module.mellow_author_reply_labeled_answer("CAT", ["Dog", "CAT"])
+        self.assertEqual(labeled, "b) cat")
+        self.assertTrue(self.module.mellow_author_reply_choice_is_correct("b) anything", labeled))
+        self.assertFalse(self.module.mellow_author_reply_choice_is_correct(" b) anything", labeled))
+        self.assertFalse(self.module.mellow_author_reply_choice_is_correct("cat", labeled))
+
+    def test_mellow_author_reply_scorer_keeps_complete_denominator(self) -> None:
+        score = self.module.evaluate_mellow_author_reply_predictions([
+            {
+                "id": "sound-1",
+                "task": "sound",
+                "difficulty": "easy",
+                "choices": ["Dog", "Cat"],
+                "answer": "Cat",
+                "model_output": "b) cat",
+            },
+            {
+                "id": "music-1",
+                "task": "music",
+                "difficulty": "hard",
+                "choices": ["Piano", "Guitar"],
+                "answer": "Piano",
+                "model_output": "",
+            },
+        ])
+        self.assertEqual(score["total"], {"correct": 1, "total": 2, "accuracy_percent": 50.0})
+        self.assertEqual(score["task"]["sound"]["total"], 1)
+        self.assertEqual(score["task"]["music"]["total"], 1)
+
+    def test_mellow_author_reply_uses_id_wav_and_smoke_materializes_skips(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn('filename = f"{sample_id}.wav"', source)
+        self.assertIn("official_records[:SMOKE_ROWS]", source)
+
+    def test_mellow_author_reply_audio_segment_repeats_and_random_crops(self) -> None:
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch is unavailable in the dependency-light local test environment")
+
+        short = torch.tensor([[1.0, 2.0, 3.0]])
+        repeated, audit = self.module.mellow_author_reply_audio_segment(
+            short,
+            target_rate=1,
+            seconds=5,
+        )
+        self.assertEqual(repeated.tolist(), [[1.0, 2.0, 3.0, 1.0, 2.0]])
+        self.assertEqual(audit["policy"], "repeat_then_trim")
+
+        class FakeRng:
+            @staticmethod
+            def randrange(value):
+                self.assertEqual(value, 2)
+                return 1
+
+        long = torch.tensor([[0.0, 1.0, 2.0, 3.0, 4.0]])
+        cropped, audit = self.module.mellow_author_reply_audio_segment(
+            long,
+            target_rate=1,
+            seconds=3,
+            rng=FakeRng(),
+        )
+        self.assertEqual(cropped.tolist(), [[1.0, 2.0, 3.0]])
+        self.assertEqual(audit["crop_start"], 1)
+
     def test_real_choice_prefixes_are_not_misread_as_labels(self) -> None:
         choices = [
             "F. Scott Fitzgerald",
