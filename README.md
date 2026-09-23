@@ -1,5 +1,27 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-23：文本 5-10-5 Adjacent-layer Average 隔离消融线
+
+新增不训练、直接评测的文本初始化消融线
+`SmolLM2-5-10-5-adjacent-average`。它保持原固定 5-10-5 的 20 个物理层、
+30 个逻辑层和精确 `0..14,5..14,15..19` 执行轨迹不变；源 SmolLM2-135M
+的 0--4 与 25--29 层精确复制，中间层按 `(5,6),(7,8),...,(23,24)`
+逐张量使用 FP32 算术平均后转换回原 dtype。转换元数据强制记录 10 组 source
+pair、FP32 accumulator 和 0--29 每层恰好使用一次；旧单层抽取 mapping 字段为空，
+因此新旧 evaluator 会互相拒绝错误 checkpoint。独立 Stage 3 评测继续使用
+HellaSwag、MMLU、GSM8K、ARC-Easy 和 ARC-Challenge 的既有离线官方协议。
+转换与评测提交入口均固定 `pdgpu-3090`、单 GPU、8 CPU、32G MEM。代码入口为：
+
+```text
+code/RSmol/recursive_model_5_10_5_adjacent_average.py
+code/RSmol/scripts/convert_stepwise_5_10_5_adjacent_average.py
+code/RSmol/scripts/convert_stepwise_5_10_5_adjacent_average.sh
+code/RSmol/run_convert_stepwise_5_10_5_adjacent_average_3090.sh
+code/RSmol/scripts/evaluate_stage3_5_10_5_adjacent_average.py
+code/RSmol/scripts/evaluate_stage3_5_10_5_adjacent_average.sh
+code/RSmol/run_stage3_eval_5_10_5_adjacent_average_3090.sh
+```
+
 ## 2026-09-23：shared-store 可传 epochs 的隔离训练副本
 
 在不修改原 3-epoch shared-store 入口和当前作业的前提下，新增隔离的
