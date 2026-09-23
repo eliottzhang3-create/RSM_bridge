@@ -596,6 +596,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 and int(author_score["total"]["total"]) == official.EXPECTED_FULL_ROWS
                 and fallback_audio_rows == 0
             ),
+            "record_errors_counted_incorrect": int(
+                author_score.get("record_errors", {}).get("total", 0)
+            ),
             **author_score["total"],
         }
         report["mmau_v051525_evaluation"] = report.get("official_evaluation", {})

@@ -89,6 +89,29 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
         self.assertEqual(score["total"], {"correct": 1, "total": 2, "accuracy_percent": 50.0})
         self.assertEqual(score["task"]["sound"]["total"], 1)
         self.assertEqual(score["task"]["music"]["total"], 1)
+        self.assertEqual(score["record_errors"]["total"], 0)
+
+    def test_malformed_answer_mapping_is_counted_wrong_instead_of_raising(self) -> None:
+        score = self.module.evaluate_mellow_author_reply_predictions([
+            {
+                "id": "speech-leading-space",
+                "task": "speech",
+                "difficulty": "medium",
+                "choices": ["Exact answer.", "Other answer."],
+                "answer": " Exact answer.",
+                "model_output": "a) exact answer",
+            }
+        ])
+        self.assertEqual(score["total"], {"correct": 0, "total": 1, "accuracy_percent": 0.0})
+        self.assertEqual(score["record_errors"]["total"], 1)
+        self.assertEqual(
+            score["record_errors"]["counts"],
+            {"answer_not_exact_choice": 1},
+        )
+        self.assertEqual(
+            score["rows"][0]["scoring_error"]["policy"],
+            "counted_incorrect_without_shrinking_denominator",
+        )
 
     def test_mellow_author_reply_uses_id_wav_and_smoke_materializes_skips(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")

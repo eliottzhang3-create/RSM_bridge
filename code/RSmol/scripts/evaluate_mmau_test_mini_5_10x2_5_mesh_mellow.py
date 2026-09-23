@@ -389,10 +389,11 @@ def mellow_author_reply_choice_is_correct(prediction: Any, labeled_answer: Any) 
 def evaluate_mellow_author_reply_predictions(
     predictions: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Score fixed-order predictions with the Mellow author's published helper."""
+    """Score every row, conservatively counting malformed answer mappings wrong."""
 
     task_metrics = {name: [0, 0] for name in ("sound", "music", "speech")}
     difficulty_metrics = {name: [0, 0] for name in ("easy", "hard", "medium")}
+    scoring_error_counts: Counter[str] = Counter()
     correct = 0
     scored_rows: list[dict[str, Any]] = []
     for row_index, record in enumerate(predictions):
@@ -402,10 +403,31 @@ def evaluate_mellow_author_reply_predictions(
             raise ValueError(
                 f"invalid MMAU metadata at row {row_index}: task={task!r} difficulty={difficulty!r}"
             )
-        choices = _coerce_choices(record.get("choices"))
-        labeled_answer = mellow_author_reply_labeled_answer(record.get("answer", ""), choices)
         prediction = str(record.get("model_output", ""))
-        matched = mellow_author_reply_choice_is_correct(prediction, labeled_answer)
+        choices = _coerce_choices(record.get("choices"))
+        labeled_answer: str | None = None
+        scoring_error: dict[str, Any] | None = None
+        try:
+            labeled_answer = mellow_author_reply_labeled_answer(
+                record.get("answer", ""),
+                choices,
+            )
+            matched = mellow_author_reply_choice_is_correct(prediction, labeled_answer)
+        except (TypeError, ValueError) as exc:
+            # The author-reply snippet would abort here (its list lookup has
+            # no match).  Benchmark evaluation must preserve the full 1000-row
+            # denominator instead: retain the row, score it incorrect, and
+            # expose the metadata defect for audit.
+            reason = "answer_not_exact_choice"
+            scoring_error_counts[reason] += 1
+            matched = False
+            scoring_error = {
+                "reason": reason,
+                "error": str(exc),
+                "answer": record.get("answer", ""),
+                "choices": choices,
+                "policy": "counted_incorrect_without_shrinking_denominator",
+            }
         if matched:
             task_metrics[task][0] += 1
             difficulty_metrics[difficulty][0] += 1
@@ -420,6 +442,7 @@ def evaluate_mellow_author_reply_predictions(
             "correct": matched,
             "task": task,
             "difficulty": difficulty,
+            "scoring_error": scoring_error,
         })
 
     def summarize(metrics: Mapping[str, Sequence[int]]) -> dict[str, Any]:
@@ -445,6 +468,11 @@ def evaluate_mellow_author_reply_predictions(
         },
         "task": summarize(task_metrics),
         "difficulty": summarize(difficulty_metrics),
+        "record_errors": {
+            "total": int(sum(scoring_error_counts.values())),
+            "counts": dict(sorted(scoring_error_counts.items())),
+            "policy": "record_retained_and_counted_incorrect",
+        },
         "rows": scored_rows,
     }
 
@@ -473,6 +501,7 @@ def write_mellow_author_reply_evaluation(
     lines.extend([
         "",
         f"Total Accuracy: {total['accuracy_percent']:.2f}% over {total['total']} samples",
+        f"Record-level scoring errors counted incorrect: {score['record_errors']['total']}",
         "",
     ])
     (output_dir / "mellow_author_reply_evaluation.txt").write_text(

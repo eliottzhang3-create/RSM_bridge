@@ -14,6 +14,8 @@ Mellow 作者在 GitHub issue #5 中给出的复现协议：问题末字符替�
 作者回复的字母 scorer 不同；评测会同时保存两套结果：
 `mellow_author_reply_evaluation.{json,txt}` 是与 Mellow 论文/issue 比较的主结果，
 `official_evaluation.txt` 和 report 中的 `mmau_v051525_evaluation` 是新版官方诊断结果。
+作者字母 scorer 若遇到 answer 因前后空格等 metadata 问题而无法精确映射到 choices，不再
+中止整个任务；该行保留在完整分母中、按错误计分，并记录到 `record_errors`。
 需要注意，issue 发布于 2025-04-16，而 `MMAU-v05.15.25` 发布于 2025-05-15，后者约修改
 25% 问答和 5% 音频；因此这是“作者推理/计分协议在新版数据上的复现”，不能声称精确复现
 论文中的 52.11。
