@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -43,12 +44,45 @@ PREDICTION_FORMAT = "native_mellow_v0_generated_text_verbatim_v1"
 PROTOCOL_CONTRACT = "mellow_v0_mmau_matched_protocol_audio1x2_greedy_v1"
 MODEL_CONTRACT_FILENAME = "mellow_v0_model_contract.json"
 SMOKE_GATE_FILENAME = "mellow_v0_smoke_gate.json"
+SHARED_STORAGE_PREFIXES = ("/hpc_stor03", "/mnt/cloudstorfs")
 
 
 def prepare_model_output_for_official_scorer(value: Any) -> str:
     """Pass decoded Mellow output verbatim to MMAU's official scorer."""
 
     return str(value)
+
+
+def _shared_storage_identity(value: str | Path) -> str:
+    """Normalize the two cluster mount names without weakening artifact identity."""
+
+    text = Path(value).as_posix().rstrip("/") or "/"
+    for prefix in SHARED_STORAGE_PREFIXES:
+        if text == prefix:
+            return "shared-storage:/"
+        if text.startswith(prefix + "/"):
+            return "shared-storage:/" + text[len(prefix) + 1:]
+    return text
+
+
+def _same_artifact_path(expected: Path, reported: Any) -> bool:
+    if not isinstance(reported, str) or not reported:
+        return False
+    actual = Path(reported)
+    try:
+        if os.path.samefile(expected, actual):
+            return True
+    except (FileNotFoundError, OSError, ValueError):
+        pass
+    candidates_expected = {
+        _shared_storage_identity(expected),
+        _shared_storage_identity(expected.resolve()),
+    }
+    candidates_actual = {
+        _shared_storage_identity(actual),
+        _shared_storage_identity(actual.resolve()),
+    }
+    return bool(candidates_expected & candidates_actual)
 
 
 def _load_and_validate_preflight(args: argparse.Namespace) -> dict[str, Any]:
@@ -72,9 +106,16 @@ def _load_and_validate_preflight(args: argparse.Namespace) -> dict[str, Any]:
         "base_smollm2": args.base_smollm2.resolve(),
     }
     mismatches = {
-        key: {"expected": str(value), "actual": report.get(key)}
+        key: {
+            "expected": str(value),
+            "actual": report.get(key),
+            "expected_storage_identity": _shared_storage_identity(value),
+            "actual_storage_identity": _shared_storage_identity(
+                str(report.get(key, ""))
+            ),
+        }
         for key, value in expected_paths.items()
-        if Path(str(report.get(key, ""))).resolve() != value
+        if not _same_artifact_path(value, report.get(key))
     }
     checkpoint_hash = preflight._sha256(args.mellow_checkpoint.resolve())
     if report.get("mellow_checkpoint_sha256") != checkpoint_hash:
@@ -82,14 +123,43 @@ def _load_and_validate_preflight(args: argparse.Namespace) -> dict[str, Any]:
             "expected": checkpoint_hash,
             "actual": report.get("mellow_checkpoint_sha256"),
         }
+    snapshot_config_hash = preflight._sha256(
+        args.mellow_snapshot.resolve() / "config.json"
+    )
+    if report.get("snapshot_config_sha256") != snapshot_config_hash:
+        mismatches["snapshot_config_sha256"] = {
+            "expected": snapshot_config_hash,
+            "actual": report.get("snapshot_config_sha256"),
+        }
     current_source_hashes = preflight._source_inventory(args.mellow_source_root.resolve())
     if report.get("mellow_source_sha256") != current_source_hashes:
         mismatches["mellow_source_sha256"] = {
             "expected": current_source_hashes,
             "actual": report.get("mellow_source_sha256"),
         }
+    current_smollm2_inventory = preflight._smollm2_inventory(
+        args.base_smollm2.resolve()
+    )
+    if report.get("base_smollm2_inventory") != current_smollm2_inventory:
+        mismatches["base_smollm2_inventory"] = {
+            "expected": current_smollm2_inventory,
+            "actual": report.get("base_smollm2_inventory"),
+        }
     if mismatches:
         raise RuntimeError(f"Mellow preflight report is stale or belongs to other artifacts: {mismatches}")
+    report["runtime_path_validation"] = {
+        "status": "PASS",
+        "policy": "samefile_or_known_shared_storage_alias_plus_content_hashes",
+        "accepted_aliases": list(SHARED_STORAGE_PREFIXES),
+        "paths": {
+            key: {
+                "runtime": str(value),
+                "reported": report.get(key),
+                "storage_identity": _shared_storage_identity(value),
+            }
+            for key, value in expected_paths.items()
+        },
+    }
     return report
 
 
@@ -97,13 +167,14 @@ def _model_contract(args: argparse.Namespace, preflight_report: Mapping[str, Any
     return {
         "protocol_contract": PROTOCOL_CONTRACT,
         "artifact_contract": preflight.ARTIFACT_CONTRACT,
-        "preflight_report": str(args.preflight_report.resolve()),
+        "path_identity_policy": "known_shared_storage_alias_v1",
+        "preflight_report": _shared_storage_identity(args.preflight_report),
         "preflight_report_sha256": preflight._sha256(args.preflight_report.resolve()),
-        "mellow_source_root": str(args.mellow_source_root.resolve()),
-        "mellow_snapshot": str(args.mellow_snapshot.resolve()),
-        "mellow_checkpoint": str(args.mellow_checkpoint.resolve()),
+        "mellow_source_root": _shared_storage_identity(args.mellow_source_root),
+        "mellow_snapshot": _shared_storage_identity(args.mellow_snapshot),
+        "mellow_checkpoint": _shared_storage_identity(args.mellow_checkpoint),
         "mellow_checkpoint_sha256": preflight_report["mellow_checkpoint_sha256"],
-        "base_smollm2": str(args.base_smollm2.resolve()),
+        "base_smollm2": _shared_storage_identity(args.base_smollm2),
         "single_audio_policy": "same_waveform_in_two_native_slots_encoded_separately",
         "audio_preprocessing": "mono_32khz_first10s_right_zero_pad",
         "prompt_tokens": MELLOW_PROMPT_TOKENS,

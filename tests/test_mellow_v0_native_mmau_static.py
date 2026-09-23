@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,10 +96,102 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
             'report.get("status") != "PASS"',
             'report.get("strict_state_dict_load") is not True',
             "mellow_checkpoint_sha256",
+            "snapshot_config_sha256",
             "current_source_hashes",
+            "current_smollm2_inventory",
             "preflight report is stale",
         ):
             self.assertIn(marker, self.evaluator_text)
+
+    def test_cluster_storage_mount_aliases_have_the_same_identity(self) -> None:
+        hpc = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main")
+        cloud = "/mnt/cloudstorfs/sjtu_home/jinwei.zhang/models/mellow-main"
+        self.assertEqual(
+            self.evaluator._shared_storage_identity(hpc),
+            self.evaluator._shared_storage_identity(cloud),
+        )
+        self.assertTrue(self.evaluator._same_artifact_path(hpc, cloud))
+        self.assertFalse(
+            self.evaluator._same_artifact_path(
+                hpc,
+                "/mnt/cloudstorfs/sjtu_home/jinwei.zhang/models/other-model",
+            )
+        )
+
+    def test_persistent_model_contract_uses_mount_independent_identities(self) -> None:
+        args = SimpleNamespace(
+            preflight_report=Path("/hpc_stor03/user/preflight.json"),
+            mellow_source_root=Path("/hpc_stor03/user/mellow"),
+            mellow_snapshot=Path("/hpc_stor03/user/snapshot"),
+            mellow_checkpoint=Path("/hpc_stor03/user/snapshot/v0.ckpt"),
+            base_smollm2=Path("/hpc_stor03/user/SmolLM2"),
+        )
+        with mock.patch.object(self.evaluator.preflight, "_sha256", return_value="report-hash"):
+            contract = self.evaluator._model_contract(
+                args,
+                {"mellow_checkpoint_sha256": "checkpoint-hash"},
+            )
+        self.assertEqual(contract["path_identity_policy"], "known_shared_storage_alias_v1")
+        self.assertEqual(contract["mellow_source_root"], "shared-storage:/user/mellow")
+        self.assertEqual(contract["mellow_snapshot"], "shared-storage:/user/snapshot")
+        self.assertEqual(
+            contract["mellow_checkpoint"],
+            "shared-storage:/user/snapshot/v0.ckpt",
+        )
+        self.assertEqual(contract["base_smollm2"], "shared-storage:/user/SmolLM2")
+
+    def test_preflight_accepts_mount_alias_but_still_checks_all_content_identities(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            snapshot = root / "snapshot"
+            base = root / "base"
+            source.mkdir()
+            snapshot.mkdir()
+            base.mkdir()
+            checkpoint = snapshot / "v0.ckpt"
+            checkpoint.write_bytes(b"checkpoint")
+            (snapshot / "config.json").write_text("{}", encoding="utf-8")
+            report_path = root / "preflight.json"
+            source_inventory = {"mellow/model/model.py": "source-hash"}
+            base_inventory = {"required_file_sha256": {"config.json": "base-hash"}}
+            report = {
+                "status": "PASS",
+                "artifact_contract": self.evaluator.preflight.ARTIFACT_CONTRACT,
+                "strict_state_dict_load": True,
+                "missing_keys": [],
+                "unexpected_keys": [],
+                "mellow_source_root": str(source),
+                "mellow_snapshot": str(snapshot),
+                "mellow_checkpoint": str(checkpoint),
+                "base_smollm2": str(base),
+                "mellow_checkpoint_sha256": "checkpoint-hash",
+                "snapshot_config_sha256": "snapshot-hash",
+                "mellow_source_sha256": source_inventory,
+                "base_smollm2_inventory": base_inventory,
+            }
+            report_path.write_text(__import__("json").dumps(report), encoding="utf-8")
+            args = SimpleNamespace(
+                preflight_report=report_path,
+                mellow_source_root=source,
+                mellow_snapshot=snapshot,
+                mellow_checkpoint=checkpoint,
+                base_smollm2=base,
+            )
+            real_same_path = self.evaluator._same_artifact_path
+
+            def same_path_with_alias(expected, reported):
+                return real_same_path(expected, reported)
+
+            with (
+                mock.patch.object(self.evaluator, "_same_artifact_path", side_effect=same_path_with_alias),
+                mock.patch.object(self.evaluator.preflight, "_sha256", side_effect=["checkpoint-hash", "snapshot-hash"]),
+                mock.patch.object(self.evaluator.preflight, "_source_inventory", return_value=source_inventory),
+                mock.patch.object(self.evaluator.preflight, "_smollm2_inventory", return_value=base_inventory),
+            ):
+                loaded = self.evaluator._load_and_validate_preflight(args)
+            self.assertEqual(loaded["runtime_path_validation"]["status"], "PASS")
+            self.assertIn("content_hashes", loaded["runtime_path_validation"]["policy"])
 
     def test_full_requires_persistent_completed_first_five_smoke_gate(self) -> None:
         for marker in (

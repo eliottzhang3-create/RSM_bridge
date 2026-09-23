@@ -29,6 +29,11 @@ bash code/RSmol/run_mmau_test_mini_mellow_v0_full_4090.sh
 full 会复用 smoke 已完成的前 5 条，不重新推理。远程 preflight/smoke/full 尚未运行，
 本地静态检查不能写成远程 GPU PASS。
 
+集群上的同一共享存储可能在不同节点分别解析为 `/hpc_stor03/...` 与
+`/mnt/cloudstorfs/...`。preflight gate 将这两个前缀视为同一存储别名，但不会仅凭路径
+放行：运行时仍重新核对完整 checkpoint SHA256、snapshot config SHA256、Mellow 源码
+逐文件 SHA256 和本地 SmolLM2 config/tokenizer inventory。
+
 ## 2026-09-23：文本 5-10-5 Adjacent-layer Average 隔离消融线
 
 新增不训练、直接评测的文本初始化消融线
