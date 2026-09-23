@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the completed 3-epoch shared-store Audio MeSH checkpoint on MMAU.
+"""Evaluate the completed 10-epoch shared-store Audio MeSH checkpoint on MMAU.
 
 The canonical evaluator owns dataset traversal, fixed-order prompts, resumable
 outputs, official-artifact audits, and official scoring.  This adapter owns the
@@ -26,8 +26,8 @@ import evaluate_mmau_test_mini_5_10x2_5_mesh_mellow as official  # noqa: E402
 
 DEFAULT_CHECKPOINT = (
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
-    "audio_5_10x2_5_mesh_mellow_shared_store/"
-    "formal_fixed260_3ep_20260922_v1/checkpoint-011343"
+    "audio_5_10x2_5_mesh_mellow_shared_store_configurable_epochs/"
+    "formal_10epochs_20260923/checkpoint-037810"
 )
 DEFAULT_DATASET_DIR = official.DEFAULT_DATASET_DIR
 DEFAULT_HTSAT = official.DEFAULT_HTSAT
@@ -37,10 +37,10 @@ DEFAULT_MAX_NEW_TOKENS = official.DEFAULT_MAX_NEW_TOKENS
 DEFAULT_MAX_CONTEXT_LENGTH = official.DEFAULT_MAX_CONTEXT_LENGTH
 CONFIG_FILENAME = "audio_mesh_config.json"
 CONTRACT = "node_shared_unique_store_fullshuffle_fixed260_audio_reuse_answer_eos_v2"
-EXPECTED_FINAL_STEP = 11_343
-EXPECTED_EPOCHS = 3
+EXPECTED_FINAL_STEP = 37_810
+EXPECTED_EPOCHS = 10
 EXPECTED_STEPS_PER_EPOCH = 3_781
-EXPECTED_WARMUP_STEPS = 568
+EXPECTED_WARMUP_STEPS = 1_891
 EXPECTED_PREFIX_TOKENS = {"single": 260, "dual": 260}
 ANSWER_TERMINATION = {
     "token": "<|endoftext|>",
@@ -78,7 +78,7 @@ def _load_training_state_metadata(path: Path) -> Mapping[str, Any]:
 
 
 def _audit_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
-    """Fail closed unless the checkpoint is the completed fixed-260 3-epoch run."""
+    """Fail closed unless the checkpoint is the completed fixed-260 10-epoch run."""
     import torch
 
     from audio_5_10x2_5_mesh_mellow_shared_store import TRAINING_CONTRACT
@@ -215,7 +215,7 @@ def _audit_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     } != expected_cursor:
         raise RuntimeError(f"shared-store final cursor mismatch: {cursor!r}")
     if int(state.get("global_step", -1)) != EXPECTED_FINAL_STEP:
-        raise RuntimeError("shared-store training state is not at optimizer step 11,343")
+        raise RuntimeError("shared-store training state is not at optimizer step 37,810")
     rng_ranks = {str(key) for key in state.get("rng_states_by_rank", {})}
     if rng_ranks != {str(index) for index in range(8)}:
         raise RuntimeError(f"shared-store RNG rank coverage mismatch: {sorted(rng_ranks)}")

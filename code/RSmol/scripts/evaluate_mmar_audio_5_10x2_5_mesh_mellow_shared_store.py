@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the completed 3-epoch shared-store Audio MeSH checkpoint on MMAR."""
+"""Evaluate the completed 10-epoch shared-store Audio MeSH checkpoint on MMAR."""
 from __future__ import annotations
 
 import json

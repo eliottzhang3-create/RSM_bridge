@@ -86,16 +86,17 @@ Every run writes `shared_store_training_report.json` to its output directory.
 Output directories must be new or empty.  `/dev/shm` staging is removed on job
 exit; the persistent v3 store is never modified.
 
-## MMAU test-mini and MMAR evaluation of checkpoint-011343
+## MMAU test-mini and MMAR evaluation of checkpoint-037810
 
-The completed three-epoch artifact at
-`formal_fixed260_3ep_20260922_v1/checkpoint-011343` has isolated MMAU and MMAR
-entrypoints. Both run full official evaluation by default:
+The evaluation entrypoints now target the completed configurable ten-epoch
+artifact at
+`audio_5_10x2_5_mesh_mellow_shared_store_configurable_epochs/formal_10epochs_20260923/checkpoint-037810`.
+Both run full official evaluation by default. MMAU submits to `pdgpu-4090`:
 
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
 
-bash run_mmau_test_mini_audio_5_10x2_5_mesh_mellow_shared_store_5090.sh
+bash run_mmau_test_mini_audio_5_10x2_5_mesh_mellow_shared_store_4090.sh
 bash run_mmar_audio_5_10x2_5_mesh_mellow_shared_store_5090.sh
 ```
 

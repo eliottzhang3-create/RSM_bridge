@@ -1,4 +1,4 @@
-"""Dependency-light contracts for checkpoint-011343 MMAU/MMAR evaluation."""
+"""Dependency-light contracts for checkpoint-037810 MMAU/MMAR evaluation."""
 from __future__ import annotations
 
 import importlib.util
@@ -14,7 +14,7 @@ MMAU = SCRIPTS / "evaluate_mmau_test_mini_audio_5_10x2_5_mesh_mellow_shared_stor
 MMAR = SCRIPTS / "evaluate_mmar_audio_5_10x2_5_mesh_mellow_shared_store.py"
 MMAU_RUNTIME = SCRIPTS / "evaluate_mmau_test_mini_audio_5_10x2_5_mesh_mellow_shared_store.sh"
 MMAR_RUNTIME = SCRIPTS / "evaluate_mmar_audio_5_10x2_5_mesh_mellow_shared_store.sh"
-MMAU_SUBMIT = RSMOL / "run_mmau_test_mini_audio_5_10x2_5_mesh_mellow_shared_store_5090.sh"
+MMAU_SUBMIT = RSMOL / "run_mmau_test_mini_audio_5_10x2_5_mesh_mellow_shared_store_4090.sh"
 MMAR_SUBMIT = RSMOL / "run_mmar_audio_5_10x2_5_mesh_mellow_shared_store_5090.sh"
 
 
@@ -42,11 +42,11 @@ class SharedStoreEvaluationStaticTest(unittest.TestCase):
 
     def test_exact_completed_checkpoint_and_schedule_are_locked(self):
         normalized = str(self.mmau.DEFAULT_CHECKPOINT).replace("\\", "/")
-        self.assertTrue(normalized.endswith("formal_fixed260_3ep_20260922_v1/checkpoint-011343"))
-        self.assertEqual(self.mmau.EXPECTED_FINAL_STEP, 11_343)
-        self.assertEqual(self.mmau.EXPECTED_EPOCHS, 3)
+        self.assertTrue(normalized.endswith("formal_10epochs_20260923/checkpoint-037810"))
+        self.assertEqual(self.mmau.EXPECTED_FINAL_STEP, 37_810)
+        self.assertEqual(self.mmau.EXPECTED_EPOCHS, 10)
         self.assertEqual(self.mmau.EXPECTED_STEPS_PER_EPOCH, 3_781)
-        self.assertEqual(self.mmau.EXPECTED_WARMUP_STEPS, 568)
+        self.assertEqual(self.mmau.EXPECTED_WARMUP_STEPS, 1_891)
         self.assertEqual(self.mmau.EXPECTED_PREFIX_TOKENS, {"single": 260, "dual": 260})
 
     def test_predictions_are_passed_verbatim_without_leading_label_removal(self):
@@ -103,9 +103,11 @@ class SharedStoreEvaluationStaticTest(unittest.TestCase):
         ):
             self.assertIn("--mode full", submit)
             self.assertIn("--run-official-evaluation", submit)
-            self.assertIn("checkpoint-011343", submit)
-            self.assertIn("pdgpu-5090", submit)
+            self.assertIn("checkpoint-037810", submit)
+            self.assertIn("-c 8 -m 32G -g 1", submit)
             self.assertIn(runtime, submit)
+        self.assertIn("pdgpu-4090", self.mmau_submit)
+        self.assertIn("pdgpu-5090", self.mmar_submit)
         self.assertIn("--max-prompt-tokens 476", self.mmar_submit)
         self.assertTrue(MMAU_RUNTIME.is_file())
         self.assertTrue(MMAR_RUNTIME.is_file())
