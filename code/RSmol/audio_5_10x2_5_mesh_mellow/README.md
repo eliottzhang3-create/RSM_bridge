@@ -97,6 +97,40 @@ first-step MeSH gradient/path audit remains enabled.
 The repository's Windows checkout cannot run the remote CUDA/Mellow/HTSAT
 validation; use the 5090 `vc submit` launcher for the actual measurement.
 
+## Historical checkpoint-011343 MMAU evaluation
+
+The original three-epoch fixed-260 checkpoint is evaluated through an
+isolated legacy adapter rather than the current shared-store or compact
+partition evaluator:
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/
+audio_5_10x2_5_mesh_mellow/
+formal_restart_save500_20260910_105248/checkpoint-011343
+```
+
+Run the complete 1,000-row MMAU test-mini and official scorer with:
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mmau_test_mini_audio_5_10x2_5_mesh_mellow_legacy_fixed260_5090.sh
+```
+
+The adapter validates the pre-contract checkpoint schema written by the
+September 10 trainer: 3 epochs, 11,343 optimizer steps, 568 warmup steps,
+LR `1e-3 -> 0`, save interval 500, eight-rank RNG state, and final saved
+cursor `epoch=2,batch_in_epoch=15124,global_step=11343`. It does not relabel
+the artifact as a shared-store, compact-prefix, or answer-EOS checkpoint.
+
+Inference matches the checkpoint's training-time audio layout. A single-audio
+question encodes audio1 once with HTSAT, reuses that embedding for slot two,
+and invokes the bridge separately for both slots, producing a fixed 260-token
+prefix. Decoded prediction text is passed verbatim to the official scorer;
+the leading `a)`-`d)` label is not removed. The current full-denominator and
+status contracts still apply: skipped rows become empty incorrect predictions,
+`prompt_length_audit.prompt_exceeds_max_tokens` must be inspected, and a
+top-level `PASS` requires the official scorer to report all 1,000 samples.
+
 Before designing a persistent waveform-cache staging path, run
 `bash code/RSmol/run_audio_storage_probe_5090.sh`. It requests the same queue,
 image, CPU, memory, GPU, and single-node shape as formal training, but only

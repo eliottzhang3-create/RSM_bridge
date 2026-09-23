@@ -249,16 +249,21 @@ def _audit_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[str, Any]]:
+def _load_runtime_model(
+    args: argparse.Namespace,
+    *,
+    audit_checkpoint: Any | None = None,
+    route_label: str = "shared-store fixed260",
+) -> tuple[Any, Any, Any, dict[str, Any]]:
     import torch
 
     if not torch.cuda.is_available():
-        raise RuntimeError("shared-store fixed260 evaluation requires one CUDA GPU")
+        raise RuntimeError(f"{route_label} evaluation requires one CUDA GPU")
     device = torch.device("cuda", 0)
     torch.cuda.set_device(device)
     from train_audio_5_10x2_5_mesh_mellow_ddp import _load_model
 
-    checkpoint_audit = _audit_checkpoint(args)
+    checkpoint_audit = (audit_checkpoint or _audit_checkpoint)(args)
     config = json.loads((args.checkpoint / CONFIG_FILENAME).read_text(encoding="utf-8"))
     load_args = argparse.Namespace(
         resume_from=args.checkpoint,
@@ -280,7 +285,7 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[s
             )
     model.eval()
     if bool(model.config_audio.compact_single_audio_prefix):
-        raise RuntimeError("shared-store evaluator must use a fixed 260-token two-slot prefix")
+        raise RuntimeError(f"{route_label} evaluator must use a fixed 260-token two-slot prefix")
     actual_context_length = int(getattr(model.config_audio, "max_context_length", 0))
     if actual_context_length != DEFAULT_MAX_CONTEXT_LENGTH:
         raise RuntimeError(
@@ -305,7 +310,7 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[s
     }
     if parameter_devices != {str(device)}:
         raise RuntimeError(
-            "shared-store trainable parameters are not colocated on cuda:0: "
+            f"{route_label} trainable parameters are not colocated on cuda:0: "
             f"{sorted(parameter_devices)}"
         )
     config = dict(config)
