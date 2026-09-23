@@ -175,6 +175,7 @@ rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2
 - shared-store `/dev/shm` PERF20 已有远程 `PASS`：`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_mellow/perf20_shared_waveform_store_tmpfs_20260922_024229830446654-20/perf20_report.json`。该 report 证明共享 store 链路和稳态读取可运行；4090/pdgpu 变更属于当次性能作业，不能直接当作 5090 正式训练结果。
 - 正式训练入口会重新读取两个 smoke report，验证训练合同、step 游标、resume 关联、MeSH 30 层轨迹和全部 8 rank 内存释放；验证不通过则拒绝启动。
 - 原始 SmolLM2-135M 音频对比线已在本地改造成同一套六分区、compact-prefix、answer-EOS-v2、10-epoch 训练合同，训练 wrapper 使用 `pdgpu-3090`；当前状态为代码就绪，新的 20+2 smoke 与正式训练均尚未登记远程 PASS。
+- 2026-09-23 新增原始 SmolLM2-135M 的独立 shared-store configurable-epochs 对比线：从本地 Hugging Face SmolLM2-135M 初始化，使用完整 v3 waveform store、全量 manifest shuffle、固定 260-token 双槽、单音频复用 audio1 HTSAT embedding、双音频分别编码，训练配置目标为 30 epochs（113,430 optimizer steps，5% warmup 为 5,672 steps）。该线使用独立 package/trainer/checkpoint/report/output root 和 `pdgpu-3090` 8-GPU wrapper，仍要求本路线真实 20+2 smoke PASS；当前仅本地代码与静态检查就绪，远程尚未运行。
 - 固定 5-10-5 recursive 音频对比线也已改造成六分区、compact-prefix、answer-EOS-v2、10-epoch 合同；保持 20 个物理层和精确 `5-10-10-5` 逻辑轨迹、无 MeSH router/memory，训练 wrapper 使用 `pdgpu-5090`。用户已提供 `partition_formal_eos_v2_10epochs_20260919/checkpoint-037810` 作为完成训练产物；其独立 MMAU/MMAR full 评测代码已就绪，远程 artifact 审计与正式分数尚待评测作业确认。
 
 路线隔离摘要：
@@ -185,7 +186,8 @@ rsmol_reasonaqa_train_component_partitions6_32k_10s_f32_v2
 | MeSH shared-store | 完整 v3 store 一次复制到节点 `/dev/shm`，8 rank 共享 mmap，全量 manifest shuffle | 新性能/数据生命周期实验 |
 | MeSH online | 原始音频在线 decode/resample/crop/pad，完整 manifest shuffle | 速度和初始化后续训对照 |
 | MeSH silence-slot | 六分区 + 固定 260，单音频第二槽 GPU 内 zero waveform | 独立槽位实验 |
-| SmolLM2 / fixed recursive | 各自文本 backbone 和独立 checkpoint contract | 对比基线 |
+| SmolLM2 shared-store | 原始 30 层 SmolLM2 + 完整 v3 `/dev/shm` store + 固定 260 双槽 | 30-epoch 同配置对比线 |
+| SmolLM2 partition / fixed recursive | 各自文本 backbone 和独立 checkpoint contract | 历史/结构对比基线 |
 
 文本模型默认初始化自第二轮低学习率 MeSH checkpoint：
 
@@ -907,6 +909,26 @@ code/RSmol/run_audio_smollm2_135m_mellow_formal_3090.sh
 
 训练合同为 `smollm2_component_partitions6_rank_ram_compact_audio_answer_eos_v2`。除文本 backbone 是原始 30 个独立物理层的 SmolLM2-135M、没有 MeSH router/memory 外，六分区数据生命周期、130/260 compact prefix、answer EOS、batch/优化器/LR、20+2 smoke、严格内存释放、checkpoint/resume 和 10-epoch 正式配置均与当前 MeSH 主线一致。正式训练同样必须由本路线两个真实 PASS smoke report 放行。
 
+新增的 shared-store configurable-epochs 线与上述 partition-v2 线完全隔离。它从
+`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2` 的标准 30 层模型初始化，复用当前
+MeSH shared-store 的完整 v3 `/dev/shm` store、全量 manifest shuffle、8 GPU × microbatch 8 ×
+GA 4、AdamW、`1e-3 -> 1e-4` cosine 和 save-500 配置，但固定使用 260-token 双槽：单音频只算
+一次 audio1 HTSAT embedding 再分别通过两次 bridge，双音频分别计算 HTSAT embedding。30 epochs
+对应 113,430 个 optimizer steps，warmup 严格为 `ceil(113430 * 0.05) = 5672`。独立合同为
+`smollm2_node_shared_unique_store_fullshuffle_fixed260_audio_reuse_answer_eos_v2`，没有 MeSH
+router/memory、递归或共享层，不能与 partition、MeSH 或 recursive checkpoint/report 混用。
+
+```text
+code/RSmol/audio_smollm2_135m_mellow_shared_store/README.md
+code/RSmol/scripts/train_audio_smollm2_shared_store_135m_mellow_ddp.py
+code/RSmol/scripts/train_audio_smollm2_shared_store_configurable_epochs_135m_mellow_ddp.py
+code/RSmol/run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_3090.sh
+code/RSmol/run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_3090.sh
+code/RSmol/run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_3090.sh
+```
+
+这条新线当前是“本地代码就绪”，远程 smoke20、resume2 和 30-epoch formal 均尚未登记 PASS。
+
 当前 MMAU/MMAR 对比评测 checkpoint：
 
 ```text
@@ -1043,12 +1065,23 @@ code/RSmol/run_audio_shared_store_formal_configurable_epochs_5_10x2_5_mesh_mello
 code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/README.md
 code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/data.py
 code/RSmol/audio_5_10x2_5_mesh_mellow_shared_store/model.py
+code/RSmol/scripts/stage_audio_smollm2_shared_store_configurable_epochs_135m_mellow.sh
+code/RSmol/scripts/train_audio_smollm2_shared_store_135m_mellow_ddp.py
+code/RSmol/scripts/train_audio_smollm2_shared_store_configurable_epochs_135m_mellow_ddp.py
+code/RSmol/scripts/train_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_ddp.sh
+code/RSmol/scripts/train_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_ddp.sh
+code/RSmol/scripts/train_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_ddp.sh
+code/RSmol/run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_3090.sh
+code/RSmol/run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_3090.sh
+code/RSmol/run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_3090.sh
+code/RSmol/audio_smollm2_135m_mellow_shared_store/README.md
 code/RSmol/scripts/train_audio_perf20_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh
 tests/test_audio_perf20_static.py
 tests/test_audio_waveform_cache_perf20_static.py
 tests/test_audio_shared_store_training_static.py
 tests/test_audio_shared_store_configurable_epochs_static.py
+tests/test_audio_smollm2_shared_store_configurable_epochs_static.py
 tests/test_reasonaqa_component_partitions.py
 tests/test_reasonaqa_partition_materialization.py
 ```
@@ -1129,10 +1162,13 @@ python -m py_compile code/RSmol/audio_5_10x2_5_mesh_mellow/model.py
 python -m py_compile code/RSmol/scripts/train_audio_partitioned_5_10x2_5_mesh_mellow_ddp.py
 python -m py_compile code/RSmol/scripts/train_audio_shared_store_5_10x2_5_mesh_mellow_ddp.py
 python -m py_compile code/RSmol/scripts/train_audio_shared_store_configurable_epochs_5_10x2_5_mesh_mellow_ddp.py
+python -m py_compile code/RSmol/scripts/train_audio_smollm2_shared_store_135m_mellow_ddp.py
+python -m py_compile code/RSmol/scripts/train_audio_smollm2_shared_store_configurable_epochs_135m_mellow_ddp.py
 python -m unittest discover -s tests -p "test_audio_partition_training_static.py"
 python -m unittest discover -s tests -p "test_audio_5_10x2_5_mesh_mellow_static.py"
 python -m unittest discover -s tests -p "test_audio_shared_store_training_static.py"
 python -m unittest discover -s tests -p "test_audio_shared_store_configurable_epochs_static.py"
+python -m unittest discover -s tests -p "test_audio_smollm2_shared_store_configurable_epochs_static.py"
 python -m unittest discover -s tests -p "test_unique_audio_waveform_store_static.py"
 git diff --check
 ```
