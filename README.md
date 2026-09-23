@@ -1,5 +1,34 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-23：Mellow-v0 原生 MMAU test-mini 隔离评测线
+
+新增一条不转换权重、不影响现有 RSmol 评测的原生 Mellow-v0 路线。执行顺序固定为：
+CPU-only artifact preflight → MMAU parquet 物理顺序前 5 条 smoke → 同一输出目录继续 full
+1000 条并调用官方 `evaluation.py`。preflight 从本地 GitHub checkout 构造原生 Mellow，
+离线加载本地 SmolLM2-135M 和完整 `v0.ckpt`，严格覆盖 HTSAT、c2l、projection 与
+text decoder；只检查 artifact，不运行仓库中的两个 example 音频。
+
+评测沿用当前 MMAU 的官方 metadata/scorer 审计、固定顺序 prompt、mono 32 kHz/10 秒
+首段截断与右侧补零、129-token prompt 上限、append-only resume 和完整分母语义。MMAU
+单音频波形同时传入 Mellow 的两个原生槽，但两个槽分别调用 audio encoder；prefix 为
+`129 + 1 + 129 + 1 + 129 = 389` tokens。生成固定 greedy、`use_cache=False`、最多 32
+tokens，不使用 top-p；解码文本不删除开头 `a)`--`d)`，原样写入官方 `model_output`。
+smoke 未请求官方 scorer，因此只能是 `INFERENCE_ONLY_PASS`；full 才能产生可比较的
+官方 `PASS`。成功 smoke 会持久化独立 gate；full 缺少该 gate 或 artifact identity 已变化时
+会拒绝启动，full 中断后则仍可依靠同一 gate 和 append-only progress 继续。GPU 提交入口
+统一为 `pdgpu-4090`、1 GPU、8 CPU、32G MEM：
+
+```bash
+bash code/RSmol/run_mellow_v0_artifact_preflight.sh
+bash code/RSmol/run_mmau_test_mini_mellow_v0_smoke_4090.sh
+bash code/RSmol/run_mmau_test_mini_mellow_v0_full_4090.sh
+```
+
+默认输出目录为
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/mmau_test_mini_matched_protocol_audio1x2_verbatim_v1`；
+full 会复用 smoke 已完成的前 5 条，不重新推理。远程 preflight/smoke/full 尚未运行，
+本地静态检查不能写成远程 GPU PASS。
+
 ## 2026-09-23：文本 5-10-5 Adjacent-layer Average 隔离消融线
 
 新增不训练、直接评测的文本初始化消融线
