@@ -179,6 +179,20 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
             self.assertIn("--input", report)
             self.assertIn("Total Accuracy", report)
 
+    def test_inference_only_is_not_reported_as_comparable_pass(self) -> None:
+        self.assertEqual(
+            self.module.overall_evaluation_status("PASS", "NOT_REQUESTED"),
+            self.module.INFERENCE_ONLY_STATUS,
+        )
+        self.assertEqual(
+            self.module.overall_evaluation_status("PASS", "PASS"),
+            "PASS",
+        )
+        self.assertEqual(
+            self.module.overall_evaluation_status("FAILED", "PASS"),
+            "FAILED",
+        )
+
     def test_pipeline_failure_overwrites_stale_smoke_score(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)

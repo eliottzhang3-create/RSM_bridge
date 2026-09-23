@@ -427,7 +427,15 @@ def _run_official_evaluation(args: argparse.Namespace, predictions: Sequence[Map
     }
 
 
-def _ensure_output_dir(args: argparse.Namespace) -> None:
+def _ensure_output_dir(
+    args: argparse.Namespace,
+    *,
+    prediction_format: str = common.PREDICTION_FORMAT,
+    protocol_description: str = (
+        "official order; ReasonAQA lowercase labels; compact single-audio prefix; "
+        "single cuda:0; bf16; greedy"
+    ),
+) -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     config_path = args.output_dir / "run_config.json"
     immutable = {
@@ -440,8 +448,8 @@ def _ensure_output_dir(args: argparse.Namespace) -> None:
         "max_prompt_tokens": int(args.max_prompt_tokens),
         "max_new_tokens": int(args.max_new_tokens),
         "prompt_format": common.PROMPT_FORMAT,
-        "prediction_format": common.PREDICTION_FORMAT,
-        "protocol": "official order; ReasonAQA lowercase labels; compact single-audio prefix; single cuda:0; bf16; greedy",
+        "prediction_format": prediction_format,
+        "protocol": protocol_description,
     }
     if config_path.is_file():
         existing = json.loads(config_path.read_text(encoding="utf-8"))
@@ -470,6 +478,7 @@ def parse_args(
     argv: Sequence[str] | None = None,
     *,
     default_checkpoint: str | Path = DEFAULT_CHECKPOINT,
+    max_prompt_tokens: int = MMAR_MAX_PROMPT_TOKENS,
     description: str | None = None,
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=description or __doc__)
@@ -482,7 +491,7 @@ def parse_args(
     parser.add_argument("--htsat-checkpoint", type=Path, default=Path(DEFAULT_HTSAT))
     parser.add_argument("--mellow-root", type=Path, default=Path(DEFAULT_MELLOW))
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--max-prompt-tokens", type=int, default=MMAR_MAX_PROMPT_TOKENS)
+    parser.add_argument("--max-prompt-tokens", type=int, default=max_prompt_tokens)
     parser.add_argument("--max-new-tokens", type=int, default=common.DEFAULT_MAX_NEW_TOKENS)
     parser.add_argument("--dtype", choices=("bf16",), default="bf16")
     parser.add_argument("--run-official-evaluation", action="store_true")
@@ -490,8 +499,8 @@ def parse_args(
     args.metadata_json = args.metadata_json or args.dataset_dir / "MMAR-meta.json"
     args.audio_root = args.audio_root or args.dataset_dir / "mmar-audio"
     args.evaluation_script = args.evaluation_script or args.dataset_dir / "code" / "evaluation.py"
-    if args.max_prompt_tokens != MMAR_MAX_PROMPT_TOKENS:
-        parser.error(f"--max-prompt-tokens is fixed at {MMAR_MAX_PROMPT_TOKENS}")
+    if args.max_prompt_tokens != max_prompt_tokens:
+        parser.error(f"--max-prompt-tokens is fixed at {max_prompt_tokens}")
     if args.max_new_tokens != common.DEFAULT_MAX_NEW_TOKENS:
         parser.error(f"--max-new-tokens is fixed at {common.DEFAULT_MAX_NEW_TOKENS}")
     return args
@@ -502,12 +511,24 @@ def run(
     *,
     load_runtime_model: Any | None = None,
     run_model_generation: Any | None = None,
+    prepare_prediction: Any | None = None,
+    prediction_format: str = common.PREDICTION_FORMAT,
+    audio_prefix_tokens: int = common.DEFAULT_AUDIO_PREFIX_TOKENS,
+    protocol_description: str = (
+        "official order; ReasonAQA lowercase labels; compact single-audio prefix; "
+        "single cuda:0; bf16; greedy"
+    ),
     stage: str = "mmar_audio_mesh_official_accuracy",
 ) -> dict[str, Any]:
     load_runtime_model = load_runtime_model or common._load_runtime_model
     run_model_generation = run_model_generation or common._run_model_generation
+    prepare_prediction = prepare_prediction or common.prepare_model_output_for_official_scorer
     started = time.time()
-    _ensure_output_dir(args)
+    _ensure_output_dir(
+        args,
+        prediction_format=prediction_format,
+        protocol_description=protocol_description,
+    )
     report: dict[str, Any] = {
         "stage": stage,
         "status": "FAILED",
@@ -520,23 +541,25 @@ def run(
             "metadata_order": "official MMAR order",
             "choice_order": "official fixed order",
             "prompt_format": common.PROMPT_FORMAT,
-            "prediction_format": common.PREDICTION_FORMAT,
+            "prediction_format": prediction_format,
             "shuffle": False,
             "mode_limit": SMOKE_ROWS if args.mode == "smoke" else None,
             "audio_sample_rate": common.DEFAULT_SAMPLE_RATE,
             "audio_seconds": common.DEFAULT_AUDIO_SECONDS,
             "long_audio_policy": "first 10 seconds",
-            "audio_prefix_tokens": common.DEFAULT_AUDIO_PREFIX_TOKENS,
-            "max_prompt_tokens_without_truncation": MMAR_MAX_PROMPT_TOKENS,
+            "audio_prefix_tokens": int(audio_prefix_tokens),
+            "max_prompt_tokens_without_truncation": int(args.max_prompt_tokens),
             "max_new_tokens": common.DEFAULT_MAX_NEW_TOKENS,
             "do_sample": False,
             "use_cache": False,
             "prediction_key": "detected_from_official_evaluation.py",
         },
         "records": {},
+        "inference_coverage": {"status": "NOT_COMPLETED"},
         "resumption": {},
         "official_artifact_audit": {},
         "official_evaluation": {},
+        "comparable_official_score": False,
         "warnings": [],
         "fatal_error": None,
     }
@@ -592,9 +615,7 @@ def run(
                         max_new_tokens=args.max_new_tokens,
                     )
                     generated_text = str(generation.get("generated_text", ""))
-                    official_prediction = common.prepare_model_output_for_official_scorer(
-                        generated_text
-                    )
+                    official_prediction = prepare_prediction(generated_text)
                     record = {
                         "status": "generated",
                         "row_index": row_index,
@@ -689,12 +710,38 @@ def run(
                         f"{prediction_key} and are counted as incorrect by the official scorer."
                     ),
                 })
+            report["inference_coverage"] = {
+                "status": "PASS",
+                "expected_rows": expected,
+                "rows_read": int(report["records"].get("rows_read", 0)),
+                "terminal_records": int(report["records"].get("terminal_records", 0)),
+                "generated": int(report["records"].get("generated", 0)),
+                "skipped_scored_as_empty": skipped,
+            }
             report["official_evaluation"] = _run_official_evaluation(args, predictions)
             report["official_evaluation"]["prediction_key"] = prediction_key
             report["official_evaluation"]["empty_predictions_from_skips"] = skipped
-            report["status"] = "PASS" if report["official_evaluation"]["status"] != "FAILED" else "FAILED"
+            report["comparable_official_score"] = (
+                report["official_evaluation"].get("status") == "PASS"
+            )
+            report["status"] = common.overall_evaluation_status(
+                str(report["inference_coverage"].get("status")),
+                str(report["official_evaluation"].get("status")),
+            )
+            if report["official_evaluation"].get("status") == "NOT_REQUESTED":
+                report["warnings"].append({
+                    "name": "official_scorer_not_requested",
+                    "detail": (
+                        "Inference coverage completed, but no comparable official score "
+                        "was produced. Re-run with --run-official-evaluation."
+                    ),
+                })
         except Exception as exc:
             report["fatal_error"] = {"error": repr(exc), "traceback": traceback.format_exc()}
+            report["inference_coverage"] = {
+                "status": "FAILED",
+                "error": repr(exc),
+            }
             predictions = _write_outputs(
                 store,
                 args.output_dir,

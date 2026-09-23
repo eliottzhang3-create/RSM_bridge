@@ -151,6 +151,12 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
             self.assertEqual(result["status"], "PASS")
             self.assertEqual(result["reported_total"], 2)
 
+    def test_inference_only_is_not_reported_as_comparable_pass(self) -> None:
+        self.assertEqual(
+            self.module.common.overall_evaluation_status("PASS", "NOT_REQUESTED"),
+            self.module.common.INFERENCE_ONLY_STATUS,
+        )
+
     def test_smoke_directory_can_resume_as_full(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

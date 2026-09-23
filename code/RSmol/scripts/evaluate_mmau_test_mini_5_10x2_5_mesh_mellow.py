@@ -67,6 +67,7 @@ MMAU_METADATA_CANONICAL_SHA256 = "04c6b38739179ec7f3044b05435f5a734970f774ac60c8
 MMAU_EVALUATION_SHA256 = "85480e1c0dfe8ee1406e9c6e598eff0dca9e0216701f076faf69081c6aab1558"
 PROMPT_FORMAT = "reasonaqa_lowercase_labels_no_choices_prefix_v1"
 PREDICTION_FORMAT = "official_generated_text_strip_leading_abcd_label_v2"
+INFERENCE_ONLY_STATUS = "INFERENCE_ONLY"
 
 
 class RowSkip(Exception):
@@ -1283,6 +1284,21 @@ def _block_official_evaluation(
     }
 
 
+def overall_evaluation_status(
+    inference_coverage_status: str,
+    official_evaluation_status: str,
+) -> str:
+    """Keep inference coverage distinct from completion of official scoring."""
+
+    if inference_coverage_status != "PASS":
+        return "FAILED"
+    if official_evaluation_status == "PASS":
+        return "PASS"
+    if official_evaluation_status == "NOT_REQUESTED":
+        return INFERENCE_ONLY_STATUS
+    return "FAILED"
+
+
 def _counts(store: ProgressStore) -> dict[str, Any]:
     statuses = Counter(str(record.get("status", "unknown")) for record in store.state.values())
     reasons = Counter(
@@ -1330,7 +1346,11 @@ def _counts(store: ProgressStore) -> dict[str, Any]:
     }
 
 
-def _ensure_output_dir(args: argparse.Namespace) -> None:
+def _ensure_output_dir(
+    args: argparse.Namespace,
+    *,
+    prediction_format: str = PREDICTION_FORMAT,
+) -> None:
     output_dir = args.output_dir
     if output_dir.exists() and not output_dir.is_dir():
         raise NotADirectoryError(f"output path is not a directory: {output_dir}")
@@ -1347,7 +1367,7 @@ def _ensure_output_dir(args: argparse.Namespace) -> None:
         "max_prompt_tokens": int(args.max_prompt_tokens),
         "max_new_tokens": int(args.max_new_tokens),
         "prompt_format": PROMPT_FORMAT,
-        "prediction_format": PREDICTION_FORMAT,
+        "prediction_format": prediction_format,
         "protocol": "fixed-order; ReasonAQA lowercase labels; parquet physical order; single cuda:0; bf16; no permutation vote",
     }
     if config_path.is_file():
@@ -1431,13 +1451,17 @@ def run(
     *,
     load_runtime_model: Any | None = None,
     run_model_generation: Any | None = None,
+    prepare_prediction: Any | None = None,
+    prediction_format: str = PREDICTION_FORMAT,
+    audio_prefix_tokens: int = DEFAULT_AUDIO_PREFIX_TOKENS,
     stage: str = "mmau_test_mini_audio_mesh_fixed_order",
     logical_trace: str = "5+10+10+5 per generation step",
 ) -> dict[str, Any]:
     load_runtime_model = load_runtime_model or _load_runtime_model
     run_model_generation = run_model_generation or _run_model_generation
+    prepare_prediction = prepare_prediction or prepare_model_output_for_official_scorer
     started = time.time()
-    _ensure_output_dir(args)
+    _ensure_output_dir(args, prediction_format=prediction_format)
     report: dict[str, Any] = {
         "stage": stage,
         "status": "FAILED",
@@ -1455,11 +1479,11 @@ def run(
             "mode_limit": SMOKE_ROWS if args.mode == "smoke" else None,
             "choice_order": "official JSON fixed order",
             "prompt_format": PROMPT_FORMAT,
-            "prediction_format": PREDICTION_FORMAT,
+            "prediction_format": prediction_format,
             "permutation_majority_vote": False,
             "audio_sample_rate": DEFAULT_SAMPLE_RATE,
             "audio_seconds": DEFAULT_AUDIO_SECONDS,
-            "audio_prefix_tokens": DEFAULT_AUDIO_PREFIX_TOKENS,
+            "audio_prefix_tokens": int(audio_prefix_tokens),
             "max_prompt_tokens": DEFAULT_MAX_PROMPT_TOKENS,
             "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
             "greedy": True,
@@ -1468,8 +1492,10 @@ def run(
             "logical_trace": logical_trace,
         },
         "records": {},
+        "inference_coverage": {"status": "NOT_COMPLETED"},
         "resumption": {},
         "official_evaluation": {},
+        "comparable_official_score": False,
         "official_artifact_audit": {},
         "warnings": [],
         "fatal_error": None,
@@ -1525,7 +1551,7 @@ def run(
                         max_new_tokens=args.max_new_tokens,
                     )
                     generated_text = str(generation.get("generated_text", ""))
-                    model_output = prepare_model_output_for_official_scorer(generated_text)
+                    model_output = prepare_prediction(generated_text)
                     record = {
                         "status": "generated",
                         "row_index": int(row_index),
@@ -1621,7 +1647,17 @@ def run(
                     f"{report['records'].get('terminal_records')} / {expected}"
                 )
             skipped = int(report["records"].get("skipped", 0))
+            prompt_too_long = int(
+                report["records"].get("skip_reasons", {}).get(
+                    "prompt_exceeds_max_tokens", 0
+                )
+            )
             report["records"]["official_empty_predictions_from_skips"] = skipped
+            report["prompt_length_audit"] = {
+                "max_prompt_tokens": int(args.max_prompt_tokens),
+                "prompt_exceeds_max_tokens": prompt_too_long,
+                "status": "PASS" if prompt_too_long == 0 else "WARNING",
+            }
             if skipped:
                 report["warnings"].append({
                     "name": "skipped_rows_scored_as_incorrect",
@@ -1632,14 +1668,37 @@ def run(
                         "and are counted as incorrect by the official scorer."
                     ),
                 })
+            report["inference_coverage"] = {
+                "status": "PASS",
+                "expected_rows": expected,
+                "rows_read": int(report["records"].get("rows_read", 0)),
+                "terminal_records": int(report["records"].get("terminal_records", 0)),
+                "generated": int(report["records"].get("generated", 0)),
+                "skipped_scored_as_empty": skipped,
+            }
             report["official_evaluation"] = _run_official_evaluation(args, args.output_dir, len(predictions))
             report["official_evaluation"]["empty_predictions_from_skips"] = skipped
-            if report["official_evaluation"].get("status") == "FAILED":
-                report["status"] = "FAILED"
-            else:
-                report["status"] = "PASS"
+            report["comparable_official_score"] = (
+                report["official_evaluation"].get("status") == "PASS"
+            )
+            report["status"] = overall_evaluation_status(
+                str(report["inference_coverage"].get("status")),
+                str(report["official_evaluation"].get("status")),
+            )
+            if report["official_evaluation"].get("status") == "NOT_REQUESTED":
+                report["warnings"].append({
+                    "name": "official_scorer_not_requested",
+                    "detail": (
+                        "Inference coverage completed, but no comparable official score "
+                        "was produced. Re-run with --run-official-evaluation."
+                    ),
+                })
         except Exception as exc:
             report["fatal_error"] = {"error": repr(exc), "traceback": traceback.format_exc()}
+            report["inference_coverage"] = {
+                "status": "FAILED",
+                "error": repr(exc),
+            }
             # Even setup failures should leave the required output files and a
             # truthful report; no failed generation is silently scored.
             predictions = _materialize_from_store(

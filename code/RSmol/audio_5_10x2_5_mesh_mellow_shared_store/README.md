@@ -86,6 +86,39 @@ Every run writes `shared_store_training_report.json` to its output directory.
 Output directories must be new or empty.  `/dev/shm` staging is removed on job
 exit; the persistent v3 store is never modified.
 
+## MMAU test-mini and MMAR evaluation of checkpoint-011343
+
+The completed three-epoch artifact at
+`formal_fixed260_3ep_20260922_v1/checkpoint-011343` has isolated MMAU and MMAR
+entrypoints. Both run full official evaluation by default:
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+
+bash run_mmau_test_mini_audio_5_10x2_5_mesh_mellow_shared_store_5090.sh
+bash run_mmar_audio_5_10x2_5_mesh_mellow_shared_store_5090.sh
+```
+
+Evaluation preserves the training-time single-audio contract: HTSAT encodes
+audio1 once, the resulting embedding is reused for slot two, and the same
+trainable bridge is invoked separately for each slot. The resulting prefix is
+always 260 tokens. Inference runs with `eval()`, so bridge dropout is disabled;
+the adapter verifies that the two reused-slot outputs agree and fails closed
+if the two-slot audit is violated.
+
+Decoded predictions are passed verbatim to each official `evaluation.py`.
+In particular, the adapter does not remove a leading `a)`-`d)` label. MMAU
+still traverses all 1,000 rows; skipped rows become empty predictions and are
+scored as incorrect. Its report includes `prompt_length_audit`, so the remote
+result must show `prompt_exceeds_max_tokens: 0` for an unqualified score.
+
+The report separates `inference_coverage.status` from
+`official_evaluation.status`. A top-level `PASS` is possible only when the
+official scorer was requested, exited successfully, and reported the complete
+denominator. Without `--run-official-evaluation`, the top-level status is
+`INFERENCE_ONLY` and `comparable_official_score` is false. MMAR uses a
+fixed-260-safe prompt budget of 476 tokens (`768 - 260 - 32`).
+
 ## Isolated configurable-epoch copy
 
 The original three-epoch entrypoints above remain unchanged so an existing job
