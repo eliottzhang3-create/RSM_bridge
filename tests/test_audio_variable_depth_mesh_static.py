@@ -102,6 +102,27 @@ class VariableDepthAudioMeshStaticTest(unittest.TestCase):
         self.assertIn('"refine_read": max(0, depth - 2)', self.audit)
         self.assertIn("all_loop_boundaries_have_gradients", self.audit)
 
+        tree = ast.parse(self.audit)
+        helper = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_normalize_router_calls"
+        )
+        namespace: dict[str, Any] = {}
+        exec(compile(ast.Module(body=[helper], type_ignores=[]), str(AUDIT), "exec"), namespace)
+        normalize = namespace["_normalize_router_calls"]
+        expected = {
+            "pre_write": 1, "pre_read": 1, "loop1_write": 1, "loop1_read": 1,
+            "refine_write": 1, "refine_read": 0, "out_read": 1,
+        }
+        actual = {name: count for name, count in expected.items() if count}
+        normalized, unexpected = normalize(actual, expected)
+        self.assertEqual(normalized, expected)
+        self.assertEqual(unexpected, [])
+
+        normalized, unexpected = normalize({**actual, "unknown_router": 1}, expected)
+        self.assertEqual(normalized, expected)
+        self.assertEqual(unexpected, ["unknown_router"])
+
     def test_t10_preflight_uses_exact_training_pressure_and_safe_resources(self) -> None:
         for marker in (
             '"recursive_depth": 10', "recursive_depth=10", "torch.bfloat16",

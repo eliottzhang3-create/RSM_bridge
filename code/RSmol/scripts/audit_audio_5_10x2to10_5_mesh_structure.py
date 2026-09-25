@@ -41,6 +41,15 @@ def _expected_calls(depth: int) -> dict[str, int]:
     }
 
 
+def _normalize_router_calls(
+    actual: dict[str, int], expected: dict[str, int],
+) -> tuple[dict[str, int], list[str]]:
+    """Represent uncalled routers explicitly as zero and expose unknown calls."""
+    normalized = {name: int(actual.get(name, 0)) for name in expected}
+    unexpected = sorted(set(actual) - set(expected))
+    return normalized, unexpected
+
+
 def _gradient_audit(model: Any, depth: int, input_ids: torch.Tensor) -> dict[str, Any]:
     model.zero_grad(set_to_none=True)
     model.model.gradient_audit_mode = True
@@ -100,18 +109,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             expected_trace = list(build_mesh_schedule(depth))
             calls = dict(model.model.last_router_call_counts)
             expected_calls = _expected_calls(depth)
+            normalized_calls, unexpected_calls = _normalize_router_calls(calls, expected_calls)
             passed = (
-                trace == expected_trace and calls == expected_calls
+                trace == expected_trace and normalized_calls == expected_calls
+                and not unexpected_calls
                 and len(trace) == logical_layer_count(depth)
                 and tuple(output.logits.shape) == (2, 12, 128)
             )
             if not passed:
                 raise RuntimeError(
-                    f"structure audit failed at T={depth}: trace={trace} calls={calls}"
+                    f"structure audit failed at T={depth}: trace={trace} "
+                    f"calls={normalized_calls} unexpected_calls={unexpected_calls}"
                 )
             depth_reports.append({
                 "depth": depth, "logical_layers": len(trace),
-                "router_calls": calls, "status": "PASS",
+                "router_calls": normalized_calls, "status": "PASS",
             })
     model.train()
     gradients = [_gradient_audit(model, depth, input_ids) for depth in (2, 3, 6, 10)]
