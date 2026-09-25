@@ -127,8 +127,41 @@ def _json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+_CLUSTER_STORAGE_ALIASES = (
+    "/hpc_stor03/sjtu_home",
+    "/mnt/cloudstorfs/sjtu_home",
+)
+_CLUSTER_STORAGE_CANONICAL_ROOT = "/cluster/sjtu_home"
+
+
+def _normalize_cluster_storage_path(value: str) -> str:
+    """Map the two cluster bind-mount spellings to one identity string."""
+    normalized = value.replace("\\", "/").rstrip("/")
+    for prefix in _CLUSTER_STORAGE_ALIASES:
+        if normalized == prefix:
+            return _CLUSTER_STORAGE_CANONICAL_ROOT
+        if normalized.startswith(prefix + "/"):
+            return _CLUSTER_STORAGE_CANONICAL_ROOT + normalized[len(prefix):]
+    return normalized
+
+
+def _path_identity_candidates(path: Path) -> set[str]:
+    """Return existing-path identities without trusting only one bind-mount name."""
+    expanded = path.expanduser()
+    try:
+        resolved = expanded.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError):
+        return set()
+    return {
+        _normalize_cluster_storage_path(expanded.absolute().as_posix()),
+        _normalize_cluster_storage_path(resolved.as_posix()),
+    }
+
+
 def _same_path(left: Path, right: Path) -> bool:
-    return left.expanduser().resolve(strict=True) == right.expanduser().resolve(strict=True)
+    left_candidates = _path_identity_candidates(left)
+    right_candidates = _path_identity_candidates(right)
+    return bool(left_candidates and right_candidates and left_candidates & right_candidates)
 
 
 def _validate_phase_gates(args: argparse.Namespace) -> dict[str, Any]:
@@ -147,6 +180,12 @@ def _validate_phase_gates(args: argparse.Namespace) -> dict[str, Any]:
     artifact = structure.get("initialization_artifact") or {}
     if not artifact or not _same_path(Path(str(artifact.get("path", ""))), args.init_artifact):
         raise RuntimeError("phase-3 report does not belong to the requested initialization artifact")
+    init_root = args.init_artifact.resolve(strict=True)
+    expected_marker = _json(init_root / "artifact_complete.json")
+    expected_migration = _json(init_root / "variable_depth_init_report.json")
+    if (artifact.get("marker") != expected_marker
+            or artifact.get("t2_exact_parity") != expected_migration.get("t2_exact_parity")):
+        raise RuntimeError("phase-3 report initialization evidence differs from the requested artifact")
     if (memory.get("status") != "PASS"
             or int(memory.get("recursive_depth", -1)) != 10
             or int(memory.get("micro_batch_size", -1)) != 8

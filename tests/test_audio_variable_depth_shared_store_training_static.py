@@ -66,6 +66,17 @@ class VariableDepthSharedStoreTrainingStaticTest(unittest.TestCase):
         self.assertIn("--smoke20-report", formal)
         self.assertIn("--smoke-resume-report", formal)
 
+    def test_cluster_storage_aliases_preserve_phase_report_identity(self) -> None:
+        for marker in (
+            '"/hpc_stor03/sjtu_home"',
+            '"/mnt/cloudstorfs/sjtu_home"',
+            '_normalize_cluster_storage_path',
+            'left_candidates & right_candidates',
+            'artifact.get("marker") != expected_marker',
+            'artifact.get("t2_exact_parity") != expected_migration.get("t2_exact_parity")',
+        ):
+            self.assertIn(marker, self.trainer)
+
     def test_fixed_seven_epoch_shape_and_real_step_warmup(self) -> None:
         global_batch = 8 * 8 * 4
         steps_per_epoch = 968_059 // global_batch
