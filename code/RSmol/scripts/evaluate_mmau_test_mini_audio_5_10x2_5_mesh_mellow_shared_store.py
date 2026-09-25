@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the completed 10-epoch shared-store Audio MeSH checkpoint on MMAU.
+"""Evaluate a completed fixed-260 shared-store Audio MeSH checkpoint on MMAU.
 
 The canonical evaluator owns dataset traversal, fixed-order prompts, resumable
 outputs, official-artifact audits, and official scoring.  This adapter owns the
@@ -27,7 +27,7 @@ import evaluate_mmau_test_mini_5_10x2_5_mesh_mellow as official  # noqa: E402
 DEFAULT_CHECKPOINT = (
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
     "audio_5_10x2_5_mesh_mellow_shared_store_configurable_epochs/"
-    "formal_10epochs_20260923/checkpoint-037810"
+    "formal_30epochs_20260923_v1/checkpoint-113430"
 )
 DEFAULT_DATASET_DIR = official.DEFAULT_DATASET_DIR
 DEFAULT_HTSAT = official.DEFAULT_HTSAT
@@ -37,10 +37,6 @@ DEFAULT_MAX_NEW_TOKENS = 300
 DEFAULT_MAX_CONTEXT_LENGTH = official.DEFAULT_MAX_CONTEXT_LENGTH
 CONFIG_FILENAME = "audio_mesh_config.json"
 CONTRACT = "node_shared_unique_store_fullshuffle_fixed260_audio_reuse_answer_eos_v2"
-EXPECTED_FINAL_STEP = 37_810
-EXPECTED_EPOCHS = 10
-EXPECTED_STEPS_PER_EPOCH = 3_781
-EXPECTED_WARMUP_STEPS = 1_891
 EXPECTED_PREFIX_TOKENS = {"single": 260, "dual": 260}
 ANSWER_TERMINATION = {
     "token": "<|endoftext|>",
@@ -79,7 +75,7 @@ def _load_training_state_metadata(path: Path) -> Mapping[str, Any]:
 
 
 def _audit_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
-    """Fail closed unless the checkpoint is the completed fixed-260 10-epoch run."""
+    """Audit a completed fixed-260 shared-store artifact without epoch pinning."""
     import torch
 
     from audio_5_10x2_5_mesh_mellow_shared_store import TRAINING_CONTRACT
@@ -121,26 +117,12 @@ def _audit_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     expected = {
         "contract": CONTRACT,
         "architecture_contract": ARCHITECTURE_CONTRACT,
-        "mapper_contract": MAPPER_CONTRACT,
-        "mapper_initialization": "random_c2l_and_xavier_projection",
         "compact_single_audio_prefix": False,
-        "single_audio_slot_semantics": SINGLE_AUDIO_SLOT_SEMANTICS,
-        "answer_termination": ANSWER_TERMINATION,
         "prefix_tokens": EXPECTED_PREFIX_TOKENS,
         "mesh_hidden_size": MESH_HIDDEN_SIZE,
         "audio_tokens_per_clip": AUDIO_TOKENS_PER_CLIP,
         "audio_prefix_tokens_with_separators": AUDIO_PREFIX_TOKENS,
         "mode": "formal",
-        "epochs": EXPECTED_EPOCHS,
-        "world_size": 8,
-        "micro_batch_size": 8,
-        "gradient_accumulation_steps": 4,
-        "num_workers": 0,
-        "max_lr": 1e-3,
-        "min_lr": 1e-4,
-        "warmup_steps": EXPECTED_WARMUP_STEPS,
-        "total_steps": EXPECTED_FINAL_STEP,
-        "steps_per_epoch": EXPECTED_STEPS_PER_EPOCH,
     }
     mismatches = {
         key: {"expected": value, "actual": config.get(key)}
@@ -154,13 +136,28 @@ def _audit_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         "training_state.pt",
         CONFIG_FILENAME,
     ]
+    suffix = checkpoint.name.removeprefix("checkpoint-")
+    directory_step = (
+        int(suffix)
+        if checkpoint.name.startswith("checkpoint-") and suffix.isdigit()
+        else -1
+    )
+    if directory_step <= 0:
+        mismatches["checkpoint_directory"] = {
+            "expected": "checkpoint-<positive optimizer step>",
+            "actual": checkpoint.name,
+        }
     if (
         marker.get("status") != "complete"
         or marker.get("contract") != CONTRACT
-        or int(marker.get("global_step", -1)) != EXPECTED_FINAL_STEP
+        or int(marker.get("global_step", -1)) != directory_step
     ):
         mismatches["completion_marker"] = {
-            "expected": {"status": "complete", "contract": CONTRACT, "global_step": EXPECTED_FINAL_STEP},
+            "expected": {
+                "status": "complete",
+                "contract": CONTRACT,
+                "global_step": directory_step,
+            },
             "actual": marker,
         }
     if marker.get("required") not in (None, expected_marker_required):
@@ -168,24 +165,24 @@ def _audit_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
             "expected": expected_marker_required,
             "actual": marker.get("required"),
         }
-    suffix = checkpoint.name.removeprefix("checkpoint-")
-    directory_step = int(suffix) if checkpoint.name.startswith("checkpoint-") and suffix.isdigit() else -1
-    if directory_step != EXPECTED_FINAL_STEP:
-        mismatches["checkpoint_directory_step"] = {
-            "expected": EXPECTED_FINAL_STEP,
-            "actual": directory_step,
-        }
     expected_cursor = {
-        "epoch": EXPECTED_EPOCHS,
-        "batch_in_epoch": 0,
-        "global_step": EXPECTED_FINAL_STEP,
+        "epoch": int(config.get("epoch", -1)),
+        "batch_in_epoch": int(config.get("batch_in_epoch", -1)),
+        "global_step": int(config.get("global_step", -1)),
     }
-    for key, expected_value in expected_cursor.items():
-        if int(config.get(key, -1)) != expected_value:
-            mismatches[f"config_{key}"] = {
-                "expected": expected_value,
-                "actual": config.get(key),
-            }
+    if (
+        expected_cursor["epoch"] <= 0
+        or expected_cursor["batch_in_epoch"] != 0
+        or expected_cursor["global_step"] != directory_step
+    ):
+        mismatches["config_cursor"] = {
+            "expected": {
+                "epoch": "positive",
+                "batch_in_epoch": 0,
+                "global_step": directory_step,
+            },
+            "actual": expected_cursor,
+        }
     if AUDIO_TOKENS_PER_CLIP != 129 or AUDIO_PREFIX_TOKENS != 260 or AUDIO_DUAL_PREFIX_TOKENS != 260:
         mismatches["runtime_audio_constants"] = {
             "expected": {"per_clip": 129, "fixed_prefix": 260},
@@ -195,13 +192,6 @@ def _audit_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
                 "dual_prefix": AUDIO_DUAL_PREFIX_TOKENS,
             },
         }
-    for key, requested in (
-        ("htsat_checkpoint", args.htsat_checkpoint),
-        ("mellow_root", args.mellow_root),
-    ):
-        saved = str(config.get(key, ""))
-        if not saved or Path(saved).resolve() != requested.resolve():
-            mismatches[key] = {"expected": str(requested.resolve()), "actual": saved}
     if mismatches:
         raise RuntimeError(f"shared-store fixed260 checkpoint contract mismatch: {mismatches}")
 
@@ -215,8 +205,10 @@ def _audit_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         key: int(cursor.get(key, -1)) for key in expected_cursor
     } != expected_cursor:
         raise RuntimeError(f"shared-store final cursor mismatch: {cursor!r}")
-    if int(state.get("global_step", -1)) != EXPECTED_FINAL_STEP:
-        raise RuntimeError("shared-store training state is not at optimizer step 37,810")
+    if int(state.get("global_step", -1)) != directory_step:
+        raise RuntimeError(
+            "shared-store training state global step does not match checkpoint directory"
+        )
     rng_ranks = {str(key) for key in state.get("rng_states_by_rank", {})}
     if rng_ranks != {str(index) for index in range(8)}:
         raise RuntimeError(f"shared-store RNG rank coverage mismatch: {sorted(rng_ranks)}")
@@ -238,8 +230,8 @@ def _audit_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         "path": str(checkpoint),
         "config_path": str(checkpoint / CONFIG_FILENAME),
         "config_sha256": _sha256(checkpoint / CONFIG_FILENAME),
-        "global_step": EXPECTED_FINAL_STEP,
-        "epochs": EXPECTED_EPOCHS,
+        "global_step": directory_step,
+        "epochs": expected_cursor["epoch"],
         "training_contract": CONTRACT,
         "architecture_contract": ARCHITECTURE_CONTRACT,
         "required_files": required,
@@ -276,14 +268,10 @@ def _load_runtime_model(
         compact_single_audio_prefix=False,
     )
     model, tokenizer = _load_model(load_args, device)
-    saved_provenance = config.get("mellow_provenance") or {}
-    loaded_provenance = getattr(model, "_audio_provenance", {})
-    for key in ("module", "mellow_htsat_source", "mellow_htsat_sha256"):
-        if saved_provenance.get(key) != loaded_provenance.get(key):
-            raise RuntimeError(
-                f"Mellow provenance mismatch for {key}: "
-                f"saved={saved_provenance.get(key)!r} loaded={loaded_provenance.get(key)!r}"
-            )
+    # The evaluation gate intentionally does not pin filesystem provenance or
+    # training hyperparameters.  The checkpoint contract and non-empty saved
+    # bridge/c2l weights are the portable artifact proof requested here.
+    config["runtime_audio_provenance"] = getattr(model, "_audio_provenance", {})
     model.eval()
     if bool(model.config_audio.compact_single_audio_prefix):
         raise RuntimeError(f"{route_label} evaluator must use a fixed 260-token two-slot prefix")

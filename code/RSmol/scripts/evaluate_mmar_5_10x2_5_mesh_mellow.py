@@ -347,6 +347,136 @@ def materialize_predictions(
     return predictions
 
 
+def evaluate_choice_label_prefix_predictions(
+    predictions: Sequence[Mapping[str, Any]],
+    *,
+    output_key: str,
+) -> dict[str, Any]:
+    """Score the label before the first ``)`` exactly like Mellow's reply.
+
+    This is deliberately separate from the official MMAR string scorer. Rows
+    with empty predictions or answers that do not map exactly to a choice stay
+    in the denominator and are counted incorrect.
+    """
+
+    modality_metrics: dict[str, list[int]] = {}
+    category_metrics: dict[str, list[int]] = {}
+    scoring_errors: Counter[str] = Counter()
+    rows: list[dict[str, Any]] = []
+    correct = 0
+    for row_index, record in enumerate(predictions):
+        modality = str(record.get("modality", ""))
+        category = str(record.get("category", ""))
+        modality_metrics.setdefault(modality, [0, 0])
+        category_metrics.setdefault(category, [0, 0])
+        prediction = str(record.get(output_key, ""))
+        choices = common._coerce_choices(record.get("choices"))
+        labeled_answer: str | None = None
+        scoring_error: dict[str, Any] | None = None
+        try:
+            labeled_answer = common.mellow_author_reply_labeled_answer(
+                record.get("answer", ""), choices
+            )
+            matched = common.mellow_author_reply_choice_is_correct(
+                prediction, labeled_answer
+            )
+        except (TypeError, ValueError) as exc:
+            reason = "answer_not_exact_choice"
+            scoring_errors[reason] += 1
+            matched = False
+            scoring_error = {
+                "reason": reason,
+                "error": str(exc),
+                "answer": record.get("answer", ""),
+                "choices": choices,
+                "policy": "counted_incorrect_without_shrinking_denominator",
+            }
+        if matched:
+            correct += 1
+            modality_metrics[modality][0] += 1
+            category_metrics[category][0] += 1
+        modality_metrics[modality][1] += 1
+        category_metrics[category][1] += 1
+        rows.append({
+            "row_index": row_index,
+            "id": record.get("id"),
+            "prediction": prediction,
+            "prediction_prefix": prediction.split(")")[0].lower(),
+            "labeled_answer": labeled_answer,
+            "correct": matched,
+            "modality": modality,
+            "category": category,
+            "scoring_error": scoring_error,
+        })
+
+    def summarize(metrics: Mapping[str, Sequence[int]]) -> dict[str, Any]:
+        return {
+            name: {
+                "correct": int(values[0]),
+                "total": int(values[1]),
+                "accuracy_percent": (
+                    float(values[0]) / float(values[1]) * 100.0 if values[1] else 0.0
+                ),
+            }
+            for name, values in sorted(metrics.items())
+        }
+
+    total = len(predictions)
+    return {
+        "status": "PASS",
+        "scorer": "mellow_author_reply_prediction_split_first_close_paren_v1",
+        "output_key": output_key,
+        "total": {
+            "correct": correct,
+            "total": total,
+            "accuracy_percent": correct / total * 100.0 if total else 0.0,
+        },
+        "modality": summarize(modality_metrics),
+        "category": summarize(category_metrics),
+        "record_errors": {
+            "total": int(sum(scoring_errors.values())),
+            "counts": dict(sorted(scoring_errors.items())),
+            "policy": "record_retained_and_counted_incorrect",
+        },
+        "rows": rows,
+    }
+
+
+def write_choice_label_prefix_evaluation(
+    output_dir: Path,
+    predictions: Sequence[Mapping[str, Any]],
+    *,
+    output_key: str,
+) -> dict[str, Any]:
+    score = evaluate_choice_label_prefix_predictions(
+        predictions, output_key=output_key
+    )
+    common._write_json(output_dir / "choice_label_prefix_evaluation.json", score)
+    lines = [
+        "MMAR choice-label prefix evaluation",
+        "",
+        (
+            f"Total Accuracy: {score['total']['accuracy_percent']:.2f}% "
+            f"over {score['total']['total']} samples"
+        ),
+        "",
+        "Modality-wise Accuracy:",
+    ]
+    for name, item in score["modality"].items():
+        lines.append(
+            f"{name} : {item['accuracy_percent']:.2f}% over {item['total']} samples"
+        )
+    lines.extend(["", "Category-wise Accuracy:"])
+    for name, item in score["category"].items():
+        lines.append(
+            f"{name} : {item['accuracy_percent']:.2f}% over {item['total']} samples"
+        )
+    (output_dir / "choice_label_prefix_evaluation.txt").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    return score
+
+
 def _write_outputs(
     store: common.ProgressStore,
     output_dir: Path,

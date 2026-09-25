@@ -40,10 +40,10 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
         generation = GEN.read_text(encoding="utf-8")
         evaluator = EVAL.read_text(encoding="utf-8")
         self.assertIn("audio_smollm2_135m_mellow/formal_20260911_v1/checkpoint-011343", generation)
-        self.assertIn("partition_formal_eos_v2_10epochs_20260918", evaluator)
-        self.assertIn("checkpoint-037810", evaluator)
-        self.assertIn("audio_smollm2_partition_config.json", evaluator)
-        self.assertIn("official_generated_text_strip_leading_abcd_label_v2", evaluator + (SCRIPT_DIR / "evaluate_mmau_test_mini_5_10x2_5_mesh_mellow.py").read_text(encoding="utf-8"))
+        self.assertIn("formal_30epochs_20260923_v1", evaluator)
+        self.assertIn("checkpoint-113430", evaluator)
+        self.assertIn("audio_smollm2_shared_store_config.json", evaluator)
+        self.assertIn("mellow_author_reply_raw_generation_choice_label_scoring_v1", evaluator)
         self.assertIn("evaluate_mmau_test_mini_5_10x2_5_mesh_mellow", evaluator)
         self.assertNotIn("generate_audio_checkpoint_reasonaqa", generation)
 
@@ -68,10 +68,10 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
             if marker != "_audit_saved_checkpoint":
                 self.assertIn(marker, generation + evaluator)
         self.assertIn('"architecture_contract": ORIGINAL_SMOLLM2_CONTRACT', generation)
-        self.assertIn("_audit_partition_checkpoint", evaluator)
-        self.assertIn("compact_single_audio_prefix=True", evaluator)
-        self.assertIn("skip_second_prefix=True", evaluator)
-        self.assertIn("DEFAULT_AUDIO_PREFIX_TOKENS = 130", evaluator)
+        self.assertIn("_audit_shared_store_checkpoint", evaluator)
+        self.assertIn("SHARED_STORE_AUDIO_PREFIX_TOKENS = 260", evaluator)
+        self.assertIn("skip_second_prefix=False", evaluator)
+        self.assertIn("htsat_audio1_embedding_reused_for_slot2", evaluator)
         self.assertNotIn("write_routers", generation + evaluator)
         self.assertNotIn("read_routers", generation + evaluator)
         self.assertNotIn("model.mesh_model", generation + evaluator)
@@ -79,19 +79,21 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
     def test_generation_args_lock_protocol(self) -> None:
         args = self.evaluator.parse_args(["--output-dir", "/tmp/mmau", "--mode", "full"])
         self.assertEqual(args.mode, "full")
-        self.assertEqual(args.max_new_tokens, 32)
+        self.assertEqual(args.max_new_tokens, 300)
         self.assertEqual(args.max_prompt_tokens, 129)
         self.assertEqual(args.checkpoint, Path(self.evaluator.DEFAULT_CHECKPOINT))
         with self.assertRaises(SystemExit):
             self.evaluator.parse_args(["--output-dir", "/tmp/mmau", "--max-new-tokens", "5"])
 
     def test_prompt_and_scorer_prediction_match_current_official_contract(self) -> None:
-        prompt = self.evaluator.build_fixed_order_prompt("Which one?", ["first", "second"])
-        self.assertEqual(prompt, "Which one? a) first b) second")
-        self.assertNotIn("Choices:", prompt)
+        prompt = self.evaluator.official.build_mellow_author_reply_prompt(
+            "Which one?", ["first", "second"]
+        )
+        self.assertEqual(prompt, "which one? a) first b) second")
         evaluator = EVAL.read_text(encoding="utf-8")
         self.assertNotIn("parse_model_output", evaluator)
-        self.assertIn("run_model_generation=_run_model_generation", evaluator)
+        self.assertIn("run_model_generation=_run_mmau_author_reply_generation", evaluator)
+        self.assertIn("prepare_model_output_for_official_scorer", evaluator)
 
     def test_official_evaluation_uses_input_and_prediction_field(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -126,17 +128,22 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
         self.assertIn("pdgpu-5090", mmar_submit)
         self.assertIn("MMAR-meta.json", mmar_submit)
         self.assertIn("mmar-audio", mmar_submit)
-        self.assertIn("checkpoint-037810", eval_submit + mmar_submit)
+        self.assertIn("checkpoint-113430", eval_submit + mmar_submit)
+        self.assertIn("formal_30epochs_20260923_v1", eval_submit + mmar_submit)
         self.assertIn("audio_smollm2", gen_submit + eval_submit)
         self.assertNotIn("5_10x2_5_mesh_mellow", gen_submit + eval_submit)
-        self.assertIn("--max-new-tokens 32", eval_submit)
+        self.assertIn("--max-new-tokens 300", eval_submit)
+        self.assertIn("--dtype fp32", eval_submit)
+        self.assertIn("-c 8 -m 32G", eval_submit + mmar_submit)
         self.assertIn("--max-new-tokens 32", mmar_submit)
 
     def test_mmar_adapter_uses_the_same_baseline_backend_and_official_protocol(self) -> None:
         text = MMAR.read_text(encoding="utf-8")
         self.assertIn("smollm2._load_runtime_model", text)
         self.assertIn("smollm2._run_model_generation", text)
-        self.assertIn("mmar_audio_smollm2_official_accuracy", text)
+        self.assertIn("mmar_audio_smollm2_shared_store_fixed260_dual_scoring", text)
+        self.assertIn("write_choice_label_prefix_evaluation", text)
+        self.assertIn("prepare_model_output_for_official_scorer", text)
         self.assertNotIn("parse_model_output", text)
 
 

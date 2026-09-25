@@ -202,6 +202,8 @@ def _greedy_decode(
     *,
     max_new_tokens: int,
     autocast_enabled: bool,
+    top_p: float | None = None,
+    temperature: float = 0.0,
 ) -> dict[str, Any]:
     if max_new_tokens <= 0:
         raise ValueError("max_new_tokens must be positive")
@@ -231,7 +233,21 @@ def _greedy_decode(
             raise RuntimeError(f"last-token logits shape mismatch: {tuple(output.logits.shape)}")
         if not bool(torch.isfinite(output.logits).all()):
             raise RuntimeError("generation logits contain non-finite values")
-        next_token = int(torch.argmax(output.logits[:, -1, :], dim=-1).item())
+        logits = output.logits[:, -1, :]
+        if top_p is not None:
+            if not 0.0 < float(top_p) <= 1.0:
+                raise ValueError(f"top_p must be in (0, 1], got {top_p}")
+            logits = logits / (float(temperature) if temperature > 0 else 1.0)
+            sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+            cumulative_probs = torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
+            sorted_indices_to_remove = cumulative_probs > float(top_p)
+            sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+            sorted_indices_to_remove[..., 0] = False
+            remove_mask = torch.zeros_like(sorted_indices_to_remove).scatter(
+                dim=-1, index=sorted_indices, src=sorted_indices_to_remove
+            )
+            logits = logits.masked_fill(remove_mask, torch.finfo(logits.dtype).min)
+        next_token = int(torch.argmax(logits, dim=-1).item())
         generated.append(next_token)
         text_ids = torch.cat((text_ids, torch.tensor([[next_token]], dtype=torch.long, device=text_ids.device)), dim=1)
         if next_token in eos_ids:
@@ -250,6 +266,8 @@ def _greedy_decode(
         "generation_seconds": elapsed,
         "tokens_per_second": len(generated) / max(elapsed, 1e-9),
         "decoder": "greedy_full_recompute_use_cache_false",
+        "top_p": float(top_p) if top_p is not None else None,
+        "temperature": float(temperature),
     }
 
 

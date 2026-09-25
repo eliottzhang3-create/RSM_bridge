@@ -1,5 +1,30 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-25：30-epoch shared-store checkpoint-113430 的 MMAU/MMAR 评测
+
+MeSH 与原始 30 层 SmolLM2 shared-store 对比线的默认评测 checkpoint 已切换到各自的
+`formal_30epochs_20260923_v1/checkpoint-113430`。checkpoint 仍可通过命令行
+`--checkpoint` 或提交 wrapper 的环境变量传入，评测器不再把 epochs、warmup、总步数或
+checkpoint 编号写成固定放行标准；shared-store 审计只保留可迁移的完成性证明：
+`checkpoint-<step>` 目录名、completion marker、training-state cursor、8-rank RNG、固定
+260-token 双槽、shared-store/模型架构合同，以及非空的 bridge/c2l 权重。
+
+MMAU 对两条线均使用 Mellow 作者回复协议：小写 prompt、129-token prompt 截断、最长 300
+tokens、FP32、`top_p=0.8` filter 后 argmax、单音频复用 audio1 HTSAT embedding 并分别执行
+两次 bridge；原始预测不删除开头标签，同时写出作者字母分数和新版官方诊断。MMAR 同样把
+同一份原始预测直接交给两套 scorer：`choice_label_prefix_evaluation.{json,txt}` 比较首个
+`)` 前的标签，`official_evaluation.txt` 使用官方 MMAR scorer。answer 无法精确映射 choice、
+空预测和逐样本 skip 都保留在完整分母内并计错，不因单行 metadata 问题终止整个评分。
+
+单 GPU 提交入口继续限制为最多 8 CPU、32G MEM：
+
+```bash
+bash code/RSmol/run_mmau_test_mini_audio_5_10x2_5_mesh_mellow_shared_store_4090.sh
+bash code/RSmol/run_mmar_audio_5_10x2_5_mesh_mellow_shared_store_5090.sh
+bash code/RSmol/run_mmau_test_mini_audio_smollm2_5090.sh
+bash code/RSmol/run_mmar_audio_smollm2_5090.sh
+```
+
 ## 2026-09-23：MMAU 改为 Mellow 作者回复协议并保留新版官方诊断
 
 Mellow 原生线与 10-epoch shared-store checkpoint-037810 的 MMAU test-mini 评测已切换到

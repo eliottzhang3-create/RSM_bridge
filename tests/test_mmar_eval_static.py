@@ -80,6 +80,36 @@ class MMAREvaluatorStaticTest(unittest.TestCase):
         self.assertNotIn("parse_model_output", source)
         self.assertNotIn("selected_option", source)
 
+    def test_choice_label_prefix_score_keeps_full_denominator(self) -> None:
+        predictions = [
+            {
+                "id": "0",
+                "answer": "one",
+                "choices": ["one", "two"],
+                "modality": "audio",
+                "category": "test",
+                "model_prediction": "a) one",
+            },
+            {
+                "id": "1",
+                "answer": " unmatched answer ",
+                "choices": ["one", "two"],
+                "modality": "audio",
+                "category": "test",
+                "model_prediction": "a) one",
+            },
+        ]
+        score = self.module.evaluate_choice_label_prefix_predictions(
+            predictions, output_key="model_prediction"
+        )
+        self.assertEqual(score["total"]["total"], 2)
+        self.assertEqual(score["total"]["correct"], 1)
+        self.assertEqual(score["record_errors"]["total"], 1)
+        self.assertEqual(
+            score["record_errors"]["policy"],
+            "record_retained_and_counted_incorrect",
+        )
+
     def test_reasonaqa_prompt_supports_six_mmar_choices_without_prefix(self) -> None:
         prompt = self.module.common.build_fixed_order_prompt(
             "What is heard?",

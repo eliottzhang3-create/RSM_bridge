@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the completed 10-epoch shared-store Audio MeSH checkpoint on MMAR."""
+"""Evaluate a completed fixed-260 shared-store Audio MeSH checkpoint on MMAR."""
 from __future__ import annotations
 
 import json
@@ -63,6 +63,19 @@ def run(args):
             "error": f"{inference_failures} shared-store generation failures were recorded as skipped rows",
             "detail": "Inspect skipped.jsonl; do not interpret official accuracy as a valid model score.",
         }
+    predictions_path = args.output_dir / "predictions_official.json"
+    if predictions_path.is_file() and report.get("inference_coverage", {}).get("status") == "PASS":
+        predictions = json.loads(predictions_path.read_text(encoding="utf-8"))
+        prediction_key = str(report.get("protocol", {}).get("prediction_key", "answer_prediction"))
+        prefix_score = official.write_choice_label_prefix_evaluation(
+            args.output_dir, predictions, output_key=prediction_key
+        )
+        report["choice_label_prefix_evaluation"] = prefix_score
+        report["dual_scoring"] = {
+            "choice_label_prefix": prefix_score.get("status"),
+            "official_mmar": report.get("official_evaluation", {}).get("status"),
+            "prediction_text_shared_without_preparse": True,
+        }
     shared.official._write_json(args.output_dir / "evaluation_report.json", report)
     return report
 
@@ -75,6 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": report.get("status"),
         "mode": report.get("mode"),
         "records": report.get("records", {}),
+        "choice_label_prefix_evaluation": report.get("choice_label_prefix_evaluation", {}),
         "official_evaluation": report.get("official_evaluation", {}),
         "report": str(args.output_dir / "evaluation_report.json"),
     }, ensure_ascii=False, default=shared._json_default))

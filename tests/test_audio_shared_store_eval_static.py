@@ -1,4 +1,4 @@
-"""Dependency-light contracts for checkpoint-037810 MMAU/MMAR evaluation."""
+"""Dependency-light contracts for parameterized shared-store evaluation."""
 from __future__ import annotations
 
 import importlib.util
@@ -40,14 +40,21 @@ class SharedStoreEvaluationStaticTest(unittest.TestCase):
         cls.mmau_submit = MMAU_SUBMIT.read_text(encoding="utf-8")
         cls.mmar_submit = MMAR_SUBMIT.read_text(encoding="utf-8")
 
-    def test_exact_completed_checkpoint_and_schedule_are_locked(self):
+    def test_default_checkpoint_is_current_but_audit_is_step_parameterized(self):
         normalized = str(self.mmau.DEFAULT_CHECKPOINT).replace("\\", "/")
-        self.assertTrue(normalized.endswith("formal_10epochs_20260923/checkpoint-037810"))
-        self.assertEqual(self.mmau.EXPECTED_FINAL_STEP, 37_810)
-        self.assertEqual(self.mmau.EXPECTED_EPOCHS, 10)
-        self.assertEqual(self.mmau.EXPECTED_STEPS_PER_EPOCH, 3_781)
-        self.assertEqual(self.mmau.EXPECTED_WARMUP_STEPS, 1_891)
+        self.assertTrue(
+            normalized.endswith("formal_30epochs_20260923_v1/checkpoint-113430")
+        )
         self.assertEqual(self.mmau.EXPECTED_PREFIX_TOKENS, {"single": 260, "dual": 260})
+        for forbidden in (
+            "EXPECTED_FINAL_STEP",
+            "EXPECTED_EPOCHS",
+            "EXPECTED_STEPS_PER_EPOCH",
+            "EXPECTED_WARMUP_STEPS",
+        ):
+            self.assertNotIn(forbidden, self.mmau_source)
+        self.assertIn('removeprefix("checkpoint-")', self.mmau_source)
+        self.assertIn('int(marker.get("global_step", -1)) != directory_step', self.mmau_source)
 
     def test_predictions_are_passed_verbatim_without_leading_label_removal(self):
         for value in ("a) dog", " B) music", "d) answer", "free form"):
@@ -107,6 +114,8 @@ class SharedStoreEvaluationStaticTest(unittest.TestCase):
         self.assertNotIn("_run_mmau_author_reply_generation", self.mmar_source)
         self.assertIn("autocast_enabled=True", self.mmau_source)
         self.assertIn("autocast_enabled=False", self.mmau_source)
+        self.assertIn("write_choice_label_prefix_evaluation", self.mmar_source)
+        self.assertIn('"prediction_text_shared_without_preparse": True', self.mmar_source)
 
     def test_mmar_uses_context_safe_fixed260_prompt_budget(self):
         self.assertEqual(self.mmar.MMAR_MAX_NEW_TOKENS, 32)
@@ -133,7 +142,8 @@ class SharedStoreEvaluationStaticTest(unittest.TestCase):
         ):
             self.assertIn("--mode full", submit)
             self.assertIn("--run-official-evaluation", submit)
-            self.assertIn("checkpoint-037810", submit)
+            self.assertIn("checkpoint-113430", submit)
+            self.assertIn("formal_30epochs_20260923_v1", submit)
             self.assertIn("-c 8 -m 32G -g 1", submit)
             self.assertIn(runtime, submit)
         self.assertIn("pdgpu-4090", self.mmau_submit)

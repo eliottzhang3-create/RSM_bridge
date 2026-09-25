@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the partition-v2 audio SmolLM2-135M baseline on official MMAR."""
+"""Evaluate a fixed-260 shared-store audio SmolLM2-135M checkpoint on MMAR."""
 from __future__ import annotations
 
 import json
@@ -19,23 +19,57 @@ import evaluate_mmau_test_mini_audio_smollm2 as smollm2  # noqa: E402
 
 
 DEFAULT_CHECKPOINT = smollm2.DEFAULT_CHECKPOINT
+MMAR_MAX_NEW_TOKENS = 32
+FIXED260_MAX_PROMPT_TOKENS = (
+    smollm2.DEFAULT_MAX_CONTEXT_LENGTH
+    - smollm2.SHARED_STORE_AUDIO_PREFIX_TOKENS
+    - MMAR_MAX_NEW_TOKENS
+)
 
 
 def parse_args(argv: Sequence[str] | None = None):
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if not any(item == "--mode" or item.startswith("--mode=") for item in raw):
+        raw = ["--mode", "full", *raw]
     return official.parse_args(
-        argv,
+        raw,
         default_checkpoint=DEFAULT_CHECKPOINT,
+        max_prompt_tokens=FIXED260_MAX_PROMPT_TOKENS,
         description=__doc__,
     )
 
 
 def run(args):
-    return official.run(
+    report = official.run(
         args,
         load_runtime_model=smollm2._load_runtime_model,
         run_model_generation=smollm2._run_model_generation,
-        stage="mmar_audio_smollm2_official_accuracy",
+        prepare_prediction=smollm2.prepare_model_output_for_official_scorer,
+        prediction_format=smollm2.PREDICTION_FORMAT,
+        audio_prefix_tokens=smollm2.SHARED_STORE_AUDIO_PREFIX_TOKENS,
+        protocol_description=(
+            "official order; ReasonAQA lowercase labels; fixed260 two-slot single-audio "
+            "prefix; decoded prediction passed verbatim; single cuda:0; bf16; greedy"
+        ),
+        stage="mmar_audio_smollm2_shared_store_fixed260_dual_scoring",
     )
+    predictions_path = args.output_dir / "predictions_official.json"
+    if predictions_path.is_file() and report.get("inference_coverage", {}).get("status") == "PASS":
+        predictions = json.loads(predictions_path.read_text(encoding="utf-8"))
+        prediction_key = str(
+            report.get("protocol", {}).get("prediction_key", "answer_prediction")
+        )
+        prefix_score = official.write_choice_label_prefix_evaluation(
+            args.output_dir, predictions, output_key=prediction_key
+        )
+        report["choice_label_prefix_evaluation"] = prefix_score
+        report["dual_scoring"] = {
+            "choice_label_prefix": prefix_score.get("status"),
+            "official_mmar": report.get("official_evaluation", {}).get("status"),
+            "prediction_text_shared_without_preparse": True,
+        }
+        smollm2._write_json(args.output_dir / "evaluation_report.json", report)
+    return report
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -46,6 +80,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": report.get("status"),
         "mode": report.get("mode"),
         "records": report.get("records"),
+        "choice_label_prefix_evaluation": report.get("choice_label_prefix_evaluation"),
         "official_evaluation": report.get("official_evaluation"),
         "report": str(args.output_dir / "evaluation_report.json"),
     }, ensure_ascii=False, default=smollm2._json_default))
