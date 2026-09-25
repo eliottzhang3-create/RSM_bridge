@@ -1,5 +1,24 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-25：2～10 次共享递归训练阶段 5～8 代码就绪
+
+从 fixed-T=2 shared-store `checkpoint-011343` 迁移得到的可变递归深度路线，阶段 1～4
+（初始化迁移、全深度结构/抽样梯度审计、T=10 正式配置显存预检）已由用户确认远程 PASS。
+阶段 5～8 现已使用独立 trainer 和提交入口准备完成，不修改原 fixed-T=2 shared-store 线。
+训练时每个 micro-step 由 rank 0 使用独立 CPU generator 均匀采样一个
+`T ∈ {2,...,10}`，广播到全部 8 个 rank，并完整反向传播。由于 `T=2` 不使用
+`refine_read`，新 trainer 不跨不同 T 使用 DDP `no_sync`；每个 micro-step 都单独完成梯度
+同步，再进行 GA=4 累积，避免最后一个 micro-step 恰为 T=2 时早先的 `refine_read` 梯度
+停留在 rank 本地。
+
+阶段划分为：阶段 5 隔离训练器与 shared-store staging；阶段 6 fresh smoke20；阶段 7 从
+`checkpoint-000020` 精确恢复并续跑到 step 22；阶段 8 仅接受本路线阶段 6/7 PASS report
+的 7-epoch formal。深度采样器的 generator state、draw cursor、histogram、8-rank 一致性摘要
+与各 rank RNG 一同进入 checkpoint；resume 会逐项校验。968,059 行正式数据对应
+3,781 step/epoch、26,467 总 optimizer steps、1,324 warmup steps。远程阶段 6～8 尚未执行，
+当前状态只能记为“本地代码与静态检查就绪”，不能记为 GPU PASS。完整命令和文件清单见
+`code/RSmol/audio_5_10x2to10_5_mesh_mellow_shared_store/README.md`。
+
 ## 2026-09-25：30-epoch shared-store checkpoint-113430 的 MMAU/MMAR 评测
 
 MeSH 与原始 30 层 SmolLM2 shared-store 对比线的默认评测 checkpoint 已切换到各自的
