@@ -47,6 +47,26 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _is_fixed260_prefix_contract(value: Any) -> bool:
+    """Accept both the current mapping schema and the older scalar schema.
+
+    Current checkpoints serialize prefix_tokens as a mapping with single and
+    dual values. Older artifacts may use scalar 260. Compact 130/260 artifacts
+    must still be rejected.
+    """
+    if isinstance(value, dict):
+        if set(value) != {"single", "dual"}:
+            return False
+        try:
+            return int(value["single"]) == 260 and int(value["dual"]) == 260
+        except (TypeError, ValueError):
+            return False
+    try:
+        return int(value) == 260
+    except (TypeError, ValueError):
+        return False
+
+
 def _validate_source(source: Path) -> dict[str, Any]:
     source = source.resolve(strict=True)
     required = (
@@ -60,7 +80,9 @@ def _validate_source(source: Path) -> dict[str, Any]:
     marker = _json(source / "checkpoint_complete.json")
     audio_config = _json(source / "audio_mesh_config.json")
     mesh_config = _json(source / "mesh_model" / "config.json")
-    training_state = torch.load(source / "training_state.pt", map_location="cpu", weights_only=False)
+    training_state = torch.load(
+        source / "training_state.pt", map_location="cpu", weights_only=False, mmap=True,
+    )
     if marker.get("status") != "complete" or int(marker.get("global_step", -1)) != 11343:
         raise RuntimeError(f"unexpected source completion marker: {marker}")
     if int(training_state.get("global_step", -1)) != 11343:
@@ -70,8 +92,21 @@ def _validate_source(source: Path) -> dict[str, Any]:
         "logical_30_physical_20_5_10x2_5_mesh_audio_mellow",
     }:
         raise RuntimeError("source is not the audited fixed 5-10x2-5 Audio MeSH architecture")
-    if int(audio_config.get("prefix_tokens", -1)) != 260:
-        raise RuntimeError("source checkpoint does not prove the fixed 260-token two-slot contract")
+    prefix_tokens = audio_config.get("prefix_tokens")
+    if not _is_fixed260_prefix_contract(prefix_tokens):
+        raise RuntimeError(
+            "source checkpoint does not prove the fixed 260-token two-slot contract: "
+            f"prefix_tokens={prefix_tokens!r}"
+        )
+    try:
+        prefix_with_separators = int(audio_config.get("audio_prefix_tokens_with_separators", -1))
+    except (TypeError, ValueError):
+        prefix_with_separators = -1
+    if prefix_with_separators != 260:
+        raise RuntimeError(
+            "source checkpoint has an invalid total audio-prefix length: "
+            f"audio_prefix_tokens_with_separators={audio_config.get('audio_prefix_tokens_with_separators')!r}"
+        )
     if (int(mesh_config.get("num_hidden_layers", -1)),
             int(mesh_config.get("recursive_layer_count", -1)),
             int(mesh_config.get("recursive_loops", -1))) != (30, 20, 2):
@@ -80,6 +115,8 @@ def _validate_source(source: Path) -> dict[str, Any]:
         "source": str(source), "global_step": 11343,
         "training_contract": audio_config.get("contract"),
         "architecture_contract": audio_config.get("architecture_contract"),
+        "prefix_tokens": prefix_tokens,
+        "audio_prefix_tokens_with_separators": prefix_with_separators,
         "mesh_config_sha256": _sha256(source / "mesh_model" / "config.json"),
         "audio_bridge_sha256": _sha256(source / "audio_bridge.pt"),
     }

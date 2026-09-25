@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import unittest
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,6 +80,21 @@ class VariableDepthAudioMeshStaticTest(unittest.TestCase):
             '"not_copied": ["optimizer", "scheduler", "training cursor", "rank RNG"]',
         ):
             self.assertIn(marker, self.converter)
+
+    def test_converter_accepts_real_fixed260_dict_schema(self) -> None:
+        tree = ast.parse(self.converter)
+        helper = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_is_fixed260_prefix_contract"
+        )
+        namespace = {"Any": Any}
+        exec(compile(ast.Module(body=[helper], type_ignores=[]), str(CONVERTER), "exec"), namespace)
+        validate = namespace["_is_fixed260_prefix_contract"]
+        self.assertTrue(validate({"single": 260, "dual": 260}))
+        self.assertTrue(validate(260))
+        self.assertFalse(validate({"single": 130, "dual": 260}))
+        self.assertFalse(validate({"dual": 260}))
+        self.assertFalse(validate(None))
 
     def test_structure_and_gradient_audit_is_automatic(self) -> None:
         self.assertIn("for depth in range(2, 11):", self.audit)
