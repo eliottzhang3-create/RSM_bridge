@@ -23,11 +23,51 @@ from audio_5_10x2to10_5_mesh_mellow_shared_store.model import (  # noqa: E402
     AudioMeshConfig, AudioMeshModel, RecursiveLlamaForCausalLM,
 )
 
-DEFAULT_MELLOW = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/mellow-main")
+# These must match the fixed shared-store training line.  The released Mellow
+# v0.ckpt is a full-model checkpoint whose HTSAT keys live under
+# audio_encoder.base.htsat.; it is not the standalone HTSAT artifact used to
+# train checkpoint-011343.
+DEFAULT_MELLOW = Path("/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main")
 DEFAULT_HTSAT = Path(
-    "/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/Mellow-v0/"
-    "models--soham97--mellow/snapshots/83672db0dae28764e283210d5bb732621e903d8a/v0.ckpt"
+    "/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt"
 )
+
+
+def _same_resolved_path(left: Path, right: Path) -> bool:
+    """Treat /hpc_stor03 and /mnt/cloudstorfs aliases as the same artifact."""
+    return left.expanduser().resolve(strict=True) == right.expanduser().resolve(strict=True)
+
+
+def _validate_audio_artifact_provenance(root: Path, args: argparse.Namespace) -> dict[str, str]:
+    """Require the exact external HTSAT/Mellow artifacts used by the source run."""
+    migration = json.loads(
+        (root / "variable_depth_init_report.json").read_text(encoding="utf-8")
+    )
+    source_checkpoint = Path(str(migration.get("source", {}).get("source", "")))
+    source_config_path = source_checkpoint / "audio_mesh_config.json"
+    if not source_config_path.is_file():
+        raise FileNotFoundError(
+            "cannot verify source audio provenance because audio_mesh_config.json is missing: "
+            f"{source_config_path}"
+        )
+    source_config = json.loads(source_config_path.read_text(encoding="utf-8"))
+    expected_htsat = Path(str(source_config.get("htsat_checkpoint", "")))
+    expected_mellow = Path(str(source_config.get("mellow_root", "")))
+    if not _same_resolved_path(args.htsat_checkpoint, expected_htsat):
+        raise RuntimeError(
+            "T=10 preflight HTSAT differs from checkpoint-011343 training provenance: "
+            f"requested={args.htsat_checkpoint} expected={expected_htsat}"
+        )
+    if not _same_resolved_path(args.mellow_root, expected_mellow):
+        raise RuntimeError(
+            "T=10 preflight Mellow source differs from checkpoint-011343 training provenance: "
+            f"requested={args.mellow_root} expected={expected_mellow}"
+        )
+    return {
+        "htsat_checkpoint": str(args.htsat_checkpoint.resolve(strict=True)),
+        "mellow_root": str(args.mellow_root.resolve(strict=True)),
+        "source_audio_config": str(source_config_path.resolve(strict=True)),
+    }
 
 
 def _load(args: argparse.Namespace, device: torch.device) -> tuple[AudioMeshModel, Any]:
@@ -35,6 +75,7 @@ def _load(args: argparse.Namespace, device: torch.device) -> tuple[AudioMeshMode
     marker = json.loads((root / "artifact_complete.json").read_text(encoding="utf-8"))
     if marker.get("status") != "complete":
         raise RuntimeError("variable-depth initialization artifact is incomplete")
+    provenance = _validate_audio_artifact_provenance(root, args)
     mesh = RecursiveLlamaForCausalLM.from_pretrained(
         # Match formal training residency: FP32 master parameters and AdamW
         # states, with BF16 used only inside autocast for forward/backward.
@@ -52,6 +93,7 @@ def _load(args: argparse.Namespace, device: torch.device) -> tuple[AudioMeshMode
     model.bridge.load_state_dict(audio_state["bridge"], strict=True)
     model.htsat_wrapper.c2l.load_state_dict(audio_state["c2l"], strict=True)
     model.train()
+    model._preflight_audio_provenance = provenance
     return model, tokenizer
 
 
@@ -91,6 +133,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     try:
         model, tokenizer = _load(args, device)
+        report["audio_provenance"] = model._preflight_audio_provenance
         ddp = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
         optimizer = torch.optim.AdamW(
             [parameter for parameter in ddp.parameters() if parameter.requires_grad], lr=1e-3,

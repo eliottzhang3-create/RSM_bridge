@@ -131,8 +131,13 @@ class VariableDepthAudioMeshStaticTest(unittest.TestCase):
             "torch.cuda.reset_peak_memory_stats", "peak_reserved_ratio",
             "torch.cuda.OutOfMemoryError", "(batch_size, 379)", "320000",
             '"sequence_length": 639',
+            "/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt",
+            "/code/mellow-main",
+            "_validate_audio_artifact_provenance",
+            "checkpoint-011343 training provenance",
         ):
             self.assertIn(marker, self.preflight)
+        self.assertNotIn("models--soham97--mellow", self.preflight)
         submit = SUBMIT.read_text(encoding="utf-8")
         for marker in ("-p pdgpu-5090", "-c 8 -m 32G -g 1 -n 1", "vc submit"):
             self.assertIn(marker, submit)
