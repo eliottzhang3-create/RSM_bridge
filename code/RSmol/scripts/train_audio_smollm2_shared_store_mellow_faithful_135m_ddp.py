@@ -140,7 +140,10 @@ def _hash_value(digest: Any, value: Any) -> None:
         digest.update(b"tensor\0")
         digest.update(str(tensor.dtype).encode("utf-8") + b"\0")
         digest.update(json.dumps(list(tensor.shape)).encode("utf-8") + b"\0")
-        digest.update(tensor.view(torch.uint8).numpy().tobytes(order="C"))
+        # Adam stores its per-parameter step as a zero-dimensional tensor.
+        # Flatten first because PyTorch forbids changing the element size of a
+        # zero-dimensional tensor directly with view(torch.uint8).
+        digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes(order="C"))
         return
     if isinstance(value, dict):
         digest.update(b"dict\0")

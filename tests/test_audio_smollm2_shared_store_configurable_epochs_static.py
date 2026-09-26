@@ -208,6 +208,8 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         self.assertIn('"warmup_steps": 0', text)
         self.assertNotIn("AdamW", text)
         self.assertNotIn("autocast(", text)
+        self.assertIn("tensor.reshape(-1).view(torch.uint8)", text)
+        self.assertNotIn("digest.update(tensor.view(torch.uint8)", text)
 
     def test_shell_and_submission_contracts(self) -> None:
         stage = STAGE.read_text(encoding="utf-8")
