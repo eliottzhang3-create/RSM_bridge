@@ -213,6 +213,9 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         self.assertIn("generator=torch.Generator().manual_seed(args.seed + rank + epoch)", text)
         self.assertIn("resumed Adam step tensor must remain on CPU", text)
         self.assertNotIn('optimizer_state[key] = value.to(device)', text)
+        self.assertIn('temporary / "text_model_state.pt"', text)
+        self.assertIn('args.resume_from / "text_model_state.pt"', text)
+        self.assertIn('"text_model_state.pt"', text)
 
     def test_trace_mismatch_identifies_exact_field(self) -> None:
         path = TRAIN

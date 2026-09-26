@@ -334,6 +334,17 @@ def load_model(args: argparse.Namespace, device: torch.device) -> tuple[AudioSmo
         text_model.resize_token_embeddings(len(tokenizer))
     text_model.config.pad_token_id = int(tokenizer.pad_token_id)
     wrapper, htsat, provenance = baseline._load_mellow_wrapper(args.mellow_root, args.htsat_checkpoint, device)
+    if args.resume_from:
+        text_state_path = args.resume_from / "text_model_state.pt"
+        if not text_state_path.is_file():
+            raise RuntimeError(
+                "resume checkpoint lacks the exact text_model_state.pt; "
+                "this checkpoint predates exact-resume state capture"
+            )
+        exact_text_state = torch.load(text_state_path, map_location=device, weights_only=False)
+        if not isinstance(exact_text_state, dict) or not exact_text_state:
+            raise RuntimeError("resume checkpoint exact text model state is empty")
+        text_model.load_state_dict(exact_text_state, strict=True)
     model = AudioSmolLM2Model(text_model.to(device), tokenizer, wrapper, htsat, AudioSmolLM2Config(compact_single_audio_prefix=False))
     if args.resume_from:
         audio_state = torch.load(args.resume_from / "audio_bridge.pt", map_location=device, weights_only=False)
@@ -420,6 +431,10 @@ def save_checkpoint(path: Path, model: Any, tokenizer: Any, optimizer: Any, sche
     published = False
     try:
         model.text_model.save_pretrained(temporary / "text_model", safe_serialization=False)
+        # Keep the exact in-memory state in addition to the HF artifact.  The
+        # latter is useful for inspection, but direct state loading is required
+        # for bitwise resume equivalence (including tied embeddings).
+        torch.save(model.text_model.state_dict(), temporary / "text_model_state.pt")
         tokenizer.save_pretrained(temporary / "tokenizer")
         torch.save(baseline._trainable_state(model), temporary / "audio_bridge.pt")
         torch.save({
@@ -433,7 +448,7 @@ def save_checkpoint(path: Path, model: Any, tokenizer: Any, optimizer: Any, sche
         config = checkpoint_config(args, inventory, shape, model)
         config.update({"global_step": cursor["global_step"], "epoch": cursor["epoch"], "batch_in_epoch": cursor["batch_in_epoch"], "scheduler_last_epoch": scheduler.last_epoch})
         (temporary / CONFIG_FILENAME).write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-        required = ["text_model", "tokenizer", "audio_bridge.pt", "training_state.pt", CONFIG_FILENAME]
+        required = ["text_model", "text_model_state.pt", "tokenizer", "audio_bridge.pt", "training_state.pt", CONFIG_FILENAME]
         marker = {"status": "complete", "contract": TRAINING_CONTRACT, "global_step": cursor["global_step"], "required": required}
         (temporary / "checkpoint_complete.json").write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
         if not baseline._text_model_weight_files(temporary / "text_model"):
