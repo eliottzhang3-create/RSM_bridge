@@ -7,6 +7,7 @@ This directory and its configurable-epoch entrypoints are an isolated reproducti
 - Official Mellow training reference: commit c8204d8eb99b4384fd7a76ad57995731e0c0c2bf.
 - Standard 30-layer SmolLM2-135M, frozen HTSAT backbone, trainable c2l and Mellow projection, and fully trainable text model.
 - Missing audio slots sample uniformly from sorted unique non-empty filepath1 values. Self-selection is allowed.
+- The Stage-1 manifest stores an originally empty filepath2 as a duplicate audio2_path for legacy routes. This route restores the missing-slot meaning from filepath2_raw, audio2_reused, and audio2_source before applying Mellow's random-audio2 process.
 - Both audio slots are cropped independently. Clips longer than 320000 samples use an inclusive random start; shorter clips are right-zero-padded.
 - Fixed layout: audio1 129 + separator 1 + audio2 129 + separator 1 + prompt 129 + answer 250 = 639 tokens.
 - Adam, LR 1e-3, weight decay 1e-4, gradient clipping 0.5, FP32, no warmup, epoch-level CosineAnnealingLR with T_max 30.

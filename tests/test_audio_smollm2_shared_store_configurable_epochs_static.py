@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import unittest
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,6 +91,38 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
             self.assertIn(marker, text)
         self.assertNotIn("sha256(f\"{self.seed}", text)
         self.assertNotIn("random_audio_pool.json", text)
+
+    def test_normalized_manifest_restores_missing_audio2(self) -> None:
+        path = PACKAGE / "data.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        names = {"_path_value_present", "normalized_audio2_is_missing", "row_audio_path"}
+        functions = [
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in names
+        ]
+        self.assertEqual({node.name for node in functions}, names)
+        namespace: dict[str, Any] = {"Any": Any}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), namespace)
+        row_audio_path = namespace["row_audio_path"]
+
+        normalized_single = {
+            "audio1_path": "/audio/one.wav",
+            "audio2_path": "/audio/one.wav",
+            "filepath2_raw": "",
+            "audio2_source": "filepath1_duplicate",
+            "audio2_reused": True,
+        }
+        self.assertEqual(row_audio_path(normalized_single, True), "/audio/one.wav")
+        self.assertEqual(row_audio_path(normalized_single, False), "")
+
+        explicit_dual = {
+            "audio1_path": "/audio/one.wav",
+            "audio2_path": "/audio/two.wav",
+            "filepath2_raw": "two.wav",
+            "audio2_source": "filepath2",
+            "audio2_reused": False,
+        }
+        self.assertEqual(row_audio_path(explicit_dual, False), "/audio/two.wav")
 
     def test_variable_store_is_strict_torchaudio_and_full_length(self) -> None:
         text = STORE.read_text(encoding="utf-8")

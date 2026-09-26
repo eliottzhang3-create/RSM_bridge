@@ -466,7 +466,11 @@ def data_contract_audit(dataset: ReasonAQADataset) -> dict[str, Any]:
         dual += int(not is_single)
         explicit_same += int((not is_single) and same)
     if single <= 0 or dual <= 0:
-        raise RuntimeError("manifest must contain both single- and dual-audio rows")
+        raise RuntimeError(
+            "manifest must contain both single- and dual-audio rows after "
+            f"restoring normalized filepath2 semantics: single={single}, dual={dual}, "
+            f"rows={len(dataset)}"
+        )
     return {
         "passed": True, "rows": len(dataset), "single_audio_rows": single,
         "dual_audio_rows": dual, "explicit_same_audio_rows": explicit_same,

@@ -36,11 +36,38 @@ def normalize_path(value: str | Path) -> str:
     return os.path.normpath(os.path.expanduser(str(value))).replace("\\", "/")
 
 
+def _path_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, (list, tuple, set)):
+        return any(_path_value_present(item) for item in value)
+    return bool(str(value).strip())
+
+
+def normalized_audio2_is_missing(row: dict[str, Any]) -> bool:
+    """Recover an originally empty filepath2 from a normalized manifest.
+
+    Stage-1 manifests materialize an empty filepath2 as audio2_path=audio1_path
+    for legacy routes, while retaining explicit provenance fields.  Public
+    Mellow instead samples a random filepath1 clip for that missing slot, so
+    this route must consult the provenance before reading audio2_path.
+    """
+    if row.get("audio2_reused") is True:
+        return True
+    if str(row.get("audio2_source") or "") == "filepath1_duplicate":
+        return True
+    if "filepath2_raw" in row and not _path_value_present(row.get("filepath2_raw")):
+        return True
+    return False
+
+
 def row_audio_path(row: dict[str, Any], first: bool) -> str:
+    if not first and normalized_audio2_is_missing(row):
+        return ""
     keys = ("audio1_path", "filepath1") if first else ("audio2_path", "filepath2")
     for key in keys:
         value = row.get(key)
-        if value:
+        if _path_value_present(value):
             return str(value)
     return ""
 
@@ -305,6 +332,7 @@ __all__ = [
     "UniqueWaveformStore",
     "collate_reasonaqa",
     "normalize_path",
+    "normalized_audio2_is_missing",
     "row_audio_path",
     "sha256_file",
 ]
