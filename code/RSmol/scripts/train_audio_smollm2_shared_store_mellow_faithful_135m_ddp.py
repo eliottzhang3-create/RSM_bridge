@@ -160,6 +160,14 @@ def _hash_value(digest: Any, value: Any) -> None:
     digest.update(repr(value).encode("utf-8") + b"\0")
 
 
+def stochastic_rng_fingerprint(device: torch.device) -> str:
+    """Fingerprint the RNG streams used by dataset/model stochastic steps."""
+    digest = hashlib.sha256()
+    digest.update(torch.get_rng_state().cpu().numpy().tobytes())
+    digest.update(torch.cuda.get_rng_state(device).cpu().numpy().tobytes())
+    return digest.hexdigest()
+
+
 def training_state_fingerprint(model: Any, optimizer: Any, scheduler: Any) -> dict[str, Any]:
     model_digest = hashlib.sha256()
     trainable_names: list[str] = []
@@ -480,7 +488,7 @@ def validate_checkpoint(path: Path, args: argparse.Namespace, inventory: dict[st
     return config, state
 
 
-def resume_checkpoint(path: Path, args: argparse.Namespace, inventory: dict[str, Any], shape: dict[str, int], optimizer: Any, scheduler: Any, rank: int, device: torch.device, model: Any) -> dict[str, int]:
+def resume_checkpoint(path: Path, args: argparse.Namespace, inventory: dict[str, Any], shape: dict[str, int], optimizer: Any, scheduler: Any, rank: int, device: torch.device, model: Any) -> tuple[dict[str, int], dict[str, Any]]:
     config, state = validate_checkpoint(path, args, inventory, shape, model)
     baseline._validate_optimizer_coverage(state, model)
     optimizer.load_state_dict(state["optimizer"])
@@ -501,7 +509,7 @@ def resume_checkpoint(path: Path, args: argparse.Namespace, inventory: dict[str,
     if set(rng) != {str(index) for index in range(args.world_size)}:
         raise RuntimeError("resume checkpoint lacks all rank RNG states")
     baseline._restore_rng_state(rng[str(rank)], device)
-    return cursor
+    return cursor, rng[str(rank)]
 
 
 def data_contract_audit(dataset: ReasonAQADataset) -> dict[str, Any]:
@@ -644,8 +652,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=0.0)
         ddp = DDP(model, device_ids=[local_rank], broadcast_buffers=False, find_unused_parameters=False)
         cursor = {"epoch": 0, "batch_in_epoch": 0, "global_step": 0}
+        resume_rng_state: dict[str, Any] | None = None
         if args.resume_from:
-            cursor = resume_checkpoint(args.resume_from, args, inventory, shape, optimizer, scheduler, rank, device, model)
+            cursor, resume_rng_state = resume_checkpoint(args.resume_from, args, inventory, shape, optimizer, scheduler, rank, device, model)
         resume_representatives = baseline._select_resume_representatives(model) if args.resume_from else None
         resume_snapshots = baseline._snapshot_resume_representatives(resume_representatives) if resume_representatives else None
         if args.mode == "smoke":
@@ -710,6 +719,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer),
             )
             iterator = iter(loader)
+            if resume_rng_state is not None:
+                # Iterator/model reconstruction must not perturb the stream
+                # captured immediately after checkpoint-000020. Restore again
+                # at the final boundary before the first resumed batch.
+                baseline._restore_rng_state(resume_rng_state, device)
+                resume_rng_state = None
             while cursor["batch_in_epoch"] < shape["steps_per_epoch"] and cursor["global_step"] < stop_step:
                 started = time.perf_counter()
                 optimizer.zero_grad(set_to_none=True)
@@ -719,6 +734,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 for micro_index in range(args.gradient_accumulation_steps):
                     batch = next(iterator)
                     moved = {key: (value.to(device) if torch.is_tensor(value) else value) for key, value in batch.items()}
+                    rng_before_forward = stochastic_rng_fingerprint(device)
                     sync_context = contextlib.nullcontext() if micro_index == args.gradient_accumulation_steps - 1 else ddp.no_sync()
                     with sync_context:
                         output = ddp(**{
@@ -738,6 +754,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         first_batch_audit = batch_contract_audit(owner, moved)
                     local_micro_trace.append({
                         "micro_index": micro_index,
+                        "rng_sha256_before_forward": rng_before_forward,
                         "row_indices": list(batch["row_indices"]),
                         "audio1_ids": batch["audio1_ids"].tolist(),
                         "audio2_ids": batch["audio2_ids"].tolist(),

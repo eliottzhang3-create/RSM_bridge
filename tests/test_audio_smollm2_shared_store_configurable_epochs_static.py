@@ -216,6 +216,9 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         self.assertIn('temporary / "text_model_state.pt"', text)
         self.assertIn('args.resume_from / "text_model_state.pt"', text)
         self.assertIn('"text_model_state.pt"', text)
+        self.assertIn("resume_rng_state", text)
+        self.assertIn("rng_sha256_before_forward", text)
+        self.assertIn("at the final boundary before the first resumed batch", text)
 
     def test_trace_mismatch_identifies_exact_field(self) -> None:
         path = TRAIN
