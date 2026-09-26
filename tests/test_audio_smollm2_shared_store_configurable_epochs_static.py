@@ -134,6 +134,9 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
 
     def test_model_uses_fixed_639_layout_and_independent_audio_passes(self) -> None:
         model = (PACKAGE / "model.py").read_text(encoding="utf-8")
+        self.assertIn("MAPPER_CONTRACT", model)
+        self.assertIn("ORIGINAL_SMOLLM2_CONTRACT", model)
+        self.assertIn("AudioSmolLM2Model = MellowFaithfulAudioSmolLM2Model", model)
         for marker in (
             "MELLOW_SEQUENCE_TOKENS",
             "prefix1, prefix2 = self.encode_audio(audio1, audio2, audio2_reused_mask=None)",

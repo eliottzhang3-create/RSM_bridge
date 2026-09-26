@@ -7,8 +7,14 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from audio_smollm2_135m_mellow.model import AudioSmolLM2Model as BaseAudioSmolLM2Model
-from audio_smollm2_135m_mellow.model import AUDIO_PREFIX_TOKENS, AUDIO_TOKENS_PER_CLIP, SMOLLM2_HIDDEN_SIZE
+from audio_smollm2_135m_mellow.model import (
+    AUDIO_PREFIX_TOKENS,
+    AUDIO_TOKENS_PER_CLIP,
+    MAPPER_CONTRACT,
+    ORIGINAL_SMOLLM2_CONTRACT,
+    SMOLLM2_HIDDEN_SIZE,
+    AudioSmolLM2Model as BaseAudioSmolLM2Model,
+)
 from .data import ANSWER_TOKENS, PROMPT_TOKENS
 
 MELLOW_TEXT_PREFIX_TOKENS = AUDIO_PREFIX_TOKENS + PROMPT_TOKENS
@@ -80,3 +86,19 @@ class MellowFaithfulAudioSmolLM2Model(BaseAudioSmolLM2Model):
         self.last_answer_attention_mask = answer_attention_mask.detach()
         self.last_multimodal_sequence_length = int(inputs_embeds.shape[1])
         return SimpleNamespace(loss=loss, logits=output.logits)
+
+
+# The isolated trainer imports the route-specific implementation through the
+# standard model surface.  Keep the explicit descriptive class name above for
+# audits while exposing the name expected by the trainer.
+AudioSmolLM2Model = MellowFaithfulAudioSmolLM2Model
+
+__all__ = [
+    "AUDIO_PREFIX_TOKENS",
+    "AUDIO_TOKENS_PER_CLIP",
+    "MAPPER_CONTRACT",
+    "ORIGINAL_SMOLLM2_CONTRACT",
+    "SMOLLM2_HIDDEN_SIZE",
+    "AudioSmolLM2Model",
+    "MellowFaithfulAudioSmolLM2Model",
+]
