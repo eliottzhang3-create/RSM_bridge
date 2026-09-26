@@ -96,6 +96,10 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         for marker in (
             "torchaudio.load(str(path), channels_first=True)",
             "torchaudio.functional.resample",
+            'getattr(torchaudio, "info", None)',
+            "from torchcodec.decoders import AudioDecoder",
+            "decoder.metadata",
+            "duration_seconds",
             "byte_offset",
             "byte_length",
             "num_samples",
@@ -108,6 +112,7 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
             "if not partial.exists() and final.is_file():",
         ):
             self.assertIn(marker, text)
+        self.assertNotIn("torchaudio.info(", text)
         for forbidden in ("soundfile", "wave.open", "F.interpolate", "SEGMENT_SAMPLES"):
             self.assertNotIn(forbidden, text)
 

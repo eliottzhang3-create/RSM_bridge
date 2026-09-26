@@ -208,17 +208,62 @@ def iter_loaded(sources: list[AudioSource], workers: int, threads: int) -> Itera
         yield from pool.imap(load_source, sources, chunksize=1)
 
 
-def logical_config(sources: list[AudioSource], report: dict[str, Any]) -> dict[str, Any]:
+def estimate_resampled_samples(path: Path) -> int:
+    """Estimate stored samples across TorchAudio 2.8 and 2.9+ I/O APIs.
+
+    TorchAudio 2.9 removed ``torchaudio.info`` and routes ``load`` through
+    TorchCodec. Prefer metadata-only probes when available and retain a full
+    decode fallback so the store builder also works with older or unusual
+    TorchAudio/TorchCodec combinations. This estimate is used only for the
+    pre-build free-space guard; the final store records the exact decoded and
+    resampled length returned by ``load_full_waveform``.
+    """
     import torchaudio
 
-    estimated_samples = 0
-    for source in sources:
-        info = torchaudio.info(source.source_path)
-        if int(info.num_frames) <= 0 or int(info.sample_rate) <= 0:
-            raise RuntimeError(f"cannot estimate decoded length: {source.source_path}")
-        estimated_samples += math.ceil(
-            int(info.num_frames) * SAMPLE_RATE / int(info.sample_rate)
+    info_function = getattr(torchaudio, "info", None)
+    if callable(info_function):
+        try:
+            info = info_function(str(path))
+            frames = int(info.num_frames)
+            source_rate = int(info.sample_rate)
+            if frames > 0 and source_rate > 0:
+                return math.ceil(frames * SAMPLE_RATE / source_rate)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+
+    try:
+        from torchcodec.decoders import AudioDecoder
+
+        decoder = AudioDecoder(str(path))
+        metadata = decoder.metadata
+        source_rate_value = getattr(metadata, "sample_rate", None)
+        source_rate = int(source_rate_value) if source_rate_value is not None else 0
+        frames_value = getattr(metadata, "num_frames", None)
+        if frames_value is not None and source_rate > 0:
+            frames = int(frames_value)
+            if frames > 0:
+                return math.ceil(frames * SAMPLE_RATE / source_rate)
+        duration_value = getattr(metadata, "duration_seconds", None)
+        if duration_value is not None:
+            duration = float(duration_value)
+            if math.isfinite(duration) and duration > 0:
+                return max(1, math.ceil(duration * SAMPLE_RATE))
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+        pass
+
+    waveform, source_rate = torchaudio.load(str(path), channels_first=True)
+    if waveform.ndim != 2 or waveform.shape[-1] <= 0 or int(source_rate) <= 0:
+        raise RuntimeError(
+            f"cannot estimate decoded length: {path}; "
+            f"shape={tuple(waveform.shape)} sample_rate={source_rate}"
         )
+    return math.ceil(int(waveform.shape[-1]) * SAMPLE_RATE / int(source_rate))
+
+
+def logical_config(sources: list[AudioSource], report: dict[str, Any]) -> dict[str, Any]:
+    estimated_samples = sum(
+        estimate_resampled_samples(Path(source.source_path)) for source in sources
+    )
     return {
         "format": MELLOW_VARIABLE_STORE_FORMAT,
         "mellow_reference_commit": MELLOW_REFERENCE_COMMIT,
