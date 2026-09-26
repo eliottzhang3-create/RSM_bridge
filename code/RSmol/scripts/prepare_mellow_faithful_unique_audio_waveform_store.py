@@ -161,10 +161,41 @@ def source_inventory_sha256(sources: list[AudioSource]) -> str:
     return digest.hexdigest()
 
 
+def decode_audio_file(path: Path) -> tuple[torch.Tensor, int]:
+    """Decode with TorchAudio, falling back when TorchCodec is unavailable."""
+    import torchaudio
+
+    try:
+        waveform, source_rate = torchaudio.load(str(path), channels_first=True)
+    except ImportError as torchaudio_error:
+        try:
+            import soundfile
+        except ImportError as soundfile_error:
+            raise RuntimeError(
+                "TorchAudio cannot decode because TorchCodec is missing, and the "
+                "SoundFile compatibility backend is not installed. Install torchcodec "
+                "matching the current PyTorch version or install soundfile."
+            ) from soundfile_error
+        try:
+            samples, source_rate = soundfile.read(
+                str(path), dtype="float32", always_2d=True
+            )
+        except Exception as soundfile_error:
+            raise RuntimeError(
+                f"unable to decode {path}: torchaudio={torchaudio_error!r}; "
+                f"soundfile={soundfile_error!r}"
+            ) from soundfile_error
+        array = np.asarray(samples, dtype=np.float32)
+        if array.ndim != 2:
+            raise RuntimeError(f"SoundFile returned invalid shape for {path}: {array.shape}")
+        waveform = torch.from_numpy(array.T.copy()).contiguous()
+    return waveform, int(source_rate)
+
+
 def load_full_waveform(path: Path) -> torch.Tensor:
     import torchaudio
 
-    waveform, source_rate = torchaudio.load(str(path), channels_first=True)
+    waveform, source_rate = decode_audio_file(path)
     waveform = waveform.float()
     if waveform.ndim != 2 or waveform.shape[0] < 1:
         raise RuntimeError(f"invalid decoded waveform {path}: {tuple(waveform.shape)}")
@@ -251,7 +282,18 @@ def estimate_resampled_samples(path: Path) -> int:
     except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
         pass
 
-    waveform, source_rate = torchaudio.load(str(path), channels_first=True)
+    try:
+        import soundfile
+
+        info = soundfile.info(str(path))
+        frames = int(info.frames)
+        source_rate = int(info.samplerate)
+        if frames > 0 and source_rate > 0:
+            return math.ceil(frames * SAMPLE_RATE / source_rate)
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+        pass
+
+    waveform, source_rate = decode_audio_file(path)
     if waveform.ndim != 2 or waveform.shape[-1] <= 0 or int(source_rate) <= 0:
         raise RuntimeError(
             f"cannot estimate decoded length: {path}; "
@@ -279,6 +321,7 @@ def logical_config(sources: list[AudioSource], report: dict[str, Any]) -> dict[s
         "estimated_total_waveform_bytes": estimated_samples * 4,
         "manifest_report": report,
         "preprocessing_contract": "public Mellow mono-first-two-channel mean and 32kHz resample; no crop or padding in store",
+        "decoder_contract": "torchaudio.load primary; SoundFile float32 fallback only when TorchAudio lacks TorchCodec",
     }
 
 

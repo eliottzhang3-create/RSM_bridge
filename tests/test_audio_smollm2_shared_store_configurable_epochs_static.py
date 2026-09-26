@@ -100,6 +100,10 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
             "from torchcodec.decoders import AudioDecoder",
             "decoder.metadata",
             "duration_seconds",
+            "soundfile.info(str(path))",
+            "soundfile.read(",
+            "decode_audio_file(path)",
+            "TorchAudio cannot decode because TorchCodec is missing",
             "byte_offset",
             "byte_length",
             "num_samples",
@@ -113,7 +117,7 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         ):
             self.assertIn(marker, text)
         self.assertNotIn("torchaudio.info(", text)
-        for forbidden in ("soundfile", "wave.open", "F.interpolate", "SEGMENT_SAMPLES"):
+        for forbidden in ("wave.open", "F.interpolate", "SEGMENT_SAMPLES"):
             self.assertNotIn(forbidden, text)
 
     def test_sampler_matches_confirmed_official_process(self) -> None:

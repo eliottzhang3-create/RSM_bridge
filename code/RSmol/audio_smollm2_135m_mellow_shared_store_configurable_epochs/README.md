@@ -20,6 +20,10 @@ With 968059 manifest rows, the shape is 30251 optimizer steps per epoch, 27 drop
 ## Build the variable-length unique store on CPU
 
 Run directly in a CPU terminal. There is no submission wrapper.
+The builder uses `torchaudio.load` when its codec backend is available. With
+TorchAudio 2.9 environments that do not include TorchCodec, it falls back to
+SoundFile float32 decoding while retaining the same mono and 32 kHz resampling
+contract.
 
 ~~~bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
