@@ -1,4 +1,4 @@
-"""Dependency-light contracts for native Mellow-v0 MMAU evaluation."""
+"""Dependency-light contracts for matched native Mellow-v0 MMAU/MMAR evaluation."""
 from __future__ import annotations
 
 import importlib.util
@@ -18,6 +18,9 @@ EVALUATOR = SCRIPTS / "evaluate_mmau_test_mini_mellow_v0.py"
 PREFLIGHT_SH = RSMOL / "run_mellow_v0_artifact_preflight.sh"
 SMOKE_SH = RSMOL / "run_mmau_test_mini_mellow_v0_smoke_4090.sh"
 FULL_SH = RSMOL / "run_mmau_test_mini_mellow_v0_full_4090.sh"
+MMAR_EVALUATOR = SCRIPTS / "evaluate_mmar_mellow_v0.py"
+MMAR_RUNTIME = SCRIPTS / "evaluate_mmar_mellow_v0.sh"
+MMAR_SUBMIT = RSMOL / "run_mmar_mellow_v0_4090.sh"
 
 
 def load_evaluator():
@@ -25,6 +28,17 @@ def load_evaluator():
     if scripts_text not in sys.path:
         sys.path.insert(0, scripts_text)
     spec = importlib.util.spec_from_file_location("native_mellow_v0_mmau", EVALUATOR)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_mmar_evaluator():
+    scripts_text = str(SCRIPTS)
+    if scripts_text not in sys.path:
+        sys.path.insert(0, scripts_text)
+    spec = importlib.util.spec_from_file_location("native_mellow_v0_mmar", MMAR_EVALUATOR)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -39,6 +53,10 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
         cls.evaluator = load_evaluator()
         cls.smoke = SMOKE_SH.read_text(encoding="utf-8")
         cls.full = FULL_SH.read_text(encoding="utf-8")
+        cls.mmar_text = MMAR_EVALUATOR.read_text(encoding="utf-8")
+        cls.mmar = load_mmar_evaluator()
+        cls.mmar_runtime = MMAR_RUNTIME.read_text(encoding="utf-8")
+        cls.mmar_submit = MMAR_SUBMIT.read_text(encoding="utf-8")
 
     def test_preflight_strictly_loads_complete_native_checkpoint_on_cpu(self) -> None:
         for marker in (
@@ -222,7 +240,7 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
     def test_smoke_and_full_share_output_and_respect_scheduler_limits(self) -> None:
         default_output = (
             "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/"
-            "mmau_test_mini_mellow_author_reply_protocol_v1"
+            "mmau_test_mini_mellow_author_reply_matched_smollm2_113430_v2"
         )
         for wrapper in (self.smoke, self.full):
             self.assertIn(default_output, wrapper)
@@ -251,6 +269,84 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
             "prepare_prediction=prepare_model_output_for_official_scorer",
         ):
             self.assertIn(marker, combined)
+
+    def test_mmau_records_exact_comparison_reference(self) -> None:
+        target = (
+            "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
+            "audio_smollm2_135m_mellow_shared_store_configurable_epochs/"
+            "formal_30epochs_20260923_v1/"
+            "mmau_test_mini_checkpoint_113430_mellow_author_reply_protocol_v1"
+        )
+        self.assertEqual(
+            self.evaluator.MMAU_COMPARISON_REFERENCE["evaluation_output"], target
+        )
+        self.assertIn("MMAU-v05.15.25", self.evaluator_text)
+        self.assertIn('report["comparison_reference"]', self.evaluator_text)
+
+    def test_native_mmar_files_and_fixed_runtime_contract(self) -> None:
+        for path in (MMAR_EVALUATOR, MMAR_RUNTIME, MMAR_SUBMIT):
+            self.assertTrue(path.is_file(), path)
+        args = self.mmar.parse_args([
+            "--dataset-dir", "/tmp/mmar",
+            "--output-dir", "/tmp/mellow-mmar",
+        ])
+        self.assertEqual(args.mode, "full")
+        self.assertEqual(args.max_prompt_tokens, 129)
+        self.assertEqual(args.max_new_tokens, 32)
+        self.assertEqual(args.dtype, "fp32")
+        with self.assertRaises(SystemExit):
+            self.mmar.parse_args([
+                "--output-dir", "/tmp/mellow-mmar",
+                "--max-prompt-tokens", "476",
+            ])
+        with self.assertRaises(SystemExit):
+            self.mmar.parse_args([
+                "--output-dir", "/tmp/mellow-mmar",
+                "--max-new-tokens", "300",
+            ])
+
+    def test_native_mmar_matches_target_data_and_dual_scoring(self) -> None:
+        target = (
+            "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
+            "audio_smollm2_135m_mellow_shared_store_configurable_epochs/"
+            "formal_30epochs_20260923_v1/mmar_checkpoint_113430_dual_scoring_v1"
+        )
+        self.assertEqual(
+            self.mmar.MMAR_COMPARISON_REFERENCE["evaluation_output"], target
+        )
+        for marker in (
+            "evaluate_mmar_5_10x2_5_mesh_mellow as official",
+            "evaluate_mmau_test_mini_mellow_v0 as mellow",
+            "load_runtime_model=_load_runtime_model",
+            'runtime["runtime_model_contract"] = _model_contract',
+            "run_model_generation=mellow._run_model_generation",
+            "prepare_prediction=mellow.prepare_model_output_for_official_scorer",
+            "write_choice_label_prefix_evaluation",
+            'report["choice_label_prefix_evaluation"]',
+            'report["dual_scoring"]',
+            '"prediction_text_shared_without_preparse": True',
+            '"official_metadata_and_scorer_shared_with_comparison": True',
+            '"top_p_argmax_is_greedy_equivalent": True',
+            '"model_inherent_difference"',
+            '"language_model_default_exactly_as_released_wrapper"',
+        ):
+            self.assertIn(marker, self.mmar_text)
+
+    def test_native_mmar_submission_is_isolated_and_official(self) -> None:
+        for marker in (
+            "-p pdgpu-4090",
+            "-c 8 -m 32G -g 1 -n 1",
+            "MMAR-meta.json",
+            "mmar-audio",
+            "code/evaluation.py",
+            "--max-prompt-tokens 129",
+            "--max-new-tokens 32",
+            "--dtype fp32",
+            "--run-official-evaluation",
+            "mmar_mellow_v0_dual_scoring_matched_smollm2_113430_v1",
+        ):
+            self.assertIn(marker, self.mmar_submit)
+        self.assertIn("evaluate_mmar_mellow_v0.py", self.mmar_runtime)
 
 
 if __name__ == "__main__":

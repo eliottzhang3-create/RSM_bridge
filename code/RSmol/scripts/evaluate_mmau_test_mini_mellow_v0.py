@@ -33,7 +33,7 @@ import evaluate_mmau_test_mini_5_10x2_5_mesh_mellow as official  # noqa: E402
 DEFAULT_DATASET_DIR = Path(official.DEFAULT_DATASET_DIR)
 DEFAULT_OUTPUT_DIR = Path(
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/"
-    "mmau_test_mini_mellow_author_reply_protocol_v1"
+    "mmau_test_mini_mellow_author_reply_matched_smollm2_113430_v2"
 )
 DEFAULT_MAX_PROMPT_TOKENS = 129
 DEFAULT_MAX_NEW_TOKENS = 300
@@ -43,10 +43,33 @@ MELLOW_AUDIO_PREFIX_TOKENS = 260
 MELLOW_PREFIX_TOKENS = 389
 MELLOW_HIDDEN_SIZE = 576
 PREDICTION_FORMAT = "mellow_author_reply_raw_generation_choice_label_scoring_v1"
-PROTOCOL_CONTRACT = "mellow_v0_mmau_github_issue5_author_reply_reproduction_v1"
+PROTOCOL_CONTRACT = "mellow_v0_mmau_author_reply_matched_smollm2_113430_v2"
 MODEL_CONTRACT_FILENAME = "mellow_v0_model_contract.json"
 SMOKE_GATE_FILENAME = "mellow_v0_smoke_gate.json"
 SHARED_STORAGE_PREFIXES = ("/hpc_stor03", "/mnt/cloudstorfs")
+MMAU_COMPARISON_REFERENCE = {
+    "model_route": "audio_smollm2_135m_mellow_shared_store_configurable_epochs",
+    "checkpoint": (
+        "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
+        "audio_smollm2_135m_mellow_shared_store_configurable_epochs/"
+        "formal_30epochs_20260923_v1/checkpoint-113430"
+    ),
+    "evaluation_output": (
+        "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
+        "audio_smollm2_135m_mellow_shared_store_configurable_epochs/"
+        "formal_30epochs_20260923_v1/"
+        "mmau_test_mini_checkpoint_113430_mellow_author_reply_protocol_v1"
+    ),
+    "matched_components": [
+        "MMAU-v05.15.25 physical-order 1000-row denominator",
+        "Mellow author-reply lowercase prompt and fixed choice labels",
+        "129-token prompt truncation",
+        "32kHz 10-second MellowWrapper audio policy",
+        "300-token top-p-filter-then-argmax decoding",
+        "verbatim generated text supplied to both scorers",
+        "Mellow author choice-label score plus MMAU-v05.15.25 official score",
+    ],
+}
 
 
 def prepare_model_output_for_official_scorer(value: Any) -> str:
@@ -191,6 +214,7 @@ def _model_contract(args: argparse.Namespace, preflight_report: Mapping[str, Any
             "inference_dtype": "float32",
         },
         "prediction_format": PREDICTION_FORMAT,
+        "comparison_reference": MMAU_COMPARISON_REFERENCE,
     }
 
 
@@ -565,6 +589,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         stage="mmau_test_mini_native_mellow_v0_matched_protocol",
         logical_trace="native Mellow-v0 30-layer SmolLM2; two separately encoded same-waveform audio slots",
     )
+    report["comparison_reference"] = MMAU_COMPARISON_REFERENCE
     inference_failures = int(
         report.get("records", {}).get("skip_reasons", {}).get("sample_exception", 0)
     )

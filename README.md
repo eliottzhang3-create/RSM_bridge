@@ -1,5 +1,31 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-26：原生 Mellow-v0 的 MMAU/MMAR 公平对比评测
+
+原生 Mellow-v0 的 MMAU test-mini 评测已重新锁定到与
+`formal_30epochs_20260923_v1/checkpoint-113430` 对照结果相同的协议：使用
+MMAU-v05.15.25 的 1000 条完整分母，同时执行 Mellow 作者回复中的小写固定选项 prompt、
+129-token prompt、32 kHz/10 秒 MellowWrapper 音频处理、最多 300 tokens 的
+top-p filter 后 argmax，并把同一份未预解析预测分别交给作者 choice-label scorer 和新版
+MMAU 官方 scorer。新的默认输出目录为
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/mmau_test_mini_mellow_author_reply_matched_smollm2_113430_v2`，避免复用旧结果。
+
+此前没有原生 Mellow-v0 的 MMAR 入口；现在新增
+`scripts/evaluate_mmar_mellow_v0.py`、运行脚本和 `pdgpu-4090` 提交入口。它与
+`mmar_checkpoint_113430_dual_scoring_v1` 共享官方 MMAR metadata 顺序、完整分母、
+固定选项 prompt、首 10 秒音频、32-token 生成上限、动态探测的官方 prediction key，
+并将同一份原始预测同时交给官方 MMAR scorer 与 choice-label-prefix scorer。原生
+Mellow-v0 固有的 129-token prompt 和 FP32 推理与对照 checkpoint 的 476-token/BF16
+能力差异会明确写入 report，不会伪装成完全相同的模型运行合同。两条评测都要求先运行
+`run_mellow_v0_artifact_preflight.sh`，当前状态仅为本地代码和静态检查就绪，远程 GPU
+分数仍以各自 `evaluation_report.json` 为准。
+
+## 2026-09-26：隔离的 Mellow-faithful SmolLM2 shared-store 路线代码就绪
+
+仅修改 audio_smollm2_135m_mellow_shared_store_configurable_epochs 路线，旧 SmolLM2 fixed-260 shared-store 与全部 MeSH 路线保持原实现。新路线锁定 Mellow training 分支 commit c8204d8eb99b4384fd7a76ad57995731e0c0c2bf，使用完整变长 32 kHz 单声道 waveform store、运行时独立随机 10 秒裁剪、缺失音频槽的随机 filepath1 音频、固定 639-token 布局、Adam 与 epoch-level cosine。
+
+按用户确认保留原训练几何：8 GPU × microbatch 8 × GA 4，effective global batch 256；30 epochs 共 113430 optimizer steps。每个 epoch 保存 checkpoint，但只保留最后三份。正式训练前必须完成 fresh smoke20、独立 uninterrupted reference22、从 step 20 恢复到 step 22 的精确对照，以及 formal gate。当前状态仅为本地代码与静态检查就绪，远程 GPU 尚未登记 PASS。完整生成和提交命令见 code/RSmol/audio_smollm2_135m_mellow_shared_store_configurable_epochs/README.md。
+
 ## 2026-09-25：2～10 次共享递归训练阶段 5～8 代码就绪
 
 从 fixed-T=2 shared-store `checkpoint-011343` 迁移得到的可变递归深度路线，阶段 1～4

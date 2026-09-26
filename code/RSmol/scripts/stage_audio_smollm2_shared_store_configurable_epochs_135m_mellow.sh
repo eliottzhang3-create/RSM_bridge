@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "usage: $0 <smoke|formal> [trainer arguments...]" >&2
+  echo "usage: $0 <smoke|reference|formal> [trainer arguments...]" >&2
   exit 2
 fi
 MODE="$1"
 shift
-if [[ "$MODE" != "smoke" && "$MODE" != "formal" ]]; then
+if [[ "$MODE" != "smoke" && "$MODE" != "reference" && "$MODE" != "formal" ]]; then
   echo "invalid configurable shared-store training mode: $MODE" >&2
   exit 2
 fi
@@ -17,10 +17,10 @@ USER_CONDA_BASE="${USER_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/minic
 source "$USER_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate rsmol
 
-SOURCE_STORE="${RSMOL_SHARED_STORE_SOURCE:-/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_train_unique_waveforms_32k_10s_f32_v3}"
+SOURCE_STORE="${RSMOL_SMOLLM2_MELLOW_STORE_SOURCE:-/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_mellow_faithful_full_waveforms_32k_f32_v2}"
 SOURCE_MANIFEST="${RSMOL_SHARED_MANIFEST_SOURCE:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl}"
-RUN_ID="${RSMOL_SMOLLM2_SHARED_STORE_RUN_ID:-$(date +%Y%m%d_%H%M%S%N)-$$}"
-STAGED_STORE="/dev/shm/rsmol_smollm2_shared_train_${RUN_ID}"
+RUN_ID="${RSMOL_SMOLLM2_MELLOW_SHARED_STORE_RUN_ID:-$(date +%Y%m%d_%H%M%S%N)-$$}"
+STAGED_STORE="/dev/shm/rsmol_smollm2_mellow_faithful_${RUN_ID}"
 STAGED_MANIFEST="$STAGED_STORE/reasonaqa_train.jsonl"
 
 if [[ ! -d "$SOURCE_STORE" || ! -f "$SOURCE_STORE/metadata.json" || ! -f "$SOURCE_STORE/index.jsonl" || ! -f "$SOURCE_STORE/waveforms.f32" ]]; then
@@ -36,7 +36,7 @@ if [[ ! -f "$SOURCE_MANIFEST" ]]; then
   exit 2
 fi
 
-python -c 'import json, pathlib, sys; p=pathlib.Path(sys.argv[1]); m=json.loads((p/"metadata.json").read_text()); assert m.get("status")=="PASS", m; assert m.get("format")=="manifest_unique_fixed_waveform_store_v1", m' "$SOURCE_STORE"
+python -c 'import json, pathlib, sys; p=pathlib.Path(sys.argv[1]); m=json.loads((p/"metadata.json").read_text()); assert m.get("status")=="PASS", m; assert m.get("format")=="mellow_faithful_variable_waveform_store_v2", m; assert m.get("mellow_reference_commit")=="c8204d8eb99b4384fd7a76ad57995731e0c0c2bf", m' "$SOURCE_STORE"
 
 STORE_KIB=$(du -sk "$SOURCE_STORE" | awk '{print $1}')
 MANIFEST_KIB=$((($(stat -c '%s' "$SOURCE_MANIFEST") + 1023) / 1024))
@@ -53,7 +53,7 @@ if [[ -e "$STAGED_STORE" ]]; then
 fi
 
 cleanup_shared_store() {
-  if [[ -n "${STAGED_STORE:-}" && "$STAGED_STORE" == /dev/shm/rsmol_smollm2_shared_train_* && -d "$STAGED_STORE" ]]; then
+  if [[ -n "${STAGED_STORE:-}" && "$STAGED_STORE" == /dev/shm/rsmol_smollm2_mellow_faithful_* && -d "$STAGED_STORE" ]]; then
     rm -rf -- "$STAGED_STORE"
   fi
 }
