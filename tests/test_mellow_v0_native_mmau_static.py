@@ -226,16 +226,16 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
             self.assertEqual(loaded["runtime_path_validation"]["status"], "PASS")
             self.assertIn("content_hashes", loaded["runtime_path_validation"]["policy"])
 
-    def test_full_requires_persistent_completed_first_five_smoke_gate(self) -> None:
+    def test_full_can_start_directly_without_smoke_gate(self) -> None:
         for marker in (
-            'SMOKE_GATE_FILENAME = "mellow_v0_smoke_gate.json"',
-            "_require_completed_smoke(args)",
-            '"expected_rows": official.SMOKE_ROWS',
-            '"terminal_records": official.SMOKE_ROWS',
-            '"official_evaluation_status": "NOT_REQUESTED"',
-            "_smoke_gate_payload(args, report)",
+            "SMOKE_GATE_FILENAME",
+            "_require_completed_smoke",
+            "_smoke_gate_payload",
+            "requires the completed first-five smoke gate",
         ):
-            self.assertIn(marker, self.evaluator_text)
+            self.assertNotIn(marker, self.evaluator_text)
+        self.assertIn("--mode full", self.full)
+        self.assertIn("--run-official-evaluation", self.full)
 
     def test_smoke_and_full_share_output_and_respect_scheduler_limits(self) -> None:
         default_output = (

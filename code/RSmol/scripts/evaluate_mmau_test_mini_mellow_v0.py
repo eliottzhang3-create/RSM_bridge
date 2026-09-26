@@ -45,7 +45,6 @@ MELLOW_HIDDEN_SIZE = 576
 PREDICTION_FORMAT = "mellow_author_reply_raw_generation_choice_label_scoring_v1"
 PROTOCOL_CONTRACT = "mellow_v0_mmau_author_reply_matched_smollm2_113430_v2"
 MODEL_CONTRACT_FILENAME = "mellow_v0_model_contract.json"
-SMOKE_GATE_FILENAME = "mellow_v0_smoke_gate.json"
 SHARED_STORAGE_PREFIXES = ("/hpc_stor03", "/mnt/cloudstorfs")
 MMAU_COMPARISON_REFERENCE = {
     "model_route": "audio_smollm2_135m_mellow_shared_store_configurable_epochs",
@@ -241,54 +240,6 @@ def _ensure_mellow_output_contract(
             )
     else:
         official._write_json(path, requested)
-
-
-def _smoke_gate_payload(
-    args: argparse.Namespace,
-    report: Mapping[str, Any],
-) -> dict[str, Any]:
-    return {
-        "status": "PASS",
-        "protocol_contract": PROTOCOL_CONTRACT,
-        "model_contract_sha256": preflight._sha256(
-            args.output_dir / MODEL_CONTRACT_FILENAME
-        ),
-        "preflight_report_sha256": preflight._sha256(args.preflight_report.resolve()),
-        "inference_status": report.get("inference_coverage", {}).get("status"),
-        "expected_rows": report.get("inference_coverage", {}).get("expected_rows"),
-        "terminal_records": report.get("inference_coverage", {}).get("terminal_records"),
-        "official_evaluation_status": report.get("official_evaluation", {}).get("status"),
-    }
-
-
-def _require_completed_smoke(args: argparse.Namespace) -> dict[str, Any]:
-    path = args.output_dir / SMOKE_GATE_FILENAME
-    if not path.is_file():
-        raise RuntimeError(
-            "full Mellow-v0 MMAU evaluation requires the completed first-five smoke gate: "
-            f"{path}"
-        )
-    gate = json.loads(path.read_text(encoding="utf-8"))
-    expected = {
-        "status": "PASS",
-        "protocol_contract": PROTOCOL_CONTRACT,
-        "model_contract_sha256": preflight._sha256(
-            args.output_dir / MODEL_CONTRACT_FILENAME
-        ),
-        "preflight_report_sha256": preflight._sha256(args.preflight_report.resolve()),
-        "inference_status": "PASS",
-        "expected_rows": official.SMOKE_ROWS,
-        "terminal_records": official.SMOKE_ROWS,
-        "official_evaluation_status": "NOT_REQUESTED",
-    }
-    mismatches = {
-        key: {"expected": value, "actual": gate.get(key)}
-        for key, value in expected.items()
-        if gate.get(key) != value
-    }
-    if mismatches:
-        raise RuntimeError(f"Mellow-v0 MMAU smoke gate mismatch: {mismatches}")
-    return gate
 
 
 def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[str, Any]]:
@@ -561,8 +512,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     preflight_report = _load_and_validate_preflight(args)
     args._validated_preflight_report = preflight_report
-    if args.mode == "full":
-        _require_completed_smoke(args)
     _ensure_mellow_output_contract(args, preflight_report)
     report = official.run(
         args,
@@ -634,16 +583,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "status": "PASS" if fallback_audio_rows == 0 else "NONCOMPARABLE_FALLBACK",
         }
         official._write_json(args.output_dir / "evaluation_report.json", report)
-    if (
-        args.mode == "smoke"
-        and report.get("status") == official.INFERENCE_ONLY_STATUS
-        and report.get("inference_coverage", {}).get("status") == "PASS"
-        and report.get("official_evaluation", {}).get("status") == "NOT_REQUESTED"
-    ):
-        official._write_json(
-            args.output_dir / SMOKE_GATE_FILENAME,
-            _smoke_gate_payload(args, report),
-        )
     return report
 
 
