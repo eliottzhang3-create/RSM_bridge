@@ -71,7 +71,7 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         self.assertIn("c8204d8eb99b4384fd7a76ad57995731e0c0c2bf", package)
         self.assertIn("4d3722d904734c7b2ae1b55309002c82bf1d11bc", package)
         self.assertIn("mellow_faithful_variable_waveform_store_v2", package)
-        self.assertIn("exact_resume_v2", package)
+        self.assertIn("gbs32_exact_resume_v3", package)
         self.assertNotIn("audio_5_10x2_5_mesh", package)
 
     def test_stateful_mellow_data_call_order(self) -> None:
@@ -138,8 +138,9 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
     def test_optimizer_batch_scheduler_and_checkpoint_contract(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
         for marker in (
-            "CANONICAL_MICRO_BATCH = 8",
-            "CANONICAL_GRAD_ACCUM = 4",
+            "CANONICAL_MICRO_BATCH = 4",
+            "CANONICAL_GRAD_ACCUM = 1",
+            "CANONICAL_GLOBAL_BATCH = 32",
             "CANONICAL_CHECKPOINT_RETENTION = 3",
             "torch.optim.Adam(",
             "CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=0.0)",
@@ -176,8 +177,8 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             for marker in (
                 "--epochs 30",
-                "--micro-batch-size 8",
-                "--gradient-accumulation-steps 4",
+                "--micro-batch-size 4",
+                "--gradient-accumulation-steps 1",
                 "--checkpoint-retention 3",
             ):
                 self.assertIn(marker, text)

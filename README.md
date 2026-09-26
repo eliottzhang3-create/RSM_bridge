@@ -24,7 +24,7 @@ Mellow-v0 固有的 129-token prompt 和 FP32 推理与对照 checkpoint 的 476
 
 仅修改 audio_smollm2_135m_mellow_shared_store_configurable_epochs 路线，旧 SmolLM2 fixed-260 shared-store 与全部 MeSH 路线保持原实现。新路线锁定 Mellow training 分支 commit c8204d8eb99b4384fd7a76ad57995731e0c0c2bf，使用完整变长 32 kHz 单声道 waveform store、运行时独立随机 10 秒裁剪、缺失音频槽的随机 filepath1 音频、固定 639-token 布局、Adam 与 epoch-level cosine。
 
-按用户确认保留原训练几何：8 GPU × microbatch 8 × GA 4，effective global batch 256；30 epochs 共 113430 optimizer steps。每个 epoch 保存 checkpoint，但只保留最后三份。正式训练前必须完成 fresh smoke20、独立 uninterrupted reference22、从 step 20 恢复到 step 22 的精确对照，以及 formal gate。当前状态仅为本地代码与静态检查就绪，远程 GPU 尚未登记 PASS。完整生成和提交命令见 code/RSmol/audio_smollm2_135m_mellow_shared_store_configurable_epochs/README.md。
+按最新确认改为 Mellow 的 global-batch 几何：8 GPU × microbatch 4 × GA 1，effective global batch 32；968,059 条数据每 epoch 30,251 optimizer steps，30 epochs 共 907,530 steps。每个 epoch 保存 checkpoint，但只保留最后三份。正式训练前必须完成 fresh smoke20、独立 uninterrupted reference22、从 step 20 恢复到 step 22 的精确对照，以及 formal gate。当前状态仅为本地代码与静态检查就绪，远程 GPU 尚未登记 PASS。完整生成和提交命令见 code/RSmol/audio_smollm2_135m_mellow_shared_store_configurable_epochs/README.md。
 
 ## 2026-09-25：2～10 次共享递归训练阶段 5～8 代码就绪
 

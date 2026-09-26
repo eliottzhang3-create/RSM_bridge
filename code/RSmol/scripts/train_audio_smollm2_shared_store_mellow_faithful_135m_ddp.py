@@ -53,8 +53,9 @@ SMOKE_TOTAL_STEPS = 22
 FORMAL_EPOCHS = 30
 CANONICAL_LR = 1e-3
 CANONICAL_WEIGHT_DECAY = 1e-4
-CANONICAL_MICRO_BATCH = 8
-CANONICAL_GRAD_ACCUM = 4
+CANONICAL_MICRO_BATCH = 4
+CANONICAL_GRAD_ACCUM = 1
+CANONICAL_GLOBAL_BATCH = 32
 CANONICAL_SEED = 1234
 CANONICAL_CHECKPOINT_RETENTION = 3
 
@@ -317,6 +318,11 @@ def load_model(args: argparse.Namespace, device: torch.device) -> tuple[AudioSmo
 
 def training_shape(args: argparse.Namespace, rows: int) -> dict[str, int]:
     global_batch = args.world_size * args.micro_batch_size * args.gradient_accumulation_steps
+    if global_batch != CANONICAL_GLOBAL_BATCH:
+        raise RuntimeError(
+            f"Mellow reproduction requires effective global batch {CANONICAL_GLOBAL_BATCH}, "
+            f"got {global_batch}"
+        )
     steps_per_epoch = rows // global_batch
     if steps_per_epoch <= 0:
         raise RuntimeError("dataset is shorter than one global batch")
@@ -557,7 +563,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if not torch.cuda.is_available() or world != 8 or args.world_size != 8:
             raise RuntimeError("Mellow reproduction requires one 8-GPU node")
         if args.micro_batch_size != CANONICAL_MICRO_BATCH or args.gradient_accumulation_steps != CANONICAL_GRAD_ACCUM or args.num_workers != 0:
-            raise RuntimeError("this reproduction requires microbatch=8, grad_accum=4, num_workers=0")
+            raise RuntimeError("this reproduction requires microbatch=4, grad_accum=1, effective global batch=32, num_workers=0")
         if args.learning_rate != CANONICAL_LR or args.weight_decay != CANONICAL_WEIGHT_DECAY or args.seed != CANONICAL_SEED:
             raise RuntimeError("Mellow optimizer/seed contract mismatch")
         if args.epochs != FORMAL_EPOCHS or args.save_every_epochs != 1 or args.checkpoint_retention != CANONICAL_CHECKPOINT_RETENTION:

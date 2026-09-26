@@ -10,12 +10,12 @@ This directory and its configurable-epoch entrypoints are an isolated reproducti
 - Both audio slots are cropped independently. Clips longer than 320000 samples use an inclusive random start; shorter clips are right-zero-padded.
 - Fixed layout: audio1 129 + separator 1 + audio2 129 + separator 1 + prompt 129 + answer 250 = 639 tokens.
 - Adam, LR 1e-3, weight decay 1e-4, gradient clipping 0.5, FP32, no warmup, epoch-level CosineAnnealingLR with T_max 30.
-- 8 GPUs, microbatch 8 per rank, gradient accumulation 4, effective global batch 256, num_workers 0.
+- Mellow-matched global batch: 8 GPUs, microbatch 4 per rank, no gradient accumulation (1), effective global batch 32, num_workers 0.
 - Thirty epochs. Save at every epoch boundary and retain only the newest three complete checkpoints.
 - Dataset randomness is stateful Python random. Checkpoints include every rank's Python, Torch, and CUDA RNG state.
 - Sampler order is torch.randperm with seed equal to the epoch, followed by contiguous rank slices. Resume starts directly at the saved optimizer-step cursor and does not replay prior batches.
 
-With 968059 manifest rows, the shape is 3781 optimizer steps per epoch and 113430 total steps. The final retained checkpoints are expected at steps 105868, 109649, and 113430.
+With 968059 manifest rows, the shape is 30251 optimizer steps per epoch, 27 dropped rows per epoch, and 907530 total steps. The final retained checkpoints are expected at steps 847028, 877279, and 907530.
 
 ## Build the variable-length unique store on CPU
 
@@ -56,7 +56,7 @@ Use fresh output directories. The uninterrupted reference22 run is mandatory: re
 ~~~bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
 ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow_shared_store_configurable_epochs
-TAG=20260926_v1
+TAG=20260926_gbs32_v1
 
 bash run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_3090.sh \
   --epochs 30 \
