@@ -210,6 +210,25 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         self.assertNotIn("autocast(", text)
         self.assertIn("tensor.reshape(-1).view(torch.uint8)", text)
         self.assertNotIn("digest.update(tensor.view(torch.uint8)", text)
+        self.assertIn("generator=torch.Generator().manual_seed(args.seed + rank + epoch)", text)
+        self.assertIn("resumed Adam step tensor must remain on CPU", text)
+        self.assertNotIn('optimizer_state[key] = value.to(device)', text)
+
+    def test_trace_mismatch_identifies_exact_field(self) -> None:
+        path = TRAIN
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        functions = [
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "first_trace_mismatch"
+        ]
+        self.assertEqual(len(functions), 1)
+        namespace: dict[str, Any] = {"Any": Any}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), namespace)
+        mismatch = namespace["first_trace_mismatch"](
+            [{"by_rank": [[{"audio2_ids": [1, 2], "loss": 1.0}]]}],
+            [{"by_rank": [[{"audio2_ids": [1, 3], "loss": 1.0}]]}],
+        )
+        self.assertIn("trace[0].by_rank[0][0].audio2_ids[1]", mismatch)
 
     def test_shell_and_submission_contracts(self) -> None:
         stage = STAGE.read_text(encoding="utf-8")

@@ -14,6 +14,7 @@ This directory and its configurable-epoch entrypoints are an isolated reproducti
 - Mellow-matched global batch: 8 GPUs, microbatch 4 per rank, no gradient accumulation (1), effective global batch 32, num_workers 0.
 - Thirty epochs. Save at every epoch boundary and retain only the newest three complete checkpoints.
 - Dataset randomness is stateful Python random. Checkpoints include every rank's Python, Torch, and CUDA RNG state.
+- Resume leaves Adam's non-capturable scalar step tensors on CPU, matching a continuous run. The DataLoader uses a private generator for its iterator seed so reconstruction at the resume cursor does not advance the training RNG stream.
 - Sampler order is torch.randperm with seed equal to the epoch, followed by contiguous rank slices. Resume starts directly at the saved optimizer-step cursor and does not replay prior batches.
 
 With 968059 manifest rows, the shape is 30251 optimizer steps per epoch, 27 dropped rows per epoch, and 907530 total steps. The final retained checkpoints are expected at steps 847028, 877279, and 907530.

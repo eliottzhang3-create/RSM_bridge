@@ -215,7 +215,11 @@ def compare_reference22(
             raise RuntimeError(f"reference22 store differs in {key}")
     expected_trace = reference.get("resume_comparison_trace")
     if expected_trace != trace_tail:
-        raise RuntimeError("resumed stochastic row/audio/crop/template/loss trace differs from reference22")
+        mismatch = first_trace_mismatch(expected_trace, trace_tail)
+        raise RuntimeError(
+            "resumed stochastic row/audio/crop/template/loss trace differs from "
+            f"reference22 at {mismatch}"
+        )
     expected_fingerprint = reference.get("training_state_fingerprint")
     if expected_fingerprint != fingerprint:
         raise RuntimeError("resumed model/optimizer/scheduler fingerprint differs from reference22")
@@ -225,6 +229,27 @@ def compare_reference22(
         "trace_exact_match": True,
         "training_state_exact_match": True,
     }
+
+
+def first_trace_mismatch(expected: Any, actual: Any, path: str = "trace") -> str:
+    """Locate the first divergence without hiding data or numerical differences."""
+    if type(expected) is not type(actual):
+        return f"{path}: types {type(expected).__name__} != {type(actual).__name__}"
+    if isinstance(expected, dict):
+        if set(expected) != set(actual):
+            return f"{path}: keys {sorted(expected)} != {sorted(actual)}"
+        for key in expected:
+            if expected[key] != actual[key]:
+                return first_trace_mismatch(expected[key], actual[key], f"{path}.{key}")
+    elif isinstance(expected, list):
+        if len(expected) != len(actual):
+            return f"{path}: lengths {len(expected)} != {len(actual)}"
+        for index, (left, right) in enumerate(zip(expected, actual)):
+            if left != right:
+                return first_trace_mismatch(left, right, f"{path}[{index}]")
+    elif expected != actual:
+        return f"{path}: expected={expected!r}, actual={actual!r}"
+    return f"{path}: unknown mismatch"
 
 
 def prune_formal_checkpoints(output_dir: Path, keep: int) -> list[str]:
@@ -445,10 +470,13 @@ def resume_checkpoint(path: Path, args: argparse.Namespace, inventory: dict[str,
     baseline._validate_optimizer_coverage(state, model)
     optimizer.load_state_dict(state["optimizer"])
     scheduler.load_state_dict(state["scheduler"])
+    # Adam keeps its non-capturable scalar step on CPU. load_state_dict already
+    # places moment tensors on their parameter device; moving every tensor to
+    # CUDA changes the optimizer's state layout relative to an uninterrupted run.
     for optimizer_state in optimizer.state.values():
-        for key, value in tuple(optimizer_state.items()):
-            if torch.is_tensor(value):
-                optimizer_state[key] = value.to(device)
+        step = optimizer_state.get("step")
+        if torch.is_tensor(step) and step.device.type != "cpu":
+            raise RuntimeError("resumed Adam step tensor must remain on CPU")
     cursor = {key: int(state["cursor"][key]) for key in ("epoch", "batch_in_epoch", "global_step")}
     if cursor["global_step"] != cursor["epoch"] * shape["steps_per_epoch"] + cursor["batch_in_epoch"]:
         raise RuntimeError(f"resume cursor is inconsistent: {cursor}")
@@ -663,6 +691,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 shuffle=False,
                 drop_last=True,
                 num_workers=0,
+                generator=torch.Generator().manual_seed(args.seed + rank + epoch),
                 collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer),
             )
             iterator = iter(loader)
@@ -766,6 +795,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("DDP ranks ended with different model/optimizer/scheduler fingerprints")
         resume_equivalence = None
         if args.mode == "smoke" and args.resume_from is not None:
+            if rank == 0:
+                # Preserve both traces in the FAIL report if the comparison
+                # rejects this run, so a remote divergence can be inspected.
+                report["resume_comparison_trace"] = resume_comparison_trace
+                report["training_state_fingerprint"] = local_fingerprint
             resume_equivalence = compare_reference22(
                 args.reference22_report,
                 resume_comparison_trace,
