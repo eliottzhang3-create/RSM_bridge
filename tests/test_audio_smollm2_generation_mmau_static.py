@@ -94,6 +94,15 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
         self.assertNotIn("parse_model_output", evaluator)
         self.assertIn("run_model_generation=_run_mmau_author_reply_generation", evaluator)
         self.assertIn("prepare_model_output_for_official_scorer", evaluator)
+        for marker in (
+            'report["mellow_author_reply_evaluation"]',
+            'report["mmau_v051525_evaluation"]',
+            'report["mellow_author_reply_protocol_audit"]',
+            '"comparable": bool(',
+            'fallback_audio_rows == 0',
+            'report["comparable_official_score"] = False',
+        ):
+            self.assertIn(marker, evaluator)
 
     def test_official_evaluation_uses_input_and_prediction_field(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -144,6 +153,11 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
         self.assertIn("mmar_audio_smollm2_shared_store_fixed260_dual_scoring", text)
         self.assertIn("write_choice_label_prefix_evaluation", text)
         self.assertIn("prepare_model_output_for_official_scorer", text)
+        self.assertIn('report["choice_label_prefix_evaluation"]', text)
+        self.assertIn('report["dual_scoring"]', text)
+        self.assertIn('report["status"] = "FAILED"', text)
+        self.assertIn("standard independent 30-layer SmolLM2 trace", text)
+        self.assertIn('smollm2._write_json(args.output_dir / "evaluation_report.json", report)', text)
         self.assertNotIn("parse_model_output", text)
 
 

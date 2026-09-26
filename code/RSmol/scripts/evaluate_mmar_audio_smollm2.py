@@ -53,6 +53,24 @@ def run(args):
         ),
         stage="mmar_audio_smollm2_shared_store_fixed260_dual_scoring",
     )
+    report.setdefault("protocol", {})["logical_trace"] = (
+        "standard independent 30-layer SmolLM2 trace on every generation step"
+    )
+    inference_failures = int(
+        report.get("records", {}).get("skip_reasons", {}).get("sample_exception", 0)
+    )
+    if inference_failures:
+        report["status"] = "FAILED"
+        report["fatal_error"] = {
+            "error": (
+                f"{inference_failures} SmolLM2 shared-store generation failures "
+                "were recorded as skipped rows"
+            ),
+            "detail": (
+                "Inspect skipped.jsonl; do not interpret either MMAR score as a "
+                "valid model comparison."
+            ),
+        }
     predictions_path = args.output_dir / "predictions_official.json"
     if predictions_path.is_file() and report.get("inference_coverage", {}).get("status") == "PASS":
         predictions = json.loads(predictions_path.read_text(encoding="utf-8"))
@@ -68,7 +86,7 @@ def run(args):
             "official_mmar": report.get("official_evaluation", {}).get("status"),
             "prediction_text_shared_without_preparse": True,
         }
-        smollm2._write_json(args.output_dir / "evaluation_report.json", report)
+    smollm2._write_json(args.output_dir / "evaluation_report.json", report)
     return report
 
 

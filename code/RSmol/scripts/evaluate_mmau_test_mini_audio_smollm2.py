@@ -910,22 +910,59 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         stage="mmau_test_mini_audio_smollm2_shared_store_fixed260",
         logical_trace="standard 30-layer SmolLM2 per generation step",
     )
+    inference_failures = int(
+        report.get("records", {}).get("skip_reasons", {}).get("sample_exception", 0)
+    )
+    if inference_failures:
+        report["status"] = "FAILED"
+        report["comparable_official_score"] = False
+        report["fatal_error"] = {
+            "error": (
+                f"{inference_failures} SmolLM2 shared-store generation failures "
+                "were recorded as skipped rows"
+            ),
+            "detail": (
+                "Inspect skipped.jsonl; do not interpret either MMAU score as a "
+                "valid model comparison."
+            ),
+        }
+        _write_json(args.output_dir / "evaluation_report.json", report)
     predictions_path = args.output_dir / "predictions_fixed_order.json"
     if predictions_path.is_file() and report.get("inference_coverage", {}).get("status") == "PASS":
         predictions = json.loads(predictions_path.read_text(encoding="utf-8"))
         author_score = official.write_mellow_author_reply_evaluation(
             args.output_dir, predictions
         )
+        payload_sources = (
+            report.get("records", {}).get("audio", {}).get("payload_sources", {})
+        )
+        fallback_audio_rows = sum(
+            int(count)
+            for source, count in payload_sources.items()
+            if source != "official_id_wav"
+        )
         report["mellow_author_reply_evaluation"] = author_score
         report["mellow_author_reply_context"] = official.MELLOW_AUTHOR_REPLY_CONTEXT
         report["primary_comparison_score"] = {
             "scorer": official.MELLOW_AUTHOR_REPLY_SCORER,
+            "comparable": bool(
+                args.mode == "full"
+                and inference_failures == 0
+                and int(author_score["total"]["total"]) == official.EXPECTED_FULL_ROWS
+                and fallback_audio_rows == 0
+            ),
             "record_errors_counted_incorrect": int(
                 author_score.get("record_errors", {}).get("total", 0)
             ),
             **author_score["total"],
         }
         report["mmau_v051525_evaluation"] = report.get("official_evaluation", {})
+        report["mellow_author_reply_protocol_audit"] = {
+            "official_id_wav_rows": int(payload_sources.get("official_id_wav", 0)),
+            "fallback_audio_rows": fallback_audio_rows,
+            "payload_sources": payload_sources,
+            "status": "PASS" if fallback_audio_rows == 0 else "NONCOMPARABLE_FALLBACK",
+        }
         _write_json(args.output_dir / "evaluation_report.json", report)
     return report
 
