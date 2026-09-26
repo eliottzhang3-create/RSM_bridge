@@ -196,12 +196,14 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
             "resume_comparison_trace",
             "training_state_fingerprint",
             "compare_reference22",
+            "informational_only",
+            "step_seconds=",
             "route_code_identity",
             "if rank != 0:",
             "mellow_faithful_full_waveforms_32k_f32_v2",
             "scheduler.step()",
-            "shape=shape",
-            "inventory=inventory",
+            'first.get("shape") != shape',
+            'first.get("store_inventory", {}).get(key) != inventory.get(key)',
         ):
             self.assertIn(marker, text)
         self.assertIn('"global_batch_size": global_batch', text)
@@ -254,10 +256,11 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
                 "--checkpoint-retention 3",
             ):
                 self.assertIn(marker, text)
-        self.assertIn("--reference22-report", RESUME.read_text(encoding="utf-8"))
+        self.assertNotIn("REFERENCE_SEEN", RESUME.read_text(encoding="utf-8"))
         formal = FORMAL.read_text(encoding="utf-8")
-        for marker in ("--smoke20-report", "--reference22-report", "--smoke-resume-report"):
-            self.assertIn(marker, formal)
+        self.assertIn("--smoke20-report", formal)
+        self.assertNotIn("REFERENCE_SEEN", formal)
+        self.assertNotIn("RESUME_SEEN", formal)
         for path in SUBMITS:
             text = path.read_text(encoding="utf-8")
             for marker in ("vc submit", "-p pdgpu-3090", "-c 32", "-m 256G", "-g 8", "-n 1"):

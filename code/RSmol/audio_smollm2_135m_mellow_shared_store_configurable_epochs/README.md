@@ -57,33 +57,18 @@ If an identical interrupted build retains BUILDING, build_config.json, progress.
 
 ## Required GPU qualification and formal sequence
 
-Use fresh output directories. The uninterrupted reference22 run is mandatory: resume2 compares steps 21 and 22 across all ranks, including row indices, selected audio IDs, crop offsets, templates, losses, LR, and final model/optimizer/scheduler fingerprints.
+Use fresh output directories. Formal training requires the existing PASS smoke20 report with matching data, shape, optimizer, and runtime audits. The previous resume2 attempts reached step 22 but failed only the exact cross-run loss comparison; they are not claimed as exact-resume PASS. By request, reference22 and resume2 are optional diagnostics and do not block formal training. Progress logs include `step_seconds`.
 
 ~~~bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
 ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow_shared_store_configurable_epochs
-TAG=20260926_gbs32_v1
-
-bash run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_3090.sh \
-  --epochs 30 \
-  --output-dir "$ROOT/smoke20_30epochs_$TAG"
-
-bash run_audio_smollm2_shared_store_reference22_configurable_epochs_135m_mellow_3090.sh \
-  --epochs 30 \
-  --output-dir "$ROOT/reference22_30epochs_$TAG"
-
-bash run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_3090.sh \
-  --epochs 30 \
-  --resume-from "$ROOT/smoke20_30epochs_$TAG/checkpoint-000020" \
-  --reference22-report "$ROOT/reference22_30epochs_$TAG/shared_store_training_report.json" \
-  --output-dir "$ROOT/resume2_30epochs_$TAG"
+SMOKE_REPORT="$ROOT/smoke20_30epochs_20260926_gbs32_rngboundary_v1/shared_store_training_report.json"
+FORMAL_TAG=20260926_gbs32_direct_formal_v1
 
 bash run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_3090.sh \
   --epochs 30 \
-  --smoke20-report "$ROOT/smoke20_30epochs_$TAG/shared_store_training_report.json" \
-  --reference22-report "$ROOT/reference22_30epochs_$TAG/shared_store_training_report.json" \
-  --smoke-resume-report "$ROOT/resume2_30epochs_$TAG/shared_store_training_report.json" \
-  --output-dir "$ROOT/formal_30epochs_$TAG"
+  --smoke20-report "$SMOKE_REPORT" \
+  --output-dir "$ROOT/formal_30epochs_$FORMAL_TAG"
 ~~~
 
-All four GPU wrappers submit one pdgpu-3090 node with 8 GPUs, 32 CPUs, and 256 GiB memory. Local checks only establish code readiness; remote PASS requires the generated reports and checkpoints.
+The formal wrapper submits one pdgpu-3090 node with 8 GPUs, 32 CPUs, and 256 GiB memory. Local checks only establish code readiness; remote PASS requires the generated report and checkpoints.

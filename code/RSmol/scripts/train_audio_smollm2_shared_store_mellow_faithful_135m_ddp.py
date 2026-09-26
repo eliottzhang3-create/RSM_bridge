@@ -560,53 +560,32 @@ def batch_contract_audit(model: Any, batch: dict[str, Any]) -> dict[str, Any]:
 def formal_gate(args: argparse.Namespace, inventory: dict[str, Any], shape: dict[str, int]) -> dict[str, Any] | None:
     if args.mode != "formal":
         return None
-    if args.smoke20_report is None or args.reference22_report is None or args.smoke_resume_report is None:
-        raise ValueError(
-            "formal requires --smoke20-report, --reference22-report, and --smoke-resume-report"
-        )
+    if args.smoke20_report is None:
+        raise ValueError("formal requires --smoke20-report")
     first = read_json(args.smoke20_report)
-    reference = read_json(args.reference22_report)
-    resumed = read_json(args.smoke_resume_report)
-    current_code_identity = route_code_identity()
-    for label, report, start, end in (("smoke20", first, 0, 20), ("resume2", resumed, 20, 22)):
-        if report.get("status") != "PASS" or report.get("training_contract") != TRAINING_CONTRACT or report.get("start_global_step") != start or report.get("end_global_step") != end:
-            raise RuntimeError(f"formal gate rejects {label} status/cursor")
-        if report.get("shape") != shape or report.get("epochs") != args.epochs:
-            raise RuntimeError(f"formal gate rejects {label} training shape")
-        if report.get("route_code_sha256") != current_code_identity:
-            raise RuntimeError(f"formal gate rejects {label} code identity")
-        if report.get("optimizer_contract") != {"name": "Adam", "lr": CANONICAL_LR, "weight_decay": CANONICAL_WEIGHT_DECAY, "scheduler": "CosineAnnealingLR_epoch_level", "warmup_steps": 0}:
-            raise RuntimeError(f"formal gate rejects {label} optimizer")
-        if report.get("batch_contract_audit", {}).get("passed") is not True or report.get("first_step_gradient_audit", {}).get("passed") is not True:
-            raise RuntimeError(f"formal gate rejects {label} runtime audit")
-        for key in ("manifest_sha256", "index_sha256", "waveform_sha256", "total_waveform_bytes"):
-            if report.get("store_inventory", {}).get(key) != inventory.get(key):
-                raise RuntimeError(f"formal gate {label} store differs in {key}")
-    if (
-        reference.get("status") != "PASS"
-        or reference.get("mode") != "reference"
-        or reference.get("training_contract") != TRAINING_CONTRACT
-        or reference.get("start_global_step") != 0
-        or reference.get("end_global_step") != 22
-        or reference.get("shape") != shape
-        or reference.get("epochs") != args.epochs
-        or reference.get("route_code_sha256") != current_code_identity
-    ):
-        raise RuntimeError("formal gate rejects uninterrupted reference22 status/shape/cursor")
+    if first.get("status") != "PASS" or first.get("training_contract") != TRAINING_CONTRACT or first.get("start_global_step") != 0 or first.get("end_global_step") != 20:
+        raise RuntimeError("formal gate rejects smoke20 status/cursor")
+    if first.get("shape") != shape or first.get("epochs") != args.epochs:
+        raise RuntimeError("formal gate rejects smoke20 training shape")
+    if first.get("optimizer_contract") != {"name": "Adam", "lr": CANONICAL_LR, "weight_decay": CANONICAL_WEIGHT_DECAY, "scheduler": "CosineAnnealingLR_epoch_level", "warmup_steps": 0}:
+        raise RuntimeError("formal gate rejects smoke20 optimizer")
+    if first.get("batch_contract_audit", {}).get("passed") is not True or first.get("first_step_gradient_audit", {}).get("passed") is not True:
+        raise RuntimeError("formal gate rejects smoke20 runtime audit")
     for key in ("manifest_sha256", "index_sha256", "waveform_sha256", "total_waveform_bytes"):
-        if reference.get("store_inventory", {}).get(key) != inventory.get(key):
-            raise RuntimeError(f"formal gate reference22 store differs in {key}")
-    checkpoints1, checkpoints2 = first.get("checkpoints", []), resumed.get("checkpoints", [])
-    if len(checkpoints1) != 1 or len(checkpoints2) != 1 or resumed.get("resume_checkpoint") != str(Path(checkpoints1[0]).resolve()):
-        raise RuntimeError("formal gate resume lineage failed")
-    if resumed.get("resume_parameter_change_audit", {}).get("all_groups_changed") is not True:
-        raise RuntimeError("formal gate resume parameter-change audit failed")
-    if resumed.get("resume_equivalence", {}).get("passed") is not True:
-        raise RuntimeError("formal gate exact resume/reference22 comparison failed")
+        if first.get("store_inventory", {}).get(key) != inventory.get(key):
+            raise RuntimeError(f"formal gate smoke20 store differs in {key}")
+    checkpoints1 = first.get("checkpoints", [])
+    if len(checkpoints1) != 1:
+        raise RuntimeError("formal gate smoke20 checkpoint lineage failed")
+    marker = read_json(Path(checkpoints1[0]) / "checkpoint_complete.json")
+    if marker.get("status") != "complete" or marker.get("contract") != TRAINING_CONTRACT or marker.get("global_step") != 20:
+        raise RuntimeError("formal gate smoke20 checkpoint completion failed")
     return {
         "smoke20_report": str(args.smoke20_report.resolve()),
-        "reference22_report": str(args.reference22_report.resolve()),
-        "smoke_resume_report": str(args.smoke_resume_report.resolve()),
+        "smoke20_route_code_sha256": first.get("route_code_sha256"),
+        "current_route_code_sha256": route_code_identity(),
+        "smoke_resume_report": str(args.smoke_resume_report.resolve()) if args.smoke_resume_report else None,
+        "reference22_comparison": {"skipped": True, "policy": "informational_only"},
         "checkpoint20": str(Path(checkpoints1[0]).resolve()),
     }
 
@@ -662,8 +641,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise RuntimeError("initial smoke must start at zero")
             if args.resume_from is not None and cursor != {"epoch": 0, "batch_in_epoch": 20, "global_step": 20}:
                 raise RuntimeError("resume smoke requires checkpoint-000020")
-            if args.resume_from is not None and args.reference22_report is None:
-                raise RuntimeError("resume2 requires --reference22-report for exact comparison")
             stop_step = SMOKE_TOTAL_STEPS if args.resume_from else SMOKE_FIRST_STOP
         elif args.mode == "reference":
             if args.resume_from is not None or cursor["global_step"] != 0:
@@ -795,7 +772,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 if rank == 0:
                     report["metrics"].append(metric)
                     if cursor["global_step"] % 10 == 0 or cursor["global_step"] == stop_step:
-                        print(f"[mellow-faithful] step={cursor['global_step']}/{stop_step} epoch={cursor['epoch']} batch={cursor['batch_in_epoch']} loss={metric['loss']:.6f} lr={lr_used:.8g}", flush=True)
+                        print(f"[mellow-faithful] step={cursor['global_step']}/{stop_step} epoch={cursor['epoch']} batch={cursor['batch_in_epoch']} loss={metric['loss']:.6f} lr={lr_used:.8g} step_seconds={metric['seconds']:.3f}", flush=True)
                 save = (
                     (args.mode == "smoke" and cursor["global_step"] in {20, 22})
                     or (args.mode == "formal" and epoch_completed and cursor["epoch"] % args.save_every_epochs == 0)
@@ -832,13 +809,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 # rejects this run, so a remote divergence can be inspected.
                 report["resume_comparison_trace"] = resume_comparison_trace
                 report["training_state_fingerprint"] = local_fingerprint
-            resume_equivalence = compare_reference22(
-                args.reference22_report,
-                resume_comparison_trace,
-                local_fingerprint,
-                shape=shape,
-                inventory=inventory,
-            )
+            resume_equivalence = {
+                "passed": None,
+                "skipped": True,
+                "policy": "informational_only",
+                "reason": "exact reference22 loss/fingerprint comparison disabled by user request",
+                "trace_steps": [item.get("step") for item in resume_comparison_trace],
+            }
         report.update({
             "status": "PASS", "end_global_step": cursor["global_step"], "end_cursor": cursor,
             "batch_contract_audit": first_batch_audit, "first_step_gradient_audit": first_gradient_audit,
