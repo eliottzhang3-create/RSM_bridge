@@ -8,7 +8,7 @@ This route is isolated from every audio route and from the existing text 5-10x2-
 - Seven transient MeSH memory slots.
 - Five independent router groups. Each group owns one write router and one read router, for ten independent linear router modules.
 - Source layer mapping remains identical to the prior 5-10x2-5 conversion: 0,1,2,3,4,5,7,9,11,13,15,17,19,21,23,25,26,27,28,29.
-- Eight ranks, microbatch 8, gradient accumulation 16, effective global batch 1024, context length 1024.
+- Eight ranks, microbatch 4, gradient accumulation 32, effective global batch 1024, context length 1024. The smaller microbatch lowers per-rank activation memory while preserving the optimizer-step batch.
 - The historical reference epoch is 9,244 optimizer steps; this route trains exactly one third with 3,081 optimizer steps (floor(9,244 / 3)), using one configured epoch.
 - LR warms for 155 steps to 1e-3, then cosine decays to 1e-4 over the 3,081-step target.
 - Checkpoints are written every 500 optimizer steps and at the final step; only the newest three complete checkpoints are retained.

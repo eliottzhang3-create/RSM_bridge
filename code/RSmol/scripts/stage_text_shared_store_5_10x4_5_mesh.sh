@@ -99,8 +99,8 @@ ARGS=(
   --data-dir "$STAGED_DATA"
   --output-dir "$OUTPUT"
   --world-size 8
-  --micro-batch-size 8
-  --gradient-accumulation-steps 16
+  --micro-batch-size 4
+  --gradient-accumulation-steps 32
   --context-length 1024
   --max-optimizer-steps "$MAX_STEPS"
   --scheduler-total-steps 3081

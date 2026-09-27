@@ -42,8 +42,8 @@ from recursive_model_5_10x4_5_mesh import (  # noqa: E402
 DATA_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data")
 OUTPUT_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh")
 DEFAULT_WORLD_SIZE = 8
-DEFAULT_MICRO_BATCH_SIZE = 8
-DEFAULT_GRADIENT_ACCUMULATION_STEPS = 16
+DEFAULT_MICRO_BATCH_SIZE = 4
+DEFAULT_GRADIENT_ACCUMULATION_STEPS = 32
 DEFAULT_CONTEXT_LENGTH = 1024
 DEFAULT_STEPS_PER_EPOCH = 9_244
 DEFAULT_FORMAL_EPOCHS = 1
@@ -120,8 +120,8 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
     gate = str(args.gate).upper()
     max_steps = args.max_optimizer_steps if args.max_optimizer_steps is not None else (DEFAULT_FORMAL_OPTIMIZER_STEPS if gate == "FORMAL" else (2 if gate == "E" else (10 if gate == "D" else 2)))
     if gate == "FORMAL":
-        if (args.world_size, args.micro_batch_size, args.gradient_accumulation_steps, max_steps, args.scheduler_total_steps, args.warmup_steps) != (8, 8, 16, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_WARMUP_STEPS):
-            raise ValueError("FORMAL requires 8 ranks, microbatch=8, GA=16, 3081 steps, scheduler_total_steps=3081, warmup=155")
+        if (args.world_size, args.micro_batch_size, args.gradient_accumulation_steps, max_steps, args.scheduler_total_steps, args.warmup_steps) != (8, 4, 32, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_WARMUP_STEPS):
+            raise ValueError("FORMAL requires 8 ranks, microbatch=4, GA=32, 3081 steps, scheduler_total_steps=3081, warmup=155")
         if (args.steps_per_epoch, args.epochs) != (DEFAULT_STEPS_PER_EPOCH, DEFAULT_FORMAL_EPOCHS):
             raise ValueError("FORMAL requires reference steps_per_epoch=9244 and epochs=1")
         if not math.isfinite(args.max_lr) or not math.isfinite(args.min_lr) or args.max_lr <= 0.0 or args.min_lr <= 0.0 or args.min_lr >= args.max_lr:
