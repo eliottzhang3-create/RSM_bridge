@@ -27,6 +27,8 @@ SHELL_SCRIPTS = (
     ROOT / "code/RSmol/run_audit_nccl_transport_5_10x4_5_mesh_4090.sh",
     ROOT / "code/RSmol/scripts/audit_post_stage_nccl_5_10x4_5_mesh.sh",
     ROOT / "code/RSmol/run_audit_post_stage_nccl_5_10x4_5_mesh_4090.sh",
+    ROOT / "code/RSmol/scripts/audit_same_allocation_text_5_10x4_5_mesh.sh",
+    ROOT / "code/RSmol/run_audit_same_allocation_text_5_10x4_5_mesh_3090.sh",
 )
 
 
@@ -67,19 +69,11 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertIn("def _init_process_group", source)
         run_training = source[source.index("def run_training"):]
         self.assertLess(
-            run_training.index('phase="model_loaded_cpu"'),
-            run_training.index("_init_process_group(rank=rank"),
-        )
-        self.assertLess(
-            run_training.index("_init_process_group(rank=rank"),
-            run_training.index('phase="nccl_warmup_start"'),
-        )
-        self.assertLess(
-            run_training.index('phase="nccl_warmup_pass"'),
             run_training.index("\n        model.to(device)"),
+            run_training.index("_init_process_group(rank=rank"),
         )
-        self.assertIn("NCCL communicator creation is lazy", source)
-        self.assertIn("warmup_work.wait()", source)
+        self.assertNotIn('phase="nccl_warmup_start"', run_training)
+        self.assertNotIn("warmup_work", run_training)
         self.assertIn("RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS", source)
         startup_diagnostics = source[
             source.index("def _startup_diagnostics"):source.index("def _validate_router_stats")
@@ -142,6 +136,27 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertNotIn("train_stage4_5_10x4_5_mesh_ddp.py", stage)
         wrapper = (ROOT / "code/RSmol/run_audit_post_stage_nccl_5_10x4_5_mesh_4090.sh").read_text(encoding="utf-8")
         self.assertIn("pdgpu-4090", wrapper)
+
+    def test_same_allocation_audit_is_fail_fast_and_uses_3090(self) -> None:
+        audit = (ROOT / "code/RSmol/scripts/audit_same_allocation_text_5_10x4_5_mesh.sh").read_text(encoding="utf-8")
+        expected_order = (
+            "01_model_free_nccl",
+            "02_historical_x2_smoke",
+            "04_copy_to_shared_memory",
+            "06_post_stage_nccl",
+            "07_x4_smoke",
+        )
+        positions = [audit.index(value) for value in expected_order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("timeout --signal=TERM", audit)
+        self.assertIn("train_stage4_5_10x2_5_mesh_ddp.sh", audit)
+        self.assertIn("train_stage4_5_10x4_5_mesh_ddp.py", audit)
+        self.assertIn("audit_nccl_transport_5_10x4_5_mesh.sh", audit)
+        self.assertIn("nvidia-smi topo -m", audit)
+        self.assertIn("/dev/shm/rsmol_text_5_10x4_5_same_allocation_", audit)
+        wrapper = (ROOT / "code/RSmol/run_audit_same_allocation_text_5_10x4_5_mesh_3090.sh").read_text(encoding="utf-8")
+        self.assertIn("pdgpu-3090", wrapper)
+        self.assertNotIn("pdgpu-4090", wrapper)
 
 
 if __name__ == "__main__":

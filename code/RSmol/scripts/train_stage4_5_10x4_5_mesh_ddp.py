@@ -546,36 +546,6 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
         _startup_phase(config, rank=rank, device=device, phase="model_loaded_cpu")
-
-        # HF checkpoint loading and tokenizer initialization are CPU and shared
-        # filesystem work, so finish them before starting NCCL.  Then force a
-        # real collective to complete before allocating the model's CUDA
-        # parameter storage.  Merely calling init_process_group is insufficient
-        # because NCCL communicator creation is lazy.
-        _startup_phase(config, rank=rank, device=device, phase="process_group_init_start")
-        _init_process_group(rank=rank, world_size=world_size, device=device)
-        _startup_phase(config, rank=rank, device=device, phase="process_group_initialized")
-        _startup_phase(config, rank=rank, device=device, phase="nccl_warmup_start")
-        warmup = torch.tensor(float(rank + 1), dtype=torch.float32, device=device)
-        torch.cuda.synchronize(device)
-        warmup_work = dist.all_reduce(
-            warmup,
-            op=dist.ReduceOp.SUM,
-            async_op=True,
-        )
-        warmup_work.wait()
-        torch.cuda.synchronize(device)
-        warmup_actual = float(warmup.item())
-        warmup_expected = float(world_size * (world_size + 1) / 2)
-        if warmup_actual != warmup_expected:
-            raise RuntimeError(
-                "pre-model NCCL warmup mismatch: "
-                f"expected={warmup_expected}, actual={warmup_actual}"
-            )
-        _startup_phase(config, rank=rank, device=device, phase="nccl_warmup_pass")
-        _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
-        _startup_phase(config, rank=rank, device=device, phase="process_group_ready")
-
         model.to(device)
         _startup_phase(config, rank=rank, device=device, phase="model_on_device")
         model.model.routing_stats_mode = True
@@ -596,6 +566,14 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 saved_rng = resume_state.get("rng_state")
             if saved_rng is not None:
                 torch.set_rng_state(saved_rng)
+        # Keep production free of speculative NCCL workarounds.  The isolated
+        # same-allocation audit determines whether the node, historical x2
+        # trainer, shared-memory staging, or x4 path is responsible.
+        _startup_phase(config, rank=rank, device=device, phase="process_group_init_start")
+        _init_process_group(rank=rank, world_size=world_size, device=device)
+        _startup_phase(config, rank=rank, device=device, phase="process_group_initialized")
+        _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
+        _startup_phase(config, rank=rank, device=device, phase="process_group_ready")
         # MeSH has no mutable forward buffers that need rank-0 broadcast.  The
         # router state is stored in Parameters, not buffers.  Disabling this
         # redundant pre-forward collective makes any real rank skew easier to
