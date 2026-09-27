@@ -15,16 +15,17 @@ PACKAGE = RSMOL / "audio_smollm2_135m_mellow_shared_store_configurable_epochs"
 TRAIN = SCRIPTS / "train_audio_smollm2_shared_store_mellow_faithful_135m_ddp.py"
 ENTRY = SCRIPTS / "train_audio_smollm2_shared_store_configurable_epochs_135m_mellow_ddp.py"
 STORE = SCRIPTS / "prepare_mellow_faithful_unique_audio_waveform_store.py"
+TEXT_AUDIT = SCRIPTS / "audit_mellow_faithful_text_manifest.py"
 STAGE = SCRIPTS / "stage_audio_smollm2_shared_store_configurable_epochs_135m_mellow.sh"
 SMOKE = SCRIPTS / "train_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_ddp.sh"
 REFERENCE = SCRIPTS / "train_audio_smollm2_shared_store_reference22_configurable_epochs_135m_mellow_ddp.sh"
 RESUME = SCRIPTS / "train_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_ddp.sh"
 FORMAL = SCRIPTS / "train_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_ddp.sh"
 SUBMITS = (
-    RSMOL / "run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_3090.sh",
-    RSMOL / "run_audio_smollm2_shared_store_reference22_configurable_epochs_135m_mellow_3090.sh",
-    RSMOL / "run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_3090.sh",
-    RSMOL / "run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_3090.sh",
+    RSMOL / "run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_5090.sh",
+    RSMOL / "run_audio_smollm2_shared_store_reference22_configurable_epochs_135m_mellow_5090.sh",
+    RSMOL / "run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_5090.sh",
+    RSMOL / "run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_5090.sh",
 )
 
 
@@ -39,6 +40,7 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
             TRAIN,
             ENTRY,
             STORE,
+            TEXT_AUDIT,
         )
         for path in (
             *python_files,
@@ -124,21 +126,21 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         }
         self.assertEqual(row_audio_path(explicit_dual, False), "/audio/two.wav")
 
-    def test_text_contract_recovers_metadata_and_fails_before_sampling(self) -> None:
+    def test_text_contract_is_lazy_and_cpu_audit_is_separate(self) -> None:
         path = PACKAGE / "data.py"
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         names = {
             "_text_value", "_normalise_text_key", "_find_nonempty_text",
-            "_prepare_mellow_text_rows",
+            "prepare_mellow_text_row",
         }
         functions = [
             node for node in tree.body
             if isinstance(node, ast.FunctionDef) and node.name in names
         ]
         self.assertEqual({node.name for node in functions}, names)
-        namespace: dict[str, Any] = {"Any": Any, "json": __import__("json")}
+        namespace: dict[str, Any] = {"Any": Any}
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), namespace)
-        prepare = namespace["_prepare_mellow_text_rows"]
+        prepare = namespace["prepare_mellow_text_row"]
 
         rows = [
             {
@@ -155,17 +157,27 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
                 "metadata": {"input": "caption first audio"},
             },
         ]
-        audit = prepare(rows)
-        self.assertTrue(audit["passed"])
+        audits = [prepare(row) for row in rows]
+        self.assertTrue(all(audit["valid"] for audit in audits))
         self.assertEqual(rows[0]["input"], "What is audible?")
         self.assertEqual(rows[0]["answer"], "Birds")
         self.assertEqual(rows[1]["input"], "caption first audio")
-        self.assertEqual(audit["validation_rng_calls"], 0)
-        self.assertEqual(audit["recovered_from_metadata"]["prompt"], 2)
-        self.assertEqual(audit["recovered_from_metadata"]["answer"], 1)
+        self.assertEqual(audits[0]["validation_rng_calls"], 0)
+        self.assertEqual(sum(audit["recovered_from_metadata"]["prompt"] for audit in audits), 2)
+        self.assertEqual(sum(audit["recovered_from_metadata"]["answer"] for audit in audits), 1)
 
-        with self.assertRaisesRegex(ValueError, "unresolved_rows=1"):
-            prepare([{"row_index": 99, "input": "ordinary question", "answer": "", "metadata": {}}])
+        invalid = prepare({"row_index": 99, "input": "ordinary question", "answer": "", "metadata": {}})
+        self.assertFalse(invalid["valid"])
+        self.assertEqual(invalid["missing"], ["answer"])
+
+        data_text = path.read_text(encoding="utf-8")
+        self.assertNotIn("_prepare_mellow_text_rows(self.rows)", data_text)
+        self.assertIn("startup_full_manifest_scan", data_text)
+        self.assertIn("_resolve_text_row", data_text)
+        self.assertIn("requested_row_indices", data_text)
+        audit_text = TEXT_AUDIT.read_text(encoding="utf-8")
+        for marker in ("--expected-rows", "968_059", "invalid_rows", "cpu_only", "prepare_mellow_text_row"):
+            self.assertIn(marker, audit_text)
 
     def test_variable_store_is_strict_torchaudio_and_full_length(self) -> None:
         text = STORE.read_text(encoding="utf-8")
@@ -311,7 +323,7 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         self.assertNotIn("RESUME_SEEN", formal)
         for path in SUBMITS:
             text = path.read_text(encoding="utf-8")
-            for marker in ("vc submit", "-p pdgpu-3090", "-c 32", "-m 256G", "-g 8", "-n 1"):
+            for marker in ("vc submit", "-p pdgpu-5090", "-c 32", "-m 256G", "-g 8", "-n 1"):
                 self.assertIn(marker, text)
 
 

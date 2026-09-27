@@ -89,119 +89,92 @@ def _find_nonempty_text(value: Any, names: tuple[str, ...]) -> str:
     return ""
 
 
-def _prepare_mellow_text_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Repair Stage-1 aliases and validate every row without consuming RNG."""
+def prepare_mellow_text_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Recover and validate one row without consuming training RNG."""
     recovered = {"prompt": 0, "answer": 0, "caption1": 0, "caption2": 0}
-    template_rows = {
-        "caption_both": 0,
-        "caption_first": 0,
-        "caption_second": 0,
-        "difference": 0,
-        "emotion": 0,
-        "generic": 0,
-    }
-    failures: list[dict[str, Any]] = []
+    metadata = row.get("metadata")
 
-    for manifest_index, row in enumerate(rows):
-        metadata = row.get("metadata")
+    prompt = (
+        _text_value(row.get("input"))
+        or _text_value(row.get("prompt"))
+        or _text_value(row.get("question"))
+    )
+    if not prompt:
+        prompt = _find_nonempty_text(metadata, ("input", "question", "prompt"))
+        recovered["prompt"] += int(bool(prompt))
 
-        prompt = (
-            _text_value(row.get("input"))
-            or _text_value(row.get("prompt"))
-            or _text_value(row.get("question"))
+    answer = (
+        _text_value(row.get("answer"))
+        or _text_value(row.get("target"))
+        or _text_value(row.get("output"))
+    )
+    if not answer:
+        answer = _find_nonempty_text(
+            metadata, ("answer", "answers", "target", "output", "label")
         )
-        if not prompt:
-            prompt = _find_nonempty_text(metadata, ("input", "question", "prompt"))
-            recovered["prompt"] += int(bool(prompt))
+        recovered["answer"] += int(bool(answer))
 
-        answer = (
-            _text_value(row.get("answer"))
-            or _text_value(row.get("target"))
-            or _text_value(row.get("output"))
-        )
-        if not answer:
-            answer = _find_nonempty_text(
-                metadata, ("answer", "answers", "target", "output", "label")
-            )
-            recovered["answer"] += int(bool(answer))
+    caption1 = _text_value(row.get("caption1"))
+    if not caption1:
+        caption1 = _find_nonempty_text(metadata, ("caption1", "caption_1"))
+        recovered["caption1"] += int(bool(caption1))
 
-        caption1 = _text_value(row.get("caption1"))
+    caption2 = _text_value(row.get("caption2"))
+    if not caption2:
+        caption2 = _find_nonempty_text(metadata, ("caption2", "caption_2"))
+        recovered["caption2"] += int(bool(caption2))
+
+    row["input"] = prompt
+    row["answer"] = answer
+    row["caption1"] = caption1
+    row["caption2"] = caption2
+
+    missing: list[str] = []
+    if not prompt:
+        missing.append("prompt")
+        group = "generic"
+    elif prompt == "caption both audios":
+        group = "caption_both"
         if not caption1:
-            caption1 = _find_nonempty_text(metadata, ("caption1", "caption_1"))
-            recovered["caption1"] += int(bool(caption1))
-
-        caption2 = _text_value(row.get("caption2"))
+            missing.append("caption1")
         if not caption2:
-            caption2 = _find_nonempty_text(metadata, ("caption2", "caption_2"))
-            recovered["caption2"] += int(bool(caption2))
+            missing.append("caption2")
+    elif prompt == "caption first audio":
+        group = "caption_first"
+        if not caption1:
+            missing.append("caption1")
+    elif prompt == "caption second audio":
+        group = "caption_second"
+        if not caption2:
+            missing.append("caption2")
+    elif prompt in {
+        "explain the difference in few words",
+        "explain the difference in a sentence",
+        "explain the difference in detail",
+    }:
+        group = "difference"
+        if not answer:
+            missing.append("answer")
+    elif "emo_emo_emo" in prompt:
+        group = "emotion"
+        if not answer:
+            missing.append("answer")
+    else:
+        group = "generic"
+        if not answer:
+            missing.append("answer")
 
-        # Store repaired canonical fields once. Runtime template selection still
-        # consumes Python random only when a row is actually sampled.
-        row["input"] = prompt
-        row["answer"] = answer
-        row["caption1"] = caption1
-        row["caption2"] = caption2
-
-        missing: list[str] = []
-        if not prompt:
-            missing.append("prompt")
-            group = "generic"
-        elif prompt == "caption both audios":
-            group = "caption_both"
-            if not caption1:
-                missing.append("caption1")
-            if not caption2:
-                missing.append("caption2")
-        elif prompt == "caption first audio":
-            group = "caption_first"
-            if not caption1:
-                missing.append("caption1")
-        elif prompt == "caption second audio":
-            group = "caption_second"
-            if not caption2:
-                missing.append("caption2")
-        elif prompt in {
-            "explain the difference in few words",
-            "explain the difference in a sentence",
-            "explain the difference in detail",
-        }:
-            group = "difference"
-            if not answer:
-                missing.append("answer")
-        elif "emo_emo_emo" in prompt:
-            group = "emotion"
-            if not answer:
-                missing.append("answer")
-        else:
-            group = "generic"
-            if not answer:
-                missing.append("answer")
-        template_rows[group] += 1
-
-        if missing:
-            failures.append({
-                "manifest_index": manifest_index,
-                "source_row_index": row.get("row_index"),
-                "taskname": row.get("taskname"),
-                "subtype": row.get("subtype"),
-                "missing": missing,
-                "prompt_preview": prompt[:160],
-                "metadata_keys": sorted(str(key) for key in metadata) if isinstance(metadata, dict) else [],
-            })
-
-    if failures:
-        preview = json.dumps(failures[:10], ensure_ascii=False, sort_keys=True)
-        raise ValueError(
-            "Mellow text preflight failed before training: "
-            f"unresolved_rows={len(failures)} first_rows={preview}"
-        )
     return {
-        "passed": True,
-        "rows": len(rows),
+        "valid": not missing,
+        "group": group,
+        "missing": missing,
         "recovered_from_metadata": recovered,
-        "template_rows": template_rows,
         "validation_rng_calls": 0,
-        "policy": "official input/answer semantics with deterministic Stage-1 metadata recovery",
+        "source_row_index": row.get("row_index"),
+        "taskname": row.get("taskname"),
+        "subtype": row.get("subtype"),
+        "prompt_preview": prompt[:160],
+        "metadata_keys": sorted(str(key) for key in metadata) if isinstance(metadata, dict) else [],
     }
 
 
@@ -335,7 +308,13 @@ class ReasonAQADataset(Dataset[dict[str, Any]]):
         ]
         if not self.rows:
             raise ValueError(f"empty manifest: {self.manifest}")
-        self.text_contract_audit = _prepare_mellow_text_rows(self.rows)
+        # Do not scan the full text corpus inside a GPU training job. Rows are
+        # repaired and validated lazily when sampled. A separate CPU audit
+        # script performs the optional full-manifest inspection.
+        self._text_row_status = bytearray(len(self.rows))  # 0 unknown, 1 valid, 2 invalid
+        self._invalid_text_rows: dict[int, dict[str, Any]] = {}
+        self._text_replacement_events = 0
+        self._text_replacement_distance = 0
         self.tokenizer = tokenizer
         self.store = UniqueWaveformStore(unique_waveform_store_dir)
         manifest_sha = sha256_file(self.manifest)
@@ -359,6 +338,39 @@ class ReasonAQADataset(Dataset[dict[str, Any]]):
         row = self.rows[int(index)]
         first, second = row_audio_path(row, True), row_audio_path(row, False)
         return not bool(second), bool(first and second and normalize_path(first) == normalize_path(second))
+
+    def _resolve_text_row(self, requested_index: int) -> tuple[int, dict[str, Any], int]:
+        """Skip unresolved text rows while preserving a full local batch."""
+        total = len(self.rows)
+        for distance in range(total):
+            candidate_index = (int(requested_index) + distance) % total
+            status = self._text_row_status[candidate_index]
+            if status == 0:
+                audit = prepare_mellow_text_row(self.rows[candidate_index])
+                status = 1 if audit["valid"] else 2
+                self._text_row_status[candidate_index] = status
+                if status == 2:
+                    self._invalid_text_rows[candidate_index] = audit
+            if status == 1:
+                if distance:
+                    self._text_replacement_events += 1
+                    self._text_replacement_distance += distance
+                return candidate_index, self.rows[candidate_index], distance
+        raise RuntimeError("manifest has no row with a usable Mellow text contract")
+
+    def runtime_text_report(self) -> dict[str, Any]:
+        examples = []
+        for index in sorted(self._invalid_text_rows)[:20]:
+            examples.append({"manifest_index": index, **self._invalid_text_rows[index]})
+        return {
+            "startup_full_manifest_scan": False,
+            "policy": "lazy metadata recovery; unresolved rows are skipped via deterministic forward replacement",
+            "rows_validated_lazily": int(sum(status != 0 for status in self._text_row_status)),
+            "distinct_invalid_rows_encountered": len(self._invalid_text_rows),
+            "replacement_events": self._text_replacement_events,
+            "replacement_distance_total": self._text_replacement_distance,
+            "invalid_examples": examples,
+        }
 
     @staticmethod
     def _crop_or_pad(waveform: torch.Tensor) -> tuple[torch.Tensor, int]:
@@ -405,14 +417,12 @@ class ReasonAQADataset(Dataset[dict[str, Any]]):
             prompt = prompt.lower()
             answer = canonical_answer.lower()
         if not prompt or not answer:
-            raise ValueError(
-                "Mellow row violated the startup-validated text contract: "
-                f"row_index={row.get('row_index')} taskname={row.get('taskname')} subtype={row.get('subtype')}"
-            )
+            raise ValueError("internal error: lazily validated Mellow row has empty prompt or answer")
         return answer, prompt, group
 
     def __getitem__(self, index: int) -> dict[str, Any]:
-        row = self.rows[int(index)]
+        requested_index = int(index)
+        selected_index, row, replacement_distance = self._resolve_text_row(requested_index)
         path1, path2 = row_audio_path(row, True), row_audio_path(row, False)
         random1, random2 = not bool(path1), not bool(path2)
         if random1:
@@ -433,7 +443,10 @@ class ReasonAQADataset(Dataset[dict[str, Any]]):
             "audio2": audio2,
             "prompt": prompt,
             "answer": answer,
-            "row_index": int(index),
+            "row_index": selected_index,
+            "requested_row_index": requested_index,
+            "text_row_replaced": bool(replacement_distance),
+            "text_replacement_distance": replacement_distance,
             "single_audio_slot": random2,
             "audio1_random": random1,
             "audio2_random": random2,
@@ -474,6 +487,9 @@ def collate_reasonaqa(items: list[dict[str, Any]], tokenizer: Any) -> dict[str, 
         "answer_input_ids": answer["input_ids"],
         "answer_attention_mask": answer["attention_mask"],
         "row_indices": [int(item["row_index"]) for item in items],
+        "requested_row_indices": [int(item["requested_row_index"]) for item in items],
+        "text_row_replaced_mask": torch.tensor([bool(item["text_row_replaced"]) for item in items]),
+        "text_replacement_distances": torch.tensor([int(item["text_replacement_distance"]) for item in items]),
         "single_audio_slot_mask": torch.tensor([bool(item["single_audio_slot"]) for item in items]),
         "audio2_reused_mask": torch.zeros(len(items), dtype=torch.bool),
         "audio1_random_mask": torch.tensor([bool(item["audio1_random"]) for item in items]),
@@ -501,6 +517,7 @@ __all__ = [
     "collate_reasonaqa",
     "normalize_path",
     "normalized_audio2_is_missing",
+    "prepare_mellow_text_row",
     "row_audio_path",
     "sha256_file",
 ]

@@ -529,7 +529,11 @@ def data_contract_audit(dataset: ReasonAQADataset) -> dict[str, Any]:
     return {
         "passed": True, "rows": len(dataset), "single_audio_rows": single,
         "dual_audio_rows": dual, "explicit_same_audio_rows": explicit_same,
-        "text_contract_audit": dataset.text_contract_audit,
+        "text_handling": {
+            "startup_full_manifest_scan": False,
+            "policy": "validate lazily; recover metadata aliases and skip unresolved rows",
+            "standalone_cpu_audit": "scripts/audit_mellow_faithful_text_manifest.py",
+        },
         "single_audio_behavior": "sample audio2 from filepath1 pool; never reuse audio1 embedding",
         "random_process": "stateful process-wide Python random in public-Mellow call order",
         "random_audio_pool": "sorted unique non-empty filepath1 paths; uniform choice and self-selection allowed",
@@ -746,6 +750,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         "micro_index": micro_index,
                         "rng_sha256_before_forward": rng_before_forward,
                         "row_indices": list(batch["row_indices"]),
+                        "requested_row_indices": list(batch["requested_row_indices"]),
+                        "text_row_replaced": batch["text_row_replaced_mask"].tolist(),
+                        "text_replacement_distances": batch["text_replacement_distances"].tolist(),
                         "audio1_ids": batch["audio1_ids"].tolist(),
                         "audio2_ids": batch["audio2_ids"].tolist(),
                         "audio1_crop_offsets": batch["audio1_crop_offsets"].tolist(),
@@ -817,6 +824,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if resume_representatives and resume_snapshots:
             resume_change = baseline._compute_resume_parameter_change_audit(resume_representatives, resume_snapshots)
             baseline._validate_parameter_change_audit(resume_change)
+        runtime_text_by_rank = gather(dataset.runtime_text_report(), world)
         local_fingerprint = training_state_fingerprint(owner, optimizer, scheduler)
         fingerprints = gather(local_fingerprint, world)
         if len({json.dumps(item, sort_keys=True) for item in fingerprints}) != 1:
@@ -845,6 +853,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "training_state_fingerprint": local_fingerprint,
             "resume_equivalence": resume_equivalence,
             "sampler_audits": sampler_audits,
+            "runtime_text_handling_by_rank": runtime_text_by_rank,
         })
         return report
     except Exception as exc:
