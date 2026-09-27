@@ -148,18 +148,21 @@ def token_weighted_gradient_scale(*, world_size: int, global_window_tokens: int,
     return float(world_size * gradient_accumulation_steps / global_window_tokens)
 
 
-def _dist_setup(config: Stage4Config) -> tuple[int, int, torch.device]:
+def _runtime_setup(config: Stage4Config) -> tuple[int, int, torch.device]:
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", str(rank)))
     detected_world = int(os.environ.get("WORLD_SIZE", str(config.world_size)))
-    if detected_world > 1:
-        if not dist.is_initialized():
-            backend = "nccl" if torch.cuda.is_available() else "gloo"
-            dist.init_process_group(backend=backend, rank=rank, world_size=detected_world)
     device = torch.device("cuda", local_rank) if torch.cuda.is_available() else torch.device("cpu")
     if device.type == "cuda":
         torch.cuda.set_device(device)
     return rank, detected_world, device
+
+
+def _init_process_group(*, rank: int, world_size: int, device: torch.device) -> None:
+    if world_size <= 1 or dist.is_initialized():
+        return
+    backend = "nccl" if device.type == "cuda" else "gloo"
+    dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
 
 
 def _seed(seed: int, rank: int) -> None:
@@ -356,6 +359,12 @@ def _heartbeat(config: Stage4Config, *, rank: int, device: torch.device, optimiz
     temporary.replace(target)
 
 
+def _startup_phase(config: Stage4Config, *, rank: int, device: torch.device, phase: str) -> None:
+    _heartbeat(config, rank=rank, device=device, optimizer_step=0, phase=phase)
+    if rank == 0:
+        print(f"[startup] phase={phase}", flush=True)
+
+
 def _failure_diagnostic(config: Stage4Config, *, rank: int, device: torch.device, exc: BaseException) -> None:
     payload = {
         "timestamp": time.time(),
@@ -524,12 +533,11 @@ def _validate_checkpoint_complete(path: Path) -> None:
 
 
 def run_training(config: Stage4Config) -> dict[str, Any]:
-    rank, world_size, device = _dist_setup(config)
+    rank, world_size, device = _runtime_setup(config)
     _seed(config.seed, rank)
     report: dict[str, Any] = {"status": "FAIL", "gate": config.gate, "configuration": asdict(config), "architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "world_size": world_size, "rank": rank, "device": str(device), "diagnostics_dir": str(config.output_dir / "ddp_diagnostics"), "checks": [], "warnings": [], "hard_failures": []}
     try:
-        _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
-        _heartbeat(config, rank=rank, device=device, optimizer_step=0, phase="startup_complete")
+        _startup_phase(config, rank=rank, device=device, phase="process_started")
         model_path = config.resume_from or config.model_path
         if model_path is None:
             raise ValueError("Stage 4 requires --model-path or --resume-from")
@@ -537,14 +545,18 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
             _validate_checkpoint_complete(config.resume_from)
         register_auto_class()
         from transformers import AutoTokenizer
+        _startup_phase(config, rank=rank, device=device, phase="model_load_start")
         model = RecursiveLlamaForCausalLM.from_pretrained(model_path, local_files_only=True)
         tokenizer_path = config.tokenizer_path or model_path
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
+        _startup_phase(config, rank=rank, device=device, phase="model_loaded_cpu")
         model.to(device)
+        _startup_phase(config, rank=rank, device=device, phase="model_on_device")
         model.model.routing_stats_mode = True
         optimizer, optimizer_group_audit = _optimizer(model, config)
+        _startup_phase(config, rank=rank, device=device, phase="optimizer_ready")
         resume_state = _load_checkpoint_state(config.resume_from) if config.resume_from else None
         optimizer_step = int(resume_state.get("optimizer_step", 0)) if resume_state else 0
         if config.gate == "E":
@@ -560,13 +572,22 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 saved_rng = resume_state.get("rng_state")
             if saved_rng is not None:
                 torch.set_rng_state(saved_rng)
+        # Initialize NCCL only after the potentially slow per-rank checkpoint
+        # load and CPU-to-GPU materialization. Starting the process group before
+        # those operations can leave its watchdog inside CUDA/GIL-sensitive
+        # startup work for more than the default 480-second heartbeat window.
+        _init_process_group(rank=rank, world_size=world_size, device=device)
+        _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
+        _startup_phase(config, rank=rank, device=device, phase="process_group_ready")
         # MeSH has no mutable forward buffers that need rank-0 broadcast.  The
         # router state is stored in Parameters, not buffers.  Disabling this
         # redundant pre-forward collective makes any real rank skew easier to
         # localize and avoids stalling on the rotary buffer broadcast.
         ddp_model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device.index] if device.type == "cuda" and world_size > 1 else None, broadcast_buffers=False, find_unused_parameters=False) if world_size > 1 else model
+        _startup_phase(config, rank=rank, device=device, phase="ddp_ready")
         manifest = _manifest(config.data_dir) if config.gate != "A" else []
         staged_data_contract = _validate_staged_data_contract(config, manifest)
+        _startup_phase(config, rank=rank, device=device, phase="data_contract_ready")
         stream_obj = DistributedParquetStream(manifest, tokenizer, rank=rank, world_size=world_size, batch_size=config.micro_batch_size, context_length=config.context_length, pad_token_id=int(tokenizer.pad_token_id), seed=config.seed) if manifest else None
         if resume_state and stream_obj is not None:
             stream_obj.restore_cursor(resume_state.get("data_cursors_by_rank", {}).get(str(rank)))
@@ -675,7 +696,8 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                         print(f"[warning][router] step={optimizer_step} {warning['message']} ; continuing training", flush=True)
             local_report = {"optimizer_step": optimizer_step, "epoch": (optimizer_step - 1) // config.steps_per_epoch, "step_in_epoch": ((optimizer_step - 1) % config.steps_per_epoch) + 1, "loss": float(total_loss.item() / max(1, total_tokens.item())), "local_valid_tokens": int(total_tokens.item()), "global_valid_tokens": int(global_tokens.item()), "learning_rate": float(optimizer.param_groups[0]["lr"]), "grad_norm": float(grad_norm.item()), "step_time_seconds": step_time_seconds, "tokens_per_second": tokens_per_second, **memory_stats, "router_parameters_in_optimizer": bool(optimizer_group_audit["router_parameters_in_optimizer"]), "routing_stats": {"memory_slots": MEMORY_SLOT_COUNT, "loss_auxiliary": False, "audit_due": routing_audit_due, "audit_passed": routing_audit_ok if routing_audit_due else None, "audit_non_fatal": True, "warning": routing_audit_error if routing_audit_due and not routing_audit_ok else None, "routers": router_stats, "rank_audits": routing_audit_ranks if routing_audit_due and rank == 0 else []}}
             metrics.append(local_report)
-            log_due = optimizer_step % DEFAULT_LOG_INTERVAL_STEPS == 0 or optimizer_step == config.max_optimizer_steps
+            log_interval_steps = max(1, int(os.environ.get("RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS", DEFAULT_LOG_INTERVAL_STEPS)))
+            log_due = optimizer_step % log_interval_steps == 0 or optimizer_step == config.max_optimizer_steps
             if rank == 0 and log_due:
                 print(
                     "[train] "

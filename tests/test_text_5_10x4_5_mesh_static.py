@@ -55,6 +55,14 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertIn("reset_for_epoch", source)
         self.assertIn("rows_to_skip", source)
         self.assertIn("checkpoint_retention=DEFAULT_CHECKPOINT_RETENTION", source)
+        self.assertIn("def _runtime_setup", source)
+        self.assertIn("def _init_process_group", source)
+        self.assertLess(source.index("model.to(device)"), source.index("_init_process_group(rank=rank"))
+        self.assertIn("RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS", source)
+
+        stage = (ROOT / "code/RSmol/scripts/stage_text_shared_store_5_10x4_5_mesh.sh").read_text(encoding="utf-8")
+        self.assertIn("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", stage)
+        self.assertIn('RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS:-1', stage)
 
     def test_converter_and_audit_match_x4(self) -> None:
         converter = CONVERTER.read_text(encoding="utf-8")
