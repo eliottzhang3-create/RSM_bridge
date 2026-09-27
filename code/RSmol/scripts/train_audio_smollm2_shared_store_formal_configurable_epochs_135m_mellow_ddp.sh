@@ -32,7 +32,7 @@ exec bash "$SCRIPT_DIR/stage_audio_smollm2_shared_store_configurable_epochs_135m
   --learning-rate 1e-3 \
   --weight-decay 1e-4 \
   --micro-batch-size 4 \
-  --gradient-accumulation-steps 1 \
+  --gradient-accumulation-steps 8 \
   --num-workers 0 \
   --save-every-steps 5000 \
   --checkpoint-retention 4 \

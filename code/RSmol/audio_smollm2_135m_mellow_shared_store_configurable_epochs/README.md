@@ -11,7 +11,8 @@ This directory and its configurable-epoch entrypoints are an isolated reproducti
 - Both audio slots are cropped independently. Clips longer than 320000 samples use an inclusive random start; shorter clips are right-zero-padded.
 - Fixed layout: audio1 129 + separator 1 + audio2 129 + separator 1 + prompt 129 + answer 250 = 639 tokens.
 - Adam, LR 1e-3, weight decay 1e-4, gradient clipping 0.5, FP32, no warmup, epoch-level CosineAnnealingLR with T_max 30.
-- Mellow-matched global batch: 8 GPUs, microbatch 4 per rank, no gradient accumulation (1), effective global batch 32, num_workers 0.
+- Qualification smoke/reference/resume geometry: 8 GPUs, microbatch 4 per rank, gradient accumulation 1, effective global batch 32, num_workers 0.
+- Formal geometry: 8 GPUs, microbatch 4 per rank, gradient accumulation 8, effective global batch 256, num_workers 0. This is the requested production batch override; the remaining Mellow data, model, optimizer, precision, and epoch-level scheduler contracts are unchanged.
 - Thirty epochs. Save every 5000 optimizer steps and at the final step, retaining only the newest four complete checkpoints.
 - Dataset randomness is stateful Python random. Checkpoints include every rank's Python, Torch, and CUDA RNG state.
 - Resume leaves Adam's non-capturable scalar step tensors on CPU, matching a continuous run. The DataLoader uses a private generator for its iterator seed so reconstruction at the resume cursor does not advance the training RNG stream.
@@ -56,7 +57,7 @@ policy. It cannot be resumed and must be restarted with a fresh output
 directory after pulling this fix. New formal runs save every 5000 optimizer
 steps, so later interruptions can resume from the newest retained checkpoint.
 
-With 968059 manifest rows, the shape is 30251 optimizer steps per epoch, 27 dropped rows per epoch, and 907530 total steps. The final retained checkpoints are expected at steps 895000, 900000, 905000, and 907530.
+With 968059 manifest rows and formal global batch 256, the shape is 3781 optimizer steps per epoch, 123 dropped rows per epoch, and 113430 total steps. The final retained checkpoints are expected at steps 100000, 105000, 110000, and 113430.
 
 ## Build the variable-length unique store on CPU
 
@@ -96,7 +97,7 @@ If an identical interrupted build retains BUILDING, build_config.json, progress.
 
 ## Required GPU qualification and formal sequence
 
-Use fresh output directories. Formal training requires the existing PASS smoke20 report with matching data, shape, optimizer, and runtime audits. The previous resume2 attempts reached step 22 but failed only the exact cross-run loss comparison; they are not claimed as exact-resume PASS. By request, reference22 and resume2 are optional diagnostics and do not block formal training. Progress logs include `step_seconds`.
+Use fresh output directories. Formal training accepts the existing global-batch-32 PASS smoke20 report as a qualification run when its dataset, optimizer, store, and runtime audits match. Formal itself uses global batch 256. The previous resume2 attempts reached step 22 but failed only the exact cross-run loss comparison; they are not claimed as exact-resume PASS. By request, reference22 and resume2 are optional diagnostics and do not block formal training. Progress logs include `step_seconds`.
 
 ~~~bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol

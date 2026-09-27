@@ -239,8 +239,10 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         text = TRAIN.read_text(encoding="utf-8")
         for marker in (
             "CANONICAL_MICRO_BATCH = 4",
-            "CANONICAL_GRAD_ACCUM = 1",
-            "CANONICAL_GLOBAL_BATCH = 32",
+            "QUALIFICATION_GRAD_ACCUM = 1",
+            "QUALIFICATION_GLOBAL_BATCH = 32",
+            "FORMAL_GRAD_ACCUM = 8",
+            "FORMAL_GLOBAL_BATCH = 256",
             "CANONICAL_SAVE_EVERY_STEPS = 5_000",
             "CANONICAL_CHECKPOINT_RETENTION = 4",
             "torch.optim.Adam(",
@@ -261,7 +263,7 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
             "if rank != 0:",
             "mellow_faithful_full_waveforms_32k_f32_v2",
             "scheduler.step()",
-            'first.get("shape") != shape',
+            'smoke_shape.get("global_batch_size") != QUALIFICATION_GLOBAL_BATCH',
             'first.get("store_inventory", {}).get(key) != inventory.get(key)',
         ):
             self.assertIn(marker, text)
@@ -311,11 +313,13 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
             for marker in (
                 "--epochs 30",
                 "--micro-batch-size 4",
-                "--gradient-accumulation-steps 1",
                 "--save-every-steps 5000",
                 "--checkpoint-retention 4",
             ):
                 self.assertIn(marker, text)
+        for path in (SMOKE, REFERENCE, RESUME):
+            self.assertIn("--gradient-accumulation-steps 1", path.read_text(encoding="utf-8"))
+        self.assertIn("--gradient-accumulation-steps 8", FORMAL.read_text(encoding="utf-8"))
         self.assertNotIn("REFERENCE_SEEN", RESUME.read_text(encoding="utf-8"))
         formal = FORMAL.read_text(encoding="utf-8")
         self.assertIn("--smoke20-report", formal)

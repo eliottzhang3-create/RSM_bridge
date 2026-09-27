@@ -54,8 +54,10 @@ FORMAL_EPOCHS = 30
 CANONICAL_LR = 1e-3
 CANONICAL_WEIGHT_DECAY = 1e-4
 CANONICAL_MICRO_BATCH = 4
-CANONICAL_GRAD_ACCUM = 1
-CANONICAL_GLOBAL_BATCH = 32
+QUALIFICATION_GRAD_ACCUM = 1
+QUALIFICATION_GLOBAL_BATCH = 32
+FORMAL_GRAD_ACCUM = 8
+FORMAL_GLOBAL_BATCH = 256
 CANONICAL_SEED = 1234
 CANONICAL_SAVE_EVERY_STEPS = 5_000
 CANONICAL_CHECKPOINT_RETENTION = 4
@@ -83,7 +85,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, required=True)
     parser.add_argument("--world-size", type=int, default=8)
     parser.add_argument("--micro-batch-size", type=int, default=CANONICAL_MICRO_BATCH)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=CANONICAL_GRAD_ACCUM)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=QUALIFICATION_GRAD_ACCUM)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=CANONICAL_LR)
     parser.add_argument("--weight-decay", type=float, default=CANONICAL_WEIGHT_DECAY)
@@ -366,9 +368,10 @@ def load_model(args: argparse.Namespace, device: torch.device) -> tuple[AudioSmo
 
 def training_shape(args: argparse.Namespace, rows: int) -> dict[str, int]:
     global_batch = args.world_size * args.micro_batch_size * args.gradient_accumulation_steps
-    if global_batch != CANONICAL_GLOBAL_BATCH:
+    expected_global_batch = FORMAL_GLOBAL_BATCH if args.mode == "formal" else QUALIFICATION_GLOBAL_BATCH
+    if global_batch != expected_global_batch:
         raise RuntimeError(
-            f"Mellow reproduction requires effective global batch {CANONICAL_GLOBAL_BATCH}, "
+            f"{args.mode} mode requires effective global batch {expected_global_batch}, "
             f"got {global_batch}"
         )
     steps_per_epoch = rows // global_batch
@@ -571,8 +574,22 @@ def formal_gate(args: argparse.Namespace, inventory: dict[str, Any], shape: dict
     first = read_json(args.smoke20_report)
     if first.get("status") != "PASS" or first.get("training_contract") != TRAINING_CONTRACT or first.get("start_global_step") != 0 or first.get("end_global_step") != 20:
         raise RuntimeError("formal gate rejects smoke20 status/cursor")
-    if first.get("shape") != shape or first.get("epochs") != args.epochs:
-        raise RuntimeError("formal gate rejects smoke20 training shape")
+    smoke_shape = first.get("shape", {})
+    smoke_rows = (
+        int(smoke_shape.get("steps_per_epoch", -1))
+        * int(smoke_shape.get("global_batch_size", -1))
+        + int(smoke_shape.get("dropped_rows_per_epoch", -1))
+    )
+    formal_rows = (
+        shape["steps_per_epoch"] * shape["global_batch_size"]
+        + shape["dropped_rows_per_epoch"]
+    )
+    if (
+        first.get("epochs") != args.epochs
+        or smoke_shape.get("global_batch_size") != QUALIFICATION_GLOBAL_BATCH
+        or smoke_rows != formal_rows
+    ):
+        raise RuntimeError("formal gate rejects smoke20 dataset or qualification batch geometry")
     if first.get("optimizer_contract") != {"name": "Adam", "lr": CANONICAL_LR, "weight_decay": CANONICAL_WEIGHT_DECAY, "scheduler": "CosineAnnealingLR_epoch_level", "warmup_steps": 0}:
         raise RuntimeError("formal gate rejects smoke20 optimizer")
     if first.get("batch_contract_audit", {}).get("passed") is not True or first.get("first_step_gradient_audit", {}).get("passed") is not True:
@@ -592,6 +609,8 @@ def formal_gate(args: argparse.Namespace, inventory: dict[str, Any], shape: dict
         "current_route_code_sha256": route_code_identity(),
         "smoke_resume_report": str(args.smoke_resume_report.resolve()) if args.smoke_resume_report else None,
         "reference22_comparison": {"skipped": True, "policy": "informational_only"},
+        "qualification_global_batch_size": QUALIFICATION_GLOBAL_BATCH,
+        "formal_global_batch_size": shape["global_batch_size"],
         "checkpoint20": str(Path(checkpoints1[0]).resolve()),
     }
 
@@ -605,8 +624,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise FileExistsError(f"refusing nonempty output: {args.output_dir}")
         if not torch.cuda.is_available() or world != 8 or args.world_size != 8:
             raise RuntimeError("Mellow reproduction requires one 8-GPU node")
-        if args.micro_batch_size != CANONICAL_MICRO_BATCH or args.gradient_accumulation_steps != CANONICAL_GRAD_ACCUM or args.num_workers != 0:
-            raise RuntimeError("this reproduction requires microbatch=4, grad_accum=1, effective global batch=32, num_workers=0")
+        expected_grad_accum = FORMAL_GRAD_ACCUM if args.mode == "formal" else QUALIFICATION_GRAD_ACCUM
+        expected_global_batch = FORMAL_GLOBAL_BATCH if args.mode == "formal" else QUALIFICATION_GLOBAL_BATCH
+        if args.micro_batch_size != CANONICAL_MICRO_BATCH or args.gradient_accumulation_steps != expected_grad_accum or args.num_workers != 0:
+            raise RuntimeError(
+                f"{args.mode} mode requires microbatch=4, grad_accum={expected_grad_accum}, "
+                f"effective global batch={expected_global_batch}, num_workers=0"
+            )
         if args.learning_rate != CANONICAL_LR or args.weight_decay != CANONICAL_WEIGHT_DECAY or args.seed != CANONICAL_SEED:
             raise RuntimeError("Mellow optimizer/seed contract mismatch")
         if (
