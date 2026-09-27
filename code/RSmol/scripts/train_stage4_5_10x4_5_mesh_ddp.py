@@ -532,6 +532,15 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
     report: dict[str, Any] = {"status": "FAIL", "gate": config.gate, "configuration": asdict(config), "architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "world_size": world_size, "rank": rank, "device": str(device), "diagnostics_dir": str(config.output_dir / "ddp_diagnostics"), "checks": [], "warnings": [], "hard_failures": []}
     try:
         _startup_phase(config, rank=rank, device=device, phase="process_started")
+        # Preserve the initialization order used by the proven x2 text
+        # trainer.  On the current 4090 stack, initializing NCCL only after
+        # model.to(device) can leave the first collective permanently stuck,
+        # even though an otherwise identical model-free transport audit passes.
+        _startup_phase(config, rank=rank, device=device, phase="process_group_init_start")
+        _init_process_group(rank=rank, world_size=world_size, device=device)
+        _startup_phase(config, rank=rank, device=device, phase="process_group_initialized")
+        _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
+        _startup_phase(config, rank=rank, device=device, phase="process_group_ready")
         model_path = config.resume_from or config.model_path
         if model_path is None:
             raise ValueError("Stage 4 requires --model-path or --resume-from")
@@ -566,15 +575,6 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 saved_rng = resume_state.get("rng_state")
             if saved_rng is not None:
                 torch.set_rng_state(saved_rng)
-        # Initialize NCCL only after the potentially slow per-rank checkpoint
-        # load and CPU-to-GPU materialization. Starting the process group before
-        # those operations can leave its watchdog inside CUDA/GIL-sensitive
-        # startup work for more than the default 480-second heartbeat window.
-        _startup_phase(config, rank=rank, device=device, phase="process_group_init_start")
-        _init_process_group(rank=rank, world_size=world_size, device=device)
-        _startup_phase(config, rank=rank, device=device, phase="process_group_initialized")
-        _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
-        _startup_phase(config, rank=rank, device=device, phase="process_group_ready")
         # MeSH has no mutable forward buffers that need rank-0 broadcast.  The
         # router state is stored in Parameters, not buffers.  Disabling this
         # redundant pre-forward collective makes any real rank skew easier to

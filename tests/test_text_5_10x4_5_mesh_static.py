@@ -65,7 +65,12 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertIn("checkpoint_retention=DEFAULT_CHECKPOINT_RETENTION", source)
         self.assertIn("def _runtime_setup", source)
         self.assertIn("def _init_process_group", source)
-        self.assertLess(source.index("model.to(device)"), source.index("_init_process_group(rank=rank"))
+        run_training = source[source.index("def run_training"):]
+        self.assertLess(
+            run_training.index("_init_process_group(rank=rank"),
+            run_training.index("\n        model.to(device)"),
+        )
+        self.assertIn("initialization order used by the proven x2 text", source)
         self.assertIn("RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS", source)
         startup_diagnostics = source[
             source.index("def _startup_diagnostics"):source.index("def _validate_router_stats")
@@ -105,6 +110,7 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertIn("work.wait()", source)
         self.assertIn("torch.cuda.synchronize(device)", source)
         self.assertIn("device_uuid", source)
+        self.assertLess(source.index('name="process_group_init_start"'), source.index('name="model_load_start"'))
         self.assertIn("ddp = DDP(", source)
         self.assertIn('"init_sync": True', source)
         self.assertNotIn("init_sync=False", source)

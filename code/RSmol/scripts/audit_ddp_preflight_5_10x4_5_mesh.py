@@ -254,6 +254,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         phase(output_dir, rank=rank, name="process_started", detail=runtime_record)
         atomic_json(output_dir / "runtime" / f"rank{rank}.json", runtime_record)
+
+        # Match the ordering used by the previously successful x2 text
+        # trainer: establish the process group before checkpoint loading and
+        # CUDA model materialization.  The transport-only audit passes with
+        # this ordering, whereas creating NCCL after model.to(device) hangs at
+        # the first collective on the affected 4090 jobs.
+        phase(output_dir, rank=rank, name="process_group_init_start")
+        dist.init_process_group(
+            "nccl",
+            rank=rank,
+            world_size=world_size,
+            timeout=timedelta(seconds=args.timeout_seconds),
+        )
+        process_group_initialized = True
+        phase(output_dir, rank=rank, name="process_group_ready")
+
         ModelClass, parameter_audit, register_auto_class = load_variant(args.variant)
         register_auto_class()
 
@@ -302,16 +318,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         model.to(device)
         torch.cuda.synchronize(device)
         phase(output_dir, rank=rank, name="model_on_device")
-
-        phase(output_dir, rank=rank, name="process_group_init_start")
-        dist.init_process_group(
-            "nccl",
-            rank=rank,
-            world_size=world_size,
-            timeout=timedelta(seconds=args.timeout_seconds),
-        )
-        process_group_initialized = True
-        phase(output_dir, rank=rank, name="process_group_ready")
 
         scalar = torch.tensor(float(rank + 1), dtype=torch.float32, device=device)
         torch.cuda.synchronize(device)
