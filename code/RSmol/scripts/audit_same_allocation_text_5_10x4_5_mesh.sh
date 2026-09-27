@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-USER_CONDA_BASE="${{USER_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3}"
+USER_CONDA_BASE="${USER_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3}"
 source "$USER_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate "$USER_CONDA_BASE/envs/rsmol"
 cd "$REPO_ROOT"
 
-OUTPUT="${{RSMOL_5_10X4_5_MESH_SAME_ALLOCATION_OUTPUT:?set same-allocation output directory}"
-SOURCE_DATA="${{RSMOL_5_10X4_5_MESH_PERSISTENT_DATA_SOURCE:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data}"
-X2_MODEL="${{RSMOL_5_10X4_5_MESH_X2_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x2-5-mesh}"
-X4_MODEL="${{RSMOL_5_10X4_5_MESH_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x4-5-mesh}"
-RUN_ID="${{RSMOL_5_10X4_5_MESH_RUN_ID:-$(date +%Y%m%d_%H%M%S%N)-$$}"
+OUTPUT="${RSMOL_5_10X4_5_MESH_SAME_ALLOCATION_OUTPUT:?set same-allocation output directory}"
+SOURCE_DATA="${RSMOL_5_10X4_5_MESH_PERSISTENT_DATA_SOURCE:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data}"
+X2_MODEL="${RSMOL_5_10X4_5_MESH_X2_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x2-5-mesh}"
+X4_MODEL="${RSMOL_5_10X4_5_MESH_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x4-5-mesh}"
+RUN_ID="${RSMOL_5_10X4_5_MESH_RUN_ID:-$(date +%Y%m%d_%H%M%S%N)-$$}"
 STAGE_ROOT="/dev/shm/rsmol_text_5_10x4_5_same_allocation_$RUN_ID"
 STAGED_DATA="$STAGE_ROOT/data"
 STATUS_FILE="$OUTPUT/stage_status.tsv"
 SOURCE_REPORT="$OUTPUT/source_data_inventory.json"
 STAGED_REPORT="$OUTPUT/staged_data_inventory.json"
-STAGE_TIMEOUT_SECONDS="${{RSMOL_5_10X4_5_MESH_AUDIT_STAGE_TIMEOUT_SECONDS:-600}"
+STAGE_TIMEOUT_SECONDS="${RSMOL_5_10X4_5_MESH_AUDIT_STAGE_TIMEOUT_SECONDS:-600}"
 
 for path in "$SOURCE_DATA" "$X2_MODEL" "$X4_MODEL"; do
   if [[ ! -e "$path" ]]; then
@@ -39,7 +39,7 @@ mkdir -p "$OUTPUT/environment"
 printf 'stage\tstatus\tstart_epoch\tend_epoch\texit_code\n' > "$STATUS_FILE"
 
 cleanup_stage() {
-  if [[ -n "${{STAGE_ROOT:-}" && "$STAGE_ROOT" == /dev/shm/rsmol_text_5_10x4_5_same_allocation_* && -d "$STAGE_ROOT" ]]; then
+  if [[ -n "${STAGE_ROOT:-}" && "$STAGE_ROOT" == /dev/shm/rsmol_text_5_10x4_5_same_allocation_* && -d "$STAGE_ROOT" ]]; then
     rm -rf -- "$STAGE_ROOT"
   fi
 }
@@ -105,7 +105,7 @@ SHM_FREE_KIB="$(df -Pk /dev/shm | awk 'NR == 2 {print $4}')"
 MARGIN_KIB=$((10 * 1024 * 1024))
 REQUIRED_KIB=$((SOURCE_KIB + MARGIN_KIB))
 if [[ -z "$SHM_FREE_KIB" || "$SHM_FREE_KIB" -lt "$REQUIRED_KIB" ]]; then
-  echo "insufficient /dev/shm: free_kib=${{SHM_FREE_KIB:-unknown} required_kib=$REQUIRED_KIB" >&2
+  echo "insufficient /dev/shm: free_kib=${SHM_FREE_KIB:-unknown} required_kib=$REQUIRED_KIB" >&2
   exit 2
 fi
 

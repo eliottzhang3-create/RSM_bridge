@@ -41,6 +41,7 @@ class TextMeshX4StaticTest(unittest.TestCase):
         for path in SHELL_SCRIPTS:
             raw = path.read_bytes()
             self.assertNotIn(b"\r", raw, f"{path} contains CR/CRLF bytes that break Bash continuations")
+            self.assertNotIn(b"${{", raw, f"{path} contains an invalid double-brace Bash substitution")
             self.assertTrue(raw.startswith(b"#!"), f"{path} lacks a shebang")
             self.assertIn(b"set -euo pipefail", raw, f"{path} lacks strict Bash mode")
 
