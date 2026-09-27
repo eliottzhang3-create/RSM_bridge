@@ -10,7 +10,7 @@ shift
 case "$MODE" in
   smoke) GATE=D; MAX_STEPS=10 ;;
   resume) GATE=E; MAX_STEPS=2 ;;
-  formal) GATE=FORMAL; MAX_STEPS=18488 ;;
+  formal) GATE=FORMAL; MAX_STEPS=3081 ;;
   *) echo "invalid mode: $MODE" >&2; exit 2 ;;
 esac
 
@@ -34,7 +34,7 @@ fi
 
 SOURCE_DATA="${RSMOL_5_10X4_5_MESH_PERSISTENT_DATA_SOURCE:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data}"
 MODEL="${RSMOL_5_10X4_5_MESH_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x4-5-mesh}"
-OUTPUT="${RSMOL_5_10X4_5_MESH_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/${MODE}_2epochs_20260927_$(date +%Y%m%d_%H%M%S)}"
+OUTPUT="${RSMOL_5_10X4_5_MESH_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/${MODE}_third_epoch_20260927_$(date +%Y%m%d_%H%M%S)}"
 RESUME_FROM="${RSMOL_5_10X4_5_MESH_RESUME_FROM:-}"
 RUN_ID="${RSMOL_5_10X4_5_MESH_RUN_ID:-$(date +%Y%m%d_%H%M%S%N)-$$}"
 STAGE_ROOT="/dev/shm/rsmol_text_5_10x4_5_$RUN_ID"
@@ -97,21 +97,19 @@ ARGS=(
   --gate "$GATE"
   --model-path "$MODEL"
   --data-dir "$STAGED_DATA"
-  --persistent-data-source "$SOURCE_DATA"
-  --stage-report "$STAGED_REPORT"
   --output-dir "$OUTPUT"
   --world-size 8
   --micro-batch-size 8
   --gradient-accumulation-steps 16
   --context-length 1024
   --max-optimizer-steps "$MAX_STEPS"
-  --scheduler-total-steps 18488
-  --warmup-steps 925
+  --scheduler-total-steps 3081
+  --warmup-steps 155
   --max-lr 1e-3
   --min-lr 1e-4
   --save-every 500
   --steps-per-epoch 9244
-  --epochs 2
+  --epochs 1
   --seed "${RSMOL_5_10X4_5_MESH_SEED:-0}"
 )
 if [[ -n "$RESUME_FROM" ]]; then

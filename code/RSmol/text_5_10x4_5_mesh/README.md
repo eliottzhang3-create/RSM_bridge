@@ -9,11 +9,11 @@ This route is isolated from every audio route and from the existing text 5-10x2-
 - Five independent router groups. Each group owns one write router and one read router, for ten independent linear router modules.
 - Source layer mapping remains identical to the prior 5-10x2-5 conversion: 0,1,2,3,4,5,7,9,11,13,15,17,19,21,23,25,26,27,28,29.
 - Eight ranks, microbatch 8, gradient accumulation 16, effective global batch 1024, context length 1024.
-- Two epochs of 9,244 optimizer steps each, 18,488 total steps.
-- LR warms for 925 steps to 1e-3, then cosine decays to 1e-4.
+- The historical reference epoch is 9,244 optimizer steps; this route trains exactly one third with 3,081 optimizer steps (floor(9,244 / 3)), using one configured epoch.
+- LR warms for 155 steps to 1e-3, then cosine decays to 1e-4 over the 3,081-step target.
 - Checkpoints are written every 500 optimizer steps and at the final step; only the newest three complete checkpoints are retained.
-- Sorted parquet shards are assigned by shard_index modulo 8. Each epoch resets the same fixed assignment. Unconsumed shard tails are accepted; data exhaustion before 9,244 steps is a distributed hard failure.
-- Every GPU job copies the full persistent parquet directory once into a run-specific /dev/shm directory. All ranks read that same staged copy. Source and staged parquet footer, row count, byte size, and SHA256 inventories must match before torchrun starts.
+- Sorted parquet shards are assigned by shard_index modulo 8. Each rank streams its assigned persistent parquet shards directly from the remote login-mounted data directory, matching the validated 5-10x2-5 text trainer. The one-third target stops before data exhaustion.
+- Production training does not copy the dataset into /dev/shm; the shared-memory staging script remains available only as an independent diagnostic tool.
 
 ## CPU-only conversion in the terminal
 
@@ -43,8 +43,12 @@ After smoke produces checkpoint-000010, run the two-step resume gate:
     export RSMOL_5_10X4_5_MESH_RESUME_FROM=/path/to/smoke/checkpoint-000010
     bash run_stage4_5_10x4_5_mesh_resume_3090.sh
 
+The resume gate accepts only a checkpoint produced by this direct-read smoke contract; older staged 18,488-step x4 checkpoints are rejected.
+
 Formal training:
 
     bash run_stage4_5_10x4_5_mesh_formal_3090.sh
+
+Formal output is formal_third_epoch_3081steps_20260927_3090_v1 by default.
 
 Local static checks do not count as remote CUDA or training PASS. Use the Stage 1 audit JSON and each training gate report as the remote result of record.

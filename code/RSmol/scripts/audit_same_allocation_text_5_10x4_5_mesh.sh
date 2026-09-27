@@ -133,8 +133,6 @@ run_stage 07_x4_smoke \
     --gate D \
     --model-path "$X4_MODEL" \
     --data-dir "$STAGED_DATA" \
-    --persistent-data-source "$SOURCE_DATA" \
-    --stage-report "$STAGED_REPORT" \
     --output-dir "$OUTPUT/07_x4_smoke" \
     --world-size 8 \
     --micro-batch-size 1 \

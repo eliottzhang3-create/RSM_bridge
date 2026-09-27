@@ -61,36 +61,44 @@ class TextMeshX4StaticTest(unittest.TestCase):
     def test_formal_training_contract(self) -> None:
         source = TRAINER.read_text(encoding="utf-8")
         self.assertIn("DEFAULT_STEPS_PER_EPOCH = 9_244", source)
-        self.assertIn("DEFAULT_FORMAL_EPOCHS = 2", source)
-        self.assertIn("DEFAULT_FORMAL_WARMUP_STEPS = 925", source)
+        self.assertIn("DEFAULT_FORMAL_EPOCHS = 1", source)
+        self.assertIn("DEFAULT_FORMAL_OPTIMIZER_STEPS = 3_081", source)
+        self.assertIn("DEFAULT_FORMAL_WARMUP_STEPS = 155", source)
         self.assertIn("DEFAULT_MAX_LR = 1e-3", source)
         self.assertIn("DEFAULT_MIN_LR = 1e-4", source)
-        self.assertIn('relative_to(Path("/dev/shm"))', source)
-        self.assertIn("reset_for_epoch", source)
-        self.assertIn("rows_to_skip", source)
         self.assertIn("checkpoint_retention=DEFAULT_CHECKPOINT_RETENTION", source)
-        self.assertIn("def _runtime_setup", source)
-        self.assertIn("def _init_process_group", source)
+        self.assertIn("def _dist_setup", source)
+        self.assertNotIn("def _init_process_group", source)
+        self.assertNotIn("persistent_data_source", source)
+        self.assertNotIn("stage_report", source)
         run_training = source[source.index("def run_training"):]
         self.assertLess(
+            run_training.index("_dist_setup(config)"),
             run_training.index("\n        model.to(device)"),
-            run_training.index("_init_process_group(rank=rank"),
         )
         self.assertNotIn('phase="nccl_warmup_start"', run_training)
         self.assertNotIn("warmup_work", run_training)
-        self.assertIn("RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS", source)
         startup_diagnostics = source[
             source.index("def _startup_diagnostics"):source.index("def _validate_router_stats")
         ]
-        self.assertNotIn("all_gather_object", startup_diagnostics)
-        self.assertIn('print(f"[startup][rank={rank}] phase={phase}"', source)
-        self.assertIn('phase="process_group_init_start"', source)
-        self.assertIn('phase="process_group_initialized"', source)
-        self.assertIn('phase="ddp_init_start"', source)
-
-        stage = (ROOT / "code/RSmol/scripts/stage_text_shared_store_5_10x4_5_mesh.sh").read_text(encoding="utf-8")
-        self.assertIn("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", stage)
-        self.assertIn('RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS:-1', stage)
+        self.assertIn("all_gather_object", startup_diagnostics)
+        self.assertIn("DistributedParquetStream", source)
+        train_shell = (ROOT / "code/RSmol/scripts/train_stage4_5_10x4_5_mesh_ddp.sh").read_text(encoding="utf-8")
+        self.assertIn('--data-dir "$DATA"', train_shell)
+        self.assertIn("MAX_STEPS=3081", train_shell)
+        self.assertIn("SCHEDULER=3081", train_shell)
+        self.assertIn("WARMUP=155", train_shell)
+        self.assertIn("STEPS_PER_EPOCH=9244", train_shell)
+        self.assertIn("EPOCHS=1", train_shell)
+        self.assertIn("RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS", train_shell)
+        self.assertIn("_validate_resume_contract", source)
+        self.assertIn("resume checkpoint manifest differs", source)
+        self.assertNotIn("stage_text_shared_store_5_10x4_5_mesh.sh", train_shell)
+        staged_diagnostic = (ROOT / "code/RSmol/scripts/stage_text_shared_store_5_10x4_5_mesh.sh").read_text(encoding="utf-8")
+        self.assertIn("MAX_STEPS=3081", staged_diagnostic)
+        self.assertIn("--scheduler-total-steps 3081", staged_diagnostic)
+        self.assertNotIn("--persistent-data-source", staged_diagnostic)
+        self.assertNotIn("--stage-report", staged_diagnostic)
 
     def test_converter_and_audit_match_x4(self) -> None:
         converter = CONVERTER.read_text(encoding="utf-8")
@@ -173,11 +181,14 @@ class TextMeshX4StaticTest(unittest.TestCase):
             self.assertIn("pdgpu-3090", source)
             self.assertNotIn("pdgpu-4090", source)
             self.assertIn("-c 32 -m 256G -g 8 -n 1", source)
-            self.assertIn(f"stage_text_shared_store_5_10x4_5_mesh.sh {mode}", source)
+            self.assertIn("train_stage4_5_10x4_5_mesh_ddp.sh", source)
+            self.assertNotIn("stage_text_shared_store_5_10x4_5_mesh.sh", source)
         resume = wrappers["resume"].read_text(encoding="utf-8")
         self.assertIn("checkpoint_complete.json", resume)
         self.assertIn("training_state.pt", resume)
         self.assertIn("RSMOL_5_10X4_5_MESH_RESUME_FROM", resume)
+        formal = wrappers["formal"].read_text(encoding="utf-8")
+        self.assertIn("formal_third_epoch_3081steps_20260927_3090_v1", formal)
 
 
 if __name__ == "__main__":
