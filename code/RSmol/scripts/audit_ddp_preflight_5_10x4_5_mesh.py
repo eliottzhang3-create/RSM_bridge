@@ -255,21 +255,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         phase(output_dir, rank=rank, name="process_started", detail=runtime_record)
         atomic_json(output_dir / "runtime" / f"rank{rank}.json", runtime_record)
 
-        # Match the ordering used by the previously successful x2 text
-        # trainer: establish the process group before checkpoint loading and
-        # CUDA model materialization.  The transport-only audit passes with
-        # this ordering, whereas creating NCCL after model.to(device) hangs at
-        # the first collective on the affected 4090 jobs.
-        phase(output_dir, rank=rank, name="process_group_init_start")
-        dist.init_process_group(
-            "nccl",
-            rank=rank,
-            world_size=world_size,
-            timeout=timedelta(seconds=args.timeout_seconds),
-        )
-        process_group_initialized = True
-        phase(output_dir, rank=rank, name="process_group_ready")
-
         ModelClass, parameter_audit, register_auto_class = load_variant(args.variant)
         register_auto_class()
 
@@ -314,6 +299,50 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if comparison.get("status") != "PASS":
             raise RuntimeError(f"cross-rank parameter comparison failed: {comparison}")
         phase(output_dir, rank=rank, name="parameter_contract_ready")
+
+        # Keep the expensive CPU checkpoint load and full parameter hashing
+        # outside the lifetime of the NCCL process group.  Immediately after
+        # creating the group, force its first real collective to complete
+        # before model CUDA storage is allocated.  init_process_group itself
+        # is lazy and does not establish the NCCL communicator.
+        phase(output_dir, rank=rank, name="process_group_init_start")
+        dist.init_process_group(
+            "nccl",
+            rank=rank,
+            world_size=world_size,
+            timeout=timedelta(seconds=args.timeout_seconds),
+        )
+        process_group_initialized = True
+        phase(output_dir, rank=rank, name="process_group_ready")
+
+        warmup = torch.tensor(float(rank + 1), dtype=torch.float32, device=device)
+        torch.cuda.synchronize(device)
+        phase(
+            output_dir,
+            rank=rank,
+            name="pre_model_nccl_warmup_start",
+            detail={"input": float(warmup.item())},
+        )
+        warmup_work = dist.all_reduce(
+            warmup,
+            op=dist.ReduceOp.SUM,
+            async_op=True,
+        )
+        warmup_work.wait()
+        torch.cuda.synchronize(device)
+        warmup_actual = float(warmup.item())
+        warmup_expected = float(world_size * (world_size + 1) / 2)
+        if not math.isclose(warmup_actual, warmup_expected, rel_tol=0.0, abs_tol=1e-5):
+            raise RuntimeError(
+                "pre-model NCCL warmup mismatch: "
+                f"expected={warmup_expected}, actual={warmup_actual}"
+            )
+        phase(
+            output_dir,
+            rank=rank,
+            name="pre_model_nccl_warmup_pass",
+            detail={"actual": warmup_actual},
+        )
 
         model.to(device)
         torch.cuda.synchronize(device)
@@ -401,6 +430,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "ddp_init_seconds": ddp_seconds,
             "parameter_contract_sha256": fingerprint["contract_sha256"],
             "parameter_values_sha256": fingerprint["values_sha256"],
+            "pre_model_nccl_warmup": warmup_actual,
             "scalar_all_reduce": actual_sum,
             "runtime": runtime_record,
             "broadcast_mib": args.broadcast_mib,
