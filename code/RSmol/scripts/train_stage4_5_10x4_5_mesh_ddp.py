@@ -361,8 +361,7 @@ def _heartbeat(config: Stage4Config, *, rank: int, device: torch.device, optimiz
 
 def _startup_phase(config: Stage4Config, *, rank: int, device: torch.device, phase: str) -> None:
     _heartbeat(config, rank=rank, device=device, optimizer_step=0, phase=phase)
-    if rank == 0:
-        print(f"[startup] phase={phase}", flush=True)
+    print(f"[startup][rank={rank}] phase={phase}", flush=True)
 
 
 def _failure_diagnostic(config: Stage4Config, *, rank: int, device: torch.device, exc: BaseException) -> None:
@@ -394,11 +393,6 @@ def _startup_diagnostics(config: Stage4Config, *, rank: int, world_size: int, de
         "nccl_environment": {name: os.environ.get(name) for name in ("NCCL_DEBUG", "NCCL_DEBUG_SUBSYS", "NCCL_P2P_DISABLE", "NCCL_IB_DISABLE", "TORCH_NCCL_ASYNC_ERROR_HANDLING", "TORCH_NCCL_DUMP_ON_TIMEOUT", "TORCH_NCCL_TRACE_BUFFER_SIZE", "TORCH_DISTRIBUTED_DEBUG")},
     }
     _diagnostic_dir(config).joinpath(f"rank{rank}.startup.json").write_text(json.dumps(local, indent=2, default=str) + "\n", encoding="utf-8")
-    if world_size > 1:
-        gathered: list[Any] = [None for _ in range(world_size)]
-        dist.all_gather_object(gathered, local)
-        if rank == 0:
-            _diagnostic_dir(config).joinpath("world_startup.json").write_text(json.dumps(gathered, indent=2, default=str) + "\n", encoding="utf-8")
 
 
 def _validate_router_stats(router_stats: dict[str, dict[str, float]]) -> str | None:
@@ -576,13 +570,16 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         # load and CPU-to-GPU materialization. Starting the process group before
         # those operations can leave its watchdog inside CUDA/GIL-sensitive
         # startup work for more than the default 480-second heartbeat window.
+        _startup_phase(config, rank=rank, device=device, phase="process_group_init_start")
         _init_process_group(rank=rank, world_size=world_size, device=device)
+        _startup_phase(config, rank=rank, device=device, phase="process_group_initialized")
         _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
         _startup_phase(config, rank=rank, device=device, phase="process_group_ready")
         # MeSH has no mutable forward buffers that need rank-0 broadcast.  The
         # router state is stored in Parameters, not buffers.  Disabling this
         # redundant pre-forward collective makes any real rank skew easier to
         # localize and avoids stalling on the rotary buffer broadcast.
+        _startup_phase(config, rank=rank, device=device, phase="ddp_init_start")
         ddp_model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device.index] if device.type == "cuda" and world_size > 1 else None, broadcast_buffers=False, find_unused_parameters=False) if world_size > 1 else model
         _startup_phase(config, rank=rank, device=device, phase="ddp_ready")
         manifest = _manifest(config.data_dir) if config.gate != "A" else []

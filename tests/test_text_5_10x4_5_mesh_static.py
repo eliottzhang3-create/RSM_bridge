@@ -59,6 +59,14 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertIn("def _init_process_group", source)
         self.assertLess(source.index("model.to(device)"), source.index("_init_process_group(rank=rank"))
         self.assertIn("RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS", source)
+        startup_diagnostics = source[
+            source.index("def _startup_diagnostics"):source.index("def _validate_router_stats")
+        ]
+        self.assertNotIn("all_gather_object", startup_diagnostics)
+        self.assertIn('print(f"[startup][rank={rank}] phase={phase}"', source)
+        self.assertIn('phase="process_group_init_start"', source)
+        self.assertIn('phase="process_group_initialized"', source)
+        self.assertIn('phase="ddp_init_start"', source)
 
         stage = (ROOT / "code/RSmol/scripts/stage_text_shared_store_5_10x4_5_mesh.sh").read_text(encoding="utf-8")
         self.assertIn("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", stage)
