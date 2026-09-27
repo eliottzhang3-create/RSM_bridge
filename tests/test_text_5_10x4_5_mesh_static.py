@@ -17,6 +17,9 @@ SHELL_SCRIPTS = (
     ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_smoke_4090.sh",
     ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_resume_4090.sh",
     ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_formal_4090.sh",
+    ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_smoke_3090.sh",
+    ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_resume_3090.sh",
+    ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_formal_3090.sh",
     ROOT / "code/RSmol/scripts/audit_stage1_5_10x4_5_mesh.sh",
     ROOT / "code/RSmol/scripts/convert_stepwise_5_10x4_5_mesh.sh",
     ROOT / "code/RSmol/scripts/stage_text_shared_store_5_10x4_5_mesh.sh",
@@ -158,6 +161,23 @@ class TextMeshX4StaticTest(unittest.TestCase):
         wrapper = (ROOT / "code/RSmol/run_audit_same_allocation_text_5_10x4_5_mesh_3090.sh").read_text(encoding="utf-8")
         self.assertIn("pdgpu-3090", wrapper)
         self.assertNotIn("pdgpu-4090", wrapper)
+
+    def test_production_submission_wrappers_use_validated_3090_queue(self) -> None:
+        wrappers = {
+            "smoke": ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_smoke_3090.sh",
+            "resume": ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_resume_3090.sh",
+            "formal": ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_formal_3090.sh",
+        }
+        for mode, path in wrappers.items():
+            source = path.read_text(encoding="utf-8")
+            self.assertIn("pdgpu-3090", source)
+            self.assertNotIn("pdgpu-4090", source)
+            self.assertIn("-c 32 -m 256G -g 8 -n 1", source)
+            self.assertIn(f"stage_text_shared_store_5_10x4_5_mesh.sh {mode}", source)
+        resume = wrappers["resume"].read_text(encoding="utf-8")
+        self.assertIn("checkpoint_complete.json", resume)
+        self.assertIn("training_state.pt", resume)
+        self.assertIn("RSMOL_5_10X4_5_MESH_RESUME_FROM", resume)
 
 
 if __name__ == "__main__":

@@ -31,18 +31,20 @@ Optional CPU parquet preflight:
       --data-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data \
       --report-path /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/preflight/source_inventory.json
 
-## pdgpu-4090 submissions
+## Validated pdgpu-3090 training submissions
 
-    bash run_audit_stage1_5_10x4_5_mesh_4090.sh
-    bash run_stage4_5_10x4_5_mesh_smoke_4090.sh
+The same-allocation diagnostic must report PASS before these production gates. The validated sequence uses pdgpu-3090:
+
+    bash run_audit_same_allocation_text_5_10x4_5_mesh_3090.sh
+    bash run_stage4_5_10x4_5_mesh_smoke_3090.sh
 
 After smoke produces checkpoint-000010, run the two-step resume gate:
 
     export RSMOL_5_10X4_5_MESH_RESUME_FROM=/path/to/smoke/checkpoint-000010
-    bash run_stage4_5_10x4_5_mesh_resume_4090.sh
+    bash run_stage4_5_10x4_5_mesh_resume_3090.sh
 
 Formal training:
 
-    bash run_stage4_5_10x4_5_mesh_formal_4090.sh
+    bash run_stage4_5_10x4_5_mesh_formal_3090.sh
 
 Local static checks do not count as remote CUDA or training PASS. Use the Stage 1 audit JSON and each training gate report as the remote result of record.
