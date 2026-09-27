@@ -10,12 +10,29 @@ MODEL = ROOT / "code/RSmol/recursive_model_5_10x4_5_mesh.py"
 TRAINER = ROOT / "code/RSmol/scripts/train_stage4_5_10x4_5_mesh_ddp.py"
 CONVERTER = ROOT / "code/RSmol/scripts/convert_stepwise_5_10x4_5_mesh.py"
 AUDIT = ROOT / "code/RSmol/scripts/audit_stage1_5_10x4_5_mesh.py"
+SHELL_SCRIPTS = (
+    ROOT / "code/RSmol/run_audit_stage1_5_10x4_5_mesh_4090.sh",
+    ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_smoke_4090.sh",
+    ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_resume_4090.sh",
+    ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_formal_4090.sh",
+    ROOT / "code/RSmol/scripts/audit_stage1_5_10x4_5_mesh.sh",
+    ROOT / "code/RSmol/scripts/convert_stepwise_5_10x4_5_mesh.sh",
+    ROOT / "code/RSmol/scripts/stage_text_shared_store_5_10x4_5_mesh.sh",
+    ROOT / "code/RSmol/scripts/train_stage4_5_10x4_5_mesh_ddp.sh",
+)
 
 
 class TextMeshX4StaticTest(unittest.TestCase):
     def test_python_sources_parse(self) -> None:
         for path in (MODEL, TRAINER, CONVERTER, AUDIT):
             ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    def test_shell_scripts_use_unix_line_endings(self) -> None:
+        for path in SHELL_SCRIPTS:
+            raw = path.read_bytes()
+            self.assertNotIn(b"\r", raw, f"{path} contains CR/CRLF bytes that break Bash continuations")
+            self.assertTrue(raw.startswith(b"#!"), f"{path} lacks a shebang")
+            self.assertIn(b"set -euo pipefail", raw, f"{path} lacks strict Bash mode")
 
     def test_model_contract_is_isolated_x4(self) -> None:
         source = MODEL.read_text(encoding="utf-8")
