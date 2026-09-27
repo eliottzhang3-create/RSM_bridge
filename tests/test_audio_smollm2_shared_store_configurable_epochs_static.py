@@ -124,6 +124,49 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
         }
         self.assertEqual(row_audio_path(explicit_dual, False), "/audio/two.wav")
 
+    def test_text_contract_recovers_metadata_and_fails_before_sampling(self) -> None:
+        path = PACKAGE / "data.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        names = {
+            "_text_value", "_normalise_text_key", "_find_nonempty_text",
+            "_prepare_mellow_text_rows",
+        }
+        functions = [
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in names
+        ]
+        self.assertEqual({node.name for node in functions}, names)
+        namespace: dict[str, Any] = {"Any": Any, "json": __import__("json")}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), namespace)
+        prepare = namespace["_prepare_mellow_text_rows"]
+
+        rows = [
+            {
+                "row_index": 17,
+                "input": "",
+                "answer": "",
+                "metadata": {"question": "What is audible?", "answers": ["Birds", "Bird calls"]},
+            },
+            {
+                "row_index": 18,
+                "input": "",
+                "answer": None,
+                "caption1": "A bell rings",
+                "metadata": {"input": "caption first audio"},
+            },
+        ]
+        audit = prepare(rows)
+        self.assertTrue(audit["passed"])
+        self.assertEqual(rows[0]["input"], "What is audible?")
+        self.assertEqual(rows[0]["answer"], "Birds")
+        self.assertEqual(rows[1]["input"], "caption first audio")
+        self.assertEqual(audit["validation_rng_calls"], 0)
+        self.assertEqual(audit["recovered_from_metadata"]["prompt"], 2)
+        self.assertEqual(audit["recovered_from_metadata"]["answer"], 1)
+
+        with self.assertRaisesRegex(ValueError, "unresolved_rows=1"):
+            prepare([{"row_index": 99, "input": "ordinary question", "answer": "", "metadata": {}}])
+
     def test_variable_store_is_strict_torchaudio_and_full_length(self) -> None:
         text = STORE.read_text(encoding="utf-8")
         for marker in (
@@ -186,13 +229,17 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
             "CANONICAL_MICRO_BATCH = 4",
             "CANONICAL_GRAD_ACCUM = 1",
             "CANONICAL_GLOBAL_BATCH = 32",
-            "CANONICAL_CHECKPOINT_RETENTION = 3",
+            "CANONICAL_SAVE_EVERY_STEPS = 5_000",
+            "CANONICAL_CHECKPOINT_RETENTION = 4",
             "torch.optim.Adam(",
             "CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=0.0)",
             "output.loss / args.gradient_accumulation_steps",
             "ddp.no_sync()",
             "clip_grad_norm_(ddp.parameters(), 0.5",
             "prune_formal_checkpoints",
+            'cursor["global_step"] % args.save_every_steps == 0',
+            'cursor["global_step"] == stop_step',
+            '"save_final_step": True',
             "resume_comparison_trace",
             "training_state_fingerprint",
             "compare_reference22",
@@ -253,7 +300,8 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
                 "--epochs 30",
                 "--micro-batch-size 4",
                 "--gradient-accumulation-steps 1",
-                "--checkpoint-retention 3",
+                "--save-every-steps 5000",
+                "--checkpoint-retention 4",
             ):
                 self.assertIn(marker, text)
         self.assertNotIn("REFERENCE_SEEN", RESUME.read_text(encoding="utf-8"))

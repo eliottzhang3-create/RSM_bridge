@@ -34,6 +34,6 @@ exec bash "$SCRIPT_DIR/stage_audio_smollm2_shared_store_configurable_epochs_135m
   --micro-batch-size 4 \
   --gradient-accumulation-steps 1 \
   --num-workers 0 \
-  --save-every-epochs 1 \
-  --checkpoint-retention 3 \
+  --save-every-steps 5000 \
+  --checkpoint-retention 4 \
   "$@"

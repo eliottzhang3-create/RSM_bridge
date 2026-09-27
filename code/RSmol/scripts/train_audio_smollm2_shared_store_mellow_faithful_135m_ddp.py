@@ -57,7 +57,8 @@ CANONICAL_MICRO_BATCH = 4
 CANONICAL_GRAD_ACCUM = 1
 CANONICAL_GLOBAL_BATCH = 32
 CANONICAL_SEED = 1234
-CANONICAL_CHECKPOINT_RETENTION = 3
+CANONICAL_SAVE_EVERY_STEPS = 5_000
+CANONICAL_CHECKPOINT_RETENTION = 4
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -86,7 +87,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=CANONICAL_LR)
     parser.add_argument("--weight-decay", type=float, default=CANONICAL_WEIGHT_DECAY)
-    parser.add_argument("--save-every-epochs", type=int, default=1)
+    parser.add_argument("--save-every-steps", type=int, default=CANONICAL_SAVE_EVERY_STEPS)
     parser.add_argument("--checkpoint-retention", type=int, default=CANONICAL_CHECKPOINT_RETENTION)
     parser.add_argument("--seed", type=int, default=CANONICAL_SEED)
     parser.add_argument("--dist-timeout-minutes", type=int, default=30)
@@ -421,7 +422,7 @@ def checkpoint_config(args: argparse.Namespace, inventory: dict[str, Any], shape
         "scheduler_t_max_epochs": args.epochs, "scheduler_eta_min": 0.0,
         "warmup_steps": 0, "gradient_clip_norm": 0.5, "autocast": False,
         "total_steps": shape["total_steps"], "steps_per_epoch": shape["steps_per_epoch"],
-        "save_every_epochs": args.save_every_epochs,
+        "save_every_steps": args.save_every_steps,
         "checkpoint_retention": args.checkpoint_retention,
         "htsat_checkpoint": str(args.htsat_checkpoint.resolve()), "mellow_root": str(args.mellow_root.resolve()),
         "mellow_provenance": model._audio_provenance,
@@ -528,6 +529,7 @@ def data_contract_audit(dataset: ReasonAQADataset) -> dict[str, Any]:
     return {
         "passed": True, "rows": len(dataset), "single_audio_rows": single,
         "dual_audio_rows": dual, "explicit_same_audio_rows": explicit_same,
+        "text_contract_audit": dataset.text_contract_audit,
         "single_audio_behavior": "sample audio2 from filepath1 pool; never reuse audio1 embedding",
         "random_process": "stateful process-wide Python random in public-Mellow call order",
         "random_audio_pool": "sorted unique non-empty filepath1 paths; uniform choice and self-selection allowed",
@@ -603,8 +605,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("this reproduction requires microbatch=4, grad_accum=1, effective global batch=32, num_workers=0")
         if args.learning_rate != CANONICAL_LR or args.weight_decay != CANONICAL_WEIGHT_DECAY or args.seed != CANONICAL_SEED:
             raise RuntimeError("Mellow optimizer/seed contract mismatch")
-        if args.epochs != FORMAL_EPOCHS or args.save_every_epochs != 1 or args.checkpoint_retention != CANONICAL_CHECKPOINT_RETENTION:
-            raise RuntimeError("this route requires 30 epochs, epoch saves, and retention of the newest three checkpoints")
+        if (
+            args.epochs != FORMAL_EPOCHS
+            or args.save_every_steps != CANONICAL_SAVE_EVERY_STEPS
+            or args.checkpoint_retention != CANONICAL_CHECKPOINT_RETENTION
+        ):
+            raise RuntimeError(
+                "this route requires 30 epochs, checkpoints every 5000 optimizer steps, "
+                "and retention of the newest four checkpoints"
+            )
         torch.cuda.set_device(local_rank); device = torch.device("cuda", local_rank)
         dist.init_process_group("nccl", rank=rank, world_size=world, timeout=timedelta(minutes=args.dist_timeout_minutes))
         baseline._seed(args.seed, rank)
@@ -661,7 +670,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "formal_gate": gate, "model_trainable_audit": trainable_audit,
             "sampler_contract": "torch.randperm(seed=epoch), truncate to complete effective global batches, contiguous per-rank slices",
             "effective_global_batch_size": shape["global_batch_size"],
-            "checkpoint_policy": {"save_every_epochs": 1, "retain_newest": CANONICAL_CHECKPOINT_RETENTION},
+            "checkpoint_policy": {
+                "save_every_steps": CANONICAL_SAVE_EVERY_STEPS,
+                "save_final_step": True,
+                "retain_newest": CANONICAL_CHECKPOINT_RETENTION,
+            },
             "route_code_sha256": route_code_identity(),
         })
         first_gradient_audit = None; first_batch_audit = None; resumed_gradient_audit = None
@@ -775,7 +788,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         print(f"[mellow-faithful] step={cursor['global_step']}/{stop_step} epoch={cursor['epoch']} batch={cursor['batch_in_epoch']} loss={metric['loss']:.6f} lr={lr_used:.8g} step_seconds={metric['seconds']:.3f}", flush=True)
                 save = (
                     (args.mode == "smoke" and cursor["global_step"] in {20, 22})
-                    or (args.mode == "formal" and epoch_completed and cursor["epoch"] % args.save_every_epochs == 0)
+                    or (
+                        args.mode == "formal"
+                        and (
+                            cursor["global_step"] % args.save_every_steps == 0
+                            or cursor["global_step"] == stop_step
+                        )
+                    )
                 )
                 if save:
                     checkpoint = args.output_dir / f"checkpoint-{cursor['global_step']:06d}"

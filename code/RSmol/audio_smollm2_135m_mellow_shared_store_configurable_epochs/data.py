@@ -44,6 +44,167 @@ def _path_value_present(value: Any) -> bool:
     return bool(str(value).strip())
 
 
+def _text_value(value: Any) -> str:
+    """Convert one manifest text value without stringifying containers."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            text = _text_value(item)
+            if text:
+                return text
+        return ""
+    if isinstance(value, (bool, int, float)):
+        return str(value)
+    return ""
+
+
+def _normalise_text_key(value: Any) -> str:
+    return "".join(character for character in str(value).lower() if character.isalnum())
+
+
+def _find_nonempty_text(value: Any, names: tuple[str, ...]) -> str:
+    """Find the first non-empty named value, preserving name priority."""
+    if isinstance(value, dict):
+        items = list(value.items())
+        for name in names:
+            wanted = _normalise_text_key(name)
+            for key, item in items:
+                if _normalise_text_key(key) == wanted:
+                    text = _text_value(item)
+                    if text:
+                        return text
+        for item in value.values():
+            if isinstance(item, (dict, list, tuple)):
+                found = _find_nonempty_text(item, names)
+                if found:
+                    return found
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            found = _find_nonempty_text(item, names)
+            if found:
+                return found
+    return ""
+
+
+def _prepare_mellow_text_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Repair Stage-1 aliases and validate every row without consuming RNG."""
+    recovered = {"prompt": 0, "answer": 0, "caption1": 0, "caption2": 0}
+    template_rows = {
+        "caption_both": 0,
+        "caption_first": 0,
+        "caption_second": 0,
+        "difference": 0,
+        "emotion": 0,
+        "generic": 0,
+    }
+    failures: list[dict[str, Any]] = []
+
+    for manifest_index, row in enumerate(rows):
+        metadata = row.get("metadata")
+
+        prompt = (
+            _text_value(row.get("input"))
+            or _text_value(row.get("prompt"))
+            or _text_value(row.get("question"))
+        )
+        if not prompt:
+            prompt = _find_nonempty_text(metadata, ("input", "question", "prompt"))
+            recovered["prompt"] += int(bool(prompt))
+
+        answer = (
+            _text_value(row.get("answer"))
+            or _text_value(row.get("target"))
+            or _text_value(row.get("output"))
+        )
+        if not answer:
+            answer = _find_nonempty_text(
+                metadata, ("answer", "answers", "target", "output", "label")
+            )
+            recovered["answer"] += int(bool(answer))
+
+        caption1 = _text_value(row.get("caption1"))
+        if not caption1:
+            caption1 = _find_nonempty_text(metadata, ("caption1", "caption_1"))
+            recovered["caption1"] += int(bool(caption1))
+
+        caption2 = _text_value(row.get("caption2"))
+        if not caption2:
+            caption2 = _find_nonempty_text(metadata, ("caption2", "caption_2"))
+            recovered["caption2"] += int(bool(caption2))
+
+        # Store repaired canonical fields once. Runtime template selection still
+        # consumes Python random only when a row is actually sampled.
+        row["input"] = prompt
+        row["answer"] = answer
+        row["caption1"] = caption1
+        row["caption2"] = caption2
+
+        missing: list[str] = []
+        if not prompt:
+            missing.append("prompt")
+            group = "generic"
+        elif prompt == "caption both audios":
+            group = "caption_both"
+            if not caption1:
+                missing.append("caption1")
+            if not caption2:
+                missing.append("caption2")
+        elif prompt == "caption first audio":
+            group = "caption_first"
+            if not caption1:
+                missing.append("caption1")
+        elif prompt == "caption second audio":
+            group = "caption_second"
+            if not caption2:
+                missing.append("caption2")
+        elif prompt in {
+            "explain the difference in few words",
+            "explain the difference in a sentence",
+            "explain the difference in detail",
+        }:
+            group = "difference"
+            if not answer:
+                missing.append("answer")
+        elif "emo_emo_emo" in prompt:
+            group = "emotion"
+            if not answer:
+                missing.append("answer")
+        else:
+            group = "generic"
+            if not answer:
+                missing.append("answer")
+        template_rows[group] += 1
+
+        if missing:
+            failures.append({
+                "manifest_index": manifest_index,
+                "source_row_index": row.get("row_index"),
+                "taskname": row.get("taskname"),
+                "subtype": row.get("subtype"),
+                "missing": missing,
+                "prompt_preview": prompt[:160],
+                "metadata_keys": sorted(str(key) for key in metadata) if isinstance(metadata, dict) else [],
+            })
+
+    if failures:
+        preview = json.dumps(failures[:10], ensure_ascii=False, sort_keys=True)
+        raise ValueError(
+            "Mellow text preflight failed before training: "
+            f"unresolved_rows={len(failures)} first_rows={preview}"
+        )
+    return {
+        "passed": True,
+        "rows": len(rows),
+        "recovered_from_metadata": recovered,
+        "template_rows": template_rows,
+        "validation_rng_calls": 0,
+        "policy": "official input/answer semantics with deterministic Stage-1 metadata recovery",
+    }
+
+
 def normalized_audio2_is_missing(row: dict[str, Any]) -> bool:
     """Recover an originally empty filepath2 from a normalized manifest.
 
@@ -174,6 +335,7 @@ class ReasonAQADataset(Dataset[dict[str, Any]]):
         ]
         if not self.rows:
             raise ValueError(f"empty manifest: {self.manifest}")
+        self.text_contract_audit = _prepare_mellow_text_rows(self.rows)
         self.tokenizer = tokenizer
         self.store = UniqueWaveformStore(unique_waveform_store_dir)
         manifest_sha = sha256_file(self.manifest)
@@ -213,34 +375,40 @@ class ReasonAQADataset(Dataset[dict[str, Any]]):
 
     @staticmethod
     def _answer_prompt(row: dict[str, Any]) -> tuple[str, str, str]:
-        prompt = str(row.get("input") or row.get("prompt") or row.get("question") or "")
+        prompt = _text_value(row.get("input"))
+        canonical_answer = _text_value(row.get("answer"))
+        caption1 = _text_value(row.get("caption1"))
+        caption2 = _text_value(row.get("caption2"))
         group = "generic"
         if prompt == "caption both audios":
             prompt, group = random.choice(BOTH), "BOTH"
             answer = (
-                "The audio 1 is " + str(row.get("caption1", "")).lower()
-                + ". The audio 2 is " + str(row.get("caption2", "")).lower() + "."
+                "The audio 1 is " + caption1.lower()
+                + ". The audio 2 is " + caption2.lower() + "."
             ).replace("..", ".")
         elif prompt == "caption first audio":
             prompt, group = random.choice(FIRST), "FIRST"
-            answer = ("The audio 1 is " + str(row.get("caption1", "")).lower() + ".").replace("..", ".")
+            answer = ("The audio 1 is " + caption1.lower() + ".").replace("..", ".")
         elif prompt == "caption second audio":
             prompt, group = random.choice(SECOND), "SECOND"
-            answer = ("The audio 2 is " + str(row.get("caption2", "")).lower() + ".").replace("..", ".")
+            answer = ("The audio 2 is " + caption2.lower() + ".").replace("..", ".")
         elif prompt == "explain the difference in few words":
-            prompt, answer, group = random.choice(WORDONLY), str(row.get("answer", "")), "WORDONLY"
+            prompt, answer, group = random.choice(WORDONLY), canonical_answer, "WORDONLY"
         elif prompt == "explain the difference in a sentence":
-            prompt, answer, group = random.choice(LONGLINEONLY), str(row.get("answer", "")), "LONGLINEONLY"
+            prompt, answer, group = random.choice(LONGLINEONLY), canonical_answer, "LONGLINEONLY"
         elif prompt == "explain the difference in detail":
-            prompt, answer, group = random.choice(DETAILONLY), str(row.get("answer", "")), "DETAILONLY"
+            prompt, answer, group = random.choice(DETAILONLY), canonical_answer, "DETAILONLY"
         elif "emo_emo_emo" in prompt:
             prompt = prompt.replace("emo_emo_emo", random.choice(EMOTION))
-            answer, group = str(row.get("answer", "")), "EMOTION"
+            answer, group = canonical_answer, "EMOTION"
         else:
             prompt = prompt.lower()
-            answer = str(row.get("answer") or row.get("target") or row.get("output") or "").lower()
+            answer = canonical_answer.lower()
         if not prompt or not answer:
-            raise ValueError("Mellow row lacks prompt or answer")
+            raise ValueError(
+                "Mellow row violated the startup-validated text contract: "
+                f"row_index={row.get('row_index')} taskname={row.get('taskname')} subtype={row.get('subtype')}"
+            )
         return answer, prompt, group
 
     def __getitem__(self, index: int) -> dict[str, Any]:

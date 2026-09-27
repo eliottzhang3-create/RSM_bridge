@@ -12,12 +12,35 @@ This directory and its configurable-epoch entrypoints are an isolated reproducti
 - Fixed layout: audio1 129 + separator 1 + audio2 129 + separator 1 + prompt 129 + answer 250 = 639 tokens.
 - Adam, LR 1e-3, weight decay 1e-4, gradient clipping 0.5, FP32, no warmup, epoch-level CosineAnnealingLR with T_max 30.
 - Mellow-matched global batch: 8 GPUs, microbatch 4 per rank, no gradient accumulation (1), effective global batch 32, num_workers 0.
-- Thirty epochs. Save at every epoch boundary and retain only the newest three complete checkpoints.
+- Thirty epochs. Save every 5000 optimizer steps and at the final step, retaining only the newest four complete checkpoints.
 - Dataset randomness is stateful Python random. Checkpoints include every rank's Python, Torch, and CUDA RNG state.
 - Resume leaves Adam's non-capturable scalar step tensors on CPU, matching a continuous run. The DataLoader uses a private generator for its iterator seed so reconstruction at the resume cursor does not advance the training RNG stream.
 - Sampler order is torch.randperm with seed equal to the epoch, followed by contiguous rank slices. Resume starts directly at the saved optimizer-step cursor and does not replay prior batches.
 
-With 968059 manifest rows, the shape is 30251 optimizer steps per epoch, 27 dropped rows per epoch, and 907530 total steps. The final retained checkpoints are expected at steps 847028, 877279, and 907530.
+## Text-contract preflight
+
+The failed formal run on 2026-09-27 reached step 9970 and then encountered a
+Stage-1 row whose normalized input or answer field was empty. The original
+record is retained under metadata, but the previous dataset implementation
+only consulted the normalized top-level fields when that row was sampled.
+
+This isolated route now performs a deterministic full-manifest text preflight
+at dataset construction. It recovers non-empty input/question/prompt,
+answer/answers/target/output/label, and caption aliases from the retained
+source metadata, writes them into the in-memory canonical fields, and validates
+the text required by every official Mellow template. The preflight makes zero
+random calls, so it does not alter Mellow's training RNG sequence. If a row is
+genuinely unresolved, the job fails before the first optimizer step and reports
+its manifest index, source row index, task, subtype, missing fields, and
+metadata keys. The manifest and unique waveform store remain unchanged, and no
+other training route is affected.
+
+The step-9970 run produced no checkpoint under the previous epoch-boundary
+policy. It cannot be resumed and must be restarted with a fresh output
+directory after pulling this fix. New formal runs save every 5000 optimizer
+steps, so later interruptions can resume from the newest retained checkpoint.
+
+With 968059 manifest rows, the shape is 30251 optimizer steps per epoch, 27 dropped rows per epoch, and 907530 total steps. The final retained checkpoints are expected at steps 895000, 900000, 905000, and 907530.
 
 ## Build the variable-length unique store on CPU
 
