@@ -31,8 +31,8 @@ exec bash "$SCRIPT_DIR/stage_audio_smollm2_shared_store_configurable_epochs_135m
   --output-dir "$DEFAULT_OUTPUT" \
   --learning-rate 1e-3 \
   --weight-decay 1e-4 \
-  --micro-batch-size 4 \
-  --gradient-accumulation-steps 8 \
+  --micro-batch-size 8 \
+  --gradient-accumulation-steps 4 \
   --num-workers 0 \
   --save-every-steps 5000 \
   --checkpoint-retention 4 \

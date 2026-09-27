@@ -12,7 +12,7 @@ This directory and its configurable-epoch entrypoints are an isolated reproducti
 - Fixed layout: audio1 129 + separator 1 + audio2 129 + separator 1 + prompt 129 + answer 250 = 639 tokens.
 - Adam, LR 1e-3, weight decay 1e-4, gradient clipping 0.5, FP32, no warmup, epoch-level CosineAnnealingLR with T_max 30.
 - Qualification smoke/reference/resume geometry: 8 GPUs, microbatch 4 per rank, gradient accumulation 1, effective global batch 32, num_workers 0.
-- Formal geometry: 8 GPUs, microbatch 4 per rank, gradient accumulation 8, effective global batch 256, num_workers 0. This is the requested production batch override; the remaining Mellow data, model, optimizer, precision, and epoch-level scheduler contracts are unchanged.
+- Formal geometry: 8 GPUs, microbatch 8 per rank, gradient accumulation 4, effective global batch 256, num_workers 0. This restores the previous production batching geometry while retaining the Mellow-faithful data, model, FP32, optimizer, and epoch-level scheduler contracts.
 - Thirty epochs. Save every 5000 optimizer steps and at the final step, retaining only the newest four complete checkpoints.
 - Dataset randomness is stateful Python random. Checkpoints include every rank's Python, Torch, and CUDA RNG state.
 - Resume leaves Adam's non-capturable scalar step tensors on CPU, matching a continuous run. The DataLoader uses a private generator for its iterator seed so reconstruction at the resume cursor does not advance the training RNG stream.

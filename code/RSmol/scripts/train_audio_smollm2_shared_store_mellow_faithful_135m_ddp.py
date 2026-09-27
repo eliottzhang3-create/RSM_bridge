@@ -53,10 +53,11 @@ SMOKE_TOTAL_STEPS = 22
 FORMAL_EPOCHS = 30
 CANONICAL_LR = 1e-3
 CANONICAL_WEIGHT_DECAY = 1e-4
-CANONICAL_MICRO_BATCH = 4
+QUALIFICATION_MICRO_BATCH = 4
 QUALIFICATION_GRAD_ACCUM = 1
 QUALIFICATION_GLOBAL_BATCH = 32
-FORMAL_GRAD_ACCUM = 8
+FORMAL_MICRO_BATCH = 8
+FORMAL_GRAD_ACCUM = 4
 FORMAL_GLOBAL_BATCH = 256
 CANONICAL_SEED = 1234
 CANONICAL_SAVE_EVERY_STEPS = 5_000
@@ -84,7 +85,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--reference22-report", type=Path)
     parser.add_argument("--epochs", type=int, required=True)
     parser.add_argument("--world-size", type=int, default=8)
-    parser.add_argument("--micro-batch-size", type=int, default=CANONICAL_MICRO_BATCH)
+    parser.add_argument("--micro-batch-size", type=int, default=QUALIFICATION_MICRO_BATCH)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=QUALIFICATION_GRAD_ACCUM)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=CANONICAL_LR)
@@ -624,11 +625,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise FileExistsError(f"refusing nonempty output: {args.output_dir}")
         if not torch.cuda.is_available() or world != 8 or args.world_size != 8:
             raise RuntimeError("Mellow reproduction requires one 8-GPU node")
+        expected_micro_batch = FORMAL_MICRO_BATCH if args.mode == "formal" else QUALIFICATION_MICRO_BATCH
         expected_grad_accum = FORMAL_GRAD_ACCUM if args.mode == "formal" else QUALIFICATION_GRAD_ACCUM
         expected_global_batch = FORMAL_GLOBAL_BATCH if args.mode == "formal" else QUALIFICATION_GLOBAL_BATCH
-        if args.micro_batch_size != CANONICAL_MICRO_BATCH or args.gradient_accumulation_steps != expected_grad_accum or args.num_workers != 0:
+        if args.micro_batch_size != expected_micro_batch or args.gradient_accumulation_steps != expected_grad_accum or args.num_workers != 0:
             raise RuntimeError(
-                f"{args.mode} mode requires microbatch=4, grad_accum={expected_grad_accum}, "
+                f"{args.mode} mode requires microbatch={expected_micro_batch}, grad_accum={expected_grad_accum}, "
                 f"effective global batch={expected_global_batch}, num_workers=0"
             )
         if args.learning_rate != CANONICAL_LR or args.weight_decay != CANONICAL_WEIGHT_DECAY or args.seed != CANONICAL_SEED:

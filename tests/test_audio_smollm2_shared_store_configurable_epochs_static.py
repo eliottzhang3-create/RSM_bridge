@@ -238,10 +238,11 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
     def test_optimizer_batch_scheduler_and_checkpoint_contract(self) -> None:
         text = TRAIN.read_text(encoding="utf-8")
         for marker in (
-            "CANONICAL_MICRO_BATCH = 4",
+            "QUALIFICATION_MICRO_BATCH = 4",
             "QUALIFICATION_GRAD_ACCUM = 1",
             "QUALIFICATION_GLOBAL_BATCH = 32",
-            "FORMAL_GRAD_ACCUM = 8",
+            "FORMAL_MICRO_BATCH = 8",
+            "FORMAL_GRAD_ACCUM = 4",
             "FORMAL_GLOBAL_BATCH = 256",
             "CANONICAL_SAVE_EVERY_STEPS = 5_000",
             "CANONICAL_CHECKPOINT_RETENTION = 4",
@@ -312,14 +313,17 @@ class MellowFaithfulSmolLM2StaticTest(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             for marker in (
                 "--epochs 30",
-                "--micro-batch-size 4",
                 "--save-every-steps 5000",
                 "--checkpoint-retention 4",
             ):
                 self.assertIn(marker, text)
         for path in (SMOKE, REFERENCE, RESUME):
-            self.assertIn("--gradient-accumulation-steps 1", path.read_text(encoding="utf-8"))
-        self.assertIn("--gradient-accumulation-steps 8", FORMAL.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("--micro-batch-size 4", text)
+            self.assertIn("--gradient-accumulation-steps 1", text)
+        formal_text = FORMAL.read_text(encoding="utf-8")
+        self.assertIn("--micro-batch-size 8", formal_text)
+        self.assertIn("--gradient-accumulation-steps 4", formal_text)
         self.assertNotIn("REFERENCE_SEEN", RESUME.read_text(encoding="utf-8"))
         formal = FORMAL.read_text(encoding="utf-8")
         self.assertIn("--smoke20-report", formal)
