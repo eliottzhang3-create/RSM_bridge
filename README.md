@@ -1,5 +1,11 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-27：文本 5-10x4-5 MeSH 隔离训练线代码就绪
+
+新增隔离文本路线 5-10x4-5-mesh：20 个物理层执行 50 个逻辑层，十层中段循环四次，使用 7 个瞬时记忆槽和 5 组独立 write/read routers。训练保持旧文本 5-10x2-5 的 8-rank 固定 parquet 分片分配、microbatch 8、GA 16 和 1024-token 合同；正式训练固定为 2 个 epoch，每 epoch 9,244 optimizer steps，总计 18,488 steps，925-step warmup，LR 从 1e-3 cosine 降至 1e-4。每 500 steps 和最终步保存 checkpoint，只保留最近三份。
+
+模型转换只在 CPU 终端直接执行，不提供提交 wrapper。所有审计、smoke、resume 和 formal GPU 作业使用 pdgpu-4090。每个训练作业会先把约 24G 的完整 parquet 数据只复制一份到节点共享 /dev/shm，对源目录与 staged copy 做逐 shard footer、行数、字节数和 SHA256 一致性检查，然后 8 个 rank 共同读取。完整命令、文件清单和远程 PASS 边界见 code/RSmol/text_5_10x4_5_mesh/README.md。
+
 ## 2026-09-26：原生 Mellow-v0 的 MMAU/MMAR 公平对比评测
 
 原生 Mellow-v0 的 MMAU test-mini 评测已重新锁定到与
