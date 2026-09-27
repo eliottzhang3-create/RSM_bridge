@@ -10,6 +10,7 @@ MODEL = ROOT / "code/RSmol/recursive_model_5_10x4_5_mesh.py"
 TRAINER = ROOT / "code/RSmol/scripts/train_stage4_5_10x4_5_mesh_ddp.py"
 CONVERTER = ROOT / "code/RSmol/scripts/convert_stepwise_5_10x4_5_mesh.py"
 AUDIT = ROOT / "code/RSmol/scripts/audit_stage1_5_10x4_5_mesh.py"
+DDP_PREFLIGHT = ROOT / "code/RSmol/scripts/audit_ddp_preflight_5_10x4_5_mesh.py"
 SHELL_SCRIPTS = (
     ROOT / "code/RSmol/run_audit_stage1_5_10x4_5_mesh_4090.sh",
     ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_smoke_4090.sh",
@@ -19,12 +20,14 @@ SHELL_SCRIPTS = (
     ROOT / "code/RSmol/scripts/convert_stepwise_5_10x4_5_mesh.sh",
     ROOT / "code/RSmol/scripts/stage_text_shared_store_5_10x4_5_mesh.sh",
     ROOT / "code/RSmol/scripts/train_stage4_5_10x4_5_mesh_ddp.sh",
+    ROOT / "code/RSmol/scripts/audit_ddp_preflight_5_10x4_5_mesh.sh",
+    ROOT / "code/RSmol/run_audit_ddp_preflight_5_10x4_5_mesh_4090.sh",
 )
 
 
 class TextMeshX4StaticTest(unittest.TestCase):
     def test_python_sources_parse(self) -> None:
-        for path in (MODEL, TRAINER, CONVERTER, AUDIT):
+        for path in (MODEL, TRAINER, CONVERTER, AUDIT, DDP_PREFLIGHT):
             ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
     def test_shell_scripts_use_unix_line_endings(self) -> None:
@@ -85,6 +88,22 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertIn("for loop in range(4)", audit)
         self.assertIn("ten_router_outputs", audit)
         self.assertIn("five_write_history_entries", audit)
+
+    def test_ddp_preflight_is_standard_ab_comparison(self) -> None:
+        source = DDP_PREFLIGHT.read_text(encoding="utf-8")
+        self.assertIn('choices=("x2", "x4")', source)
+        self.assertIn("output_loading_info=True", source)
+        self.assertIn("parameter_fingerprint", source)
+        self.assertIn("dist.all_reduce", source)
+        self.assertIn("dist.broadcast", source)
+        self.assertIn("ddp = DDP(", source)
+        self.assertIn('"init_sync": True', source)
+        self.assertNotIn("init_sync=False", source)
+        shell = (ROOT / "code/RSmol/scripts/audit_ddp_preflight_5_10x4_5_mesh.sh").read_text(encoding="utf-8")
+        self.assertNotIn("NCCL_P2P_DISABLE", shell)
+        self.assertNotIn("NCCL_CUMEM_ENABLE", shell)
+        wrapper = (ROOT / "code/RSmol/run_audit_ddp_preflight_5_10x4_5_mesh_4090.sh").read_text(encoding="utf-8")
+        self.assertIn("pdgpu-4090", wrapper)
 
 
 if __name__ == "__main__":
