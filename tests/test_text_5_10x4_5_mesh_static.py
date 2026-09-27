@@ -11,6 +11,7 @@ TRAINER = ROOT / "code/RSmol/scripts/train_stage4_5_10x4_5_mesh_ddp.py"
 CONVERTER = ROOT / "code/RSmol/scripts/convert_stepwise_5_10x4_5_mesh.py"
 AUDIT = ROOT / "code/RSmol/scripts/audit_stage1_5_10x4_5_mesh.py"
 DDP_PREFLIGHT = ROOT / "code/RSmol/scripts/audit_ddp_preflight_5_10x4_5_mesh.py"
+NCCL_TRANSPORT = ROOT / "code/RSmol/scripts/audit_nccl_transport_5_10x4_5_mesh.py"
 SHELL_SCRIPTS = (
     ROOT / "code/RSmol/run_audit_stage1_5_10x4_5_mesh_4090.sh",
     ROOT / "code/RSmol/run_stage4_5_10x4_5_mesh_smoke_4090.sh",
@@ -22,12 +23,16 @@ SHELL_SCRIPTS = (
     ROOT / "code/RSmol/scripts/train_stage4_5_10x4_5_mesh_ddp.sh",
     ROOT / "code/RSmol/scripts/audit_ddp_preflight_5_10x4_5_mesh.sh",
     ROOT / "code/RSmol/run_audit_ddp_preflight_5_10x4_5_mesh_4090.sh",
+    ROOT / "code/RSmol/scripts/audit_nccl_transport_5_10x4_5_mesh.sh",
+    ROOT / "code/RSmol/run_audit_nccl_transport_5_10x4_5_mesh_4090.sh",
+    ROOT / "code/RSmol/scripts/audit_post_stage_nccl_5_10x4_5_mesh.sh",
+    ROOT / "code/RSmol/run_audit_post_stage_nccl_5_10x4_5_mesh_4090.sh",
 )
 
 
 class TextMeshX4StaticTest(unittest.TestCase):
     def test_python_sources_parse(self) -> None:
-        for path in (MODEL, TRAINER, CONVERTER, AUDIT, DDP_PREFLIGHT):
+        for path in (MODEL, TRAINER, CONVERTER, AUDIT, DDP_PREFLIGHT, NCCL_TRANSPORT):
             ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
     def test_shell_scripts_use_unix_line_endings(self) -> None:
@@ -96,6 +101,10 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertIn("parameter_fingerprint", source)
         self.assertIn("dist.all_reduce", source)
         self.assertIn("dist.broadcast", source)
+        self.assertIn("async_op=True", source)
+        self.assertIn("work.wait()", source)
+        self.assertIn("torch.cuda.synchronize(device)", source)
+        self.assertIn("device_uuid", source)
         self.assertIn("ddp = DDP(", source)
         self.assertIn('"init_sync": True', source)
         self.assertNotIn("init_sync=False", source)
@@ -103,6 +112,18 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertNotIn("NCCL_P2P_DISABLE", shell)
         self.assertNotIn("NCCL_CUMEM_ENABLE", shell)
         wrapper = (ROOT / "code/RSmol/run_audit_ddp_preflight_5_10x4_5_mesh_4090.sh").read_text(encoding="utf-8")
+        self.assertIn("pdgpu-4090", wrapper)
+
+    def test_post_stage_nccl_audit_preserves_isolation(self) -> None:
+        stage = (ROOT / "code/RSmol/scripts/audit_post_stage_nccl_5_10x4_5_mesh.sh").read_text(encoding="utf-8")
+        self.assertIn("/dev/shm/rsmol_text_5_10x4_5_post_stage_audit_", stage)
+        self.assertIn("audit_text_parquet_store_5_10x4_5_mesh.py", stage)
+        self.assertIn("shm_before_stage.txt", stage)
+        self.assertIn("shm_after_stage.txt", stage)
+        self.assertIn("audit_nccl_transport_5_10x4_5_mesh.sh" , stage)
+        self.assertIn("baseline", stage)
+        self.assertNotIn("train_stage4_5_10x4_5_mesh_ddp.py", stage)
+        wrapper = (ROOT / "code/RSmol/run_audit_post_stage_nccl_5_10x4_5_mesh_4090.sh").read_text(encoding="utf-8")
         self.assertIn("pdgpu-4090", wrapper)
 
 

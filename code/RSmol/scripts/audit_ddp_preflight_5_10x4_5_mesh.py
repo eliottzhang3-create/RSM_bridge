@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import socket
 import sys
 import time
 import traceback
@@ -220,12 +221,39 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     device = torch.device("cuda", local_rank)
     torch.cuda.set_device(device)
+    device_properties = torch.cuda.get_device_properties(device)
+    runtime_record = {
+        "hostname": socket.gethostname(),
+        "rank": rank,
+        "local_rank": local_rank,
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "cuda_device_count": torch.cuda.device_count(),
+        "current_device": torch.cuda.current_device(),
+        "device_name": device_properties.name,
+        "device_uuid": str(getattr(device_properties, "uuid", "")),
+        "device_properties": str(device_properties),
+        "torch_version": torch.__version__,
+        "torch_cuda_version": torch.version.cuda,
+        "nccl_environment": {
+            name: os.environ.get(name)
+            for name in (
+                "NCCL_P2P_DISABLE",
+                "NCCL_CUMEM_ENABLE",
+                "NCCL_SHM_DISABLE",
+                "NCCL_IB_DISABLE",
+                "NCCL_DEBUG",
+                "TORCH_NCCL_ASYNC_ERROR_HANDLING",
+                "TORCH_NCCL_BLOCKING_WAIT",
+            )
+        },
+    }
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     process_group_initialized = False
 
     try:
-        phase(output_dir, rank=rank, name="process_started")
+        phase(output_dir, rank=rank, name="process_started", detail=runtime_record)
+        atomic_json(output_dir / "runtime" / f"rank{rank}.json", runtime_record)
         ModelClass, parameter_audit, register_auto_class = load_variant(args.variant)
         register_auto_class()
 
@@ -286,15 +314,34 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         phase(output_dir, rank=rank, name="process_group_ready")
 
         scalar = torch.tensor(float(rank + 1), dtype=torch.float32, device=device)
-        dist.all_reduce(scalar, op=dist.ReduceOp.SUM)
+        torch.cuda.synchronize(device)
+        phase(
+            output_dir,
+            rank=rank,
+            name="scalar_all_reduce_start",
+            detail={"input": float(scalar.item())},
+        )
+        work = dist.all_reduce(
+            scalar,
+            op=dist.ReduceOp.SUM,
+            async_op=True,
+        )
+        work.wait()
+        torch.cuda.synchronize(device)
+        actual_sum = float(scalar.item())
         expected_sum = world_size * (world_size + 1) / 2
         if not math.isclose(
-            float(scalar.item()), float(expected_sum), rel_tol=0.0, abs_tol=1e-5
+            actual_sum, float(expected_sum), rel_tol=0.0, abs_tol=1e-5
         ):
             raise RuntimeError(
-                f"scalar all_reduce mismatch: expected={expected_sum}, actual={scalar.item()}"
+                f"scalar all_reduce mismatch: expected={expected_sum}, actual={actual_sum}"
             )
-        phase(output_dir, rank=rank, name="scalar_all_reduce_pass")
+        phase(
+            output_dir,
+            rank=rank,
+            name="scalar_all_reduce_pass",
+            detail={"actual": actual_sum},
+        )
 
         broadcast_numel = args.broadcast_mib * 1024 * 1024 // 4
         broadcast_tensor = torch.empty(
@@ -304,7 +351,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             broadcast_tensor.fill_(7.25)
         else:
             broadcast_tensor.zero_()
-        dist.broadcast(broadcast_tensor, src=0)
+        work = dist.broadcast(broadcast_tensor, src=0, async_op=True)
+        work.wait()
         torch.cuda.synchronize(device)
         if not math.isclose(float(broadcast_tensor[0].item()), 7.25) or not math.isclose(
             float(broadcast_tensor[-1].item()), 7.25
@@ -335,7 +383,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             name="ddp_ready",
             detail={"seconds": ddp_seconds},
         )
-        dist.barrier()
+        barrier_work = dist.barrier(async_op=True)
+        barrier_work.wait()
+        torch.cuda.synchronize(device)
 
         rank_result = {
             "status": "PASS",
@@ -345,7 +395,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "ddp_init_seconds": ddp_seconds,
             "parameter_contract_sha256": fingerprint["contract_sha256"],
             "parameter_values_sha256": fingerprint["values_sha256"],
-            "scalar_all_reduce": float(scalar.item()),
+            "scalar_all_reduce": actual_sum,
+            "runtime": runtime_record,
             "broadcast_mib": args.broadcast_mib,
             "ddp_type": type(ddp).__name__,
             "ddp_init_sync": "default_true",
