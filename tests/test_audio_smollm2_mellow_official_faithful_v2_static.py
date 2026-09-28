@@ -41,16 +41,11 @@ FORMAL = (
     SCRIPTS
     / "train_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_official_faithful_v2_ddp.sh"
 )
-PRIMARY_SUBMITS = tuple(
+SUBMITS = tuple(
     RSMOL
-    / f"run_audio_smollm2_shared_store_{mode}_configurable_epochs_135m_mellow_official_faithful_v2_4090.sh"
-    for mode in ("smoke20", "resume2", "formal")
+    / f"run_audio_smollm2_shared_store_{mode}_configurable_epochs_135m_mellow_official_faithful_v2_3090.sh"
+    for mode in ("smoke20", "reference22", "resume2", "formal")
 )
-REFERENCE_SUBMIT = (
-    RSMOL
-    / "run_audio_smollm2_shared_store_reference22_configurable_epochs_135m_mellow_official_faithful_v2_3090.sh"
-)
-SUBMITS = (*PRIMARY_SUBMITS, REFERENCE_SUBMIT)
 OLD_PACKAGE = RSMOL / "audio_smollm2_135m_mellow_shared_store_configurable_epochs"
 OLD_TRAIN = SCRIPTS / "train_audio_smollm2_shared_store_mellow_faithful_135m_ddp.py"
 
@@ -192,16 +187,11 @@ class MellowOfficialFaithfulV2StaticTest(unittest.TestCase):
             "train_audio_smollm2_shared_store_configurable_epochs_135m_mellow_official_faithful_v2_ddp.py",
             stage,
         )
-        for path in PRIMARY_SUBMITS:
+        for path in SUBMITS:
             text = path.read_text(encoding="utf-8")
-            self.assertIn("-p pdgpu-4090", text)
-            self.assertNotIn("pdgpu-3090", text)
+            self.assertIn("-p pdgpu-3090", text)
             self.assertNotIn("pdgpu-5090", text)
             self.assertIn("official_faithful_v2", text)
-        reference_submit = REFERENCE_SUBMIT.read_text(encoding="utf-8")
-        self.assertIn("-p pdgpu-3090", reference_submit)
-        self.assertNotIn("pdgpu-4090", reference_submit)
-        self.assertNotIn("pdgpu-5090", reference_submit)
         for path in (SMOKE, REFERENCE, RESUME):
             text = path.read_text(encoding="utf-8")
             self.assertIn("--micro-batch-size 4", text)

@@ -4,7 +4,7 @@
 
 新增完全隔离的 audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs 路线。它修正旧 Mellow-faithful 路线相对官方运行时合同的三项偏差：冻结 HTSAT 参数但保持 HTSAT train mode、两个音频分隔符固定使用 token ID 0，以及使用锁定 Mellow commit c8204d8eb99b4384fd7a76ad57995731e0c0c2bf 的逐参数 GradNormTracker 代替固定 0.5 梯度裁剪。旧路线的 package、trainer、checkpoint 和 report 保持原合同，不能与 v2 混用。
 
-v2 checkpoint 保存各 rank 的 HTSAT mutable buffers 和 GradNormTracker running_norm；resume 在首个恢复 forward 前加载本 rank buffer，并保留 DataLoader iterator 创建后的第二次 RNG 恢复。普通 train-mode BatchNorm 在 epoch 内可按 rank 分化；每个完整 epoch 结束后从 rank 0 广播模型状态与 optimizer tensor state。fresh smoke 固定运行 0 到 20，resume 固定运行 20 到 22；formal 必须同时读取本路线两个 PASS report。qualification 为 8 GPU × microbatch 4 × GA 1，formal 为 8 GPU × microbatch 8 × GA 4、30 epochs、每 5000 步保存并保留最新 4 份。smoke20、resume2 与 formal 提交 wrapper 使用 pdgpu-4090；可选 reference22 诊断 wrapper 仍使用 pdgpu-3090。
+v2 checkpoint 保存各 rank 的 HTSAT mutable buffers 和 GradNormTracker running_norm；resume 在首个恢复 forward 前加载本 rank buffer，并保留 DataLoader iterator 创建后的第二次 RNG 恢复。普通 train-mode BatchNorm 在 epoch 内可按 rank 分化；每个完整 epoch 结束后从 rank 0 广播模型状态与 optimizer tensor state。fresh smoke 固定运行 0 到 20，resume 固定运行 20 到 22；formal 必须同时读取本路线两个 PASS report。qualification 为 8 GPU × microbatch 4 × GA 1，formal 为 8 GPU × microbatch 8 × GA 4、30 epochs、每 5000 步保存并保留最新 4 份。所有提交 wrapper 使用 pdgpu-3090。
 
 当前状态为本地代码、Python 编译和静态合同测试就绪；远程 smoke20、resume2、BatchNorm buffer 变化、epoch 边界同步和 30-epoch formal 均尚未登记 GPU PASS。完整合同和命令见 code/RSmol/audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs/README.md。
 
