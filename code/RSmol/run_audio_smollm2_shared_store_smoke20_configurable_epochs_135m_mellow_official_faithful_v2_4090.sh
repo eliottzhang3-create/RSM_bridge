@@ -5,12 +5,12 @@ cd "$SCRIPT_DIR"
 mkdir -p log
 CMD_ARGS=""
 if (($#)); then printf -v CMD_ARGS '%q ' "$@"; fi
-JOB_TAG="audio-smollm2-mellow-official-v2-resume2-$(date +%m%d%H%M%S%N)"
+JOB_TAG="audio-smollm2-mellow-official-v2-smoke20-$(date +%m%d%H%M%S%N)"
 vc submit \
-  -p pdgpu-3090 \
+  -p pdgpu-4090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 32 -m 256G -g 8 -n 1 \
   -j "$JOB_TAG" \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$SCRIPT_DIR/log/${JOB_TAG}.JOB.log" \
-  --cmd "bash scripts/train_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_official_faithful_v2_ddp.sh $CMD_ARGS"
+  --cmd "bash scripts/train_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_official_faithful_v2_ddp.sh $CMD_ARGS"

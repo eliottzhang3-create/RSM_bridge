@@ -72,8 +72,9 @@ retain the newest four complete checkpoints
 ```
 
 With 968,059 rows, formal training has 3,781 optimizer steps per epoch and
-113,430 total optimizer steps. All submission wrappers use `pdgpu-3090`, one node,
-eight GPUs, 32 CPUs, and 256 GiB memory.
+113,430 total optimizer steps. The required smoke20, resume2, and formal submission
+wrappers use `pdgpu-4090`; the optional reference22 diagnostic remains on
+`pdgpu-3090`. All jobs use one node, eight GPUs, 32 CPUs, and 256 GiB memory.
 
 ## GradNormTracker
 
@@ -110,11 +111,11 @@ at checkpoint-000022.
 Run from the remote `code/RSmol` directory.
 
 ```bash
-bash run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_official_faithful_v2_3090.sh --epochs 30
+bash run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_official_faithful_v2_4090.sh --epochs 30
 
-bash run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_official_faithful_v2_3090.sh --epochs 30 --resume-from /actual/v2/smoke/checkpoint-000020
+bash run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_official_faithful_v2_4090.sh --epochs 30 --resume-from /actual/v2/smoke/checkpoint-000020
 
-bash run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_official_faithful_v2_3090.sh --epochs 30 --smoke20-report /actual/v2/smoke/shared_store_training_report.json --smoke-resume-report /actual/v2/resume/shared_store_training_report.json
+bash run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_official_faithful_v2_4090.sh --epochs 30 --smoke20-report /actual/v2/smoke/shared_store_training_report.json --smoke-resume-report /actual/v2/resume/shared_store_training_report.json
 ```
 
 The reference22 entry remains an optional uninterrupted diagnostic. It does not
