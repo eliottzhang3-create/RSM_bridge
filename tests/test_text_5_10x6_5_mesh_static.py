@@ -97,11 +97,14 @@ class TextMeshX6StaticTest(unittest.TestCase):
             "torch.bfloat16",
             "broadcast_buffers=False",
             "checkpoint_retention=DEFAULT_CHECKPOINT_RETENTION",
+            "ROUTER_PARAMETER_COUNT",
+            "expected_router_parameter_tensors = ROUTER_PARAMETER_COUNT * 2",
             '"write_4", "read_4"',
             '"write_5", "read_5"',
             "fourteen router statistics were not produced",
         ):
             self.assertIn(expected, source)
+        self.assertNotIn("requires 20 router tensors", source)
         self.assertIn("recursive_model_5_10x6_5_mesh", source)
         self.assertNotIn("stage_text_shared_store_5_10x6_5_mesh.sh", source)
         shell = TRAIN_SHELL.read_text(encoding="utf-8")

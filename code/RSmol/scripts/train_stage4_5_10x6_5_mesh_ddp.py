@@ -34,6 +34,7 @@ from recursive_model_5_10x6_5_mesh import (  # noqa: E402
     LOGICAL_TO_PHYSICAL,
     MEMORY_SLOT_COUNT,
     MODEL_ARCHITECTURE_CONTRACT,
+    ROUTER_PARAMETER_COUNT,
     RecursiveLlamaForCausalLM,
     parameter_audit,
     register_auto_class,
@@ -383,9 +384,13 @@ def _optimizer(model: torch.nn.Module, config: Stage4Config) -> tuple[torch.opti
             decay.append(parameter)
     optimizer = torch.optim.AdamW([{"params": decay, "weight_decay": DEFAULT_ADAMW_WEIGHT_DECAY}, {"params": no_decay, "weight_decay": 0.0}], lr=config.max_lr, betas=DEFAULT_ADAMW_BETAS, eps=DEFAULT_ADAMW_EPS, amsgrad=DEFAULT_ADAMW_AMSGRAD)
     router_names = [name for name, _ in model.named_parameters() if ".write_routers." in name or ".read_routers." in name]
-    router_parameters_in_optimizer = len(router_names) == 20
+    expected_router_parameter_tensors = ROUTER_PARAMETER_COUNT * 2
+    router_parameters_in_optimizer = len(router_names) == expected_router_parameter_tensors
     if not router_parameters_in_optimizer:
-        raise RuntimeError(f"x6 optimizer router contract requires 20 router tensors, found {len(router_names)}")
+        raise RuntimeError(
+            "x6 optimizer router contract requires "
+            f"{expected_router_parameter_tensors} router tensors, found {len(router_names)}"
+        )
     return optimizer, {"groups": [{"name": "decay", "parameter_count": len(decay)}, {"name": "no_decay", "parameter_count": len(no_decay)}], "router_parameters": router_names, "router_parameters_in_optimizer": router_parameters_in_optimizer}
 
 
