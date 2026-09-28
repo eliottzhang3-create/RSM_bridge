@@ -577,7 +577,11 @@ def _load_x4_model(args: argparse.Namespace, device: torch.device) -> tuple[Any,
         args.mellow_root, args.htsat_checkpoint, device
     )
     model = AudioMeshX4ZeroSlotModel(
-        mesh.to(device), tokenizer, wrapper, htsat, AudioMeshX4ZeroSlotConfig()
+        mesh.to(device),
+        tokenizer,
+        wrapper,
+        htsat,
+        config=AudioMeshX4ZeroSlotConfig(),
     )
     if resume_from is not None:
         audio_state = torch.load(

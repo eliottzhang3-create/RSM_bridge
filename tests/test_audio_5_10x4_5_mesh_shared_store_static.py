@@ -37,6 +37,11 @@ class AudioX4SharedStoreStaticTest(unittest.TestCase):
         self.assertIn("recursive_model_5_10x4_5_mesh", trainer)
         self.assertIn("checkpoint-003081", trainer)
         self.assertIn("_validate_x4_text_checkpoint", trainer)
+        self.assertIn("config=AudioMeshX4ZeroSlotConfig()", trainer)
+        self.assertNotIn(
+            "wrapper, htsat, AudioMeshX4ZeroSlotConfig()",
+            trainer,
+        )
         self.assertIn('"training_state_loaded": False', trainer)
         self.assertIn("trace_matches_5_10x4_5", trainer)
         self.assertIn("bridge_has_finite_nonzero_gradients", trainer)
@@ -67,4 +72,3 @@ class AudioX4SharedStoreStaticTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
