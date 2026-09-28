@@ -1,5 +1,18 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-28：x4 MeSH 音频 shared-store 隔离训练线
+
+新增隔离路线 audio_5_10x4_5_mesh_mellow_shared_store_configurable_epochs。
+文本模型从 x4 三分之一 epoch 的 checkpoint-003081 仅加载模型与 tokenizer，音频训练
+从 global step 0 开始，不继承文本 optimizer、scheduler、RNG 或数据游标。HTSAT 保持
+冻结；Mellow c2l、原有 768→576→576 映射层和完整 x4 文本模型参与训练。固定保留两个
+129-token 音频槽和两个分隔符：结构性单音频行的第二槽使用 GPU 运行时创建的全零
+waveform，不复用第一槽真实音频；双音频行正常使用两个真实输入。训练使用完整 unique
+waveform store、全 manifest shuffle、8 GPU × microbatch 8 × GA 4、3 epochs、
+LR 1e-3→1e-4、每 500 步保存并保留最新 4 份。smoke、resume 和 formal 提交入口全部
+使用 pdgpu-3090。完整合同与命令见
+code/RSmol/audio_5_10x4_5_mesh_mellow_shared_store_configurable_epochs/README.md。
+
 ## 2026-09-28：文本 5-10x6-5 MeSH 隔离训练线
 
 在已成功启动的文本 5-10x4-5 最终 direct-parquet 路线基础上，新增完全隔离的 5-10x6-5 MeSH 路线：20 个物理 decoder 层执行 70 个逻辑层，十层中段循环六次；每次 forward 使用 7 个瞬时记忆槽，前段结束后和六次中段循环后分别使用一组独立 write/read routers，共 7 组、14 个 router 模块。20 个继承物理层继续使用 5-10x2-5/x4 相同的 30→20 层映射，新 routers 按七槽合同确定性初始化。
