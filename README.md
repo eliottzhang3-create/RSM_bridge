@@ -1,5 +1,11 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-28：文本 5-10x6-5 MeSH 隔离训练线
+
+在已成功启动的文本 5-10x4-5 最终 direct-parquet 路线基础上，新增完全隔离的 5-10x6-5 MeSH 路线：20 个物理 decoder 层执行 70 个逻辑层，十层中段循环六次；每次 forward 使用 7 个瞬时记忆槽，前段结束后和六次中段循环后分别使用一组独立 write/read routers，共 7 组、14 个 router 模块。20 个继承物理层继续使用 5-10x2-5/x4 相同的 30→20 层映射，新 routers 按七槽合同确定性初始化。
+
+模型转换仍从干净的 /hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10-5 在 CPU 终端执行。训练保持 x4 最终合同：8 ranks、每卡 microbatch 4、GA 32、effective global batch 1024、context 1024；直接流式读取远程挂载 parquet，按排序后 shard index modulo 8 固定分片，不在正式训练中复制到 /dev/shm。训练目标为三分之一历史 epoch，即 3,081 optimizer steps；warmup 155 steps，LR 从 1e-3 cosine 降至 1e-4；每 500 步和最终步保存，只保留最近 3 个完整 checkpoint。Stage-1、smoke、resume 和 formal 提交入口均使用 pdgpu-3090。完整合同和命令见 code/RSmol/text_5_10x6_5_mesh/README.md。
+
 ## 2026-09-27：文本 5-10x4-5 MeSH 隔离训练线代码就绪
 
 新增隔离文本路线 5-10x4-5-mesh：20 个物理层执行 50 个逻辑层，十层中段循环四次，使用 7 个瞬时记忆槽和 5 组独立 write/read routers。训练保持旧文本 5-10x2-5 的 8-rank 固定 parquet 分片分配、microbatch 8、GA 16 和 1024-token 合同；正式训练固定为 2 个 epoch，每 epoch 9,244 optimizer steps，总计 18,488 steps，925-step warmup，LR 从 1e-3 cosine 降至 1e-4。每 500 steps 和最终步保存 checkpoint，只保留最近三份。
