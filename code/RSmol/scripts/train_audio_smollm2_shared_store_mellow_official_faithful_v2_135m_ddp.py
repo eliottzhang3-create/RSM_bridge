@@ -1,0 +1,1357 @@
+#!/usr/bin/env python3
+"""Train the isolated Mellow official-faithful-v2 SmolLM2 baseline."""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import hashlib
+import json
+import os
+import shutil
+import tempfile
+import time
+import traceback
+from datetime import timedelta
+from pathlib import Path
+from typing import Any
+
+import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
+
+import train_audio_smollm2_135m_mellow_ddp as baseline
+from audio_smollm2_135m_mellow.model import AudioSmolLM2Config
+from audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs import (
+    TRAINING_CONTRACT,
+)
+from audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs.data import (
+    ANSWER_TOKENS,
+    MELLOW_REFERENCE_COMMIT,
+    MELLOW_TEMPLATE_BLOB_SHA,
+    MELLOW_VARIABLE_STORE_FORMAT,
+    PROMPT_TOKENS,
+    ReasonAQADataset,
+    SEGMENT_SAMPLES,
+    collate_reasonaqa,
+)
+from audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs.grad_norm_tracker import (
+    GradNormTracker,
+    MELLOW_GRAD_NORM_SOURCE,
+    MELLOW_REFERENCE_COMMIT as GRAD_NORM_REFERENCE_COMMIT,
+)
+from audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs.model import (
+    AUDIO_PREFIX_TOKENS,
+    AUDIO_TOKENS_PER_CLIP,
+    MAPPER_CONTRACT,
+    ORIGINAL_SMOLLM2_CONTRACT,
+    SMOLLM2_HIDDEN_SIZE,
+    AudioSmolLM2Model,
+    OFFICIAL_SEPARATOR_TOKEN_ID,
+)
+from audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs.sampler import (
+    ContiguousDistributedEpochSampler,
+)
+
+CONFIG_FILENAME = "audio_smollm2_mellow_official_faithful_v2_shared_store_config.json"
+DEFAULT_MANIFEST = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10_5_mellow/preflight/stage1_with_clotho_aqa_v2_drop12/reasonaqa_train.jsonl")
+DEFAULT_STORE = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/rsmol_reasonaqa_mellow_faithful_full_waveforms_32k_f32_v2")
+SMOKE_FIRST_STOP = 20
+SMOKE_TOTAL_STEPS = 22
+FORMAL_EPOCHS = 30
+CANONICAL_LR = 1e-3
+CANONICAL_WEIGHT_DECAY = 1e-4
+QUALIFICATION_MICRO_BATCH = 4
+QUALIFICATION_GRAD_ACCUM = 1
+QUALIFICATION_GLOBAL_BATCH = 32
+FORMAL_MICRO_BATCH = 8
+FORMAL_GRAD_ACCUM = 4
+FORMAL_GLOBAL_BATCH = 256
+CANONICAL_SEED = 1234
+CANONICAL_SAVE_EVERY_STEPS = 5_000
+CANONICAL_CHECKPOINT_RETENTION = 4
+GRAD_TRACKER_INITIAL_L2_NORM = 0.5
+GRAD_TRACKER_INITIAL_MAX_NORM = 5.0
+GRAD_TRACKER_OVERDRIVE_FACTOR = 2.5
+GRAD_TRACKER_MOMENTUM = 0.995
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("smoke", "reference", "formal"), required=True)
+    parser.add_argument("--train-manifest", type=Path, required=True)
+    parser.add_argument("--unique-waveform-store-dir", type=Path, required=True)
+    parser.add_argument("--persistent-manifest-source", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--persistent-store-source", type=Path, default=DEFAULT_STORE)
+    parser.add_argument("--store-copy-seconds", type=float, required=True)
+    parser.add_argument("--manifest-copy-seconds", type=float, required=True)
+    parser.add_argument("--staging-total-seconds", type=float, required=True)
+    parser.add_argument("--model-path", type=Path, default=Path(baseline.DEFAULT_MODEL))
+    parser.add_argument("--tokenizer-path", type=Path)
+    parser.add_argument("--htsat-checkpoint", type=Path, default=Path(baseline.DEFAULT_HTSAT))
+    parser.add_argument("--mellow-root", type=Path, default=Path(baseline.DEFAULT_MELLOW))
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--resume-from", type=Path)
+    parser.add_argument("--smoke20-report", type=Path)
+    parser.add_argument("--smoke-resume-report", type=Path)
+    parser.add_argument("--reference22-report", type=Path)
+    parser.add_argument("--epochs", type=int, required=True)
+    parser.add_argument("--world-size", type=int, default=8)
+    parser.add_argument("--micro-batch-size", type=int, default=QUALIFICATION_MICRO_BATCH)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=QUALIFICATION_GRAD_ACCUM)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--learning-rate", type=float, default=CANONICAL_LR)
+    parser.add_argument("--weight-decay", type=float, default=CANONICAL_WEIGHT_DECAY)
+    parser.add_argument("--save-every-steps", type=int, default=CANONICAL_SAVE_EVERY_STEPS)
+    parser.add_argument("--checkpoint-retention", type=int, default=CANONICAL_CHECKPOINT_RETENTION)
+    parser.add_argument("--seed", type=int, default=CANONICAL_SEED)
+    parser.add_argument("--dist-timeout-minutes", type=int, default=30)
+    return parser.parse_args(argv)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def route_code_identity() -> dict[str, str]:
+    route_root = Path(__file__).resolve().parents[1]
+    files = {
+        "trainer": Path(__file__).resolve(),
+        "entry": Path(__file__).resolve().with_name(
+            "train_audio_smollm2_shared_store_configurable_epochs_135m_mellow_official_faithful_v2_ddp.py"
+        ),
+        "package_init": route_root / "audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs" / "__init__.py",
+        "data": route_root / "audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs" / "data.py",
+        "model": route_root / "audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs" / "model.py",
+        "sampler": route_root / "audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs" / "sampler.py",
+        "templates": route_root / "audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs" / "mellow_templates.py",
+        "grad_norm_tracker": route_root / "audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs" / "grad_norm_tracker.py",
+    }
+    missing = [str(path) for path in files.values() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"route code identity lacks files: {missing}")
+    return {name: sha256(path) for name, path in files.items()}
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def gather(value: Any, world: int) -> list[Any]:
+    values: list[Any] = [None] * world
+    if world > 1:
+        dist.all_gather_object(values, value)
+    else:
+        values[0] = value
+    return values
+
+
+def _hash_value(digest: Any, value: Any) -> None:
+    """Add a deterministic nested Python/Torch value to a SHA256 digest."""
+    if torch.is_tensor(value):
+        tensor = value.detach().cpu().contiguous()
+        digest.update(b"tensor\0")
+        digest.update(str(tensor.dtype).encode("utf-8") + b"\0")
+        digest.update(json.dumps(list(tensor.shape)).encode("utf-8") + b"\0")
+        # Adam stores its per-parameter step as a zero-dimensional tensor.
+        # Flatten first because PyTorch forbids changing the element size of a
+        # zero-dimensional tensor directly with view(torch.uint8).
+        digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes(order="C"))
+        return
+    if isinstance(value, dict):
+        digest.update(b"dict\0")
+        for key in sorted(value, key=lambda item: str(item)):
+            _hash_value(digest, str(key))
+            _hash_value(digest, value[key])
+        return
+    if isinstance(value, (list, tuple)):
+        digest.update(b"sequence\0")
+        for item in value:
+            _hash_value(digest, item)
+        return
+    digest.update(type(value).__name__.encode("utf-8") + b"\0")
+    digest.update(repr(value).encode("utf-8") + b"\0")
+
+
+def stochastic_rng_fingerprint(device: torch.device) -> str:
+    """Fingerprint the RNG streams used by dataset/model stochastic steps."""
+    digest = hashlib.sha256()
+    digest.update(torch.get_rng_state().cpu().numpy().tobytes())
+    digest.update(torch.cuda.get_rng_state(device).cpu().numpy().tobytes())
+    return digest.hexdigest()
+
+
+def value_sha256(value: Any) -> str:
+    digest = hashlib.sha256()
+    _hash_value(digest, value)
+    return digest.hexdigest()
+
+
+def grad_norm_contract() -> dict[str, Any]:
+    return {
+        "algorithm": "Mellow GradNormTracker per-parameter L2/max EMA shared-min-scale",
+        "source_commit": GRAD_NORM_REFERENCE_COMMIT,
+        "source_symbol": MELLOW_GRAD_NORM_SOURCE,
+        "initial_l2_norm": GRAD_TRACKER_INITIAL_L2_NORM,
+        "initial_max_norm": GRAD_TRACKER_INITIAL_MAX_NORM,
+        "overdrive_factor": GRAD_TRACKER_OVERDRIVE_FACTOR,
+        "momentum": GRAD_TRACKER_MOMENTUM,
+        "fixed_clip_grad_norm": None,
+    }
+
+
+def grad_norm_tracker_reference_audit() -> dict[str, Any]:
+    """Exercise the pinned tracker math and its checkpoint continuation."""
+    first = GradNormTracker(
+        initial_l2_norm=GRAD_TRACKER_INITIAL_L2_NORM,
+        initial_max_norm=GRAD_TRACKER_INITIAL_MAX_NORM,
+        overdrive_factor=GRAD_TRACKER_OVERDRIVE_FACTOR,
+        momentum=GRAD_TRACKER_MOMENTUM,
+    )
+    parameter0 = torch.nn.Parameter(torch.zeros(2, dtype=torch.float64))
+    parameter1 = torch.nn.Parameter(torch.zeros(2, dtype=torch.float64))
+    parameter0.grad = torch.tensor([3.0, 4.0], dtype=torch.float64)
+    parameter1.grad = torch.tensor([0.2, -0.1], dtype=torch.float64)
+    total_norm, scale = first.track_and_clip_([
+        ("parameter0", parameter0),
+        ("parameter1", parameter1),
+    ])
+    expected_total = (25.0 + 0.05) ** 0.5
+    if abs(total_norm - expected_total) > 1e-12 or abs(scale - 0.25) > 1e-12:
+        raise RuntimeError(
+            f"GradNormTracker reference mismatch: total={total_norm}, scale={scale}"
+        )
+    if not torch.allclose(
+        parameter0.grad,
+        torch.tensor([0.75, 1.0], dtype=torch.float64),
+        rtol=0.0,
+        atol=1e-12,
+    ):
+        raise RuntimeError("GradNormTracker shared scaling reference failed")
+
+    saved_state = first.state_dict()
+    resumed = GradNormTracker(
+        initial_l2_norm=GRAD_TRACKER_INITIAL_L2_NORM,
+        initial_max_norm=GRAD_TRACKER_INITIAL_MAX_NORM,
+        overdrive_factor=GRAD_TRACKER_OVERDRIVE_FACTOR,
+        momentum=GRAD_TRACKER_MOMENTUM,
+    )
+    resumed.load_state_dict(saved_state)
+    continuous_parameters = [
+        torch.nn.Parameter(torch.zeros(2, dtype=torch.float64)),
+        torch.nn.Parameter(torch.zeros(2, dtype=torch.float64)),
+    ]
+    resumed_parameters = [
+        torch.nn.Parameter(torch.zeros(2, dtype=torch.float64)),
+        torch.nn.Parameter(torch.zeros(2, dtype=torch.float64)),
+    ]
+    next_gradients = (
+        torch.tensor([1.0, -0.5], dtype=torch.float64),
+        torch.tensor([2.0, 0.0], dtype=torch.float64),
+    )
+    for parameter, gradient in zip(continuous_parameters, next_gradients):
+        parameter.grad = gradient.clone()
+    for parameter, gradient in zip(resumed_parameters, next_gradients):
+        parameter.grad = gradient.clone()
+    continuous_result = first.track_and_clip_([
+        ("parameter0", continuous_parameters[0]),
+        ("parameter1", continuous_parameters[1]),
+    ])
+    resumed_result = resumed.track_and_clip_([
+        ("parameter0", resumed_parameters[0]),
+        ("parameter1", resumed_parameters[1]),
+    ])
+    if continuous_result != resumed_result or first.state_dict() != resumed.state_dict():
+        raise RuntimeError("GradNormTracker state_dict resume reference failed")
+    for continuous_parameter, resumed_parameter in zip(
+        continuous_parameters, resumed_parameters
+    ):
+        if not torch.equal(continuous_parameter.grad, resumed_parameter.grad):
+            raise RuntimeError("GradNormTracker resumed gradient scaling diverged")
+    return {
+        "passed": True,
+        "first_total_l2_norm": total_norm,
+        "first_scale": scale,
+        "state_sha256_after_first_step": value_sha256(saved_state),
+        "continued_result": list(continuous_result),
+        "continued_state_sha256": value_sha256(first.state_dict()),
+        "contract": grad_norm_contract(),
+    }
+
+
+def training_state_fingerprint(
+    model: Any,
+    optimizer: Any,
+    scheduler: Any,
+    grad_norm_tracker: GradNormTracker,
+) -> dict[str, Any]:
+    model_digest = hashlib.sha256()
+    trainable_names: list[str] = []
+    trainable_elements = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        trainable_names.append(name)
+        trainable_elements += int(parameter.numel())
+        _hash_value(model_digest, name)
+        _hash_value(model_digest, parameter)
+    optimizer_digest = hashlib.sha256()
+    _hash_value(optimizer_digest, optimizer.state_dict())
+    scheduler_digest = hashlib.sha256()
+    _hash_value(scheduler_digest, scheduler.state_dict())
+    tracker_digest = hashlib.sha256()
+    _hash_value(tracker_digest, grad_norm_tracker.state_dict())
+    htsat_buffers = model.htsat_buffer_state()
+    return {
+        "trainable_model_sha256": model_digest.hexdigest(),
+        "optimizer_sha256": optimizer_digest.hexdigest(),
+        "scheduler_sha256": scheduler_digest.hexdigest(),
+        "grad_norm_tracker_sha256": tracker_digest.hexdigest(),
+        "htsat_buffers_sha256": value_sha256(htsat_buffers),
+        "htsat_buffer_count": len(htsat_buffers),
+        "trainable_parameter_count": len(trainable_names),
+        "trainable_element_count": trainable_elements,
+    }
+
+
+def gather_to_rank0(value: Any, world: int, rank: int) -> list[Any] | None:
+    if world == 1:
+        return [value]
+    gathered: list[Any] | None = [None] * world if rank == 0 else None
+    dist.gather_object(value, object_gather_list=gathered, dst=0)
+    return gathered
+
+
+def htsat_buffer_change_audit(
+    before: dict[str, torch.Tensor],
+    after: dict[str, torch.Tensor],
+) -> dict[str, Any]:
+    if set(before) != set(after):
+        raise RuntimeError("HTSAT buffer inventory changed during training")
+    changed = [name for name in sorted(before) if not torch.equal(before[name], after[name])]
+    batch_norm_candidates = [
+        name
+        for name in sorted(before)
+        if name.endswith(("running_mean", "running_var", "num_batches_tracked"))
+    ]
+    candidate_set = set(batch_norm_candidates)
+    changed_batch_norm = [name for name in changed if name in candidate_set]
+    return {
+        "passed": bool(batch_norm_candidates and changed_batch_norm),
+        "buffer_count": len(before),
+        "batch_norm_buffer_count": len(batch_norm_candidates),
+        "changed_buffer_count": len(changed),
+        "changed_batch_norm_buffer_count": len(changed_batch_norm),
+        "changed_buffer_names_sample": changed[:20],
+        "changed_batch_norm_names_sample": changed_batch_norm[:20],
+        "before_sha256": value_sha256(before),
+        "after_sha256": value_sha256(after),
+    }
+
+
+def broadcast_epoch_state(model: Any, optimizer: Any, world: int) -> dict[str, Any]:
+    if world <= 1:
+        return {"passed": True, "model_tensors": 0, "optimizer_tensors": 0}
+    model_tensors = 0
+    for value in model.state_dict().values():
+        if torch.is_tensor(value):
+            if value.device.type == "cuda":
+                dist.broadcast(value, src=0)
+            else:
+                payload = [value if dist.get_rank() == 0 else None]
+                dist.broadcast_object_list(payload, src=0)
+                value.copy_(payload[0])
+            model_tensors += 1
+    optimizer_tensors = 0
+    for group in optimizer.param_groups:
+        for parameter in group["params"]:
+            state = optimizer.state.get(parameter, {})
+            for key in sorted(state):
+                value = state[key]
+                if torch.is_tensor(value):
+                    if value.device.type == "cuda":
+                        dist.broadcast(value, src=0)
+                    else:
+                        payload = [value if dist.get_rank() == 0 else None]
+                        dist.broadcast_object_list(payload, src=0)
+                        state[key] = payload[0]
+                    optimizer_tensors += 1
+                else:
+                    payload = [value]
+                    dist.broadcast_object_list(payload, src=0)
+                    state[key] = payload[0]
+    dist.barrier()
+    return {
+        "passed": True,
+        "source_rank": 0,
+        "model_tensors": model_tensors,
+        "optimizer_tensors": optimizer_tensors,
+    }
+
+
+def compare_reference22(
+    reference_path: Path,
+    trace_tail: list[dict[str, Any]],
+    fingerprint: dict[str, Any],
+    *,
+    shape: dict[str, int],
+    inventory: dict[str, Any],
+) -> dict[str, Any]:
+    reference = read_json(reference_path.resolve(strict=True))
+    if reference.get("status") != "PASS" or reference.get("mode") != "reference":
+        raise RuntimeError("reference22 report is not a passing uninterrupted reference run")
+    if reference.get("start_global_step") != 0 or reference.get("end_global_step") != 22:
+        raise RuntimeError("reference22 report has the wrong cursor range")
+    if reference.get("training_contract") != TRAINING_CONTRACT:
+        raise RuntimeError("reference22 report has the wrong training contract")
+    if reference.get("shape") != shape or reference.get("route_code_sha256") != route_code_identity():
+        raise RuntimeError("reference22 report differs in training shape or route code")
+    expected_optimizer = {
+        "name": "Adam",
+        "lr": CANONICAL_LR,
+        "weight_decay": CANONICAL_WEIGHT_DECAY,
+        "scheduler": "CosineAnnealingLR_epoch_level",
+        "warmup_steps": 0,
+    }
+    if reference.get("optimizer_contract") != expected_optimizer:
+        raise RuntimeError("reference22 report has the wrong optimizer contract")
+    for key in ("manifest_sha256", "index_sha256", "waveform_sha256", "total_waveform_bytes"):
+        if reference.get("store_inventory", {}).get(key) != inventory.get(key):
+            raise RuntimeError(f"reference22 store differs in {key}")
+    expected_trace = reference.get("resume_comparison_trace")
+    if expected_trace != trace_tail:
+        mismatch = first_trace_mismatch(expected_trace, trace_tail)
+        raise RuntimeError(
+            "resumed stochastic row/audio/crop/template/loss trace differs from "
+            f"reference22 at {mismatch}"
+        )
+    expected_fingerprint = reference.get("training_state_fingerprint")
+    if expected_fingerprint != fingerprint:
+        raise RuntimeError("resumed model/optimizer/scheduler fingerprint differs from reference22")
+    return {
+        "passed": True,
+        "reference22_report": str(reference_path.resolve()),
+        "trace_exact_match": True,
+        "training_state_exact_match": True,
+    }
+
+
+def first_trace_mismatch(expected: Any, actual: Any, path: str = "trace") -> str:
+    """Locate the first divergence without hiding data or numerical differences."""
+    if type(expected) is not type(actual):
+        return f"{path}: types {type(expected).__name__} != {type(actual).__name__}"
+    if isinstance(expected, dict):
+        if set(expected) != set(actual):
+            return f"{path}: keys {sorted(expected)} != {sorted(actual)}"
+        for key in expected:
+            if expected[key] != actual[key]:
+                return first_trace_mismatch(expected[key], actual[key], f"{path}.{key}")
+    elif isinstance(expected, list):
+        if len(expected) != len(actual):
+            return f"{path}: lengths {len(expected)} != {len(actual)}"
+        for index, (left, right) in enumerate(zip(expected, actual)):
+            if left != right:
+                return first_trace_mismatch(left, right, f"{path}[{index}]")
+    elif expected != actual:
+        return f"{path}: expected={expected!r}, actual={actual!r}"
+    return f"{path}: unknown mismatch"
+
+
+def prune_formal_checkpoints(output_dir: Path, keep: int) -> list[str]:
+    checkpoints: list[tuple[int, Path]] = []
+    for path in output_dir.glob("checkpoint-*"):
+        marker_path = path / "checkpoint_complete.json"
+        if not path.is_dir() or not marker_path.is_file():
+            continue
+        marker = read_json(marker_path)
+        if marker.get("status") == "complete" and marker.get("contract") == TRAINING_CONTRACT:
+            checkpoints.append((int(marker.get("global_step", -1)), path))
+    checkpoints.sort()
+    for _, path in checkpoints[:-keep]:
+        shutil.rmtree(path)
+    return [str(path) for _, path in checkpoints[-keep:]]
+
+
+def store_inventory(args: argparse.Namespace) -> dict[str, Any]:
+    staged = args.unique_waveform_store_dir.resolve(strict=True)
+    source = args.persistent_store_source.resolve(strict=True)
+    staged_manifest = args.train_manifest.resolve(strict=True)
+    source_manifest = args.persistent_manifest_source.resolve(strict=True)
+    if Path("/dev/shm") not in staged.parents or Path("/dev/shm") not in staged_manifest.parents:
+        raise RuntimeError("staged store and manifest must be under /dev/shm")
+    required_files = ("metadata.json", "index.jsonl", "waveforms.f32")
+    for root in (source, staged):
+        if (root / "BUILDING").exists():
+            raise RuntimeError(f"store is BUILDING: {root}")
+        missing = [name for name in required_files if not (root / name).is_file()]
+        if missing:
+            raise RuntimeError(f"store {root} lacks {missing}")
+    source_meta, staged_meta = read_json(source / "metadata.json"), read_json(staged / "metadata.json")
+    if sha256(source / "metadata.json") != sha256(staged / "metadata.json"):
+        raise RuntimeError("source/staged metadata differs")
+    expected = {
+        "status": "PASS", "format": MELLOW_VARIABLE_STORE_FORMAT,
+        "mellow_reference_commit": MELLOW_REFERENCE_COMMIT,
+        "sample_rate": 32000, "dtype": "float32", "byte_order": "little",
+        "data_file": "waveforms.f32",
+    }
+    for label, metadata in (("source", source_meta), ("staged", staged_meta)):
+        mismatch = {key: (value, metadata.get(key)) for key, value in expected.items() if metadata.get(key) != value}
+        if mismatch:
+            raise RuntimeError(f"{label} store contract mismatch: {mismatch}")
+    identity_keys = (
+        "manifest_sha256", "source_inventory_sha256", "index_sha256",
+        "waveform_sha256", "num_unique_audio_files", "filepath1_unique_pool_size",
+        "total_waveform_bytes",
+    )
+    mismatch = {key: (source_meta.get(key), staged_meta.get(key)) for key in identity_keys if source_meta.get(key) != staged_meta.get(key)}
+    if mismatch:
+        raise RuntimeError(f"source/staged store identity differs: {mismatch}")
+    if sha256(source_manifest) != source_meta["manifest_sha256"] or sha256(staged_manifest) != source_meta["manifest_sha256"]:
+        raise RuntimeError("manifest/store identity mismatch")
+    for name, metadata_key in (("index.jsonl", "index_sha256"),):
+        if sha256(source / name) != source_meta[metadata_key] or sha256(staged / name) != source_meta[metadata_key]:
+            raise RuntimeError(f"{name} SHA256 mismatch")
+    expected_bytes = int(source_meta["total_waveform_bytes"])
+    if (source / "waveforms.f32").stat().st_size != expected_bytes or (staged / "waveforms.f32").stat().st_size != expected_bytes:
+        raise RuntimeError("waveform byte-size mismatch")
+    return {
+        "persistent_store_source": str(source), "persistent_manifest_source": str(source_manifest),
+        "staged_store_path": str(staged), "staged_manifest_path": str(staged_manifest),
+        "metadata_sha256": sha256(source / "metadata.json"),
+        **{key: source_meta[key] for key in identity_keys},
+        "total_waveform_gib": expected_bytes / 1024**3,
+        "preprocessing_contract": source_meta.get("preprocessing_contract"),
+    }
+
+
+def load_model(args: argparse.Namespace, device: torch.device) -> tuple[AudioSmolLM2Model, Any]:
+    from transformers import AutoTokenizer
+    model_path = args.resume_from / "text_model" if args.resume_from else args.model_path
+    tokenizer_path = args.tokenizer_path or (args.resume_from / "tokenizer" if args.resume_from else model_path)
+    text_model = baseline._load_text_backbone(model_path)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
+    old_vocab = len(tokenizer)
+    tokenizer.add_special_tokens({"pad_token": "!"})
+    if tokenizer.pad_token_id != tokenizer.convert_tokens_to_ids("!"):
+        raise RuntimeError("Mellow tokenizer pad token must be literal !")
+    if len(tokenizer) != old_vocab:
+        text_model.resize_token_embeddings(len(tokenizer))
+    text_model.config.pad_token_id = int(tokenizer.pad_token_id)
+    wrapper, htsat, provenance = baseline._load_mellow_wrapper(args.mellow_root, args.htsat_checkpoint, device)
+    if args.resume_from:
+        text_state_path = args.resume_from / "text_model_state.pt"
+        if not text_state_path.is_file():
+            raise RuntimeError(
+                "resume checkpoint lacks the exact text_model_state.pt; "
+                "this checkpoint predates exact-resume state capture"
+            )
+        exact_text_state = torch.load(text_state_path, map_location=device, weights_only=False)
+        if not isinstance(exact_text_state, dict) or not exact_text_state:
+            raise RuntimeError("resume checkpoint exact text model state is empty")
+        text_model.load_state_dict(exact_text_state, strict=True)
+    model = AudioSmolLM2Model(text_model.to(device), tokenizer, wrapper, htsat, AudioSmolLM2Config(compact_single_audio_prefix=False))
+    if args.resume_from:
+        audio_state = torch.load(args.resume_from / "audio_bridge.pt", map_location=device, weights_only=False)
+        model.bridge.load_state_dict(audio_state["bridge"], strict=True)
+        model.htsat_wrapper.c2l.load_state_dict(audio_state["c2l"], strict=True)
+    model._audio_provenance = provenance
+    model._text_model_source = str(args.model_path.resolve())
+    return model.to(device), tokenizer
+
+
+def training_shape(args: argparse.Namespace, rows: int) -> dict[str, int]:
+    global_batch = args.world_size * args.micro_batch_size * args.gradient_accumulation_steps
+    expected_global_batch = FORMAL_GLOBAL_BATCH if args.mode == "formal" else QUALIFICATION_GLOBAL_BATCH
+    if global_batch != expected_global_batch:
+        raise RuntimeError(
+            f"{args.mode} mode requires effective global batch {expected_global_batch}, "
+            f"got {global_batch}"
+        )
+    steps_per_epoch = rows // global_batch
+    if steps_per_epoch <= 0:
+        raise RuntimeError("dataset is shorter than one global batch")
+    return {
+        "global_batch_size": global_batch,
+        "steps_per_epoch": steps_per_epoch,
+        "microbatches_per_epoch": steps_per_epoch * args.gradient_accumulation_steps,
+        "dropped_rows_per_epoch": rows - steps_per_epoch * global_batch,
+        "total_steps": steps_per_epoch * args.epochs,
+    }
+
+
+def checkpoint_config(args: argparse.Namespace, inventory: dict[str, Any], shape: dict[str, int], model: Any) -> dict[str, Any]:
+    source_config = args.model_path.resolve() / "config.json"
+    return {
+        "contract": TRAINING_CONTRACT,
+        "architecture_contract": ORIGINAL_SMOLLM2_CONTRACT,
+        "mapper_contract": MAPPER_CONTRACT,
+        "mellow_reference_commit": MELLOW_REFERENCE_COMMIT,
+        "mellow_template_blob_sha": MELLOW_TEMPLATE_BLOB_SHA,
+        "route_code_sha256": route_code_identity(),
+        "text_model_source_path": str(args.model_path.resolve()),
+        "text_model_source_config_sha256": sha256(source_config) if source_config.is_file() else None,
+        "standard_text_contract": model.text_contract,
+        "mapper_initialization": "random_c2l_and_xavier_projection",
+        "sequence_contract": {
+            "audio1_tokens": 129, "separator1_tokens": 1, "audio2_tokens": 129,
+            "separator2_tokens": 1, "prompt_tokens": PROMPT_TOKENS,
+            "answer_tokens": ANSWER_TOKENS, "total_tokens": 639,
+            "answer_logit_slice": [388, 638], "text_attention_mask_passed": False,
+            "separator_token_id": OFFICIAL_SEPARATOR_TOKEN_ID,
+        },
+        "separator_contract": model.separator_contract(),
+        "htsat_runtime_contract": {
+            "parameters_frozen": True,
+            "module_training": True,
+            "mutable_buffers_saved_by_rank": True,
+            "epoch_boundary_rank0_state_broadcast": True,
+        },
+        "htsat_buffer_inventory": [
+            {
+                "name": name,
+                "shape": list(value.shape),
+                "dtype": str(value.dtype),
+            }
+            for name, value in sorted(model.htsat_buffer_state().items())
+        ],
+        "audio_slot_contract": "missing audio2 samples uniformly from non-empty filepath1 pool; both HTSAT passes are independent",
+        "crop_contract": "uniform random inclusive offset for clips longer than 320000 samples; right-zero-pad shorter clips",
+        "template_contract": "verbatim public Mellow data/template.py and audiotext_dataset.py dispatch",
+        "store_identity": {
+            key: inventory[key]
+            for key in (
+                "persistent_store_source", "persistent_manifest_source", "manifest_sha256",
+                "metadata_sha256", "index_sha256", "waveform_sha256",
+                "num_unique_audio_files", "filepath1_unique_pool_size", "total_waveform_bytes",
+            )
+        },
+        "mode": args.mode, "epochs": args.epochs, "world_size": args.world_size,
+        "micro_batch_size": args.micro_batch_size, "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "effective_global_batch_size": shape["global_batch_size"], "num_workers": args.num_workers,
+        "seed": args.seed, "optimizer": "Adam", "optimizer_betas": [0.9, 0.999],
+        "optimizer_eps": 1e-8, "learning_rate": args.learning_rate,
+        "weight_decay": args.weight_decay, "scheduler": "CosineAnnealingLR_epoch_level",
+        "scheduler_t_max_epochs": args.epochs, "scheduler_eta_min": 0.0,
+        "warmup_steps": 0, "gradient_control": grad_norm_contract(),
+        "autocast": False,
+        "grad_scaler": {
+            "enabled": False,
+            "call_order": ["scale_backward", "unscale_optimizer", "grad_norm_tracker", "step", "update"],
+        },
+        "total_steps": shape["total_steps"], "steps_per_epoch": shape["steps_per_epoch"],
+        "save_every_steps": args.save_every_steps,
+        "checkpoint_retention": args.checkpoint_retention,
+        "htsat_checkpoint": str(args.htsat_checkpoint.resolve()), "mellow_root": str(args.mellow_root.resolve()),
+        "mellow_provenance": model._audio_provenance,
+    }
+
+
+def save_checkpoint(
+    path: Path,
+    model: Any,
+    tokenizer: Any,
+    optimizer: Any,
+    scheduler: Any,
+    grad_norm_tracker: GradNormTracker,
+    args: argparse.Namespace,
+    inventory: dict[str, Any],
+    shape: dict[str, int],
+    cursor: dict[str, int],
+    rank: int,
+    world: int,
+    device: torch.device,
+) -> None:
+    rng_states = gather(baseline._rng_state(device), world)
+    htsat_buffers_by_rank = gather_to_rank0(model.htsat_buffer_state(), world, rank)
+    if rank != 0:
+        return
+    if path.exists():
+        raise FileExistsError(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent))
+    published = False
+    try:
+        model.text_model.save_pretrained(temporary / "text_model", safe_serialization=False)
+        # Keep the exact in-memory state in addition to the HF artifact.  The
+        # latter is useful for inspection, but direct state loading is required
+        # for bitwise resume equivalence (including tied embeddings).
+        torch.save(model.text_model.state_dict(), temporary / "text_model_state.pt")
+        tokenizer.save_pretrained(temporary / "tokenizer")
+        torch.save(baseline._trainable_state(model), temporary / "audio_bridge.pt")
+        torch.save(
+            {str(index): state for index, state in enumerate(htsat_buffers_by_rank or [])},
+            temporary / "htsat_buffers_by_rank.pt",
+        )
+        torch.save({
+            "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
+            "scheduler_name": "CosineAnnealingLR_epoch_level",
+            "optimizer_name": "Adam", "training_contract": TRAINING_CONTRACT,
+            "grad_norm_tracker_state": grad_norm_tracker.state_dict(),
+            "grad_norm_tracker_contract": grad_norm_contract(),
+            "grad_scaler_state": {},
+            "global_step": cursor["global_step"], "cursor": cursor,
+            "rng_states_by_rank": {str(index): state for index, state in enumerate(rng_states)},
+            "optimizer_parameter_names": [name for name, parameter in model.named_parameters() if parameter.requires_grad],
+        }, temporary / "training_state.pt")
+        config = checkpoint_config(args, inventory, shape, model)
+        config.update({"global_step": cursor["global_step"], "epoch": cursor["epoch"], "batch_in_epoch": cursor["batch_in_epoch"], "scheduler_last_epoch": scheduler.last_epoch})
+        (temporary / CONFIG_FILENAME).write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        required = [
+            "text_model", "text_model_state.pt", "tokenizer", "audio_bridge.pt",
+            "htsat_buffers_by_rank.pt", "training_state.pt", CONFIG_FILENAME,
+        ]
+        marker = {"status": "complete", "contract": TRAINING_CONTRACT, "global_step": cursor["global_step"], "required": required}
+        (temporary / "checkpoint_complete.json").write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
+        if not baseline._text_model_weight_files(temporary / "text_model"):
+            raise RuntimeError("checkpoint has no text-model weights")
+        temporary.replace(path)
+        published = True
+    finally:
+        if not published:
+            shutil.rmtree(temporary, ignore_errors=True)
+
+
+def validate_checkpoint(path: Path, args: argparse.Namespace, inventory: dict[str, Any], shape: dict[str, int], model: Any, expected_step: int | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    path = path.resolve(strict=True)
+    marker, config = read_json(path / "checkpoint_complete.json"), read_json(path / CONFIG_FILENAME)
+    if marker.get("status") != "complete" or marker.get("contract") != TRAINING_CONTRACT or config.get("contract") != TRAINING_CONTRACT:
+        raise RuntimeError("checkpoint contract/completion marker failed")
+    if expected_step is not None and int(marker.get("global_step", -1)) != expected_step:
+        raise RuntimeError("checkpoint global step mismatch")
+    expected = checkpoint_config(args, inventory, shape, model)
+    for key in expected:
+        if config.get(key) != expected.get(key):
+            raise RuntimeError(f"checkpoint contract differs in {key}")
+    for name in marker.get("required", []):
+        if not (path / name).exists():
+            raise RuntimeError(f"checkpoint lacks {name}")
+    state = torch.load(path / "training_state.pt", map_location="cpu", weights_only=False)
+    if state.get("training_contract") != TRAINING_CONTRACT or state.get("optimizer_name") != "Adam" or state.get("scheduler_name") != "CosineAnnealingLR_epoch_level":
+        raise RuntimeError("checkpoint optimizer/scheduler contract failed")
+    if state.get("grad_norm_tracker_contract") != grad_norm_contract():
+        raise RuntimeError("checkpoint GradNormTracker contract failed")
+    if not isinstance(state.get("grad_norm_tracker_state"), dict):
+        raise RuntimeError("checkpoint lacks GradNormTracker state")
+    if state.get("grad_scaler_state") != {}:
+        raise RuntimeError("disabled GradScaler checkpoint state must be empty")
+    return config, state
+
+
+def resume_checkpoint(
+    path: Path,
+    args: argparse.Namespace,
+    inventory: dict[str, Any],
+    shape: dict[str, int],
+    optimizer: Any,
+    scheduler: Any,
+    grad_norm_tracker: GradNormTracker,
+    rank: int,
+    device: torch.device,
+    model: Any,
+) -> tuple[dict[str, int], dict[str, Any], dict[str, Any]]:
+    config, state = validate_checkpoint(path, args, inventory, shape, model)
+    baseline._validate_optimizer_coverage(state, model)
+    optimizer.load_state_dict(state["optimizer"])
+    scheduler.load_state_dict(state["scheduler"])
+    grad_norm_tracker.load_state_dict(state["grad_norm_tracker_state"])
+    expected_tracker_sha = value_sha256(state["grad_norm_tracker_state"])
+    restored_tracker_sha = value_sha256(grad_norm_tracker.state_dict())
+    if restored_tracker_sha != expected_tracker_sha:
+        raise RuntimeError("GradNormTracker restore fingerprint mismatch")
+    if not grad_norm_tracker.state_dict():
+        raise RuntimeError("resumed GradNormTracker state is empty")
+    buffers_by_rank = torch.load(
+        path / "htsat_buffers_by_rank.pt", map_location="cpu", weights_only=False,
+    )
+    expected_rank_keys = {str(index) for index in range(args.world_size)}
+    if not isinstance(buffers_by_rank, dict) or set(buffers_by_rank) != expected_rank_keys:
+        raise RuntimeError("resume checkpoint lacks HTSAT buffers for every rank")
+    rank_buffer_state = buffers_by_rank[str(rank)]
+    if not isinstance(rank_buffer_state, dict) or not rank_buffer_state:
+        raise RuntimeError(f"resume checkpoint has empty HTSAT buffer state for rank {rank}")
+    expected_buffer_sha = value_sha256(rank_buffer_state)
+    model.load_htsat_buffer_state(rank_buffer_state)
+    restored_buffer_sha = value_sha256(model.htsat_buffer_state())
+    if restored_buffer_sha != expected_buffer_sha:
+        raise RuntimeError("HTSAT buffer restore fingerprint mismatch")
+    # Adam keeps its non-capturable scalar step on CPU. load_state_dict already
+    # places moment tensors on their parameter device; moving every tensor to
+    # CUDA changes the optimizer's state layout relative to an uninterrupted run.
+    for optimizer_state in optimizer.state.values():
+        step = optimizer_state.get("step")
+        if torch.is_tensor(step) and step.device.type != "cpu":
+            raise RuntimeError("resumed Adam step tensor must remain on CPU")
+    cursor = {key: int(state["cursor"][key]) for key in ("epoch", "batch_in_epoch", "global_step")}
+    if cursor["global_step"] != cursor["epoch"] * shape["steps_per_epoch"] + cursor["batch_in_epoch"]:
+        raise RuntimeError(f"resume cursor is inconsistent: {cursor}")
+    if int(config["global_step"]) != cursor["global_step"] or int(config["epoch"]) != cursor["epoch"] or int(config["batch_in_epoch"]) != cursor["batch_in_epoch"]:
+        raise RuntimeError("resume config/cursor mismatch")
+    rng = state.get("rng_states_by_rank", {})
+    if set(rng) != {str(index) for index in range(args.world_size)}:
+        raise RuntimeError("resume checkpoint lacks all rank RNG states")
+    baseline._restore_rng_state(rng[str(rank)], device)
+    return cursor, rng[str(rank)], {
+        "passed": True,
+        "rank": rank,
+        "htsat_buffer_count": len(rank_buffer_state),
+        "htsat_buffers_sha256": restored_buffer_sha,
+        "grad_norm_tracker_state_sha256": restored_tracker_sha,
+        "grad_norm_tracker_parameter_count": len(grad_norm_tracker.state_dict()),
+    }
+
+
+def data_contract_audit(dataset: ReasonAQADataset) -> dict[str, Any]:
+    single = dual = explicit_same = 0
+    for index in range(len(dataset)):
+        is_single, same = dataset.audio_structure(index)
+        single += int(is_single)
+        dual += int(not is_single)
+        explicit_same += int((not is_single) and same)
+    if single <= 0 or dual <= 0:
+        raise RuntimeError(
+            "manifest must contain both single- and dual-audio rows after "
+            f"restoring normalized filepath2 semantics: single={single}, dual={dual}, "
+            f"rows={len(dataset)}"
+        )
+    return {
+        "passed": True, "rows": len(dataset), "single_audio_rows": single,
+        "dual_audio_rows": dual, "explicit_same_audio_rows": explicit_same,
+        "text_handling": {
+            "startup_full_manifest_scan": False,
+            "policy": "validate lazily; recover metadata aliases and skip unresolved rows",
+            "standalone_cpu_audit": "scripts/audit_mellow_faithful_text_manifest.py",
+        },
+        "single_audio_behavior": "sample audio2 from filepath1 pool; never reuse audio1 embedding",
+        "random_process": "stateful process-wide Python random in public-Mellow call order",
+        "random_audio_pool": "sorted unique non-empty filepath1 paths; uniform choice and self-selection allowed",
+    }
+
+
+def batch_contract_audit(model: Any, batch: dict[str, Any]) -> dict[str, Any]:
+    if tuple(batch["prompt_input_ids"].shape[1:]) != (PROMPT_TOKENS,) or tuple(batch["answer_input_ids"].shape[1:]) != (ANSWER_TOKENS,):
+        raise RuntimeError("fixed prompt/answer shapes failed")
+    if bool(batch["audio2_reused_mask"].any()):
+        raise RuntimeError("Mellow batch reused audio1 embedding")
+    if model.last_multimodal_sequence_length != 639 or model.last_audio_tokens_per_clip != (AUDIO_TOKENS_PER_CLIP, AUDIO_TOKENS_PER_CLIP):
+        raise RuntimeError("Mellow model sequence/audio-token contract failed")
+    labels = model.last_labels
+    if labels is None or labels.shape[1] != 639 or bool((labels[:, :389] != -100).any()):
+        raise RuntimeError("Mellow answer-loss prefix mask failed")
+    expected = batch["answer_input_ids"].masked_fill(batch["answer_input_ids"].eq(int(model.tokenizer.pad_token_id)), -100)
+    if not torch.equal(labels[:, 389:], expected):
+        raise RuntimeError("Mellow answer targets differ from fixed answer tokens")
+    separator_pair = getattr(model, "last_separator_pair_ids", None)
+    if (
+        separator_pair is None
+        or tuple(separator_pair.shape) != (int(batch["prompt_input_ids"].shape[0]), 2)
+        or bool(separator_pair.ne(OFFICIAL_SEPARATOR_TOKEN_ID).any())
+    ):
+        raise RuntimeError("Mellow official separator positions are not both token ID 0")
+    separator_contract = model.separator_contract()
+    if (
+        separator_contract.get("separator_token_id") != OFFICIAL_SEPARATOR_TOKEN_ID
+        or separator_contract.get("separator_equals_pad") is not False
+        or separator_contract.get("pad_token_id") != separator_contract.get("bang_token_id")
+    ):
+        raise RuntimeError(f"separator/padding identity contract failed: {separator_contract}")
+    return {
+        "passed": True, "sequence_tokens": 639, "audio_prefix_tokens": AUDIO_PREFIX_TOKENS,
+        "prompt_tokens": PROMPT_TOKENS, "answer_tokens": ANSWER_TOKENS,
+        "answer_start": 389, "text_attention_mask_passed": False,
+        "random_audio2_rows": int(batch["audio2_random_mask"].sum().item()),
+        "nonzero_crop_offsets": int((batch["audio1_crop_offsets"] > 0).sum().item() + (batch["audio2_crop_offsets"] > 0).sum().item()),
+        "template_groups": sorted(set(batch["template_groups"])),
+        "separator_pair_shape": list(separator_pair.shape),
+        "separator_pair_unique_ids": sorted(set(separator_pair.detach().cpu().reshape(-1).tolist())),
+        "separator_contract": separator_contract,
+    }
+
+
+def formal_gate(args: argparse.Namespace, inventory: dict[str, Any], shape: dict[str, int]) -> dict[str, Any] | None:
+    if args.mode != "formal":
+        return None
+    if args.smoke20_report is None or args.smoke_resume_report is None:
+        raise ValueError("formal requires --smoke20-report and --smoke-resume-report")
+    first = read_json(args.smoke20_report)
+    second = read_json(args.smoke_resume_report)
+    if first.get("status") != "PASS" or first.get("training_contract") != TRAINING_CONTRACT or first.get("start_global_step") != 0 or first.get("end_global_step") != 20:
+        raise RuntimeError("formal gate rejects smoke20 status/cursor")
+    smoke_shape = first.get("shape", {})
+    smoke_rows = (
+        int(smoke_shape.get("steps_per_epoch", -1))
+        * int(smoke_shape.get("global_batch_size", -1))
+        + int(smoke_shape.get("dropped_rows_per_epoch", -1))
+    )
+    formal_rows = (
+        shape["steps_per_epoch"] * shape["global_batch_size"]
+        + shape["dropped_rows_per_epoch"]
+    )
+    if (
+        first.get("epochs") != args.epochs
+        or smoke_shape.get("global_batch_size") != QUALIFICATION_GLOBAL_BATCH
+        or smoke_rows != formal_rows
+    ):
+        raise RuntimeError("formal gate rejects smoke20 dataset or qualification batch geometry")
+    if first.get("optimizer_contract") != {"name": "Adam", "lr": CANONICAL_LR, "weight_decay": CANONICAL_WEIGHT_DECAY, "scheduler": "CosineAnnealingLR_epoch_level", "warmup_steps": 0}:
+        raise RuntimeError("formal gate rejects smoke20 optimizer")
+    if first.get("batch_contract_audit", {}).get("passed") is not True or first.get("first_step_gradient_audit", {}).get("passed") is not True:
+        raise RuntimeError("formal gate rejects smoke20 runtime audit")
+    if first.get("htsat_buffer_change_audit", {}).get("passed") is not True:
+        raise RuntimeError("formal gate rejects smoke20 HTSAT buffer audit")
+    if first.get("grad_norm_tracker_audit", {}).get("passed") is not True:
+        raise RuntimeError("formal gate rejects smoke20 GradNormTracker audit")
+    for key in ("manifest_sha256", "index_sha256", "waveform_sha256", "total_waveform_bytes"):
+        if first.get("store_inventory", {}).get(key) != inventory.get(key):
+            raise RuntimeError(f"formal gate smoke20 store differs in {key}")
+    checkpoints1 = first.get("checkpoints", [])
+    if len(checkpoints1) != 1:
+        raise RuntimeError("formal gate smoke20 checkpoint lineage failed")
+    marker = read_json(Path(checkpoints1[0]) / "checkpoint_complete.json")
+    if marker.get("status") != "complete" or marker.get("contract") != TRAINING_CONTRACT or marker.get("global_step") != 20:
+        raise RuntimeError("formal gate smoke20 checkpoint completion failed")
+    if (
+        second.get("status") != "PASS"
+        or second.get("training_contract") != TRAINING_CONTRACT
+        or second.get("start_global_step") != 20
+        or second.get("end_global_step") != 22
+        or second.get("resume_verified_two_steps") is not True
+    ):
+        raise RuntimeError("formal gate rejects resume2 status/cursor")
+    if second.get("shape") != smoke_shape:
+        raise RuntimeError("formal gate rejects resume2 training shape")
+    if second.get("optimizer_contract") != first.get("optimizer_contract"):
+        raise RuntimeError("formal gate rejects resume2 optimizer contract")
+    if second.get("batch_contract_audit", {}).get("passed") is not True:
+        raise RuntimeError("formal gate rejects resume2 batch contract audit")
+    if second.get("first_step_gradient_audit", {}).get("passed") is not True:
+        raise RuntimeError("formal gate rejects resume2 gradient audit")
+    if second.get("htsat_buffer_change_audit", {}).get("passed") is not True:
+        raise RuntimeError("formal gate rejects resume2 HTSAT buffer audit")
+    if second.get("grad_norm_tracker_audit", {}).get("passed") is not True:
+        raise RuntimeError("formal gate rejects resume2 GradNormTracker audit")
+    if second.get("grad_norm_tracker_reference_audit", {}).get("passed") is not True:
+        raise RuntimeError("formal gate rejects resume2 tracker reference audit")
+    for key in ("manifest_sha256", "index_sha256", "waveform_sha256", "total_waveform_bytes"):
+        if second.get("store_inventory", {}).get(key) != inventory.get(key):
+            raise RuntimeError(f"formal gate resume2 store differs in {key}")
+    if second.get("resume_checkpoint") != str(Path(checkpoints1[0]).resolve()):
+        raise RuntimeError("formal gate resume2 does not descend from smoke checkpoint-000020")
+    resume_audit = second.get("resume_state_restore_audit", {})
+    if resume_audit.get("passed") is not True:
+        raise RuntimeError("formal gate rejects resume2 state restoration audit")
+    if second.get("route_code_sha256") != route_code_identity() or first.get("route_code_sha256") != route_code_identity():
+        raise RuntimeError("formal gate rejects smoke reports from different route code")
+    checkpoints2 = second.get("checkpoints", [])
+    if len(checkpoints2) != 1:
+        raise RuntimeError("formal gate resume2 checkpoint lineage failed")
+    marker2 = read_json(Path(checkpoints2[0]) / "checkpoint_complete.json")
+    if marker2.get("status") != "complete" or marker2.get("contract") != TRAINING_CONTRACT or marker2.get("global_step") != 22:
+        raise RuntimeError("formal gate resume2 checkpoint completion failed")
+    return {
+        "smoke20_report": str(args.smoke20_report.resolve()),
+        "smoke20_route_code_sha256": first.get("route_code_sha256"),
+        "current_route_code_sha256": route_code_identity(),
+        "smoke_resume_report": str(args.smoke_resume_report.resolve()),
+        "reference22_comparison": {"skipped": True, "policy": "informational_only"},
+        "qualification_global_batch_size": QUALIFICATION_GLOBAL_BATCH,
+        "formal_global_batch_size": shape["global_batch_size"],
+        "checkpoint20": str(Path(checkpoints1[0]).resolve()),
+        "checkpoint22": str(Path(checkpoints2[0]).resolve()),
+    }
+
+
+def run(args: argparse.Namespace) -> dict[str, Any]:
+    rank = int(os.environ.get("RANK", "0")); local_rank = int(os.environ.get("LOCAL_RANK", str(rank))); world = int(os.environ.get("WORLD_SIZE", str(args.world_size)))
+    report: dict[str, Any] = {"status": "FAIL", "mode": args.mode, "training_contract": TRAINING_CONTRACT, "rank": rank, "checkpoints": [], "metrics": [], "hard_failures": []}
+    output_available = not args.output_dir.exists() or not any(args.output_dir.iterdir())
+    try:
+        if not output_available:
+            raise FileExistsError(f"refusing nonempty output: {args.output_dir}")
+        if not torch.cuda.is_available() or world != 8 or args.world_size != 8:
+            raise RuntimeError("Mellow reproduction requires one 8-GPU node")
+        expected_micro_batch = FORMAL_MICRO_BATCH if args.mode == "formal" else QUALIFICATION_MICRO_BATCH
+        expected_grad_accum = FORMAL_GRAD_ACCUM if args.mode == "formal" else QUALIFICATION_GRAD_ACCUM
+        expected_global_batch = FORMAL_GLOBAL_BATCH if args.mode == "formal" else QUALIFICATION_GLOBAL_BATCH
+        if args.micro_batch_size != expected_micro_batch or args.gradient_accumulation_steps != expected_grad_accum or args.num_workers != 0:
+            raise RuntimeError(
+                f"{args.mode} mode requires microbatch={expected_micro_batch}, grad_accum={expected_grad_accum}, "
+                f"effective global batch={expected_global_batch}, num_workers=0"
+            )
+        if args.learning_rate != CANONICAL_LR or args.weight_decay != CANONICAL_WEIGHT_DECAY or args.seed != CANONICAL_SEED:
+            raise RuntimeError("Mellow optimizer/seed contract mismatch")
+        if (
+            args.epochs != FORMAL_EPOCHS
+            or args.save_every_steps != CANONICAL_SAVE_EVERY_STEPS
+            or args.checkpoint_retention != CANONICAL_CHECKPOINT_RETENTION
+        ):
+            raise RuntimeError(
+                "this route requires 30 epochs, checkpoints every 5000 optimizer steps, "
+                "and retention of the newest four checkpoints"
+            )
+        torch.cuda.set_device(local_rank); device = torch.device("cuda", local_rank)
+        dist.init_process_group("nccl", rank=rank, world_size=world, timeout=timedelta(minutes=args.dist_timeout_minutes))
+        baseline._seed(args.seed, rank)
+        if GRAD_NORM_REFERENCE_COMMIT != MELLOW_REFERENCE_COMMIT:
+            raise RuntimeError("Mellow data and GradNormTracker commits differ")
+        tracker_reference_audit = grad_norm_tracker_reference_audit()
+        inventory = store_inventory(args)
+        data_stat = (args.unique_waveform_store_dir / "waveforms.f32").stat()
+        rank_store = gather({"rank": rank, "path": str(args.unique_waveform_store_dir.resolve()), "device": int(data_stat.st_dev), "inode": int(data_stat.st_ino), "bytes": int(data_stat.st_size)}, world)
+        if len({(item["path"], item["device"], item["inode"], item["bytes"]) for item in rank_store}) != 1:
+            raise RuntimeError("ranks do not share one staged waveform inode")
+
+        model, tokenizer = load_model(args, device)
+        dataset = ReasonAQADataset(
+            args.train_manifest,
+            tokenizer,
+            unique_waveform_store_dir=args.unique_waveform_store_dir,
+        )
+        data_audit = data_contract_audit(dataset)
+        shape = training_shape(args, len(dataset))
+        gate = formal_gate(args, inventory, shape)
+        model.train()
+        trainable_audit = model.trainable_parameter_audit()
+        if trainable_audit.get("training_mode_contract") is not True:
+            raise RuntimeError("trainable parameter audit failed")
+        optimizer = torch.optim.Adam([parameter for parameter in model.parameters() if parameter.requires_grad], lr=args.learning_rate, weight_decay=args.weight_decay)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=0.0)
+        grad_norm_tracker = GradNormTracker(
+            initial_l2_norm=GRAD_TRACKER_INITIAL_L2_NORM,
+            initial_max_norm=GRAD_TRACKER_INITIAL_MAX_NORM,
+            overdrive_factor=GRAD_TRACKER_OVERDRIVE_FACTOR,
+            momentum=GRAD_TRACKER_MOMENTUM,
+        )
+        grad_scaler = torch.cuda.amp.GradScaler(enabled=False)
+        ddp = DDP(model, device_ids=[local_rank], broadcast_buffers=False, find_unused_parameters=False)
+        cursor = {"epoch": 0, "batch_in_epoch": 0, "global_step": 0}
+        resume_rng_state: dict[str, Any] | None = None
+        resume_state_restore_audit: dict[str, Any] | None = None
+        if args.resume_from:
+            cursor, resume_rng_state, resume_state_restore_audit = resume_checkpoint(
+                args.resume_from,
+                args,
+                inventory,
+                shape,
+                optimizer,
+                scheduler,
+                grad_norm_tracker,
+                rank,
+                device,
+                model,
+            )
+        initial_htsat_buffers = model.htsat_buffer_state()
+        resume_representatives = baseline._select_resume_representatives(model) if args.resume_from else None
+        resume_snapshots = baseline._snapshot_resume_representatives(resume_representatives) if resume_representatives else None
+        if args.mode == "smoke":
+            if args.resume_from is None and cursor["global_step"] != 0:
+                raise RuntimeError("initial smoke must start at zero")
+            if args.resume_from is not None and cursor != {"epoch": 0, "batch_in_epoch": 20, "global_step": 20}:
+                raise RuntimeError("resume smoke requires checkpoint-000020")
+            stop_step = SMOKE_TOTAL_STEPS if args.resume_from else SMOKE_FIRST_STOP
+        elif args.mode == "reference":
+            if args.resume_from is not None or cursor["global_step"] != 0:
+                raise RuntimeError("reference22 must be an uninterrupted fresh run")
+            stop_step = SMOKE_TOTAL_STEPS
+        else:
+            if args.resume_from is not None:
+                raise RuntimeError("formal training must initialize fresh, not resume from smoke")
+            stop_step = shape["total_steps"]
+        report.update({
+            "store_inventory": inventory, "rank_store_audit": rank_store if rank == 0 else None,
+            "dataset_rows": len(dataset), "data_contract_audit": data_audit, "shape": shape,
+            "epochs": args.epochs, "optimizer_contract": {"name": "Adam", "lr": args.learning_rate, "weight_decay": args.weight_decay, "scheduler": "CosineAnnealingLR_epoch_level", "warmup_steps": 0},
+            "precision_contract": "float32 forward/backward; disabled GradScaler follows official call order",
+            "grad_norm_contract": grad_norm_contract(),
+            "grad_norm_tracker_reference_audit": tracker_reference_audit,
+            "grad_scaler_contract": {
+                "enabled": False,
+                "state": grad_scaler.state_dict(),
+                "call_order": ["scale_backward", "unscale_optimizer", "grad_norm_tracker", "step", "update"],
+            },
+            "initialization": {"kind": "original_smollm2_plus_random_mellow_mapper" if not args.resume_from else "full_state_resume", "fresh_source": str(args.model_path.resolve()), "resume_source": str(args.resume_from.resolve()) if args.resume_from else None},
+            "start_global_step": cursor["global_step"], "start_cursor": dict(cursor),
+            "resume_checkpoint": str(args.resume_from.resolve()) if args.resume_from else None,
+            "formal_gate": gate, "model_trainable_audit": trainable_audit,
+            "resume_state_restore_audit": resume_state_restore_audit,
+            "sampler_contract": "torch.randperm(seed=epoch), truncate to complete effective global batches, contiguous per-rank slices",
+            "effective_global_batch_size": shape["global_batch_size"],
+            "checkpoint_policy": {
+                "save_every_steps": CANONICAL_SAVE_EVERY_STEPS,
+                "save_final_step": True,
+                "retain_newest": CANONICAL_CHECKPOINT_RETENTION,
+            },
+            "route_code_sha256": route_code_identity(),
+        })
+        first_gradient_audit = None; first_batch_audit = None; resumed_gradient_audit = None
+        first_htsat_buffer_audit = None; first_grad_norm_audit = None
+        resume_comparison_trace: list[dict[str, Any]] = []
+        sampler_audits: list[dict[str, Any]] = []
+        while cursor["global_step"] < stop_step:
+            epoch = cursor["epoch"]
+            if epoch >= args.epochs:
+                raise RuntimeError("epochs exhausted before target step")
+            while scheduler.last_epoch < epoch:
+                scheduler.step()
+            if scheduler.last_epoch != epoch:
+                raise RuntimeError(f"scheduler epoch mismatch: scheduler={scheduler.last_epoch} data={epoch}")
+            sampler = ContiguousDistributedEpochSampler(
+                len(dataset),
+                num_replicas=world,
+                rank=rank,
+                per_rank_batch_size=args.micro_batch_size,
+                gradient_accumulation_steps=args.gradient_accumulation_steps,
+                epoch=epoch,
+                start_optimizer_step=cursor["batch_in_epoch"],
+            )
+            sampler_audits.append(sampler.audit())
+            loader = DataLoader(
+                dataset,
+                batch_size=args.micro_batch_size,
+                sampler=sampler,
+                shuffle=False,
+                drop_last=True,
+                num_workers=0,
+                generator=torch.Generator().manual_seed(args.seed + rank + epoch),
+                collate_fn=lambda rows: collate_reasonaqa(rows, tokenizer),
+            )
+            iterator = iter(loader)
+            if resume_rng_state is not None:
+                # Iterator/model reconstruction must not perturb the stream
+                # captured immediately after checkpoint-000020. Restore again
+                # at the final boundary before the first resumed batch.
+                baseline._restore_rng_state(resume_rng_state, device)
+                resume_rng_state = None
+            while cursor["batch_in_epoch"] < shape["steps_per_epoch"] and cursor["global_step"] < stop_step:
+                started = time.perf_counter()
+                optimizer.zero_grad(set_to_none=True)
+                local_micro_trace: list[dict[str, Any]] = []
+                micro_losses: list[float] = []
+                owner = ddp.module
+                for micro_index in range(args.gradient_accumulation_steps):
+                    batch = next(iterator)
+                    moved = {key: (value.to(device) if torch.is_tensor(value) else value) for key, value in batch.items()}
+                    rng_before_forward = stochastic_rng_fingerprint(device)
+                    sync_context = contextlib.nullcontext() if micro_index == args.gradient_accumulation_steps - 1 else ddp.no_sync()
+                    with sync_context:
+                        output = ddp(**{
+                            key: moved[key]
+                            for key in (
+                                "audio1", "audio2", "prompt_input_ids", "prompt_attention_mask",
+                                "answer_input_ids", "answer_attention_mask", "audio2_reused_mask",
+                                "single_audio_slot_mask",
+                            )
+                        })
+                        if output.loss is None or not bool(torch.isfinite(output.loss)):
+                            raise RuntimeError("nonfinite Mellow training loss")
+                        raw_loss = float(output.loss.detach().float().item())
+                        micro_losses.append(raw_loss)
+                        grad_scaler.scale(output.loss / args.gradient_accumulation_steps).backward()
+                    if first_batch_audit is None:
+                        first_batch_audit = batch_contract_audit(owner, moved)
+                    local_micro_trace.append({
+                        "micro_index": micro_index,
+                        "rng_sha256_before_forward": rng_before_forward,
+                        "row_indices": list(batch["row_indices"]),
+                        "requested_row_indices": list(batch["requested_row_indices"]),
+                        "text_row_replaced": batch["text_row_replaced_mask"].tolist(),
+                        "text_replacement_distances": batch["text_replacement_distances"].tolist(),
+                        "audio1_ids": batch["audio1_ids"].tolist(),
+                        "audio2_ids": batch["audio2_ids"].tolist(),
+                        "audio1_crop_offsets": batch["audio1_crop_offsets"].tolist(),
+                        "audio2_crop_offsets": batch["audio2_crop_offsets"].tolist(),
+                        "template_groups": list(batch["template_groups"]),
+                        "loss": raw_loss,
+                    })
+                if first_gradient_audit is None:
+                    gradient = owner.runtime_gradient_audit()
+                    first_gradient_audit = {
+                        "passed": bool(gradient.get("all_decoder_layers_have_finite_gradient") and gradient.get("embedding_has_finite_gradient") and gradient.get("lm_head_has_finite_gradient") and gradient.get("htsat_frozen_and_gradient_free") and all(gradient.get("bridge_gradients", {}).values()) and all(gradient.get("c2l_gradients", {}).values())),
+                        **gradient,
+                    }
+                    if not first_gradient_audit["passed"]:
+                        raise RuntimeError("first-step gradient audit failed")
+                if resume_representatives is not None and resumed_gradient_audit is None:
+                    resumed_gradient_audit = baseline._verify_resume_representative_gradients(resume_representatives)
+                if first_htsat_buffer_audit is None:
+                    first_htsat_buffer_audit = htsat_buffer_change_audit(
+                        initial_htsat_buffers,
+                        owner.htsat_buffer_state(),
+                    )
+                    if not first_htsat_buffer_audit["passed"]:
+                        raise RuntimeError(
+                            "HTSAT train-mode audit found no changing BatchNorm buffer"
+                        )
+                grad_scaler.unscale_(optimizer)
+                grad_norm, grad_scale = grad_norm_tracker.track_and_clip_(
+                    list(owner.named_parameters())
+                )
+                if first_grad_norm_audit is None:
+                    first_grad_norm_audit = {
+                        "passed": bool(
+                            torch.isfinite(torch.tensor(grad_norm))
+                            and torch.isfinite(torch.tensor(grad_scale))
+                            and grad_norm > 0.0
+                            and 0.0 < grad_scale <= 1.0
+                            and len(grad_norm_tracker.state_dict()) > 0
+                        ),
+                        "raw_total_l2_norm": float(grad_norm),
+                        "applied_scale": float(grad_scale),
+                        "clipped": bool(grad_scale < 1.0),
+                        "running_parameter_count": len(grad_norm_tracker.state_dict()),
+                        "contract": grad_norm_contract(),
+                    }
+                    if not first_grad_norm_audit["passed"]:
+                        raise RuntimeError("first-step GradNormTracker audit failed")
+                lr_used = float(optimizer.param_groups[0]["lr"])
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
+                cursor["global_step"] += 1; cursor["batch_in_epoch"] += 1
+                epoch_completed = cursor["batch_in_epoch"] == shape["steps_per_epoch"]
+                epoch_boundary_sync = None
+                if epoch_completed:
+                    cursor["epoch"] += 1; cursor["batch_in_epoch"] = 0
+                    scheduler.step()
+                    if scheduler.last_epoch != cursor["epoch"]:
+                        raise RuntimeError("epoch-level scheduler did not advance with the completed epoch")
+                    epoch_boundary_sync = broadcast_epoch_state(owner, optimizer, world)
+                    if rank == 0:
+                        report.setdefault("epoch_boundary_state_broadcasts", []).append({
+                            "completed_epoch": cursor["epoch"],
+                            "global_step": cursor["global_step"],
+                            **epoch_boundary_sync,
+                        })
+                torch.cuda.synchronize(device)
+                step_loss = sum(micro_losses) / len(micro_losses)
+                metric = {
+                    "step": cursor["global_step"],
+                    "epoch": cursor["epoch"],
+                    "batch_in_epoch": cursor["batch_in_epoch"],
+                    "loss": step_loss,
+                    "micro_losses": micro_losses,
+                    "lr": lr_used,
+                    "raw_grad_l2_norm": float(grad_norm),
+                    "grad_scale": float(grad_scale),
+                    "gradient_clipped": bool(grad_scale < 1.0),
+                    "epoch_boundary_state_broadcast": epoch_boundary_sync,
+                    "seconds": time.perf_counter() - started,
+                }
+                if cursor["global_step"] in {21, 22}:
+                    resume_comparison_trace.append({
+                        "step": cursor["global_step"],
+                        "lr": lr_used,
+                        "by_rank": gather(local_micro_trace, world),
+                    })
+                if rank == 0:
+                    report["metrics"].append(metric)
+                    if cursor["global_step"] % 10 == 0 or cursor["global_step"] == stop_step:
+                        print(f"[mellow-official-faithful-v2] step={cursor['global_step']}/{stop_step} epoch={cursor['epoch']} batch={cursor['batch_in_epoch']} loss={metric['loss']:.6f} lr={lr_used:.8g} grad_norm={grad_norm:.6f} grad_scale={grad_scale:.8g} step_seconds={metric['seconds']:.3f}", flush=True)
+                save = (
+                    (args.mode == "smoke" and cursor["global_step"] in {20, 22})
+                    or (
+                        args.mode == "formal"
+                        and (
+                            cursor["global_step"] % args.save_every_steps == 0
+                            or cursor["global_step"] == stop_step
+                        )
+                    )
+                )
+                if save:
+                    checkpoint = args.output_dir / f"checkpoint-{cursor['global_step']:06d}"
+                    save_checkpoint(
+                        checkpoint,
+                        owner,
+                        tokenizer,
+                        optimizer,
+                        scheduler,
+                        grad_norm_tracker,
+                        args,
+                        inventory,
+                        shape,
+                        dict(cursor),
+                        rank,
+                        world,
+                        device,
+                    )
+                    if rank == 0:
+                        if args.mode == "formal":
+                            report.setdefault("checkpoint_history", []).append(str(checkpoint))
+                        else:
+                            report["checkpoints"].append(str(checkpoint))
+                    dist.barrier()
+                    if args.mode == "formal":
+                        retained = prune_formal_checkpoints(args.output_dir, args.checkpoint_retention) if rank == 0 else None
+                        retained_by_rank = gather(retained, world)
+                        if rank == 0:
+                            report["retained_checkpoints"] = retained_by_rank[0]
+                            report["checkpoints"] = retained_by_rank[0]
+                if epoch_completed:
+                    break
+        resume_change = None
+        if resume_representatives and resume_snapshots:
+            resume_change = baseline._compute_resume_parameter_change_audit(resume_representatives, resume_snapshots)
+            baseline._validate_parameter_change_audit(resume_change)
+        runtime_text_by_rank = gather(dataset.runtime_text_report(), world)
+        local_fingerprint = training_state_fingerprint(
+            owner, optimizer, scheduler, grad_norm_tracker
+        )
+        fingerprints = gather(local_fingerprint, world)
+        shared_fingerprints = [
+            {
+                key: value
+                for key, value in item.items()
+                if key not in {"htsat_buffers_sha256"}
+            }
+            for item in fingerprints
+        ]
+        if len({json.dumps(item, sort_keys=True) for item in shared_fingerprints}) != 1:
+            raise RuntimeError(
+                "DDP ranks ended with different trainable model/optimizer/scheduler/tracker fingerprints"
+            )
+        resume_equivalence = None
+        if args.mode == "smoke" and args.resume_from is not None:
+            if rank == 0:
+                # Preserve both traces in the FAIL report if the comparison
+                # rejects this run, so a remote divergence can be inspected.
+                report["resume_comparison_trace"] = resume_comparison_trace
+                report["training_state_fingerprint"] = local_fingerprint
+            resume_equivalence = {
+                "passed": None,
+                "skipped": True,
+                "policy": "informational_only",
+                "reason": "exact reference22 loss/fingerprint comparison disabled by user request",
+                "trace_steps": [item.get("step") for item in resume_comparison_trace],
+            }
+        report.update({
+            "status": "PASS", "end_global_step": cursor["global_step"], "end_cursor": cursor,
+            "batch_contract_audit": first_batch_audit, "first_step_gradient_audit": first_gradient_audit,
+            "htsat_buffer_change_audit": first_htsat_buffer_audit,
+            "grad_norm_tracker_audit": first_grad_norm_audit,
+            "resume_representative_gradient_verification": resumed_gradient_audit,
+            "resume_parameter_change_audit": resume_change,
+            "resume_verified_two_steps": bool(args.mode == "smoke" and args.resume_from and report["start_global_step"] == 20 and cursor["global_step"] == 22),
+            "resume_comparison_trace": resume_comparison_trace,
+            "training_state_fingerprint": local_fingerprint,
+            "training_state_fingerprints_by_rank": fingerprints if rank == 0 else None,
+            "resume_equivalence": resume_equivalence,
+            "sampler_audits": sampler_audits,
+            "runtime_text_handling_by_rank": runtime_text_by_rank,
+        })
+        return report
+    except Exception as exc:
+        report["hard_failures"].append({"error": repr(exc), "traceback": traceback.format_exc()})
+        raise
+    finally:
+        if rank == 0 and output_available:
+            args.output_dir.mkdir(parents=True, exist_ok=True)
+            (args.output_dir / "shared_store_training_report.json").write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
+        if dist.is_initialized():
+            dist.destroy_process_group()
+
+
+if __name__ == "__main__":
+    run(parse_args())
