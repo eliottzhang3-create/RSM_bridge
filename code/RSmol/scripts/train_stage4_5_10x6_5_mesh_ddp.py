@@ -56,6 +56,8 @@ DEFAULT_SAVE_EVERY = 500
 DEFAULT_CHECKPOINT_RETENTION = 3
 DEFAULT_LOG_INTERVAL_STEPS = 10
 DEFAULT_HEARTBEAT_MICRO_INTERVAL = 8
+DEFAULT_MAX_CONSECUTIVE_NONFINITE_WINDOWS = 32
+DEFAULT_MAX_TOTAL_NONFINITE_WINDOWS = 256
 DEFAULT_ADAMW_BETAS = (0.9, 0.95)
 DEFAULT_ADAMW_WEIGHT_DECAY = 0.1
 DEFAULT_ADAMW_EPS = 1e-8
@@ -208,18 +210,36 @@ class DistributedParquetStream:
 
     def restore_cursor(self, value: dict[str, Any] | None) -> None:
         if value:
+            policy = value.get("policy")
+            if policy != self.cursor_policy:
+                raise ValueError(f"resume cursor policy mismatch: expected {self.cursor_policy!r}, found {policy!r}")
+            cursor_rank = int(value.get("rank", -1))
+            if cursor_rank != self.rank:
+                raise ValueError(f"resume cursor rank mismatch: expected {self.rank}, found {cursor_rank}")
             self.shard_index = int(value.get("shard_index", 0))
             self.row_offset = int(value.get("row_offset", 0))
             self.microbatches_seen = int(value.get("microbatches_seen", 0))
+            if not 0 <= self.shard_index <= len(self.local_paths):
+                raise ValueError(f"resume cursor shard_index is out of range: {self.shard_index}")
+            if self.row_offset < 0 or self.microbatches_seen < 0:
+                raise ValueError("resume cursor offsets must be nonnegative")
 
     def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
         import pyarrow.parquet as pq
         while self.shard_index < len(self.local_paths):
             path = self.local_paths[self.shard_index]
             parquet = pq.ParquetFile(path)
+            resume_row_offset = self.row_offset
+            rows_seen = 0
             for batch in parquet.iter_batches(batch_size=self.batch_size, columns=["text"], use_threads=False):
+                batch_start = rows_seen
+                rows_seen += int(batch.num_rows)
+                if rows_seen <= resume_row_offset:
+                    continue
+                if batch_start < resume_row_offset:
+                    batch = batch.slice(resume_row_offset - batch_start)
                 texts = [str(x or "") for x in batch.column("text").to_pylist()]
-                self.row_offset += len(texts)
+                self.row_offset = rows_seen
                 encoded = self.tokenizer(texts, max_length=self.context_length, truncation=True, padding=True, return_tensors="pt", add_special_tokens=True)
                 ids = encoded["input_ids"].long()
                 mask = encoded.get("attention_mask", ids.ne(self.pad_token_id)).long()
@@ -227,6 +247,10 @@ class DistributedParquetStream:
                 labels[mask == 0] = self.pad_token_id
                 self.microbatches_seen += 1
                 yield {"input_ids": ids, "attention_mask": mask, "labels": labels, "valid_mask": mask.bool()}
+            if resume_row_offset > rows_seen:
+                raise ValueError(
+                    f"resume row_offset {resume_row_offset} exceeds shard row count {rows_seen}: {path}"
+                )
             self.shard_index += 1
             self.row_offset = 0
 
@@ -407,7 +431,22 @@ def _checkpoint(model: torch.nn.Module, tokenizer: Any, optimizer: torch.optim.O
     unwrapped = model.module if hasattr(model, "module") else model
     unwrapped.save_pretrained(temporary, safe_serialization=True)
     tokenizer.save_pretrained(temporary)
-    torch.save({"optimizer": optimizer.state_dict(), "scheduler": {"type": "cosine_warmup", "step": scheduler_step, "max_lr": config.max_lr, "min_lr": config.min_lr, "warmup_steps": config.warmup_steps, "total_steps": config.scheduler_total_steps}, "optimizer_step": scheduler_step, "configuration": asdict(config), "manifest": state.get("manifest", []), "data_cursors_by_rank": state.get("data_cursors_by_rank", {}), "rng_state": torch.get_rng_state(), "rng_states_by_rank": state.get("rng_states_by_rank", {}), "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest"}, temporary / "training_state.pt")
+    torch.save(
+        {
+            "optimizer": optimizer.state_dict(),
+            "scheduler": {"type": "cosine_warmup", "step": scheduler_step, "max_lr": config.max_lr, "min_lr": config.min_lr, "warmup_steps": config.warmup_steps, "total_steps": config.scheduler_total_steps},
+            "optimizer_step": scheduler_step,
+            "configuration": asdict(config),
+            "manifest": state.get("manifest", []),
+            "data_cursors_by_rank": state.get("data_cursors_by_rank", {}),
+            "rng_state": torch.get_rng_state(),
+            "rng_states_by_rank": state.get("rng_states_by_rank", {}),
+            "cuda_rng_states_by_rank": state.get("cuda_rng_states_by_rank", {}),
+            "nonfinite_windows_skipped": int(state.get("nonfinite_windows_skipped", 0)),
+            "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest",
+        },
+        temporary / "training_state.pt",
+    )
     checkpoint_metadata = {"architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "optimizer_step": scheduler_step, "router_parameters_in_optimizer": bool(state.get("router_parameters_in_optimizer", False)), "memory_slots": MEMORY_SLOT_COUNT, "logical_to_physical": list(LOGICAL_TO_PHYSICAL)}
     (temporary / "mesh_checkpoint_metadata.json").write_text(json.dumps(checkpoint_metadata, indent=2) + "\n", encoding="utf-8")
     data_manifest = {"architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "optimizer_step": scheduler_step, "data_shards": state.get("manifest", []), "data_cursors_by_rank": state.get("data_cursors_by_rank", {})}
@@ -582,8 +621,31 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         if resume_state and stream_obj is not None:
             stream_obj.restore_cursor(resume_state.get("data_cursors_by_rank", {}).get(str(rank)))
         stream: Iterator[dict[str, torch.Tensor]] = iter(stream_obj) if stream_obj is not None else _synthetic_stream(tokenizer, batch_size=config.micro_batch_size, context_length=config.context_length, vocab_size=int(model.config.vocab_size), pad_token_id=int(tokenizer.pad_token_id), seed=config.seed + rank)
+        if resume_state:
+            saved_rng = resume_state.get("rng_states_by_rank", {}).get(str(rank))
+            if saved_rng is None and rank == 0:
+                saved_rng = resume_state.get("rng_state")
+            if saved_rng is not None:
+                torch.set_rng_state(saved_rng)
+            saved_cuda_rng = resume_state.get("cuda_rng_states_by_rank", {}).get(str(rank))
+            if saved_cuda_rng is not None and device.type == "cuda":
+                torch.cuda.set_rng_state(saved_cuda_rng, device=device)
         metrics: list[dict[str, Any]] = []
         routing_warnings: list[dict[str, Any]] = []
+        nonfinite_skip_events: list[dict[str, Any]] = []
+        nonfinite_windows_skipped = int(resume_state.get("nonfinite_windows_skipped", 0)) if resume_state else 0
+        consecutive_nonfinite_windows = 0
+        max_consecutive_nonfinite_windows = int(os.environ.get("RSMOL_5_10X6_5_MESH_MAX_CONSECUTIVE_NONFINITE_WINDOWS", DEFAULT_MAX_CONSECUTIVE_NONFINITE_WINDOWS))
+        max_total_nonfinite_windows = int(os.environ.get("RSMOL_5_10X6_5_MESH_MAX_TOTAL_NONFINITE_WINDOWS", DEFAULT_MAX_TOTAL_NONFINITE_WINDOWS))
+        if max_consecutive_nonfinite_windows <= 0 or max_total_nonfinite_windows <= 0:
+            raise ValueError("nonfinite skip safety limits must be positive")
+        report.update({
+            "nonfinite_gradient_policy": "discard_accumulation_window_retry_same_optimizer_step_with_next_data",
+            "nonfinite_windows_skipped": nonfinite_windows_skipped,
+            "max_consecutive_nonfinite_windows": max_consecutive_nonfinite_windows,
+            "max_total_nonfinite_windows": max_total_nonfinite_windows,
+            "nonfinite_skip_events": nonfinite_skip_events,
+        })
         last_checkpoint: str | None = None
         while optimizer_step < config.max_optimizer_steps:
             _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="optimizer_step_start")
@@ -639,8 +701,52 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 if parameter.grad is not None:
                     parameter.grad.mul_(scale)
             grad_norm = torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), 1.0, error_if_nonfinite=False)
-            if not torch.isfinite(grad_norm):
-                raise RuntimeError("nonfinite gradient norm")
+            local_nonfinite = torch.tensor([0 if bool(torch.isfinite(grad_norm).item()) else 1], dtype=torch.int32, device=device)
+            if world_size > 1:
+                dist.all_reduce(local_nonfinite, op=dist.ReduceOp.MAX)
+            if int(local_nonfinite.item()) != 0:
+                rank_grad_norms: list[Any] = [float(grad_norm.detach().cpu())]
+                if world_size > 1:
+                    rank_grad_norms = [None for _ in range(world_size)]
+                    dist.all_gather_object(rank_grad_norms, float(grad_norm.detach().cpu()))
+                nonfinite_windows_skipped += 1
+                consecutive_nonfinite_windows += 1
+                event = {
+                    "optimizer_step_held": optimizer_step,
+                    "attempted_optimizer_step": optimizer_step + 1,
+                    "local_loss_sum": float(total_loss.detach().cpu()),
+                    "local_valid_tokens": int(total_tokens.item()),
+                    "global_valid_tokens": int(global_tokens.item()),
+                    "rank_grad_norms": rank_grad_norms,
+                    "total_skipped": nonfinite_windows_skipped,
+                    "consecutive_skipped": consecutive_nonfinite_windows,
+                    "policy": "discard_window_and_retry_same_optimizer_step_with_next_data",
+                }
+                nonfinite_skip_events.append(event)
+                report["nonfinite_windows_skipped"] = nonfinite_windows_skipped
+                report["nonfinite_skip_events"] = nonfinite_skip_events
+                diagnostic_path = _diagnostic_dir(config) / f"rank{rank}.nonfinite_skips.jsonl"
+                with diagnostic_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(event, default=str) + "\n")
+                optimizer.zero_grad(set_to_none=True)
+                _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="nonfinite_window_skipped", detail=event)
+                if rank == 0:
+                    print(
+                        f"[warning][nonfinite] holding_step={optimizer_step} "
+                        f"total_skipped={nonfinite_windows_skipped} "
+                        f"consecutive={consecutive_nonfinite_windows}; consuming next data window",
+                        flush=True,
+                    )
+                if consecutive_nonfinite_windows > max_consecutive_nonfinite_windows:
+                    raise RuntimeError(
+                        f"nonfinite gradient persisted for {consecutive_nonfinite_windows} consecutive data windows"
+                    )
+                if nonfinite_windows_skipped > max_total_nonfinite_windows:
+                    raise RuntimeError(
+                        f"nonfinite gradient skip limit exceeded: {nonfinite_windows_skipped}"
+                    )
+                continue
+            consecutive_nonfinite_windows = 0
             optimizer_step += 1
             _set_lr(optimizer, _cosine_lr(optimizer_step - 1, config))
             _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="before_optimizer_step")
@@ -697,7 +803,15 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                     gathered_rng: list[Any] = [None for _ in range(world_size)]
                     dist.all_gather_object(gathered_rng, torch.get_rng_state())
                     rng_states = {str(i): value for i, value in enumerate(gathered_rng)}
-                last_checkpoint_path = _checkpoint_synchronized(ddp_model, tokenizer, optimizer, optimizer_step, config, rank, world_size, device, {"manifest": [str(p) for p in manifest], "data_cursors_by_rank": cursors, "rng_states_by_rank": rng_states, "router_parameters_in_optimizer": optimizer_group_audit["router_parameters_in_optimizer"]})
+                cuda_rng_states: dict[str, Any] = {}
+                if device.type == "cuda":
+                    local_cuda_rng = torch.cuda.get_rng_state(device).cpu()
+                    cuda_rng_states = {str(rank): local_cuda_rng}
+                    if world_size > 1:
+                        gathered_cuda_rng: list[Any] = [None for _ in range(world_size)]
+                        dist.all_gather_object(gathered_cuda_rng, local_cuda_rng)
+                        cuda_rng_states = {str(i): value for i, value in enumerate(gathered_cuda_rng)}
+                last_checkpoint_path = _checkpoint_synchronized(ddp_model, tokenizer, optimizer, optimizer_step, config, rank, world_size, device, {"manifest": [str(p) for p in manifest], "data_cursors_by_rank": cursors, "rng_states_by_rank": rng_states, "cuda_rng_states_by_rank": cuda_rng_states, "nonfinite_windows_skipped": nonfinite_windows_skipped, "router_parameters_in_optimizer": optimizer_group_audit["router_parameters_in_optimizer"]})
                 _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="checkpoint_complete", detail={"checkpoint": str(last_checkpoint_path) if last_checkpoint_path else None})
                 if last_checkpoint_path is not None:
                     last_checkpoint = str(last_checkpoint_path)
@@ -705,7 +819,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 break
         if config.gate == "FORMAL" and optimizer_step != DEFAULT_FORMAL_OPTIMIZER_STEPS:
             raise RuntimeError(f"FORMAL stopped at {optimizer_step}, expected {DEFAULT_FORMAL_OPTIMIZER_STEPS}")
-        report.update({"status": "PASS", "configuration": asdict(config), "optimizer_steps": optimizer_step, "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS, "steps_per_epoch": config.steps_per_epoch, "epochs": config.epochs, "warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS, "metrics": metrics, "warnings": routing_warnings if rank == 0 else [], "manifest": [str(p) for p in manifest], "data_cursors_by_rank": {str(rank): stream_obj.cursor() if stream_obj is not None else {"synthetic": True}}, "optimizer_group_audit": optimizer_group_audit, "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest", "checkpoint_retention": config.checkpoint_retention, "final_checkpoint": last_checkpoint, "logical_to_physical": list(LOGICAL_TO_PHYSICAL), "memory_slots": MEMORY_SLOT_COUNT, "use_cache": False, "ddp_broadcast_buffers": False, "router_audit_policy": "non_fatal_diagnostic_only", "diagnostics_dir": str(_diagnostic_dir(config))})
+        report.update({"status": "PASS", "configuration": asdict(config), "optimizer_steps": optimizer_step, "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS, "steps_per_epoch": config.steps_per_epoch, "epochs": config.epochs, "warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS, "metrics": metrics, "warnings": routing_warnings if rank == 0 else [], "manifest": [str(p) for p in manifest], "data_cursors_by_rank": {str(rank): stream_obj.cursor() if stream_obj is not None else {"synthetic": True}}, "optimizer_group_audit": optimizer_group_audit, "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest", "checkpoint_retention": config.checkpoint_retention, "final_checkpoint": last_checkpoint, "logical_to_physical": list(LOGICAL_TO_PHYSICAL), "memory_slots": MEMORY_SLOT_COUNT, "use_cache": False, "ddp_broadcast_buffers": False, "router_audit_policy": "non_fatal_diagnostic_only", "nonfinite_gradient_policy": "discard_accumulation_window_retry_same_optimizer_step_with_next_data", "nonfinite_windows_skipped": nonfinite_windows_skipped, "nonfinite_skip_events": nonfinite_skip_events if rank == 0 else [], "max_consecutive_nonfinite_windows": max_consecutive_nonfinite_windows, "max_total_nonfinite_windows": max_total_nonfinite_windows, "diagnostics_dir": str(_diagnostic_dir(config))})
     except Exception as exc:
         report["hard_failures"].append({"error": repr(exc), "traceback": traceback.format_exc()})
         try:

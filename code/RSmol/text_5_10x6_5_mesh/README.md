@@ -49,6 +49,40 @@ Formal training:
 
     bash run_stage4_5_10x6_5_mesh_formal_3090.sh
 
-Formal output is formal_third_epoch_3081steps_20260928_3090_v1 by default. Formal training starts fresh from the converted x6 model rather than continuing the smoke checkpoint.
+Formal output is formal_third_epoch_3081steps_20260928_3090_v1 by default. A fresh
+formal run starts from the converted x6 model rather than continuing the smoke
+checkpoint.
+
+To continue an interrupted formal run, use the same formal wrapper with a complete
+formal checkpoint and a new output directory:
+
+    export RSMOL_5_10X6_5_MESH_RESUME_FROM=/path/to/formal/checkpoint-002000
+    export RSMOL_5_10X6_5_MESH_OUTPUT_DIR=/path/to/new/formal_resume_output
+    bash run_stage4_5_10x6_5_mesh_formal_3090.sh
+
+The formal wrapper validates the completion marker, manifest, and training state,
+then forwards the checkpoint into the submitted FORMAL job. The separate
+run_stage4_5_10x6_5_mesh_resume_3090.sh wrapper remains restricted to the smoke
+10-to-12 resume gate.
+
+## Resume cursor and nonfinite-gradient policy
+
+Formal resume restores each rank's exact shard and row offset. Rows already consumed
+inside the current shard are skipped before the first resumed microbatch is yielded.
+New checkpoints also save each rank's CUDA RNG state; older checkpoints remain
+loadable when that optional field is absent.
+
+Gradient clipping remains fixed at global norm 1.0. If an accumulated data window
+produces a NaN or infinite gradient norm, all ranks synchronously discard that entire
+window, keep the optimizer and scheduler step unchanged, clear the gradients, and
+consume the next data window for the same optimizer step. Therefore formal training
+still completes exactly 3,081 successful optimizer updates; skipped numerical windows
+do not count as optimizer steps. Every skip is written to
+ddp_diagnostics/rank<rank>.nonfinite_skips.jsonl and summarized in the final report.
+
+To avoid hiding a permanently corrupted model, the default safety limits are 32
+consecutive skipped windows and 256 total skipped windows. They may be adjusted with
+RSMOL_5_10X6_5_MESH_MAX_CONSECUTIVE_NONFINITE_WINDOWS and
+RSMOL_5_10X6_5_MESH_MAX_TOTAL_NONFINITE_WINDOWS.
 
 Local static checks do not count as remote CUDA or training PASS. Use the Stage 1 audit JSON and each training gate report as the remote result of record.

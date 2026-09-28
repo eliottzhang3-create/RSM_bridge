@@ -94,6 +94,9 @@ class TextMeshX6StaticTest(unittest.TestCase):
             "DEFAULT_MAX_LR = 1e-3",
             "DEFAULT_MIN_LR = 1e-4",
             "DistributedParquetStream",
+            "resume_row_offset = self.row_offset",
+            "batch = batch.slice(resume_row_offset - batch_start)",
+            "resume cursor policy mismatch",
             "torch.bfloat16",
             "broadcast_buffers=False",
             "checkpoint_retention=DEFAULT_CHECKPOINT_RETENTION",
@@ -102,6 +105,11 @@ class TextMeshX6StaticTest(unittest.TestCase):
             '"write_4", "read_4"',
             '"write_5", "read_5"',
             "fourteen router statistics were not produced",
+            "discard_accumulation_window_retry_same_optimizer_step_with_next_data",
+            "nonfinite_window_skipped",
+            "nonfinite_windows_skipped",
+            "torch.cuda.get_rng_state",
+            "torch.cuda.set_rng_state",
         ):
             self.assertIn(expected, source)
         self.assertNotIn("requires 20 router tensors", source)
@@ -130,6 +138,17 @@ class TextMeshX6StaticTest(unittest.TestCase):
         resume = SHELL_SCRIPTS[5].read_text(encoding="utf-8")
         self.assertIn("checkpoint_complete.json", resume)
         self.assertIn("training_state.pt", resume)
+        formal = SHELL_SCRIPTS[6].read_text(encoding="utf-8")
+        for expected in (
+            "RSMOL_5_10X6_5_MESH_RESUME_FROM",
+            "checkpoint_complete.json",
+            "checkpoint_manifest.json",
+            "training_state.pt",
+            "formal resume output path must be new and absent",
+            "RSMOL_5_10X6_5_MESH_STAGE4_GATE=FORMAL",
+            'RESUME_ENV=" RSMOL_5_10X6_5_MESH_RESUME_FROM=$RESUME_Q"',
+        ):
+            self.assertIn(expected, formal)
 
 
 if __name__ == "__main__":
