@@ -15,8 +15,8 @@ MMAR 完全复用官方 metadata 顺序、固定选项、32 kHz 首 10 秒/右�
 动态 prediction key 与完整分母。两条路线都将同一份未经预解析的 Qwen decoded prediction
 同时交给 `)` 前 choice-label-prefix scorer 和对应官方 scorer。
 
-代码入口为 `run_mmau_test_mini_qwen2_audio_instruct_5090.sh`、
-`run_mmar_qwen2_audio_instruct_5090.sh` 和 CPU artifact 预检
+代码入口为 `run_mmau_test_mini_qwen2_audio_instruct_3090.sh`、
+`run_mmar_qwen2_audio_instruct_3090.sh` 和 CPU artifact 预检
 `run_qwen2_audio_instruct_eval_preflight.sh`。当前只登记本地代码与静态检查就绪；远程权重
 preflight、GPU smoke/full 和正式分数尚未运行，不能记为 PASS。完整合同、输出文件和
 smoke→full 命令见 `code/RSmol/qwen2_audio_instruct_eval/README.md`。

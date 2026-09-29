@@ -52,9 +52,9 @@ bash run_qwen2_audio_instruct_eval_preflight.sh
 ```bash
 MMAU_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/qwen2_audio_instruct_eval/mmau_test_mini_dual_scoring_v1
 RSMOL_QWEN2_AUDIO_MMAU_MODE=smoke RSMOL_QWEN2_AUDIO_MMAU_OUTPUT_DIR="$MMAU_DIR" \
-  bash run_mmau_test_mini_qwen2_audio_instruct_5090.sh
+  bash run_mmau_test_mini_qwen2_audio_instruct_3090.sh
 RSMOL_QWEN2_AUDIO_MMAU_MODE=full RSMOL_QWEN2_AUDIO_MMAU_OUTPUT_DIR="$MMAU_DIR" \
-  bash run_mmau_test_mini_qwen2_audio_instruct_5090.sh
+  bash run_mmau_test_mini_qwen2_audio_instruct_3090.sh
 ```
 
 MMAR smoke 与 full：
@@ -62,11 +62,11 @@ MMAR smoke 与 full：
 ```bash
 MMAR_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/qwen2_audio_instruct_eval/mmar_dual_scoring_v1
 RSMOL_QWEN2_AUDIO_MMAR_MODE=smoke RSMOL_QWEN2_AUDIO_MMAR_OUTPUT_DIR="$MMAR_DIR" \
-  bash run_mmar_qwen2_audio_instruct_5090.sh
+  bash run_mmar_qwen2_audio_instruct_3090.sh
 RSMOL_QWEN2_AUDIO_MMAR_MODE=full RSMOL_QWEN2_AUDIO_MMAR_OUTPUT_DIR="$MMAR_DIR" \
-  bash run_mmar_qwen2_audio_instruct_5090.sh
+  bash run_mmar_qwen2_audio_instruct_3090.sh
 ```
 
-两个提交入口均使用 `pdgpu-5090`、1 GPU、8 CPU、64G memory。远程结果只有在
+两个提交入口均使用 `pdgpu-3090`、1 GPU、8 CPU、64G memory。远程结果只有在
 `evaluation_report.json` 中 inference coverage、双评分及对应 artifact audit 均为 PASS
 后才可用于正式比较。

@@ -34,7 +34,7 @@ fi
 printf -v CMD_ARGS '%q ' "${ARGS[@]}"
 
 vc submit \
-  -p pdgpu-5090 \
+  -p pdgpu-3090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 8 -m 64G -g 1 -n 1 \
   -j "qwen2audio-mmar-${MODE}-${RUN_TAG}" \

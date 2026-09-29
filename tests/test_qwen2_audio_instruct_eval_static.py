@@ -157,16 +157,16 @@ class Qwen2AudioEvalStaticTests(unittest.TestCase):
         self.assertIn("**record_static_fields", mmau_common)
         self.assertIn("**record_static_fields", mmar_common)
 
-    def test_remote_entrypoints_use_one_5090_and_shared_smoke_full_output(self) -> None:
+    def test_remote_entrypoints_use_one_3090_and_shared_smoke_full_output(self) -> None:
         wrappers = {
-            "mmau": RSMOL / "run_mmau_test_mini_qwen2_audio_instruct_5090.sh",
-            "mmar": RSMOL / "run_mmar_qwen2_audio_instruct_5090.sh",
+            "mmau": RSMOL / "run_mmau_test_mini_qwen2_audio_instruct_3090.sh",
+            "mmar": RSMOL / "run_mmar_qwen2_audio_instruct_3090.sh",
         }
         for name, path in wrappers.items():
             with self.subTest(name=name):
                 source = path.read_text(encoding="utf-8")
                 self.assertIn("vc submit", source)
-                self.assertIn("-p pdgpu-5090", source)
+                self.assertIn("-p pdgpu-3090", source)
                 self.assertIn("-g 1 -n 1", source)
                 self.assertIn("--dtype bf16", source)
                 self.assertIn("--run-official-evaluation", source)
