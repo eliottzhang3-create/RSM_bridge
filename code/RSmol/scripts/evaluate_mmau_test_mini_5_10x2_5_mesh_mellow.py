@@ -1804,10 +1804,16 @@ def run(
     audio_prefix_tokens: int = DEFAULT_AUDIO_PREFIX_TOKENS,
     stage: str = "mmau_test_mini_audio_mesh_fixed_order",
     logical_trace: str = "5+10+10+5 per generation step",
+    record_static_fields: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     load_runtime_model = load_runtime_model or _load_runtime_model
     run_model_generation = run_model_generation or _run_model_generation
     prepare_prediction = prepare_prediction or prepare_model_output_for_official_scorer
+    record_static_fields = (
+        {"audio2_reused": True}
+        if record_static_fields is None
+        else dict(record_static_fields)
+    )
     started = time.time()
     _ensure_output_dir(
         args,
@@ -1936,7 +1942,7 @@ def run(
                         "parquet_answer": sample["parquet_answer"],
                         "official_record": sample["official_record"],
                         "model_output": model_output,
-                        "audio2_reused": True,
+                        **record_static_fields,
                         "audio_payload_source": sample["audio_payload_source"],
                         **{key: value for key, value in sample.items() if key.startswith("audio_")},
                         **generation,

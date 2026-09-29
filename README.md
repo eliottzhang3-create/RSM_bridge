@@ -1,5 +1,26 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-29：Qwen2-Audio-Instruct MMAU/MMAR 隔离对比评测
+
+新增一条不转换权重、不影响现有 RSmol/Mellow 评测的 Qwen2-Audio-Instruct 隔离路线。
+远程默认权重为
+`/hpc_stor03/sjtu_home/jinwei.zhang/models/Qwen2Audio-Instruct`；加载固定使用本地
+Hugging Face artifact、单张 `cuda:0` 和 BF16，不再包含 FP32 或显存试探分支。
+
+MMAU test-mini 完全复用当前
+`audio_5_10x2_5_mesh_mellow_shared_store_configurable_epochs` 的 Mellow 作者回复协议：
+parquet 物理顺序、官方 ID WAV 优先、小写固定选项 prompt、129-token 上限、32 kHz
+repeat/random 10 秒裁剪、300-token top-p filter 后 argmax，以及完整 1000 条官方分母。
+MMAR 完全复用官方 metadata 顺序、固定选项、32 kHz 首 10 秒/右补零、32-token greedy、
+动态 prediction key 与完整分母。两条路线都将同一份未经预解析的 Qwen decoded prediction
+同时交给 `)` 前 choice-label-prefix scorer 和对应官方 scorer。
+
+代码入口为 `run_mmau_test_mini_qwen2_audio_instruct_5090.sh`、
+`run_mmar_qwen2_audio_instruct_5090.sh` 和 CPU artifact 预检
+`run_qwen2_audio_instruct_eval_preflight.sh`。当前只登记本地代码与静态检查就绪；远程权重
+preflight、GPU smoke/full 和正式分数尚未运行，不能记为 PASS。完整合同、输出文件和
+smoke→full 命令见 `code/RSmol/qwen2_audio_instruct_eval/README.md`。
+
 ## 2026-09-29：当前交接状态（新聊天优先阅读）
 
 ### 仓库、远程环境与状态边界

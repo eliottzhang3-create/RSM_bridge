@@ -649,10 +649,16 @@ def run(
         "single cuda:0; bf16; greedy"
     ),
     stage: str = "mmar_audio_mesh_official_accuracy",
+    record_static_fields: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     load_runtime_model = load_runtime_model or common._load_runtime_model
     run_model_generation = run_model_generation or common._run_model_generation
     prepare_prediction = prepare_prediction or common.prepare_model_output_for_official_scorer
+    record_static_fields = (
+        {"audio2_reused": True, "single_audio_slot": True}
+        if record_static_fields is None
+        else dict(record_static_fields)
+    )
     started = time.time()
     _ensure_output_dir(
         args,
@@ -756,8 +762,7 @@ def run(
                         "prompt": sample["prompt"],
                         "official_record": sample["official_record"],
                         "official_prediction": official_prediction,
-                        "audio2_reused": True,
-                        "single_audio_slot": True,
+                        **record_static_fields,
                         **{key: value for key, value in sample.items() if key.startswith("audio_")},
                         **generation,
                     }
