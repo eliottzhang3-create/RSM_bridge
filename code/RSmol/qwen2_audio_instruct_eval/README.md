@@ -13,6 +13,10 @@ RSmol checkpoint。
 - 模型：`/hpc_stor03/sjtu_home/jinwei.zhang/models/Qwen2Audio-Instruct`。
 - 加载：`Qwen2AudioForConditionalGeneration` + `AutoProcessor`，仅使用本地文件，
   `trust_remote_code=False`，单张 `cuda:0`，参数与推理均锁定 BF16。
+- Python 默认固定为
+  `/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3/envs/rsmol/bin/python`，避免从登录
+  shell 的 `base` 环境误用缺少 `transformers` 的解释器。需要时可通过
+  `RSMOL_QWEN2_AUDIO_PYTHON` 显式覆盖。
 - 对话：一个 user turn，内容顺序固定为 audio、benchmark prompt；不添加 system prompt，
   不添加“只回答字母”等额外语义指令。
 - 同一份未经预解析的 decoded prediction 同时送入 choice-label-prefix scorer 与官方 scorer。
@@ -45,6 +49,12 @@ prompt、129 个 Qwen prompt token 上限、32 kHz 下 repeat/random 10 秒裁�
 
 ```bash
 bash run_qwen2_audio_instruct_eval_preflight.sh
+```
+
+可先单独确认项目环境中的 Transformers 版本和 Qwen2-Audio 类：
+
+```bash
+/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3/envs/rsmol/bin/python -c 'import transformers; from transformers import Qwen2AudioForConditionalGeneration; print(transformers.__version__)'
 ```
 
 报告必须为 `PASS` 后再提交 GPU 作业。MMAU smoke 与 full：

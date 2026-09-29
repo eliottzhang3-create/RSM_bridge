@@ -9,6 +9,7 @@ from tqdm import tqdm
 from scipy.signal import fftconvolve
 import numpy as np
 from transformers import AutoTokenizer
+from utils.audio_io import load_audio
 from data.template import DETAIL, WORD, BOTH, FIRST, SECOND, EMOTION, LONGLINE, BOTH_SPK, FIRST_SPK, SECOND_SPK
 from data.template import DETAILONLY, WORDONLY, LONGLINEONLY
 
@@ -106,8 +107,8 @@ class AudioTextDataset(Dataset):
         file_path2 = os.path.join(self.data_path, file_path2)
         file_path2 = file_path2.replace("/",os.path.sep).replace("\\",os.path.sep)
         try:
-            audio_data1, audio_rate1 = torchaudio.load(file_path1, channels_first=True)
-            audio_data2, audio_rate2 = torchaudio.load(file_path2, channels_first=True)
+            audio_data1, audio_rate1 = load_audio(file_path1, channels_first=True)
+            audio_data2, audio_rate2 = load_audio(file_path2, channels_first=True)
 
             # resample audio clip
             if audio_rate1 != self.sampling_rate:

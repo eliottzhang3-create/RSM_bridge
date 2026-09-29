@@ -178,6 +178,17 @@ class Qwen2AudioEvalStaticTests(unittest.TestCase):
         )
         self.assertIn("audit_qwen2_audio_instruct_artifact.py", preflight)
         self.assertIn("RSMOL_QWEN2_AUDIO_MODEL_PATH", preflight)
+        self.assertIn("RSMOL_QWEN2_AUDIO_PYTHON", preflight)
+        self.assertIn("env/miniconda3/envs/rsmol/bin/python", preflight)
+        self.assertNotIn("\npython scripts/audit_qwen2", preflight)
+        for runner_name in (
+            "evaluate_mmau_test_mini_qwen2_audio_instruct.sh",
+            "evaluate_mmar_qwen2_audio_instruct.sh",
+        ):
+            runner = (SCRIPTS / runner_name).read_text(encoding="utf-8")
+            self.assertIn("RSMOL_QWEN2_AUDIO_PYTHON", runner)
+            self.assertIn("env/miniconda3/envs/rsmol/bin/python", runner)
+            self.assertNotIn("exec python ", runner)
         audit_source = (SCRIPTS / "audit_qwen2_audio_instruct_artifact.py").read_text(
             encoding="utf-8"
         )

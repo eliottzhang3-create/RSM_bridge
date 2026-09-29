@@ -270,7 +270,12 @@ def decode_samples(
     entries: list[dict[str, Any]], stage_root: Path, samples_per_group: int
 ) -> list[dict[str, Any]]:
     import torch
-    import torchaudio
+
+    route_root = Path(__file__).resolve().parents[2]
+    route_root_string = str(route_root)
+    if route_root_string not in sys.path:
+        sys.path.insert(0, route_root_string)
+    from utils.audio_io import load_audio
 
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for entry in entries:
@@ -283,7 +288,7 @@ def decode_samples(
     results: list[dict[str, Any]] = []
     for entry in selected:
         staged_path = stage_root.joinpath(*entry["logical_parts"])
-        waveform, sample_rate = torchaudio.load(str(staged_path), channels_first=True)
+        waveform, sample_rate = load_audio(staged_path, channels_first=True)
         if waveform.numel() <= 0 or waveform.ndim != 2:
             raise ValueError(
                 f"invalid decoded waveform shape for {staged_path}: {tuple(waveform.shape)}"

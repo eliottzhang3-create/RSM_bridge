@@ -6,6 +6,9 @@
 远程默认权重为
 `/hpc_stor03/sjtu_home/jinwei.zhang/models/Qwen2Audio-Instruct`；加载固定使用本地
 Hugging Face artifact、单张 `cuda:0` 和 BF16，不再包含 FP32 或显存试探分支。
+三个执行入口默认使用
+`/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3/envs/rsmol/bin/python`，不会继承登录
+shell 的 `base` Python；可用 `RSMOL_QWEN2_AUDIO_PYTHON` 覆盖。
 
 MMAU test-mini 完全复用当前
 `audio_5_10x2_5_mesh_mellow_shared_store_configurable_epochs` 的 Mellow 作者回复协议：

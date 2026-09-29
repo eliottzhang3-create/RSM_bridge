@@ -264,6 +264,7 @@ def inspect_upstream_source(route_root: Path) -> dict[str, Any]:
         "trainer": route_root / "training" / "trainer.py",
         "distributed": route_root / "distributed" / "torch.py",
         "dataset": route_root / "data" / "audiotext_dataset.py",
+        "audio_io": route_root / "utils" / "audio_io.py",
         "model": route_root / "models" / "mellow.py",
         "decoder": route_root / "models" / "decoder.py",
         "entrypoint": route_root / "train.py",
@@ -272,7 +273,8 @@ def inspect_upstream_source(route_root: Path) -> dict[str, Any]:
 
     contracts = {
         "dataset_joins_datapath": "os.path.join(self.data_path, file_path1)" in texts["dataset"],
-        "dataset_loads_raw_audio": "torchaudio.load(file_path1" in texts["dataset"],
+        "dataset_loads_raw_audio": "load_audio(file_path1" in texts["dataset"],
+        "audio_io_uses_soundfile": "sf.read(" in texts["audio_io"],
         "htsat_checkpoint_fixed_basename": "HTSAT_AudioSet_Saved_1.ckpt" in texts["model"],
         "htsat_keys_strip_first_ten": "new_ckpt[key[10:]]" in texts["model"],
         "decoder_path_string_routes_smollm2": 'elif "smollm2" in self.text_decoder' in texts["decoder"],
@@ -470,6 +472,7 @@ def main() -> int:
         core_contract_names = {
             "dataset_joins_datapath",
             "dataset_loads_raw_audio",
+            "audio_io_uses_soundfile",
             "htsat_checkpoint_fixed_basename",
             "htsat_keys_strip_first_ten",
             "decoder_path_string_routes_smollm2",
