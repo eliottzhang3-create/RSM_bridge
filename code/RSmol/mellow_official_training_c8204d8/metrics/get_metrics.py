@@ -1,4 +1,7 @@
-import pysepm
+# Upstream imported pysepm here, but this module never uses it. Keeping the
+# unused optional evaluation dependency out of the training import path lets
+# the official trainer run without installing speech-enhancement metrics.
+# import pysepm
 import os
 import time
 import json
