@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -57,6 +58,21 @@ def logical_parts(logical: str) -> tuple[str, ...]:
 
 def key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+
+def normalized_stem(value: str) -> str:
+    stem = PurePosixPath(value.replace(chr(92), "/")).stem
+    decomposed = unicodedata.normalize("NFKD", stem)
+    ascii_stem = decomposed.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "", ascii_stem.casefold())
+
+
+def build_normalized_stem_index(root: Path) -> dict[str, list[Path]]:
+    index: dict[str, list[Path]] = defaultdict(list)
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            index[normalized_stem(path.name)].append(path.resolve())
+    return dict(index)
 
 
 def infer_group(taskname: Any, logical: str) -> str:
@@ -133,6 +149,7 @@ def resolve(
     audiocaps_root: Path,
     clotho_root: Path,
     clotho_aqa_root: Path,
+    clotho_aqa_name_index: dict[str, list[Path]],
 ) -> dict[str, Any]:
     try:
         candidates = group_candidates(
@@ -167,6 +184,26 @@ def resolve(
             "group": group,
             "matches": sorted(matches),
         }
+    if group == "clotho_aqa":
+        normalized_matches = clotho_aqa_name_index.get(normalized_stem(logical), [])
+        if len(normalized_matches) == 1:
+            source = normalized_matches[0]
+            return {
+                "status": "resolved",
+                "logical_path": logical,
+                "group": group,
+                "source_path": str(source),
+                "source_size_bytes": int(source.stat().st_size),
+                "method": "clotho_aqa_normalized_stem",
+            }
+        if len(normalized_matches) > 1:
+            return {
+                "status": "ambiguous",
+                "logical_path": logical,
+                "group": group,
+                "method": "clotho_aqa_normalized_stem",
+                "matches": [str(path) for path in normalized_matches],
+            }
     return {
         "status": "missing",
         "logical_path": logical,
@@ -192,6 +229,12 @@ def main() -> int:
     for group, root in roots.items():
         if not root.is_dir():
             raise SystemExit(f"{group} root is not a directory: {root}")
+    clotho_aqa_name_index = build_normalized_stem_index(roots["clotho_aqa"])
+    clotho_aqa_name_collisions = {
+        stem: [str(path) for path in paths]
+        for stem, paths in clotho_aqa_name_index.items()
+        if len(paths) > 1
+    }
 
     records = json.loads(train_json.read_text(encoding="utf-8"))
     if not isinstance(records, list) or not records:
@@ -227,6 +270,7 @@ def main() -> int:
             roots["audiocaps"],
             roots["clotho"],
             roots["clotho_aqa"],
+            clotho_aqa_name_index,
         )
 
     failures = [item for item in resolutions.values() if item["status"] != "resolved"]
@@ -291,6 +335,7 @@ def main() -> int:
         "taskname_counts": dict(task_counts.most_common()),
         "resolution_method_counts": dict(Counter(item["method"] for item in resolved_items)),
         "resolved_group_counts": dict(Counter(item["group"] for item in resolved_items)),
+        "clotho_aqa_normalized_stem_collisions": clotho_aqa_name_collisions,
         "failure_counts": dict(Counter(item["status"] for item in failures)),
         "failure_preview": failures[: max(0, args.failure_preview)],
         "inconsistent_logical_paths": inconsistent[: max(0, args.failure_preview)],
