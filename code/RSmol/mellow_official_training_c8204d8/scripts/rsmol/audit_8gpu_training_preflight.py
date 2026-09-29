@@ -281,7 +281,11 @@ def inspect_upstream_source(route_root: Path) -> dict[str, Any]:
             "CosineAnnealingLR(optimizer, self.config[\"train\"][\"num_epochs\"])"
             in texts["trainer"]
         ),
-        "checkpoint_saves_state_dict_only": "{'state_dict': state_dict}" in texts["trainer"],
+        "checkpoint_saves_raw_state_dict": (
+            "torch.save(self.distributed.get_distributed_model_state(model), f)"
+            in texts["trainer"]
+        ),
+        "resume_reads_nested_state_dict": "checkpoint = checkpoint['state_dict']" in texts["trainer"],
         "resume_loads_model_state_only": "model.load_state_dict(checkpoint, strict=False)" in texts["trainer"],
         "timestamp_job_id_created_per_rank": "datetime.now().strftime" in texts["entrypoint"],
         "no_gradient_accumulation": "gradient_accumulation" not in texts["trainer"],
@@ -455,13 +459,51 @@ def main() -> int:
         )
 
         upstream = inspect_upstream_source(route_root)
+        core_contract_names = {
+            "dataset_joins_datapath",
+            "dataset_loads_raw_audio",
+            "htsat_checkpoint_fixed_basename",
+            "htsat_keys_strip_first_ten",
+            "decoder_path_string_routes_smollm2",
+            "ddp_converts_sync_batchnorm",
+            "ddp_find_unused_false",
+            "cosine_scheduler_is_epoch_based",
+            "checkpoint_saves_raw_state_dict",
+            "resume_loads_model_state_only",
+            "timestamp_job_id_created_per_rank",
+            "no_gradient_accumulation",
+        }
         missing_contracts = [
-            name for name, present in upstream["contracts"].items() if not present
+            name
+            for name in core_contract_names
+            if not upstream["contracts"].get(name, False)
         ]
         audit.require(
             "upstream_source_contracts",
             not missing_contracts,
             {"missing": missing_contracts, "contracts": upstream["contracts"]},
+        )
+        resume_schema_compatible = not (
+            upstream["contracts"].get("checkpoint_saves_raw_state_dict")
+            and upstream["contracts"].get("resume_reads_nested_state_dict")
+        )
+        audit.add(
+            "checkpoint_resume_schema_compatibility",
+            "PASS" if resume_schema_compatible else "WARN",
+            {
+                "checkpoint_saves_raw_state_dict": upstream["contracts"].get(
+                    "checkpoint_saves_raw_state_dict"
+                ),
+                "resume_reads_nested_state_dict": upstream["contracts"].get(
+                    "resume_reads_nested_state_dict"
+                ),
+                "detail": (
+                    "fresh training is unaffected; do not use resume_checkpoint until "
+                    "the schema mismatch is explicitly adapted"
+                    if not resume_schema_compatible
+                    else "save and resume schemas agree"
+                ),
+            },
         )
 
         audit.warn(
@@ -475,7 +517,7 @@ def main() -> int:
         )
         audit.warn(
             "checkpoint_resume_limitation",
-            "upstream checkpoints contain model state only; optimizer, scheduler, epoch, sampler, and RNG state are not saved",
+            "upstream checkpoints contain only a raw model state_dict; optimizer, scheduler, epoch, sampler, and RNG state are not saved, and the training resume path currently expects a nested 'state_dict' key",
         )
         audit.warn(
             "epoch_boundary_broadcast_requires_runtime_validation",
