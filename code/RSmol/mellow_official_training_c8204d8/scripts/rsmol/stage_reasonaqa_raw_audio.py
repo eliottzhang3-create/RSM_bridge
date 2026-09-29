@@ -153,7 +153,13 @@ def validate_audit_mapping(
             f"unexpected audit contract: {audit.get('contract')!r}; expected {AUDIT_CONTRACT!r}"
         )
     recorded_mapping = Path(str(audit.get("mapping_path", ""))).expanduser().resolve(strict=True)
-    if recorded_mapping != mapping_path:
+    same_mapping_file = recorded_mapping == mapping_path
+    if not same_mapping_file:
+        try:
+            same_mapping_file = recorded_mapping.samefile(mapping_path)
+        except OSError:
+            same_mapping_file = False
+    if not same_mapping_file:
         raise ValueError(
             f"mapping/report pairing mismatch: report={recorded_mapping} argument={mapping_path}"
         )
