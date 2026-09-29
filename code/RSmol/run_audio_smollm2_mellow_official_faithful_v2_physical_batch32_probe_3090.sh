@@ -8,7 +8,7 @@ CMD_ARGS=""
 if (($#)); then
   printf -v CMD_ARGS '%q ' "$@"
 fi
-JOB_TAG=audio-smollm2-mellow-official-v2-b32-probe-$(date +%m%d%H%M%S%N)
+JOB_TAG=mellow-v2-b32-$(date +%m%d%H%M%S)-$$
 
 submit_args=(
   -p pdgpu-3090
