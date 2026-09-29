@@ -32,7 +32,7 @@ HTSAT_CHECKPOINT="${MELLOW_HTSAT_CHECKPOINT:-/hpc_stor03/sjtu_home/jinwei.zhang/
 source "$USER_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate mellow_c8204d8
 
-echo "[mellow-preflight] CPU-only audit; no waveform, CUDA, model-weight, or torchrun execution" >&2
+echo "[mellow-preflight] login-node audit; no waveform/CUDA/language-model load or torchrun" >&2
 echo "[mellow-preflight] path_audit=$PATH_AUDIT_REPORT" >&2
 echo "[mellow-preflight] text_model=$TEXT_MODEL_DIR" >&2
 echo "[mellow-preflight] htsat=$HTSAT_CHECKPOINT" >&2
@@ -47,7 +47,8 @@ python "$SCRIPT_DIR/audit_8gpu_training_preflight.py" \
   --cpus 32 \
   --memory-gib 256 \
   --workers-per-rank 4 \
-  --candidate-batch-size-per-rank 32 \
+  --candidate-batch-size-per-rank 8 \
+  --gradient-accumulation-steps 4 \
   --staging-margin-gib 10
 
 python - "$REPORT_PATH" <<'PY'

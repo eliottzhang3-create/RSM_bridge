@@ -41,7 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cpus", type=int, default=32)
     parser.add_argument("--memory-gib", type=int, default=256)
     parser.add_argument("--workers-per-rank", type=int, default=4)
-    parser.add_argument("--candidate-batch-size-per-rank", type=int, default=32)
+    parser.add_argument("--candidate-batch-size-per-rank", type=int, default=8)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--staging-margin-gib", type=float, default=10.0)
     parser.add_argument("--mapping-source-samples", type=int, default=48)
     return parser.parse_args()
@@ -287,8 +288,15 @@ def inspect_upstream_source(route_root: Path) -> dict[str, Any]:
         ),
         "resume_reads_nested_state_dict": "checkpoint = checkpoint['state_dict']" in texts["trainer"],
         "resume_loads_model_state_only": "model.load_state_dict(checkpoint, strict=False)" in texts["trainer"],
-        "timestamp_job_id_created_per_rank": "datetime.now().strftime" in texts["entrypoint"],
-        "no_gradient_accumulation": "gradient_accumulation" not in texts["trainer"],
+        "job_id_supports_shared_env": (
+            "MELLOW_JOB_ID" in texts["entrypoint"]
+            and "datetime.now().strftime" in texts["entrypoint"]
+        ),
+        "gradient_accumulation_supported": (
+            "gradient_accumulation_steps" in texts["trainer"]
+            and "loss / gradient_accumulation_steps" in texts["trainer"]
+            and "no_sync()" in texts["trainer"]
+        ),
     }
     return {
         "files": {name: str(path) for name, path in paths.items()},
@@ -470,8 +478,8 @@ def main() -> int:
             "cosine_scheduler_is_epoch_based",
             "checkpoint_saves_raw_state_dict",
             "resume_loads_model_state_only",
-            "timestamp_job_id_created_per_rank",
-            "no_gradient_accumulation",
+            "job_id_supports_shared_env",
+            "gradient_accumulation_supported",
         }
         missing_contracts = [
             name
@@ -510,8 +518,12 @@ def main() -> int:
             "candidate_batch_size_requires_8gpu_smoke",
             {
                 "per_rank": args.candidate_batch_size_per_rank,
-                "global": args.candidate_batch_size_per_rank * args.gpus,
-                "gradient_accumulation": 1,
+                "gradient_accumulation": args.gradient_accumulation_steps,
+                "global_effective": (
+                    args.candidate_batch_size_per_rank
+                    * args.gpus
+                    * args.gradient_accumulation_steps
+                ),
                 "reason": "3090 memory fit is intentionally deferred to the real 8-GPU smoke",
             },
         )
@@ -533,7 +545,10 @@ def main() -> int:
                 "warm_up_steps": "not used by the trainer",
                 "reduce_lr_steps": "not used by the trainer",
                 "scheduler": "cosine advances once per epoch, not per optimizer step",
-                "gradient_accumulation": "not implemented",
+                "gradient_accumulation": (
+                    "implemented in trainer.py; optimizer/scheduler semantics remain "
+                    "official except updates occur after each accumulation window"
+                ),
             },
         )
 

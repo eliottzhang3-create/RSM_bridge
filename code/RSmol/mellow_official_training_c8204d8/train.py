@@ -11,7 +11,12 @@ from training.trainer import Trainer, TrainerMode
 def main():
     args, conf = parse_args()
     args = parse_mode(args)
-    args.job_id = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    # torchrun starts one process per rank; use a job-provided ID so every
+    # rank writes to the same checkpoint directory.
+    args.job_id = os.environ.get(
+        "MELLOW_JOB_ID",
+        datetime.now().strftime('%Y-%m-%d_%H-%M-%S'),
+    )
     args.save_dir = os.path.join(args.save_dir, args.job_id)
     args.save_adir = os.path.join(args.save_dir, "audio")
     # create output folder

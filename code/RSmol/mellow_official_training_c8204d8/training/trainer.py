@@ -20,6 +20,7 @@ import glob
 from pandas import Series
 from scipy.io.wavfile import write
 import traceback
+import contextlib
 from torch.nn import functional as F
 import distributed
 from training import log
@@ -299,6 +300,30 @@ class Trainer:
         
         return dataset, data_sampler, data_loader
 
+    @staticmethod
+    def _answer_token_loss(logits, target, attention_mask, ignore_index):
+        """Compute next-token CE only on semantically valid answer tokens."""
+        if logits.ndim != 3 or target.ndim != 2 or attention_mask.ndim != 2:
+            raise ValueError(
+                "expected logits [B,T,V], target [B,T], attention_mask [B,T]"
+            )
+        if logits.shape[:2] != target.shape or target.shape != attention_mask.shape:
+            raise ValueError(
+                f"answer loss shape mismatch: logits={tuple(logits.shape)}, "
+                f"target={tuple(target.shape)}, mask={tuple(attention_mask.shape)}"
+            )
+        valid = attention_mask.to(dtype=torch.bool) & target.ne(ignore_index)
+        token_loss = F.cross_entropy(
+            logits.transpose(1, 2),
+            target,
+            reduction="none",
+            ignore_index=ignore_index,
+        )
+        valid_count = valid.sum()
+        if valid_count.item() == 0:
+            raise ValueError("answer batch contains no valid target tokens")
+        return (token_loss * valid).sum() / valid_count
+
     def train(self):
         self.logger.info("Training Mellow with data: %s", self.config["data"]["datafiles"])
         self.config["model"]["decoder"]["prefix_dim"] = self.config["model"]["encoder"]["d_proj"]
@@ -366,8 +391,39 @@ class Trainer:
 
         # broadcast optimizer state to all other processes
         self.distributed.broadcast_optimizer_state(optimizer)
-        # Train the model
-        num_batches_per_epoch = len(data_loader)
+        # Train the model with explicit optimizer-step gradient accumulation.
+        gradient_accumulation_steps = int(
+            self.config["train"].get("gradient_accumulation_steps", 1)
+        )
+        if gradient_accumulation_steps < 1:
+            raise ValueError("gradient_accumulation_steps must be >= 1")
+        effective_global_batch_size = (
+            int(self.config["train"]["batch_size"])
+            * self.distributed.world_size()
+            * gradient_accumulation_steps
+        )
+        if self.distributed.rank() == 0:
+            self.logger.info(
+                "Batch geometry: per_rank_microbatch=%d, world_size=%d, "
+                "gradient_accumulation_steps=%d, effective_global_batch=%d",
+                int(self.config["train"]["batch_size"]),
+                self.distributed.world_size(),
+                gradient_accumulation_steps,
+                effective_global_batch_size,
+            )
+        num_microbatches_per_epoch = len(data_loader)
+        num_batches_per_epoch = num_microbatches_per_epoch // gradient_accumulation_steps
+        dropped_microbatches = (
+            num_microbatches_per_epoch
+            - num_batches_per_epoch * gradient_accumulation_steps
+        )
+        if dropped_microbatches and self.distributed.rank() == 0:
+            self.logger.warning(
+                "Dropping %d trailing microbatches so every optimizer step has "
+                "gradient_accumulation_steps=%d",
+                dropped_microbatches,
+                gradient_accumulation_steps,
+            )
 
         t0 = time.time()
         lowest_accerr_epo = 1000.0
@@ -399,37 +455,73 @@ class Trainer:
                 if epoch == 0:
                     print("Starting the training with a learning rate of {}".format(lr))
             
-            for ii, batch_data_dict in enumerate(data_loader):
-                batch_audio1 = batch_data_dict['waveform1']
-                batch_audio2 = batch_data_dict['waveform2']
-                batch_input = batch_data_dict['input']
-                batch_answer = batch_data_dict['answer']
+            data_iterator = iter(data_loader)
+            for ii in range(num_batches_per_epoch):
+                optimizer.zero_grad(set_to_none=True)
+                accumulated_loss = torch.zeros((), device=self.device, dtype=torch.float32)
 
-                batch_answer['attention_mask'] = torch.stack([torch.cat((torch.ones(self.config["model"]["decoder"]["total_prefix_length"]), text), dim=0) for text in batch_answer['attention_mask']])
+                for micro_idx in range(gradient_accumulation_steps):
+                    batch_data_dict = next(data_iterator)
+                    batch_audio1 = batch_data_dict['waveform1']
+                    batch_audio2 = batch_data_dict['waveform2']
+                    batch_input = batch_data_dict['input']
+                    batch_answer = batch_data_dict['answer']
+                    answer_attention_mask = batch_answer['attention_mask']
+                    batch_answer['attention_mask'] = torch.stack(
+                        [
+                            torch.cat(
+                                (
+                                    torch.ones(
+                                        self.config["model"]["decoder"]["total_prefix_length"],
+                                        dtype=text.dtype,
+                                    ),
+                                    text,
+                                ),
+                                dim=0,
+                            )
+                            for text in answer_attention_mask
+                        ]
+                    )
 
-                input_dict = {
-                    "audio1":batch_audio1,
-                    "audio2": batch_audio2,
-                    "input":batch_input,
-                    "answer":batch_answer,
-                }
-                input_dict = LazyConversionDict(input_dict, lambda x: x.to(self.device))
-                
-                model_outputs = model(input_dict)
-                logits = model_outputs.logits[:, self.config["model"]["decoder"]["total_prefix_length"] - 1: -1]
-                loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), input_dict['answer']['input_ids'].flatten(), ignore_index=ignore_index)
+                    input_dict = {
+                        "audio1": batch_audio1,
+                        "audio2": batch_audio2,
+                        "input": batch_input,
+                        "answer": batch_answer,
+                    }
+                    input_dict = LazyConversionDict(input_dict, lambda x: x.to(self.device))
 
-                optimizer.zero_grad()
+                    sync_context = (
+                        model.no_sync()
+                        if micro_idx + 1 < gradient_accumulation_steps
+                        and hasattr(model, "no_sync")
+                        else contextlib.nullcontext()
+                    )
+                    with sync_context:
+                        model_outputs = model(input_dict)
+                        prefix_length = self.config["model"]["decoder"]["total_prefix_length"]
+                        logits = model_outputs.logits[:, prefix_length - 1: -1]
+                        target = input_dict["answer"]["input_ids"]
+                        answer_mask = answer_attention_mask.to(self.device)
+                        loss = self._answer_token_loss(
+                            logits, target, answer_mask, ignore_index
+                        )
+                        accumulated_loss = accumulated_loss + loss.detach().float()
+                        grad_scaler.scale(loss / gradient_accumulation_steps).backward()
 
-                grad_scaler.scale(loss).backward()
-                grad_scaler.unscale_(optimizer)  # to use the same max_grad_norm value for gradient clipping
+                    del batch_audio1, batch_audio2, batch_input, batch_answer
+                    del input_dict, model_outputs
 
-                total_norm, grad_scale = grad_norm_tracker.track_and_clip_(list(model.named_parameters()))
-                
+                grad_scaler.unscale_(optimizer)
+                total_norm, grad_scale = grad_norm_tracker.track_and_clip_(
+                    list(model.named_parameters())
+                )
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
 
-                loss = self.distributed.all_reduce(loss.detach()).item()
+                loss = self.distributed.all_reduce(
+                    (accumulated_loss / gradient_accumulation_steps).detach()
+                ).item()
                 accerr_epo += loss
 
                 if loss_tracker is not None:
@@ -455,11 +547,10 @@ class Trainer:
                         epoch + 1, self.config["train"]["num_epochs"], ii + 1,
                         num_batches_per_epoch, errstr
                     )
+                if self.distributed.rank() == 0:
                     tqdm_handler.update(1)
 
-                del batch_audio1, batch_audio2, batch_input, batch_answer
-                del input_dict, model_outputs
-
+            tqdm_handler.close()
 
             metrics_train["accerr"] = float(accerr_epo)
             if accerr_epo < lowest_accerr_epo and self.distributed.rank() == 0:
