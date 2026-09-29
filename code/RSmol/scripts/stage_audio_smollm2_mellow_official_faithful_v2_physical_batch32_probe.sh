@@ -70,4 +70,14 @@ STAGING_TOTAL_SECONDS=$(awk -v start="$TOTAL_START_NS" -v end="$STAGING_END_NS" 
 echo "[physical-batch32-stage] PASS store_seconds=$STORE_COPY_SECONDS manifest_seconds=$MANIFEST_COPY_SECONDS total_seconds=$STAGING_TOTAL_SECONDS" >&2
 
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-torchrun --standalone --nproc_per_node=8 "$SCRIPT_DIR/probe_audio_smollm2_mellow_official_faithful_v2_physical_batch32_ddp.py" +  --mode formal +  --train-manifest "$STAGED_MANIFEST" +  --unique-waveform-store-dir "$STAGED_STORE" +  --persistent-manifest-source "$SOURCE_MANIFEST" +  --persistent-store-source "$SOURCE_STORE" +  --store-copy-seconds "$STORE_COPY_SECONDS" +  --manifest-copy-seconds "$MANIFEST_COPY_SECONDS" +  --staging-total-seconds "$STAGING_TOTAL_SECONDS" +  "$@"
+probe_args=(
+  --mode formal
+  --train-manifest "$STAGED_MANIFEST"
+  --unique-waveform-store-dir "$STAGED_STORE"
+  --persistent-manifest-source "$SOURCE_MANIFEST"
+  --persistent-store-source "$SOURCE_STORE"
+  --store-copy-seconds "$STORE_COPY_SECONDS"
+  --manifest-copy-seconds "$MANIFEST_COPY_SECONDS"
+  --staging-total-seconds "$STAGING_TOTAL_SECONDS"
+)
+torchrun --standalone --nproc_per_node=8 "$SCRIPT_DIR/probe_audio_smollm2_mellow_official_faithful_v2_physical_batch32_ddp.py" "${probe_args[@]}" "$@"
