@@ -1,12 +1,56 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-09-29：当前交接状态（新聊天优先阅读）
+
+### 仓库、远程环境与状态边界
+
+- 本地仓库只保存核心代码，不保存模型权重、正式数据集或远程训练输出。远程代码目录是 `/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol`，现有主环境是 `/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3/envs/rsmol`；代码通过 GitHub 在本地与远程之间同步。
+- 本次 README 更新前，`main` 与 `origin/main` 都位于 `a984b96`，工作区干净。该提交已经包含 physical-batch-32 probe 的短 job 名修复；本节 README 更新本身仍需由后续操作者按正常流程提交并推送。
+- README 中更早日期的小节是当时的历史快照。若旧小节与本节冲突，以本节和对应隔离路线的当前代码为准。远程作业是否完成只能由远程日志、report 和 checkpoint 证明，本地静态检查不能记作 GPU PASS。
+
+### 当前主线一：Mellow `official-faithful-v2` shared-store
+
+- 隔离路线目录为 `code/RSmol/audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs/`，锁定官方 Mellow training commit `c8204d8eb99b4384fd7a76ad57995731e0c0c2bf`。它保持 HTSAT 参数冻结但模块处于 train mode，使用 separator token ID 0，并使用官方逐参数 `GradNormTracker`。不要与旧 Mellow-faithful 路线混用 checkpoint 或 report。
+- 当前 formal 配置仍是 `8 GPU × microbatch 8 × GA 4 = effective global batch 256`、30 epochs、113,430 optimizer steps。这种梯度累积不与官方每 rank physical batch 32、GA 1 的一次大 batch 严格等价，尤其 HTSAT 处于 train mode 时，BatchNorm、SpecAugment 和随机状态都会按 microbatch 分别执行。
+- 第一轮 formal 已实际运行到 `step=3780/113430`，随后在第一个 epoch 边界的 `broadcast_epoch_state()` 中因 NCCL 直接广播非连续 tensor 而报 `ValueError: Tensors must be contiguous`。提交 `700dca5` 已修复：连续 tensor 直接广播；非连续 model/optimizer state 先复制到连续 staging tensor，广播后再 copy back，并记录 staging 审计。由于保存间隔是 5000 步，该轮在失败前没有 checkpoint，只能从头重跑。用户随后确认 formal 已重新跑起来，但截至交接时尚无完整训练 PASS。
+- 为评估严格 physical batch 32 方案的显存和速度，已新增完全隔离、只跑两步、不写 checkpoint 的 probe：每 rank microbatch 32、GA 1、8 GPU、FP32，并记录各 rank 峰值显存和吞吐。入口是 `code/RSmol/run_audio_smollm2_mellow_official_faithful_v2_physical_batch32_probe_3090.sh`。提交 `d4fdd32` 修复了参数传递中出现的字面量 `+`，提交 `a984b96` 将 job 名缩短到 60 字符限制以内。尚未收到远程 probe report，不能据此断言 physical batch 32 可用。
+- probe 建议从远程 `code/RSmol` 目录运行：
+
+```bash
+PROBE_OUTPUT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow_official_faithful_v2_physical_batch32_probe/probe_$(date +%Y%m%d_%H%M%S)
+bash run_audio_smollm2_mellow_official_faithful_v2_physical_batch32_probe_3090.sh --output-dir "$PROBE_OUTPUT"
+```
+
+### 当前主线二：文本 `5-10x6-5` 恢复训练
+
+- 已有 checkpoint：`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x6_5_mesh/formal_third_epoch_3081steps_20260928_3090_v1/checkpoint-002000`，目标仍是恢复后训练到总计 3,081 optimizer steps，而不是再训练 3,081 步。
+- `run_stage4_5_10x6_5_mesh_formal_3090.sh` 已支持显式 `--resume-from`，底层 wrapper 会把 checkpoint 传给 trainer；队列保持 `pdgpu-3090`。
+- 恢复训练曾在最初窗口出现 `nonfinite gradient norm`。当前实现保留 `clip_grad_norm_(..., 1.0)`，并将任一 rank 检测到非有限梯度后的整段 GA accumulation window 在所有 rank 上同步丢弃：清空梯度、消费下一段数据、保持 optimizer step 不变，然后重试同一个目标 step。跳过次数写入 diagnostics、report 和 checkpoint，并有连续及累计上限，避免无限静默跳过。
+- 后续一次作业出现 C10d rendezvous store 连接超时；结合日志判断更像节点或硬件故障。用户已重新提交 `text_x6_formal`，截至交接时没有最终 `checkpoint-003081` 完成证明。不要把 rendezvous 故障和训练器的非有限梯度策略混为一类问题。
+
+### 下一条独立路线：直接使用 Mellow 官方 `training` 分支
+
+- 用户决定另开一条与现有 RSmol v2 完全隔离的路线，直接以官方仓库 `soham97/mellow` 的 `training` 分支为基础做全面复现。已确认和审计的目标 commit 同样是 `c8204d8eb99b4384fd7a76ad57995731e0c0c2bf`；截至本次交接，尚未把官方源码 vendoring、环境、配置或提交 wrapper 写入本仓库。
+- 计划是在远程保留官方训练核心语义，只做基础设施适配：独立环境、远程文本模型和 HTSAT checkpoint 路径、ReasonAQA 数据路径、单节点 8-GPU `torchrun`、`vc submit` 的 `pdgpu-3090` 入口、日志与输出目录，以及将官方代码实际读取的原始音频文件预加载到节点共享 `/dev/shm`。
+- 严格官方复现线不要直接复用当前 v2 的预解码 waveform store，因为官方 dataset 在运行时通过音频文件路径加载、重采样和裁剪；改用 waveform store 会改变数据管线语义。现有 JSONL manifest 也未必符合官方 dataset 预期的 JSON 结构，需要先逐字段核对并生成独立的官方格式数据文件。
+- 不要直接修改现有 `rsmol` 环境。优先创建独立环境或克隆环境后审计依赖；官方 `requirements.txt` 带有平台和旧版本约束，不能在 Linux 上盲目整文件安装。也不要在未记录的情况下修复官方 sampler、batch、optimizer、scheduler、HTSAT mode、随机音频选择或 resume 语义，否则失去“直接官方代码复现”的可审计性。
+- 新聊天接手后的下一项工作应先完成官方源码、配置、dataset、DDP launcher 和依赖的逐文件核对，列出必须提供的远程真实路径，再设计隔离目录、环境安装步骤、数据 staging wrapper、1-GPU smoke、8-GPU smoke、checkpoint/reload smoke 和 formal 提交命令。未完成这些审计前不要直接启动长训练。
+
+### 新聊天的建议阅读顺序
+
+1. 本 README 的本节。
+2. `code/RSmol/audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs/README.md`。
+3. `code/RSmol/text_5_10x6_5_mesh/README.md`。
+4. 最近五个提交：`457fdcf`、`700dca5`、`11036bc`、`d4fdd32`、`a984b96`。
+5. 再开始官方 Mellow `training` 分支的独立复现路线；不要继续修改正在运行的现有 formal 训练线，除非新的远程日志证明存在必须修复的问题。
+
 ## 2026-09-28：Mellow official-faithful-v2 SmolLM2 shared-store 隔离训练线
 
 新增完全隔离的 audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs 路线。它修正旧 Mellow-faithful 路线相对官方运行时合同的三项偏差：冻结 HTSAT 参数但保持 HTSAT train mode、两个音频分隔符固定使用 token ID 0，以及使用锁定 Mellow commit c8204d8eb99b4384fd7a76ad57995731e0c0c2bf 的逐参数 GradNormTracker 代替固定 0.5 梯度裁剪。旧路线的 package、trainer、checkpoint 和 report 保持原合同，不能与 v2 混用。
 
 v2 checkpoint 保存各 rank 的 HTSAT mutable buffers 和 GradNormTracker running_norm；resume 在首个恢复 forward 前加载本 rank buffer，并保留 DataLoader iterator 创建后的第二次 RNG 恢复。普通 train-mode BatchNorm 在 epoch 内可按 rank 分化；每个完整 epoch 结束后从 rank 0 广播模型状态与 optimizer tensor state。fresh smoke 固定运行 0 到 20，resume 固定运行 20 到 22；formal 必须同时读取本路线两个 PASS report。qualification 为 8 GPU × microbatch 4 × GA 1，formal 为 8 GPU × microbatch 8 × GA 4、30 epochs、每 5000 步保存并保留最新 4 份。所有提交 wrapper 使用 pdgpu-3090。
 
-当前状态为本地代码、Python 编译和静态合同测试就绪；远程 smoke20、resume2、BatchNorm buffer 变化、epoch 边界同步和 30-epoch formal 均尚未登记 GPU PASS。完整合同和命令见 code/RSmol/audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs/README.md。
+截至 2026-09-29，formal 已实际运行到首个 epoch 边界，暴露并修复了非连续 tensor 的 NCCL 广播问题；修复后的 formal 已从头重新启动，但 30-epoch 完成状态仍待远程 report 与最终 checkpoint 证明。另有隔离的 physical-batch-32 两步显存 probe 已就绪，远程结果尚未回传。完整合同和命令见 code/RSmol/audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs/README.md。
 
 ## 2026-09-28：x4 MeSH 音频 shared-store 隔离训练线
 
