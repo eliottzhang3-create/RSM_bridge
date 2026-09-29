@@ -137,7 +137,15 @@ class MellowOfficialFaithfulV2StaticTest(unittest.TestCase):
             '"grad_norm_tracker_state"',
             "model.load_htsat_buffer_state(rank_buffer_state)",
             "broadcast_epoch_state(owner, optimizer, world)",
+            "def _broadcast_cuda_tensor_from_rank0",
             'if value.device.type == "cuda"',
+            "if value.is_contiguous()",
+            "staging = value.contiguous()",
+            "dist.broadcast(staging, src=0)",
+            "value.copy_(staging)",
+            '"model_noncontiguous_cuda_tensors"',
+            '"optimizer_noncontiguous_cuda_tensors"',
+            '"noncontiguous_cuda_tensor_names_sample"',
             "dist.broadcast_object_list(payload, src=0)",
             "htsat_buffer_change_audit",
             "last_separator_pair_ids",
@@ -145,6 +153,11 @@ class MellowOfficialFaithfulV2StaticTest(unittest.TestCase):
         ):
             self.assertIn(marker, trainer)
         self.assertNotIn("clip_grad_norm_", trainer)
+        epoch_broadcast = trainer[
+            trainer.index("def broadcast_epoch_state"):
+            trainer.index("def compare_reference22")
+        ]
+        self.assertNotIn("dist.broadcast(value, src=0)", epoch_broadcast)
         self.assertNotIn(
             "audio_smollm2_135m_mellow_shared_store_configurable_epochs import",
             trainer,

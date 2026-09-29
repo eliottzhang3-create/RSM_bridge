@@ -86,7 +86,12 @@ official `running_norm` state. Names come from the unwrapped owner model.
 
 DDP uses `broadcast_buffers=False`, so train-mode BatchNorm buffers may differ by
 rank inside an epoch. At each completed epoch, the trainer broadcasts the complete
-rank-0 model state and optimizer tensor state.
+rank-0 model state and optimizer tensor state. NCCL collectives use each tensor
+directly when it is contiguous. A noncontiguous CUDA state view is broadcast through
+a contiguous staging tensor and copied back into the original view, preserving the
+model or optimizer object's identity, strides, and shared-storage relationships. The
+epoch-boundary audit records separate model and optimizer staging counts plus a
+bounded sample of affected state names.
 
 Mid-epoch checkpoints save every rank's HTSAT named buffers in
 `htsat_buffers_by_rank.pt`. Complete checkpoints also contain the tracker state,

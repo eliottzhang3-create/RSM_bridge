@@ -353,28 +353,67 @@ def htsat_buffer_change_audit(
     }
 
 
+def _broadcast_cuda_tensor_from_rank0(value: torch.Tensor) -> bool:
+    """Broadcast a CUDA tensor without replacing its owning state object.
+
+    NCCL requires a contiguous communication buffer. State dictionaries can
+    legitimately expose noncontiguous tensor views. Replacing such a tensor
+    with a contiguous copy would leave the model or optimizer owning the old
+    view, so the collective is staged and then copied back in place.
+
+    Return True when a staging tensor was required.
+    """
+    if value.device.type != "cuda":
+        raise ValueError("CUDA epoch-state broadcast received a non-CUDA tensor")
+    if value.is_contiguous():
+        dist.broadcast(value, src=0)
+        return False
+    staging = value.contiguous()
+    dist.broadcast(staging, src=0)
+    with torch.no_grad():
+        value.copy_(staging)
+    return True
+
+
 def broadcast_epoch_state(model: Any, optimizer: Any, world: int) -> dict[str, Any]:
     if world <= 1:
-        return {"passed": True, "model_tensors": 0, "optimizer_tensors": 0}
+        return {
+            "passed": True,
+            "model_tensors": 0,
+            "optimizer_tensors": 0,
+            "model_noncontiguous_cuda_tensors": 0,
+            "optimizer_noncontiguous_cuda_tensors": 0,
+            "noncontiguous_cuda_tensor_names_sample": [],
+        }
     model_tensors = 0
-    for value in model.state_dict().values():
+    model_noncontiguous_cuda_tensors = 0
+    optimizer_noncontiguous_cuda_tensors = 0
+    noncontiguous_cuda_tensor_names: list[str] = []
+    for name, value in model.state_dict().items():
         if torch.is_tensor(value):
             if value.device.type == "cuda":
-                dist.broadcast(value, src=0)
+                if _broadcast_cuda_tensor_from_rank0(value):
+                    model_noncontiguous_cuda_tensors += 1
+                    noncontiguous_cuda_tensor_names.append(f"model.{name}")
             else:
                 payload = [value if dist.get_rank() == 0 else None]
                 dist.broadcast_object_list(payload, src=0)
-                value.copy_(payload[0])
+                with torch.no_grad():
+                    value.copy_(payload[0])
             model_tensors += 1
     optimizer_tensors = 0
-    for group in optimizer.param_groups:
-        for parameter in group["params"]:
+    for group_index, group in enumerate(optimizer.param_groups):
+        for parameter_index, parameter in enumerate(group["params"]):
             state = optimizer.state.get(parameter, {})
             for key in sorted(state):
                 value = state[key]
                 if torch.is_tensor(value):
                     if value.device.type == "cuda":
-                        dist.broadcast(value, src=0)
+                        if _broadcast_cuda_tensor_from_rank0(value):
+                            optimizer_noncontiguous_cuda_tensors += 1
+                            noncontiguous_cuda_tensor_names.append(
+                                f"optimizer.group{group_index}.parameter{parameter_index}.{key}"
+                            )
                     else:
                         payload = [value if dist.get_rank() == 0 else None]
                         dist.broadcast_object_list(payload, src=0)
@@ -390,6 +429,9 @@ def broadcast_epoch_state(model: Any, optimizer: Any, world: int) -> dict[str, A
         "source_rank": 0,
         "model_tensors": model_tensors,
         "optimizer_tensors": optimizer_tensors,
+        "model_noncontiguous_cuda_tensors": model_noncontiguous_cuda_tensors,
+        "optimizer_noncontiguous_cuda_tensors": optimizer_noncontiguous_cuda_tensors,
+        "noncontiguous_cuda_tensor_names_sample": noncontiguous_cuda_tensor_names[:32],
     }
 
 
