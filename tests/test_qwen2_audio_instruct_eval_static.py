@@ -109,9 +109,10 @@ class Qwen2AudioEvalStaticTests(unittest.TestCase):
             "audios=[audio]",
             "add_generation_prompt=True",
             "use_cache=False",
-            "pad_token_id = sorted(eos_ids)[0]",
+            '\"decoder\": \"qwen2_audio_greedy_argmax_full_recompute\"',
         ):
             self.assertIn(marker, source)
+        self.assertNotIn("model.generate(", source)
 
     def test_mmau_reuses_author_protocol_and_shares_raw_prediction(self) -> None:
         source = MMAU.read_text(encoding="utf-8")
@@ -134,6 +135,7 @@ class Qwen2AudioEvalStaticTests(unittest.TestCase):
         source = MMAR.read_text(encoding="utf-8")
         for marker in (
             "qwen.generate_greedy",
+            "manual greedy argmax full recompute",
             "max_prompt_tokens=MAX_PROMPT_TOKENS",
             "max_new_tokens=max_new_tokens",
             "return str(value)",

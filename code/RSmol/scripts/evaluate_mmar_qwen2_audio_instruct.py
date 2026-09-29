@@ -80,7 +80,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         audio_prefix_tokens=0,
         protocol_description=(
             "official MMAR order and fixed choices; native Qwen2-Audio ChatML; "
-            "decoded prediction passed verbatim; single cuda:0; bf16; greedy"
+            "decoded prediction passed verbatim; single cuda:0; bf16; "
+            "manual greedy argmax full recompute; use_cache=False"
         ),
         stage="mmar_qwen2_audio_instruct_dual_scoring",
         record_static_fields={"qwen_native_single_audio_input": True},

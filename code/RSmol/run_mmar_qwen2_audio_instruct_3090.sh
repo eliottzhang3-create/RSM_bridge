@@ -12,7 +12,7 @@ DATASET_DIR="${RSMOL_MMAR_DATASET_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/M
 METADATA_JSON="${RSMOL_MMAR_METADATA_JSON:-$DATASET_DIR/MMAR-meta.json}"
 AUDIO_ROOT="${RSMOL_MMAR_AUDIO_ROOT:-$DATASET_DIR/mmar-audio}"
 EVALUATION_SCRIPT="${RSMOL_MMAR_EVALUATION_SCRIPT:-$DATASET_DIR/code/evaluation.py}"
-OUTPUT_DIR="${RSMOL_QWEN2_AUDIO_MMAR_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/qwen2_audio_instruct_eval/mmar_dual_scoring_v1}"
+OUTPUT_DIR="${RSMOL_QWEN2_AUDIO_MMAR_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/qwen2_audio_instruct_eval/mmar_dual_scoring_v2_manual_greedy}"
 JOB_LOG="$SCRIPT_DIR/log/qwen2_audio_mmar_${MODE}.${RUN_TAG}.JOB.log"
 
 ARGS=(

@@ -36,8 +36,10 @@ prompt、129 个 Qwen prompt token 上限、32 kHz 下 repeat/random 10 秒裁�
 ### MMAR
 
 完全复用官方 metadata 顺序、固定 choices、动态探测的 prediction key、32 kHz 首 10 秒/
-右侧补零和 1000 条完整分母。Qwen 使用 deterministic greedy、`use_cache=False`、最多
-32 个生成 token。
+右侧补零和 1000 条完整分母。Qwen 使用手写 deterministic greedy argmax 全量重算循环、
+`use_cache=False`、最多 32 个生成 token；不调用 Transformers 的通用 `generate()`，以
+避免环境中的 generation utils 向旧版 Qwen2-Audio `forward()` 注入不兼容的
+`cache_position` 参数。
 
 输出同时包含 choice-label-prefix 分数与官方 MMAR 分数。主要文件为
 `predictions_official.json`、`choice_label_prefix_evaluation.json`、
@@ -70,7 +72,7 @@ RSMOL_QWEN2_AUDIO_MMAU_MODE=full RSMOL_QWEN2_AUDIO_MMAU_OUTPUT_DIR="$MMAU_DIR" \
 MMAR smoke 与 full：
 
 ```bash
-MMAR_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/qwen2_audio_instruct_eval/mmar_dual_scoring_v1
+MMAR_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/qwen2_audio_instruct_eval/mmar_dual_scoring_v2_manual_greedy
 RSMOL_QWEN2_AUDIO_MMAR_MODE=smoke RSMOL_QWEN2_AUDIO_MMAR_OUTPUT_DIR="$MMAR_DIR" \
   bash run_mmar_qwen2_audio_instruct_3090.sh
 RSMOL_QWEN2_AUDIO_MMAR_MODE=full RSMOL_QWEN2_AUDIO_MMAR_OUTPUT_DIR="$MMAR_DIR" \

@@ -547,30 +547,39 @@ def generate_greedy(
         max_prompt_tokens=max_prompt_tokens,
         truncate_prompt=False,
     )
-    input_length = int(inputs["input_ids"].shape[1])
     eos_ids = _eos_ids(model, processor)
-    pad_token_id = processor.tokenizer.pad_token_id
-    if pad_token_id is None:
-        pad_token_id = sorted(eos_ids)[0]
+    generated: list[int] = []
+    stop_reason = "max_new_tokens"
     started = time.perf_counter()
-    with torch.inference_mode(), torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=True
-    ):
-        sequences = model.generate(
-            **inputs,
-            max_new_tokens=int(max_new_tokens),
-            do_sample=False,
-            num_beams=1,
-            use_cache=False,
-            pad_token_id=pad_token_id,
-            eos_token_id=sorted(eos_ids),
-        )
-    if hasattr(sequences, "sequences"):
-        sequences = sequences.sequences
-    generated_ids = sequences[:, input_length:].detach().cpu()
+    with torch.inference_mode():
+        for _ in range(int(max_new_tokens)):
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
+                output = model(**inputs, use_cache=False, return_dict=True)
+            logits = output.logits[:, -1, :]
+            if not bool(torch.isfinite(logits).all()):
+                raise RuntimeError("Qwen2-Audio generation logits contain non-finite values")
+            next_token = int(torch.argmax(logits.float(), dim=-1).item())
+            generated.append(next_token)
+            token = torch.tensor([[next_token]], dtype=torch.long, device=device)
+            inputs["input_ids"] = torch.cat((inputs["input_ids"], token), dim=1)
+            if "attention_mask" in inputs:
+                inputs["attention_mask"] = torch.cat(
+                    (
+                        inputs["attention_mask"],
+                        torch.ones(
+                            (1, 1),
+                            dtype=inputs["attention_mask"].dtype,
+                            device=device,
+                        ),
+                    ),
+                    dim=1,
+                )
+            if next_token in eos_ids:
+                stop_reason = "eos_token"
+                break
     elapsed = time.perf_counter() - started
+    generated_ids = torch.tensor([generated], dtype=torch.long)
     clean, raw, token_ids = _decode(processor, generated_ids)
-    stop_reason = "eos_token" if token_ids and token_ids[-1] in eos_ids else "max_new_tokens"
     return {
         "generated_token_ids": token_ids,
         "generated_token_count": len(token_ids),
@@ -581,7 +590,7 @@ def generate_greedy(
         "requested_max_new_tokens": int(max_new_tokens),
         "generation_seconds": elapsed,
         "tokens_per_second": len(token_ids) / max(elapsed, 1e-9),
-        "decoder": "qwen2_audio_greedy_generate_use_cache_false",
+        "decoder": "qwen2_audio_greedy_argmax_full_recompute",
         "do_sample": False,
         "use_cache": False,
         "top_p": None,
