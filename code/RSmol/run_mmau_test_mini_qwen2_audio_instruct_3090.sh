@@ -13,7 +13,7 @@ PARQUET="${RSMOL_MMAU_PARQUET:-$DATASET_DIR/test_mini.parquet}"
 METADATA_JSON="${RSMOL_MMAU_METADATA_JSON:-$DATASET_DIR/mmau-test-mini.json}"
 EVALUATION_SCRIPT="${RSMOL_MMAU_EVALUATION_SCRIPT:-$DATASET_DIR/evaluation.py}"
 AUDIO_ROOT="${RSMOL_MMAU_AUDIO_ROOT:-$DATASET_DIR/test-mini-audios}"
-OUTPUT_DIR="${RSMOL_QWEN2_AUDIO_MMAU_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/qwen2_audio_instruct_eval/mmau_test_mini_dual_scoring_v1}"
+OUTPUT_DIR="${RSMOL_QWEN2_AUDIO_MMAU_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/qwen2_audio_instruct_eval/mmau_test_mini_dual_scoring_v2_paren_casefold}"
 JOB_LOG="$SCRIPT_DIR/log/qwen2_audio_mmau_${MODE}.${RUN_TAG}.JOB.log"
 
 ARGS=(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -22,12 +23,100 @@ import evaluate_qwen2_audio_instruct_common as qwen  # noqa: E402
 DEFAULT_MAX_NEW_TOKENS = 300
 PREDICTION_FORMAT = "qwen2_audio_instruct_raw_generation_dual_scoring_v1"
 PROTOCOL_CONTRACT = "qwen2_audio_instruct_mmau_author_reply_and_v051525_v1"
+QWEN_MMAU_AUTHOR_SCORER = "qwen2_audio_choice_label_prefix_or_parenthesized_casefold_v1"
 
 
 def prepare_model_output_for_official_scorer(value: Any) -> str:
     """Preserve the decoded Qwen answer for both scorers."""
 
     return str(value)
+
+
+def _extract_qwen_choice_label(value: Any) -> str | None:
+    """Accept letter-before-close-paren and parenthesized labels, case-insensitively."""
+
+    text = str(value)
+    parenthesized = re.search(r"\(\s*([A-Za-z])\s*\)", text)
+    if parenthesized:
+        return parenthesized.group(1).casefold()
+    before_close_paren = re.search(r"([A-Za-z])\s*\)", text)
+    if before_close_paren:
+        return before_close_paren.group(1).casefold()
+    return None
+
+
+def evaluate_qwen_mellow_author_reply_predictions(
+    predictions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Qwen-only author-reply score with tolerant choice-label semantics."""
+
+    baseline = official.evaluate_mellow_author_reply_predictions(predictions)
+    task_metrics = {name: [0, 0] for name in ("sound", "music", "speech")}
+    difficulty_metrics = {name: [0, 0] for name in ("easy", "hard", "medium")}
+    scored_rows: list[dict[str, Any]] = []
+    correct = 0
+    for row in baseline["rows"]:
+        task = str(row["task"])
+        difficulty = str(row["difficulty"])
+        prediction_label = _extract_qwen_choice_label(row.get("prediction", ""))
+        answer_label = _extract_qwen_choice_label(row.get("labeled_answer", ""))
+        matched = bool(
+            row.get("scoring_error") is None
+            and prediction_label is not None
+            and prediction_label == answer_label
+        )
+        if matched:
+            task_metrics[task][0] += 1
+            difficulty_metrics[difficulty][0] += 1
+            correct += 1
+        task_metrics[task][1] += 1
+        difficulty_metrics[difficulty][1] += 1
+        updated = dict(row)
+        updated["correct"] = matched
+        updated["prediction_label"] = prediction_label
+        updated["answer_label"] = answer_label
+        scored_rows.append(updated)
+
+    def summarize(metrics: Mapping[str, Sequence[int]]) -> dict[str, Any]:
+        return {
+            name: {
+                "correct": int(values[0]),
+                "total": int(values[1]),
+                "accuracy_percent": (
+                    float(values[0]) / float(values[1]) * 100.0 if values[1] else 0.0
+                ),
+            }
+            for name, values in metrics.items()
+        }
+
+    total = len(scored_rows)
+    return {
+        "status": "PASS",
+        "scorer": QWEN_MMAU_AUTHOR_SCORER,
+        "semantics": {
+            "accepted_forms": ["A)", "a)", "(A)", "(a)"],
+            "case_sensitive": False,
+            "same_prediction_as_official_scorer": True,
+        },
+        "total": {
+            "correct": correct,
+            "total": total,
+            "accuracy_percent": correct / total * 100.0 if total else 0.0,
+        },
+        "task": summarize(task_metrics),
+        "difficulty": summarize(difficulty_metrics),
+        "record_errors": baseline["record_errors"],
+        "rows": scored_rows,
+    }
+
+
+def write_qwen_mellow_author_reply_evaluation(
+    output_dir: Path,
+    predictions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    score = evaluate_qwen_mellow_author_reply_predictions(predictions)
+    official._write_json(output_dir / "mellow_author_reply_evaluation.json", score)
+    return score
 
 
 def _load_runtime_model(
@@ -132,7 +221,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         and report.get("inference_coverage", {}).get("status") == "PASS"
     ):
         predictions = json.loads(predictions_path.read_text(encoding="utf-8"))
-        author_score = official.write_mellow_author_reply_evaluation(
+        author_score = write_qwen_mellow_author_reply_evaluation(
             args.output_dir, predictions
         )
         payload_sources = (
@@ -144,9 +233,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if source != "official_id_wav"
         )
         report["mellow_author_reply_evaluation"] = author_score
-        report["mellow_author_reply_context"] = official.MELLOW_AUTHOR_REPLY_CONTEXT
+        report["mellow_author_reply_context"] = {
+            **official.MELLOW_AUTHOR_REPLY_CONTEXT,
+            "scorer": QWEN_MMAU_AUTHOR_SCORER,
+            "accepted_label_forms": ["A)", "a)", "(A)", "(a)"],
+            "case_sensitive": False,
+        }
         report["primary_comparison_score"] = {
-            "scorer": official.MELLOW_AUTHOR_REPLY_SCORER,
+            "scorer": QWEN_MMAU_AUTHOR_SCORER,
             "comparable": bool(
                 args.mode == "full"
                 and inference_failures == 0
@@ -161,6 +255,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         report["mmau_v051525_evaluation"] = report.get("official_evaluation", {})
         report["dual_scoring"] = {
             "choice_label_prefix": author_score.get("status"),
+            "choice_label_semantics": author_score.get("semantics", {}),
             "official_mmau_v051525": report.get("official_evaluation", {}).get("status"),
             "prediction_text_shared_without_preparse": True,
         }

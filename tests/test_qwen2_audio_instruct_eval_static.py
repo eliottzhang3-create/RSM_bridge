@@ -126,10 +126,20 @@ class Qwen2AudioEvalStaticTests(unittest.TestCase):
             "max_new_tokens=max_new_tokens",
             "return str(value)",
             '"prediction_text_shared_without_preparse": True',
-            "official.write_mellow_author_reply_evaluation",
+            "write_qwen_mellow_author_reply_evaluation",
         ):
             self.assertIn(marker, source)
         self.assertNotIn("strip_choice", source)
+        for marker in (
+            "def _extract_qwen_choice_label",
+            "parenthesized = re.search",
+            "before_close_paren = re.search",
+            ".casefold()",
+            "QWEN_MMAU_AUTHOR_SCORER",
+            "write_qwen_mellow_author_reply_evaluation",
+            '"accepted_forms": ["A)", "a)", "(A)", "(a)"]',
+        ):
+            self.assertIn(marker, source)
 
     def test_mmar_reuses_official_protocol_and_shares_raw_prediction(self) -> None:
         source = MMAR.read_text(encoding="utf-8")

@@ -29,7 +29,9 @@ prompt、129 个 Qwen prompt token 上限、32 kHz 下 repeat/random 10 秒裁�
 生成 token，以及 top-p=0.8 过滤后 argmax。完整评测保持 MMAU-v05.15.25 的 1000 条
 官方分母；逐样本 skip 写空预测并计错。
 
-输出同时包含 Mellow choice-label-prefix 分数与 MMAU-v05.15.25 官方分数。主要文件为
+输出同时包含 Qwen 专用的 choice-label-prefix 分数与 MMAU-v05.15.25 官方分数。Qwen 专用
+作者语义接受 `A)`/`a)` 和 `(A)`/`(a)`，大小写不敏感；两套分数仍使用同一份原始
+decoded prediction。主要文件为
 `predictions_fixed_order.json`、`mellow_author_reply_evaluation.json`、
 `official_evaluation.txt` 和 `evaluation_report.json`。
 
@@ -62,7 +64,7 @@ bash run_qwen2_audio_instruct_eval_preflight.sh
 报告必须为 `PASS` 后再提交 GPU 作业。MMAU smoke 与 full：
 
 ```bash
-MMAU_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/qwen2_audio_instruct_eval/mmau_test_mini_dual_scoring_v1
+MMAU_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/qwen2_audio_instruct_eval/mmau_test_mini_dual_scoring_v2_paren_casefold
 RSMOL_QWEN2_AUDIO_MMAU_MODE=smoke RSMOL_QWEN2_AUDIO_MMAU_OUTPUT_DIR="$MMAU_DIR" \
   bash run_mmau_test_mini_qwen2_audio_instruct_3090.sh
 RSMOL_QWEN2_AUDIO_MMAU_MODE=full RSMOL_QWEN2_AUDIO_MMAU_OUTPUT_DIR="$MMAU_DIR" \

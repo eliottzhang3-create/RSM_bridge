@@ -14,6 +14,8 @@ MMAU test-mini 完全复用当前
 `audio_5_10x2_5_mesh_mellow_shared_store_configurable_epochs` 的 Mellow 作者回复协议：
 parquet 物理顺序、官方 ID WAV 优先、小写固定选项 prompt、129-token 上限、32 kHz
 repeat/random 10 秒裁剪、300-token top-p filter 后 argmax，以及完整 1000 条官方分母。
+Qwen 专用作者 choice-label scorer 接受 `A)`/`a)` 或 `(A)`/`(a)`，大小写不敏感；这项
+语义只作用于 Qwen2-Audio 路线，其他评测版本保持原逻辑。
 MMAR 完全复用官方 metadata 顺序、固定选项、32 kHz 首 10 秒/右补零、32-token greedy、
 动态 prediction key 与完整分母。两条路线都将同一份未经预解析的 Qwen decoded prediction
 同时交给 `)` 前 choice-label-prefix scorer 和对应官方 scorer。
