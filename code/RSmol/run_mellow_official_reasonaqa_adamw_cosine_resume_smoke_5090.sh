@@ -31,7 +31,7 @@ vc submit \
   -p pdgpu-5090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 32 -m 256G -g 8 -n 1 \
-  -j mellow-official-reasonaqa-adamw-cosine-resume-5090-$RUN_TAG \
+  -j mellow-awc-resume-5090-$RUN_TAG \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$SCRIPT_DIR/log/mellow_official_reasonaqa_adamw_cosine_resume_5090.$RUN_TAG.JOB.log" \
   --cmd "bash mellow_official_training_c8204d8_adamw_cosine/scripts/rsmol/run_reasonaqa_8gpu_resume_smoke.sh $CMD_ARGS"
