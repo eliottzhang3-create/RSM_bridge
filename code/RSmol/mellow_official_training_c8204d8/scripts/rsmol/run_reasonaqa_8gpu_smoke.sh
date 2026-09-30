@@ -71,7 +71,8 @@ python "$SCRIPT_DIR/write_reasonaqa_runtime_config.py" \
   --save-dir "$CHECKPOINT_ROOT" \
   --batch-size 8 \
   --gradient-accumulation-steps 4 \
-  --num-epochs 1 \
+  --num-epochs 2 \
+  --max-epochs-this-run 1 \
   --num-workers 4
 
 export MELLOW_JOB_ID="mellow_official_reasonaqa_smoke_$RUN_ID"
@@ -90,3 +91,42 @@ echo "[mellow-smoke] PASS: training exited successfully" >&2
 echo "[mellow-smoke] staging_report=$STAGING_REPORT" >&2
 echo "[mellow-smoke] runtime_config=$RUNTIME_CONFIG" >&2
 echo "[mellow-smoke] checkpoints=$CHECKPOINT_ROOT/$MELLOW_JOB_ID" >&2
+find "$CHECKPOINT_ROOT/$MELLOW_JOB_ID" -maxdepth 1 -type f -name '*.ckpt' -print | sort >&2
+
+CHECKPOINT_PATH=$(find "$CHECKPOINT_ROOT/$MELLOW_JOB_ID" -maxdepth 1 -type f -name '*.ckpt' -print -quit)
+if [[ -z "$CHECKPOINT_PATH" ]]; then
+  echo "[mellow-smoke] FAIL: no checkpoint was published" >&2
+  exit 1
+fi
+python - "$CHECKPOINT_PATH" <<'PY'
+import sys
+import torch
+
+path = sys.argv[1]
+checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+required = {
+    "schema_version", "state_dict", "optimizer", "scheduler", "grad_scaler",
+    "grad_norm_tracker", "loss_tracker", "epoch_completed", "total_step", "num_epochs",
+    "batch_geometry", "random_state_by_rank",
+}
+missing = sorted(required.difference(checkpoint))
+if checkpoint.get("schema_version") != 2 or missing:
+    raise SystemExit(f"invalid full checkpoint: schema={checkpoint.get('schema_version')} missing={missing}")
+expected_geometry = {
+    "per_rank_batch_size": 8,
+    "world_size": 8,
+    "gradient_accumulation_steps": 4,
+}
+if checkpoint["batch_geometry"] != expected_geometry:
+    raise SystemExit(f"unexpected batch geometry: {checkpoint['batch_geometry']!r}")
+if len(checkpoint["random_state_by_rank"]) != 8:
+    raise SystemExit("checkpoint does not contain RNG state for all 8 ranks")
+if int(checkpoint["total_step"]) <= 0:
+    raise SystemExit("checkpoint has no optimizer step")
+if checkpoint["epoch_completed"] != 1 or checkpoint["num_epochs"] != 2:
+    raise SystemExit(
+        f"smoke checkpoint must represent epoch 1 of a 2-epoch horizon: "
+        f"epoch_completed={checkpoint['epoch_completed']} num_epochs={checkpoint['num_epochs']}"
+    )
+print(f"[mellow-smoke] full checkpoint audit PASS: {path}", file=sys.stderr)
+PY

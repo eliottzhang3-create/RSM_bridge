@@ -13,7 +13,7 @@ import yaml
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage-root", type=Path, required=True)
-    parser.add_argument("--smoke-json", type=Path, required=True)
+    parser.add_argument("--smoke-json", "--data-json", dest="data_json", type=Path, required=True)
     parser.add_argument("--output-config", type=Path, required=True)
     parser.add_argument("--save-dir", type=Path, required=True)
     parser.add_argument(
@@ -29,12 +29,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--num-epochs", type=int, default=1)
+    parser.add_argument("--max-epochs-this-run", type=int, default=0)
+    parser.add_argument("--resume-checkpoint", type=Path, default=None)
     parser.add_argument("--num-workers", type=int, default=4)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.num_epochs < 1:
+        raise ValueError("--num-epochs must be at least 1")
+    if args.max_epochs_this_run < 0:
+        raise ValueError("--max-epochs-this-run must be non-negative")
     resolved_stage_root = args.stage_root.resolve()
     shm_root = Path("/dev/shm").resolve()
     if not resolved_stage_root.is_relative_to(shm_root):
@@ -43,7 +49,7 @@ def main() -> int:
         raise ValueError("training stage is not READY")
     for path, label in (
         (resolved_stage_root, "stage root"),
-        (args.smoke_json, "smoke metadata"),
+        (args.data_json, "training metadata"),
         (args.text_model_dir, "text model"),
         (args.htsat_root, "HTSAT root"),
     ):
@@ -51,14 +57,17 @@ def main() -> int:
             raise FileNotFoundError(f"{label} does not exist: {path}")
     if args.batch_size != 8 or args.gradient_accumulation_steps != 4:
         raise ValueError("the isolated route requires per-rank batch 8 and accumulation 4")
+    resume_checkpoint = str(args.resume_checkpoint.resolve()) if args.resume_checkpoint else ""
+    if resume_checkpoint and not Path(resume_checkpoint).is_file():
+        raise FileNotFoundError(f"resume checkpoint does not exist: {resume_checkpoint}")
 
     config: dict[str, Any] = {
         "mode": "train",
         "gpu": True,
-        "resume_checkpoint": "",
+        "resume_checkpoint": resume_checkpoint,
         "data": {
             "datapath": str(resolved_stage_root),
-            "datafiles": [str(args.smoke_json.resolve())],
+            "datafiles": [str(args.data_json.resolve())],
             "sampling_rate": 32000,
             "segment_seconds": 10,
             "tokenizer_type": str(args.text_model_dir.resolve()),
@@ -84,7 +93,7 @@ def main() -> int:
             "model_type": "Mellow",
             "input_channels": 1,
             "output_channels": 1,
-            "resume_checkpoint": "",
+            "resume_checkpoint": resume_checkpoint,
             "inference_window": 5,
         },
         "train": {
@@ -106,6 +115,7 @@ def main() -> int:
             "batch_size": args.batch_size,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
             "num_epochs": args.num_epochs,
+            "max_epochs_this_run": args.max_epochs_this_run,
             "log_step": 1,
             "sav_per_num_epochs": 1,
             "random_seed": 1234,

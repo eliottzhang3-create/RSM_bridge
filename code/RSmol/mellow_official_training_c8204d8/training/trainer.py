@@ -336,17 +336,13 @@ class Trainer:
         self.distributed.barrier()
 
         # creating dataset
-        dataset, data_sampler, data_loader = self.get_data("datafiles")   
+        dataset, data_sampler, data_loader = self.get_data("datafiles")
         start_epoch = 0
+        total_step = 0
 
         # Construct NN model
         model = self.get_model()
         model = model.to(self.device)
-        if self.config["resume_checkpoint"] and self.config["resume_checkpoint"] != "":
-            checkpoint = torch.load(self.config["resume_checkpoint"], map_location=self.device)
-            checkpoint = checkpoint['state_dict']
-            model.load_state_dict(checkpoint, strict=False)
-
         model = self.distributed.create_distributed_model(model)
         model.train()
 
@@ -389,8 +385,6 @@ class Trainer:
             else:
                 raise ValueError(f"No such lr schedule: {lr_schedule}")
 
-        # broadcast optimizer state to all other processes
-        self.distributed.broadcast_optimizer_state(optimizer)
         # Train the model with explicit optimizer-step gradient accumulation.
         gradient_accumulation_steps = int(
             self.config["train"].get("gradient_accumulation_steps", 1)
@@ -425,10 +419,88 @@ class Trainer:
                 gradient_accumulation_steps,
             )
 
-        t0 = time.time()
-        lowest_accerr_epo = 1000.0
         max_grad_norm = self.config["train"]["max_grad_norm"]
         grad_norm_tracker = GradNormTracker(initial_l2_norm=max_grad_norm, initial_max_norm=10 * max_grad_norm)
+
+        resume_path = self.config.get("resume_checkpoint", "")
+        if resume_path:
+            # The full checkpoint contains Python/NumPy/CUDA RNG objects, so
+            # PyTorch's restricted ``weights_only`` loader cannot read it.
+            checkpoint = torch.load(resume_path, map_location=self.device, weights_only=False)
+            checkpoint_state = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+            is_full_checkpoint = isinstance(checkpoint, dict) and checkpoint.get("schema_version") == 2
+            if not is_full_checkpoint:
+                raise ValueError(
+                    "training resume requires a schema_version=2 full checkpoint; "
+                    "a legacy model-only checkpoint cannot restore optimizer, scheduler, or RNG state"
+                )
+            # Checkpoints are saved from DDP's underlying module and therefore
+            # do not contain the wrapper's ``module.`` prefix.
+            model_for_state = model.module if hasattr(model, "module") else model
+            model_for_state.load_state_dict(checkpoint_state, strict=is_full_checkpoint)
+            if is_full_checkpoint:
+                required_fields = {
+                    "optimizer", "scheduler", "grad_scaler", "grad_norm_tracker",
+                    "loss_tracker", "epoch_completed", "total_step", "num_epochs", "batch_geometry",
+                    "random_state_by_rank",
+                }
+                missing_fields = sorted(required_fields.difference(checkpoint))
+                if missing_fields:
+                    raise ValueError(
+                        f"full resume checkpoint is missing required fields: {missing_fields}"
+                    )
+                saved_geometry = checkpoint.get("batch_geometry", {})
+                current_geometry = {
+                    "per_rank_batch_size": int(self.config["train"]["batch_size"]),
+                    "world_size": int(self.distributed.world_size()),
+                    "gradient_accumulation_steps": gradient_accumulation_steps,
+                }
+                if saved_geometry != current_geometry:
+                    raise ValueError(
+                        f"resume batch geometry mismatch: saved={saved_geometry}, current={current_geometry}"
+                    )
+                saved_num_epochs = checkpoint.get("num_epochs")
+                if saved_num_epochs is not None and int(saved_num_epochs) != int(self.config["train"]["num_epochs"]):
+                    raise ValueError(
+                        f"resume epoch horizon mismatch: checkpoint={saved_num_epochs}, "
+                        f"config={self.config['train']['num_epochs']}"
+                    )
+                optimizer.load_state_dict(checkpoint["optimizer"])
+                if lr_scheduler is not None:
+                    if checkpoint.get("scheduler") is None:
+                        raise ValueError("full resume checkpoint is missing scheduler state")
+                    lr_scheduler.load_state_dict(checkpoint["scheduler"])
+                if checkpoint.get("grad_scaler") is None:
+                    raise ValueError("full resume checkpoint is missing grad_scaler state")
+                grad_scaler.load_state_dict(checkpoint["grad_scaler"])
+                if checkpoint.get("grad_norm_tracker") is None:
+                    raise ValueError("full resume checkpoint is missing grad_norm_tracker state")
+                grad_norm_tracker.load_state_dict(checkpoint["grad_norm_tracker"])
+                if loss_tracker is not None:
+                    if checkpoint.get("loss_tracker") is None:
+                        raise ValueError("full resume checkpoint is missing loss_tracker state")
+                    loss_tracker.load_state_dict(checkpoint["loss_tracker"])
+                start_epoch = int(checkpoint.get("epoch_completed", 0))
+                total_step = int(checkpoint.get("total_step", 0))
+                rank_states = checkpoint.get("random_state_by_rank", [])
+                if start_epoch < 0 or start_epoch > int(self.config["train"]["num_epochs"]):
+                    raise ValueError(f"invalid completed epoch in checkpoint: {start_epoch}")
+                if len(rank_states) != self.distributed.world_size():
+                    raise ValueError(
+                        f"resume world size changed: checkpoint has {len(rank_states)} RNG states, "
+                        f"current world size is {self.distributed.world_size()}"
+                    )
+                self._restore_random_state(rank_states[self.distributed.rank()])
+                self.logger.info(
+                    "Resumed full checkpoint %s at completed epoch %d, optimizer step %d",
+                    resume_path, start_epoch, total_step,
+                )
+
+        self.distributed.broadcast_parameters(model.state_dict())
+        self.distributed.broadcast_optimizer_state(optimizer)
+
+        t0 = time.time()
+        lowest_accerr_epo = 1000.0
     
         loss_history = dict(
             loss=[],
@@ -438,9 +510,13 @@ class Trainer:
 
         os.makedirs(self.config["save_dir"], exist_ok=True)
 
-        total_step = 0
         ignore_index = dataset.tokenizer.encode(dataset.tokenizer.pad_token)[0]
-        for epoch in range(start_epoch, self.config["train"]["num_epochs"]):
+        configured_epochs = int(self.config["train"]["num_epochs"])
+        epochs_this_run = int(self.config["train"].get("max_epochs_this_run", 0))
+        end_epoch = configured_epochs if epochs_this_run <= 0 else min(
+            configured_epochs, start_epoch + epochs_this_run
+        )
+        for epoch in range(start_epoch, end_epoch):
             # set epoch to use different seeds for different epochs during sampling
             data_sampler.set_epoch(epoch)
             tqdm_handler = tqdm(total=num_batches_per_epoch, position=0)
@@ -573,7 +649,13 @@ class Trainer:
                     self.logger.info("Saving model to: %s Total training time: %f hours",
                                         model_fpath, (time.time() - t0) / 3600.0)
 
-                    self._save_model_state(model_fpath, model)
+                self._save_training_checkpoint(
+                    model_fpath, model, optimizer, lr_scheduler, grad_scaler,
+                    grad_norm_tracker, loss_tracker, epoch + 1, total_step,
+                )
+                # Do not let a fast rank enter the next epoch while rank 0 is
+                # still atomically publishing the checkpoint.
+                self.distributed.barrier()
                     
             # distributed: broadcast parameters to ensure that models do not diverge
             self.distributed.broadcast_parameters(model.state_dict())
@@ -593,7 +675,10 @@ class Trainer:
 
         model = self.get_model()
         model = model.to(self.device)
-        checkpoint = torch.load(self.config["checkpoint_path"], map_location=self.device)
+        checkpoint = torch.load(
+            self.config["checkpoint_path"], map_location=self.device, weights_only=False
+        )
+        checkpoint = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
         model.load_state_dict(checkpoint, strict=True)
         model.eval()
 
@@ -666,7 +751,8 @@ class Trainer:
         tasks = self.config["data"]["datafiles"]
         for e in range(1, max_epochs+1):
             checkpoint_path = self.config["checkpoint_path"].replace("-epo-1",f"-epo-{e}")
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+            checkpoint = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
             model.load_state_dict(checkpoint, strict=True)
             model.eval()
 
@@ -733,3 +819,53 @@ class Trainer:
             # make sure data is sent to blobstorage
             f.flush()
             f.close()
+
+    @staticmethod
+    def _capture_random_state():
+        return {
+            "python": random.getstate(),
+            "numpy": np.random.get_state(),
+            "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        }
+
+    @staticmethod
+    def _restore_random_state(state):
+        random.setstate(state["python"])
+        np.random.set_state(state["numpy"])
+        torch.set_rng_state(state["torch"])
+        if torch.cuda.is_available() and state.get("cuda") is not None:
+            torch.cuda.set_rng_state_all(state["cuda"])
+
+    def _save_training_checkpoint(
+        self, checkpoint_path, model, optimizer, lr_scheduler, grad_scaler,
+        grad_norm_tracker, loss_tracker, epoch_completed, total_step,
+    ):
+        rank_random_states = self.distributed.all_gather_object(self._capture_random_state())
+        if self.distributed.rank() != 0:
+            return
+
+        checkpoint = {
+            "schema_version": 2,
+            "state_dict": self.distributed.get_distributed_model_state(model),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": lr_scheduler.state_dict() if lr_scheduler is not None else None,
+            "grad_scaler": grad_scaler.state_dict(),
+            "grad_norm_tracker": grad_norm_tracker.state_dict(),
+            "loss_tracker": loss_tracker.state_dict() if loss_tracker is not None else None,
+            "epoch_completed": int(epoch_completed),
+            "total_step": int(total_step),
+            "num_epochs": int(self.config["train"]["num_epochs"]),
+            "batch_geometry": {
+                "per_rank_batch_size": int(self.config["train"]["batch_size"]),
+                "world_size": int(self.distributed.world_size()),
+                "gradient_accumulation_steps": int(self.config["train"].get("gradient_accumulation_steps", 1)),
+            },
+            "random_state_by_rank": rank_random_states,
+        }
+        temporary_path = f"{checkpoint_path}.tmp-{os.getpid()}"
+        with open(temporary_path, "wb") as handle:
+            torch.save(checkpoint, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, checkpoint_path)
