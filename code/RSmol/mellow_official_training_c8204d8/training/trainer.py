@@ -438,7 +438,9 @@ class Trainer:
             if not is_full_checkpoint:
                 raise ValueError(
                     "training resume requires a schema_version=2 full checkpoint; "
-                    "a legacy model-only checkpoint cannot restore optimizer, scheduler, or RNG state"
+                    f"checkpoint={resume_path!r} is a legacy model-only checkpoint and "
+                    "cannot restore optimizer, scheduler, or RNG state. Rerun the "
+                    "current 8-GPU smoke/formal job and pass its audited full checkpoint."
                 )
             # Checkpoints are saved from DDP's underlying module and therefore
             # do not contain the wrapper's ``module.`` prefix.

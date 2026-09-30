@@ -24,6 +24,53 @@ USER_CONDA_BASE="${MELLOW_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/min
 source "$USER_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate mellow_c8204d8
 
+# Fail before the expensive per-job audio staging if the source is an old
+# model-only checkpoint. A true resume needs optimizer, scheduler, and RNG
+# state in addition to the model weights.
+python - "$RESUME_CHECKPOINT" <<'PY'
+import sys
+import torch
+
+path = sys.argv[1]
+checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+required = {
+    "schema_version", "state_dict", "optimizer", "scheduler", "grad_scaler",
+    "grad_norm_tracker", "loss_tracker", "epoch_completed", "total_step",
+    "num_epochs", "batch_geometry", "random_state_by_rank",
+}
+if not isinstance(checkpoint, dict):
+    raise SystemExit(
+        "resume checkpoint is not a dictionary; it is model-only and cannot "
+        "restore optimizer, scheduler, or RNG state"
+    )
+missing = sorted(required.difference(checkpoint))
+if checkpoint.get("schema_version") != 2 or missing:
+    raise SystemExit(
+        "resume requires a schema_version=2 full checkpoint; "
+        f"path={path!r}, schema={checkpoint.get('schema_version')!r}, "
+        f"missing={missing}. Rerun the current 8-GPU smoke and pass its "
+        "audited checkpoint, not an older model--epo-*.ckpt"
+    )
+if checkpoint["batch_geometry"] != {
+    "per_rank_batch_size": 8,
+    "world_size": 8,
+    "gradient_accumulation_steps": 4,
+}:
+    raise SystemExit(
+        "resume checkpoint batch geometry is incompatible with this smoke: "
+        f"{checkpoint['batch_geometry']!r}"
+    )
+if checkpoint.get("epoch_completed") != 1 or checkpoint.get("num_epochs") != 2:
+    raise SystemExit(
+        "resume smoke expects a source checkpoint at epoch 1 of a 2-epoch "
+        f"horizon; got epoch_completed={checkpoint.get('epoch_completed')!r}, "
+        f"num_epochs={checkpoint.get('num_epochs')!r}"
+    )
+if len(checkpoint["random_state_by_rank"]) != 8:
+    raise SystemExit("resume checkpoint does not contain RNG state for all 8 ranks")
+print(f"[mellow-resume] source full-checkpoint audit PASS: {path}", file=sys.stderr)
+PY
+
 RUN_ID="${MELLOW_RUN_ID:-${SLURM_JOB_ID:-$$}_$(date +%Y%m%d_%H%M%S%N)}"
 STAGE_ROOT="/dev/shm/mellow_official_reasonaqa_resume_$RUN_ID"
 STAGING_REPORT="$OUTPUT_DIR/staging_report.json"
