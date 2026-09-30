@@ -403,8 +403,8 @@ def _audit_mellow_faithful_shared_store_checkpoint(args: argparse.Namespace) -> 
         ORIGINAL_SMOLLM2_CONTRACT,
         SMOLLM2_HIDDEN_SIZE,
     )
-    from train_audio_smollm2_135m_mellow_ddp import (
-        _text_model_weight_files,
+    from train_audio_smollm2_135m_mellow_ddp import _text_model_weight_files
+    from train_audio_smollm2_shared_store_mellow_faithful_135m_ddp import (
         route_code_identity,
     )
 

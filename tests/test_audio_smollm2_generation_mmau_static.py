@@ -77,6 +77,10 @@ class SmolLM2GenerationMMAUStaticTest(unittest.TestCase):
         self.assertIn("MELLOW_FAITHFUL_PAD_TOKEN = \"!\"", evaluator)
         self.assertIn("padding=\"max_length\"", evaluator)
         self.assertIn("answer_start_position", evaluator)
+        self.assertIn(
+            "from train_audio_smollm2_shared_store_mellow_faithful_135m_ddp import",
+            evaluator,
+        )
         self.assertNotIn("write_routers", generation + evaluator)
         self.assertNotIn("read_routers", generation + evaluator)
         self.assertNotIn("model.mesh_model", generation + evaluator)
