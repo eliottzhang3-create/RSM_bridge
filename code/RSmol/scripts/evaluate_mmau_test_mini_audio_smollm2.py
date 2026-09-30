@@ -44,6 +44,10 @@ SHARED_STORE_CONFIG_FILENAME = "audio_smollm2_shared_store_config.json"
 SHARED_STORE_CONTRACT = (
     "smollm2_node_shared_unique_store_fullshuffle_fixed260_audio_reuse_answer_eos_v2"
 )
+MELLOW_FAITHFUL_SHARED_STORE_CONTRACT = (
+    "smollm2_mellow_faithful_variable_store_random_audio2_fixed639_"
+    "adam_epoch_cosine_gbs32_exact_resume_v3"
+)
 SHARED_STORE_PREFIX_TOKENS = {"single": 260, "dual": 260}
 PREDICTION_FORMAT = "mellow_author_reply_raw_generation_choice_label_scoring_v1"
 MMAU_PROTOCOL_CONTRACT = "smollm2_shared_store_mmau_github_issue5_author_reply_reproduction_v1"
@@ -226,13 +230,18 @@ def _audit_shared_store_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     from audio_smollm2_135m_mellow_shared_store import TRAINING_CONTRACT
     from train_audio_smollm2_135m_mellow_ddp import _text_model_weight_files
 
+    checkpoint = args.checkpoint
+    config_path = checkpoint / SHARED_STORE_CONFIG_FILENAME
+    if config_path.is_file():
+        config_probe = json.loads(config_path.read_text(encoding="utf-8"))
+        if config_probe.get("contract") == MELLOW_FAITHFUL_SHARED_STORE_CONTRACT:
+            return _audit_mellow_faithful_shared_store_checkpoint(args)
+
     if TRAINING_CONTRACT != SHARED_STORE_CONTRACT:
         raise RuntimeError(
             f"shared-store package contract changed: {TRAINING_CONTRACT!r} "
             f"!= {SHARED_STORE_CONTRACT!r}"
         )
-    checkpoint = args.checkpoint
-    config_path = checkpoint / SHARED_STORE_CONFIG_FILENAME
     required_files = [
         "text_model/config.json",
         "tokenizer/tokenizer_config.json",
@@ -372,6 +381,188 @@ def _audit_shared_store_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         "required_files": required_files,
         "text_model_weight_files": [str(path) for path in weights],
         "standard_text_contract": standard,
+    }
+
+
+def _audit_mellow_faithful_shared_store_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
+    """Audit the current Mellow-faithful fixed-639 training checkpoint.
+
+    The checkpoint was trained with random audio2 for missing slots, but this
+    evaluator intentionally applies the legacy audio1-reuse policy at inference.
+    """
+
+    import torch
+
+    from audio_smollm2_135m_mellow.model import (
+        MAPPER_CONTRACT,
+        ORIGINAL_SMOLLM2_CONTRACT,
+        SMOLLM2_HIDDEN_SIZE,
+    )
+    from train_audio_smollm2_135m_mellow_ddp import _text_model_weight_files
+
+    checkpoint = args.checkpoint
+    config_path = checkpoint / SHARED_STORE_CONFIG_FILENAME
+    required_files = [
+        "text_model/config.json",
+        "text_model_state.pt",
+        "tokenizer/tokenizer_config.json",
+        "audio_bridge.pt",
+        "training_state.pt",
+        SHARED_STORE_CONFIG_FILENAME,
+        "checkpoint_complete.json",
+    ]
+    missing = [name for name in required_files if not (checkpoint / name).is_file()]
+    if missing:
+        raise RuntimeError(f"Mellow-faithful checkpoint is incomplete: {missing}")
+    empty = [name for name in required_files if (checkpoint / name).stat().st_size <= 0]
+    if empty:
+        raise RuntimeError(f"Mellow-faithful checkpoint contains empty files: {empty}")
+    weights = _text_model_weight_files(checkpoint / "text_model")
+    if not weights:
+        raise RuntimeError("Mellow-faithful checkpoint has no text-model weights")
+
+    suffix = checkpoint.name.removeprefix("checkpoint-")
+    directory_step = (
+        int(suffix)
+        if checkpoint.name.startswith("checkpoint-") and suffix.isdigit()
+        else -1
+    )
+    if directory_step <= 0:
+        raise RuntimeError(
+            f"checkpoint directory must be checkpoint-<positive optimizer step>: {checkpoint.name}"
+        )
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    marker = json.loads(
+        (checkpoint / "checkpoint_complete.json").read_text(encoding="utf-8")
+    )
+    expected_marker_required = [
+        "text_model",
+        "text_model_state.pt",
+        "tokenizer",
+        "audio_bridge.pt",
+        "training_state.pt",
+        SHARED_STORE_CONFIG_FILENAME,
+    ]
+    if (
+        marker.get("status") != "complete"
+        or marker.get("contract") != MELLOW_FAITHFUL_SHARED_STORE_CONTRACT
+        or int(marker.get("global_step", -1)) != directory_step
+        or marker.get("required") != expected_marker_required
+    ):
+        raise RuntimeError(f"invalid Mellow-faithful completion marker: {marker}")
+
+    expected_config = {
+        "contract": MELLOW_FAITHFUL_SHARED_STORE_CONTRACT,
+        "architecture_contract": ORIGINAL_SMOLLM2_CONTRACT,
+        "mapper_contract": MAPPER_CONTRACT,
+        "mode": "formal",
+        "world_size": 8,
+        "micro_batch_size": 8,
+        "gradient_accumulation_steps": 4,
+        "effective_global_batch_size": 256,
+        "autocast": False,
+    }
+    mismatches = {
+        key: {"expected": expected, "actual": config.get(key)}
+        for key, expected in expected_config.items()
+        if config.get(key) != expected
+    }
+    sequence = config.get("sequence_contract") or {}
+    expected_sequence = {
+        "audio1_tokens": 129,
+        "separator1_tokens": 1,
+        "audio2_tokens": 129,
+        "separator2_tokens": 1,
+        "prompt_tokens": 129,
+        "answer_tokens": 250,
+        "total_tokens": 639,
+    }
+    sequence_mismatches = {
+        key: {"expected": expected, "actual": sequence.get(key)}
+        for key, expected in expected_sequence.items()
+        if sequence.get(key) != expected
+    }
+    standard = config.get("standard_text_contract") or {}
+    expected_standard = {
+        "model_type": "llama",
+        "hidden_size": SMOLLM2_HIDDEN_SIZE,
+        "num_hidden_layers": 30,
+        "physical_decoder_layer_count": 30,
+        "independent_decoder_layers": True,
+        "forbidden_custom_parameter_names": [],
+    }
+    standard_mismatches = {
+        key: {"expected": expected, "actual": standard.get(key)}
+        for key, expected in expected_standard.items()
+        if standard.get(key) != expected
+    }
+    if mismatches or sequence_mismatches or standard_mismatches:
+        raise RuntimeError(
+            "Mellow-faithful checkpoint contract mismatch: "
+            f"config={mismatches} sequence={sequence_mismatches} "
+            f"standard={standard_mismatches}"
+        )
+
+    expected_cursor = {
+        "epoch": int(config.get("epoch", -1)),
+        "batch_in_epoch": int(config.get("batch_in_epoch", -1)),
+        "global_step": int(config.get("global_step", -1)),
+    }
+    if (
+        expected_cursor["epoch"] <= 0
+        or expected_cursor["batch_in_epoch"] != 0
+        or expected_cursor["global_step"] != directory_step
+    ):
+        raise RuntimeError(f"invalid completed Mellow-faithful config cursor: {expected_cursor}")
+
+    state = _load_training_state_metadata(checkpoint / "training_state.pt")
+    cursor = state.get("cursor")
+    if (
+        state.get("training_contract") != MELLOW_FAITHFUL_SHARED_STORE_CONTRACT
+        or int(state.get("global_step", -1)) != directory_step
+        or not isinstance(cursor, Mapping)
+        or {key: int(cursor.get(key, -1)) for key in expected_cursor} != expected_cursor
+    ):
+        raise RuntimeError(
+            f"Mellow-faithful training-state cursor mismatch: {cursor!r}"
+        )
+    rng_ranks = {str(key) for key in state.get("rng_states_by_rank", {})}
+    if rng_ranks != {str(index) for index in range(8)}:
+        raise RuntimeError(
+            f"Mellow-faithful RNG rank coverage mismatch: {sorted(rng_ranks)}"
+        )
+    del state
+
+    try:
+        audio_state = torch.load(
+            checkpoint / "audio_bridge.pt", map_location="cpu", weights_only=True
+        )
+    except TypeError:
+        audio_state = torch.load(checkpoint / "audio_bridge.pt", map_location="cpu")
+    if not isinstance(audio_state, Mapping) or set(audio_state) != {"bridge", "c2l"}:
+        raise RuntimeError("audio_bridge.pt must contain exactly bridge and c2l states")
+    if not audio_state["bridge"] or not audio_state["c2l"]:
+        raise RuntimeError("audio_bridge.pt contains an empty bridge or c2l state")
+
+    return {
+        "status": "PASS",
+        "artifact_kind": "mellow_faithful_fixed639_training_checkpoint",
+        "path": str(checkpoint),
+        "config_path": str(config_path),
+        "config_sha256": _sha256(config_path),
+        "global_step": directory_step,
+        "epochs": expected_cursor["epoch"],
+        "training_contract": MELLOW_FAITHFUL_SHARED_STORE_CONTRACT,
+        "architecture_contract": ORIGINAL_SMOLLM2_CONTRACT,
+        "compact_single_audio_prefix": False,
+        "single_audio_prefix_tokens": 260,
+        "dual_audio_prefix_tokens": 260,
+        "sequence_tokens": 639,
+        "required_files": required_files,
+        "text_model_weight_files": [str(path) for path in weights],
+        "standard_text_contract": standard,
+        "evaluation_audio2_policy": "reuse_audio1_htsat_embedding",
     }
 
 

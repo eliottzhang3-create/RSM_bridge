@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Isolated MMAU-mini entrypoint for the 2026-09-27 shared-store checkpoint.
-# The Python evaluator keeps the legacy fixed-260 contract: audio2 reuses audio1.
+# Isolated MMAU-mini entrypoint for the 2026-09-27 Mellow-faithful checkpoint.
+# Evaluation keeps the legacy fixed-260 prefix: audio2 reuses audio1.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -16,7 +16,7 @@ METADATA_JSON="${RSMOL_MMAU_METADATA_JSON:-$DATASET_DIR/mmau-test-mini.json}"
 EVALUATION_SCRIPT="${RSMOL_MMAU_EVALUATION_SCRIPT:-$DATASET_DIR/evaluation.py}"
 HTSAT_CHECKPOINT="${RSMOL_HTSAT_CHECKPOINT:-/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt}"
 MELLOW_ROOT="${RSMOL_MELLOW_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main}"
-OUTPUT_DIR="${RSMOL_MMAU_SMOLLM2_20260927_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow_shared_store_configurable_epochs/formal_30epochs_20260927_gbs256_mb8_ga4_pdgpu5090_v1/mmau_test_mini_checkpoint_113430_reuse_audio1_fp32_v1}"
+OUTPUT_DIR="${RSMOL_MMAU_SMOLLM2_20260927_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_smollm2_135m_mellow_shared_store_configurable_epochs/formal_30epochs_20260927_gbs256_mb8_ga4_pdgpu5090_v1/mmau_test_mini_checkpoint_113430_reuse_audio1_fp32_v2_current_contract}"
 MODE="${RSMOL_MMAU_MODE:-full}"
 JOB_LOG="$SCRIPT_DIR/log/mmau_smollm2_20260927_reuse_fp32.${RUN_TAG}.JOB.log"
 
