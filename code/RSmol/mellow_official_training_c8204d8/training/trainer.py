@@ -367,7 +367,13 @@ class Trainer:
         )
         del parameters
 
-        grad_scaler = torch.cuda.amp.GradScaler(enabled=self.use_mixed_precision)
+        if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+            grad_scaler = torch.amp.GradScaler(
+                "cuda", enabled=self.use_mixed_precision
+            )
+        else:
+            # Compatibility with older PyTorch releases used by the upstream code.
+            grad_scaler = torch.cuda.amp.GradScaler(enabled=self.use_mixed_precision)
 
         lr_scheduler = None
         loss_tracker = None
@@ -822,20 +828,63 @@ class Trainer:
 
     @staticmethod
     def _capture_random_state():
+        cuda_state = None
+        if torch.cuda.is_available():
+            # Keep RNG tensors on CPU so all_gather_object/torch.save cannot
+            # accidentally relocate them with the model checkpoint tensors.
+            cuda_state = [
+                state.detach().cpu().clone()
+                for state in torch.cuda.get_rng_state_all()
+            ]
         return {
             "python": random.getstate(),
             "numpy": np.random.get_state(),
-            "torch": torch.get_rng_state(),
-            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            "torch": torch.get_rng_state().detach().cpu().clone(),
+            "cuda": cuda_state,
         }
 
     @staticmethod
+    def _coerce_rng_byte_tensor(value, name):
+        """Return a CPU uint8 RNG state regardless of checkpoint placement.
+
+        Resume checkpoints are loaded with ``map_location=self.device`` so
+        model and optimizer tensors are immediately usable by the local rank.
+        That also moves the CPU RNG state to CUDA, but ``torch.set_rng_state``
+        requires a CPU ``torch.ByteTensor``.  Older checkpoints can additionally
+        contain a serialized list, so normalize both representations here.
+        """
+        if isinstance(value, torch.Tensor):
+            value = value.detach().to(device="cpu", dtype=torch.uint8).contiguous()
+        else:
+            value = torch.as_tensor(value, dtype=torch.uint8, device="cpu").contiguous()
+        if value.ndim != 1:
+            raise ValueError(f"{name} must be a one-dimensional uint8 RNG state")
+        return value
+
+    @staticmethod
     def _restore_random_state(state):
+        if not isinstance(state, dict):
+            raise ValueError("checkpoint RNG state must be a mapping")
         random.setstate(state["python"])
         np.random.set_state(state["numpy"])
-        torch.set_rng_state(state["torch"])
-        if torch.cuda.is_available() and state.get("cuda") is not None:
-            torch.cuda.set_rng_state_all(state["cuda"])
+        torch_state = Trainer._coerce_rng_byte_tensor(state["torch"], "torch RNG state")
+        torch.set_rng_state(torch_state)
+        cuda_state = state.get("cuda")
+        if torch.cuda.is_available() and cuda_state is not None:
+            if isinstance(cuda_state, torch.Tensor) and cuda_state.ndim == 1:
+                cuda_state = [cuda_state]
+            if not isinstance(cuda_state, (list, tuple)):
+                raise ValueError("CUDA RNG state must be a list of per-device states")
+            cuda_states = [
+                Trainer._coerce_rng_byte_tensor(value, f"CUDA RNG state {index}")
+                for index, value in enumerate(cuda_state)
+            ]
+            if len(cuda_states) != torch.cuda.device_count():
+                raise ValueError(
+                    "CUDA RNG state device count mismatch: "
+                    f"checkpoint={len(cuda_states)}, current={torch.cuda.device_count()}"
+                )
+            torch.cuda.set_rng_state_all(cuda_states)
 
     def _save_training_checkpoint(
         self, checkpoint_path, model, optimizer, lr_scheduler, grad_scaler,
