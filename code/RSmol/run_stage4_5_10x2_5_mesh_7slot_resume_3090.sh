@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -z "${RSMOL_5_10X2_5_MESH_7SLOT_RESUME_FROM:-}" ]]; then
+  echo "set RSMOL_5_10X2_5_MESH_7SLOT_RESUME_FROM to a complete checkpoint" >&2
+  exit 2
+fi
+RESUME_FROM="$RSMOL_5_10X2_5_MESH_7SLOT_RESUME_FROM"
+if [[ ! -d "$RESUME_FROM" ]]; then
+  echo "resume checkpoint directory does not exist: $RESUME_FROM" >&2
+  exit 2
+fi
+for REQUIRED_FILE in checkpoint_complete.json training_state.pt; do
+  if [[ ! -f "$RESUME_FROM/$REQUIRED_FILE" ]]; then
+    echo "resume checkpoint is incomplete; missing $RESUME_FROM/$REQUIRED_FILE" >&2
+    exit 2
+  fi
+done
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+mkdir -p log
+RUN_TAG="$(date +%Y%m%d_%H%M%S)"
+OUTPUT="${RSMOL_5_10X2_5_MESH_7SLOT_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh_7slot/resume2_3090_$RUN_TAG}"
+printf -v OUTPUT_Q '%q' "$OUTPUT"
+printf -v RESUME_Q '%q' "$RESUME_FROM"
+vc submit -p pdgpu-3090 -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
+  -c 32 -m 256G -g 8 -n 1 \
+  -j "text-x2-7s-resume-$RUN_TAG" -d "$SCRIPT_DIR" \
+  JOB=1:1 "$SCRIPT_DIR/log/text_x2_7s_resume_3090.$RUN_TAG.JOB.log" \
+  --cmd "RSMOL_5_10X2_5_MESH_7SLOT_OUTPUT_DIR=$OUTPUT_Q RSMOL_5_10X2_5_MESH_7SLOT_RESUME_FROM=$RESUME_Q RSMOL_5_10X2_5_MESH_7SLOT_STAGE4_GATE=E bash scripts/train_stage4_5_10x2_5_mesh_7slot_ddp.sh"
+echo "resume output: $OUTPUT"

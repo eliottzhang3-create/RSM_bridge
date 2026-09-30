@@ -1,5 +1,24 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-01：文本 5-10x2-5、7 memory slots / 3 router groups 隔离路线
+
+新增独立路线 `text_5_10x2_5_mesh_7slot`，不修改原 5-slot 的 5-10x2-5，亦不修改
+5-10x4-5 或 5-10x6-5。模型为 20 个物理层、30 个逻辑层，轨迹 `5 + 10×2 + 5`；
+每次 forward 有 7 个瞬时记忆槽和 3 组独立 write/read routers（6 个线性模块）。转换沿用
+现有 30→20 源层映射，router 按 7-slot 初始化合同新建。
+
+转换程序为 `scripts/convert_stepwise_5_10x2_5_mesh_7slot.sh`（CPU-only）；模型定义、转换器、
+训练器及 smoke/resume/formal wrapper 都使用 `_7slot` 独立命名。训练使用 `pdgpu-3090`、
+8 ranks、microbatch 4、GA 32、effective global batch 1024、1024-token context、BF16、
+AdamW 和 1e-3→1e-4 step-level cosine。直接读取持久 parquet，不做 `/dev/shm` staging；
+正式目标为参考 9,244 optimizer steps 的三分之一，即 3,081 steps，warmup 155 steps，
+每 500 步及最后一步保存，保留最近 3 个完整 checkpoint。
+
+本地新增静态合同测试已通过，原 x2/x4 静态测试也通过；转换、GPU smoke、resume 和 formal
+尚未在远程运行。远程执行顺序、路径和配置见
+`code/RSmol/text_5_10x2_5_mesh_7slot/README.md`。远程 PASS 只能依据作业日志、report 和
+checkpoint audit 记录，不能由本地检查推断。
+
 ## 2026-09-29：Qwen2-Audio-Instruct MMAU/MMAR 隔离对比评测
 
 新增一条不转换权重、不影响现有 RSmol/Mellow 评测的 Qwen2-Audio-Instruct 隔离路线。
