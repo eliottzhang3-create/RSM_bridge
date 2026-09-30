@@ -21,7 +21,7 @@ import evaluate_mmau_test_mini_5_10x2_5_mesh_mellow as official  # noqa: E402
 DEFAULT_CHECKPOINT = (
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
     "audio_smollm2_135m_mellow_shared_store_configurable_epochs/"
-    "formal_30epochs_20260923_v1/checkpoint-113430"
+    "formal_30epochs_20260927_gbs256_mb8_ga4_pdgpu5090_v1/checkpoint-113430"
 )
 DEFAULT_DATASET_DIR = official.DEFAULT_DATASET_DIR
 DEFAULT_HTSAT = official.DEFAULT_HTSAT
@@ -48,9 +48,14 @@ MELLOW_FAITHFUL_SHARED_STORE_CONTRACT = (
     "smollm2_mellow_faithful_variable_store_random_audio2_fixed639_"
     "adam_epoch_cosine_gbs32_exact_resume_v3"
 )
+MELLOW_FAITHFUL_PROMPT_TOKENS = 129
+MELLOW_FAITHFUL_PAD_TOKEN = "!"
+MELLOW_FAITHFUL_EOS_TOKEN = "<|endoftext|>"
 SHARED_STORE_PREFIX_TOKENS = {"single": 260, "dual": 260}
-PREDICTION_FORMAT = "mellow_author_reply_raw_generation_choice_label_scoring_v1"
-MMAU_PROTOCOL_CONTRACT = "smollm2_shared_store_mmau_github_issue5_author_reply_reproduction_v1"
+PREDICTION_FORMAT = "mellow_author_reply_fixed639_prompt_eos_pad_choice_label_scoring_v2"
+MMAU_PROTOCOL_CONTRACT = (
+    "smollm2_shared_store_mmau_github_issue5_author_reply_fixed639_prompt_eos_pad_v2"
+)
 
 # Re-export the dependency-light official data/scoring helpers. MMAU and MMAR
 # intentionally share these exact contracts; only model loading and generation
@@ -398,7 +403,10 @@ def _audit_mellow_faithful_shared_store_checkpoint(args: argparse.Namespace) -> 
         ORIGINAL_SMOLLM2_CONTRACT,
         SMOLLM2_HIDDEN_SIZE,
     )
-    from train_audio_smollm2_135m_mellow_ddp import _text_model_weight_files
+    from train_audio_smollm2_135m_mellow_ddp import (
+        _text_model_weight_files,
+        route_code_identity,
+    )
 
     checkpoint = args.checkpoint
     config_path = checkpoint / SHARED_STORE_CONFIG_FILENAME
@@ -477,6 +485,8 @@ def _audit_mellow_faithful_shared_store_checkpoint(args: argparse.Namespace) -> 
         "prompt_tokens": 129,
         "answer_tokens": 250,
         "total_tokens": 639,
+        "answer_logit_slice": [388, 638],
+        "text_attention_mask_passed": False,
     }
     sequence_mismatches = {
         key: {"expected": expected, "actual": sequence.get(key)}
@@ -502,6 +512,14 @@ def _audit_mellow_faithful_shared_store_checkpoint(args: argparse.Namespace) -> 
             "Mellow-faithful checkpoint contract mismatch: "
             f"config={mismatches} sequence={sequence_mismatches} "
             f"standard={standard_mismatches}"
+        )
+
+    saved_route_hashes = config.get("route_code_sha256")
+    current_route_hashes = route_code_identity()
+    if saved_route_hashes != current_route_hashes:
+        raise RuntimeError(
+            "Mellow-faithful checkpoint route code hash mismatch: "
+            f"saved={saved_route_hashes!r} current={current_route_hashes!r}"
         )
 
     expected_cursor = {
@@ -563,6 +581,99 @@ def _audit_mellow_faithful_shared_store_checkpoint(args: argparse.Namespace) -> 
         "text_model_weight_files": [str(path) for path in weights],
         "standard_text_contract": standard,
         "evaluation_audio2_policy": "reuse_audio1_htsat_embedding",
+        "route_code_sha256": saved_route_hashes,
+    }
+
+
+def _assert_mellow_faithful_tokenizer_contract(model: Any, tokenizer: Any) -> None:
+    """Reject inference when the fixed639 tokenizer/separator contract is absent."""
+
+    pad_id = getattr(tokenizer, "pad_token_id", None)
+    bang_id = tokenizer.convert_tokens_to_ids(MELLOW_FAITHFUL_PAD_TOKEN)
+    if (
+        pad_id is None
+        or bang_id is None
+        or int(pad_id) != int(bang_id)
+        or getattr(tokenizer, "pad_token", None) != MELLOW_FAITHFUL_PAD_TOKEN
+    ):
+        raise RuntimeError(
+            "Mellow-faithful fixed639 inference requires literal '!' as the tokenizer "
+            f"padding token: pad_token={getattr(tokenizer, 'pad_token', None)!r}, "
+            f"pad_token_id={pad_id!r}, bang_id={bang_id!r}"
+        )
+    config_pad_id = getattr(getattr(model, "text_model", None), "config", None)
+    config_pad_id = getattr(config_pad_id, "pad_token_id", None)
+    if config_pad_id is not None and int(config_pad_id) != int(pad_id):
+        raise RuntimeError(
+            "text-model pad_token_id differs from the checkpoint tokenizer: "
+            f"model={config_pad_id} tokenizer={pad_id}"
+        )
+    if int(getattr(model, "separator_token_id", -1)) != int(pad_id):
+        raise RuntimeError(
+            "fixed639 audio separator must resolve to the literal '!' token: "
+            f"separator={getattr(model, 'separator_token_id', None)} pad={pad_id}"
+        )
+
+
+def _tokenize_mellow_faithful_fixed_prompt(
+    tokenizer: Any,
+    prompt: str,
+    *,
+    max_prompt_tokens: int,
+) -> tuple[Any, int, bool, dict[str, Any]]:
+    """Mirror training collate: append EOS, then right-pad the 129-token prompt slot."""
+
+    import torch
+
+    if max_prompt_tokens != MELLOW_FAITHFUL_PROMPT_TOKENS:
+        raise RuntimeError(
+            "Mellow-faithful fixed639 evaluation requires "
+            f"max_prompt_tokens={MELLOW_FAITHFUL_PROMPT_TOKENS}, got {max_prompt_tokens}"
+        )
+    pad_id = getattr(tokenizer, "pad_token_id", None)
+    bang_id = tokenizer.convert_tokens_to_ids(MELLOW_FAITHFUL_PAD_TOKEN)
+    if pad_id is None or bang_id is None or int(pad_id) != int(bang_id):
+        raise RuntimeError(
+            "cannot construct fixed639 prompt: tokenizer padding is not literal '!'"
+        )
+
+    # This is intentionally byte-for-byte equivalent to data.py:_tokenize_fixed.
+    training_prompt = str(prompt) + " " + MELLOW_FAITHFUL_EOS_TOKEN
+    unpadded = tokenizer(
+        training_prompt,
+        truncation=False,
+        padding=False,
+        add_special_tokens=True,
+        return_tensors="pt",
+    )
+    encoded = tokenizer(
+        training_prompt,
+        truncation=True,
+        padding="max_length",
+        max_length=MELLOW_FAITHFUL_PROMPT_TOKENS,
+        add_special_tokens=True,
+        return_tensors="pt",
+    )
+    input_ids = encoded["input_ids"]
+    if tuple(input_ids.shape) != (1, MELLOW_FAITHFUL_PROMPT_TOKENS):
+        raise RuntimeError(f"fixed639 prompt shape mismatch: {tuple(input_ids.shape)}")
+    original_ids = unpadded["input_ids"][0].tolist()
+    truncated = len(original_ids) > MELLOW_FAITHFUL_PROMPT_TOKENS
+    attention = encoded.get("attention_mask")
+    if attention is None:
+        attention = torch.ones_like(input_ids)
+    padding_positions = attention[0].eq(0)
+    if bool(padding_positions.any()) and not bool(
+        input_ids[0][padding_positions].eq(int(pad_id)).all()
+    ):
+        raise RuntimeError("fixed639 prompt is not right-padded with the literal '!' token")
+    return input_ids, len(original_ids), truncated, {
+        "prompt_training_text_appended_eos": True,
+        "prompt_padding_token": MELLOW_FAITHFUL_PAD_TOKEN,
+        "prompt_padding_token_id": int(pad_id),
+        "prompt_slot_tokens": MELLOW_FAITHFUL_PROMPT_TOKENS,
+        "prompt_padding_side": "right",
+        "prompt_attention_mask_passed_to_text_model": False,
     }
 
 
@@ -778,6 +889,8 @@ def _load_runtime_model(args: argparse.Namespace) -> tuple[Any, Any, Any, dict[s
         ),
     )
     model, tokenizer = _load_model(load_args, device)
+    if checkpoint_audit["artifact_kind"] == "mellow_faithful_fixed639_training_checkpoint":
+        _assert_mellow_faithful_tokenizer_contract(model, tokenizer)
     runtime_text_contract = dict(getattr(model, "text_contract", {}))
     if (
         runtime_text_contract.get("model_type") != "llama"
@@ -1016,10 +1129,15 @@ def _run_mmau_author_reply_generation(
     import torch
     from generate_audio_smollm2_checkpoint_reasonaqa import _greedy_decode
 
-    prompt_ids_cpu, prompt_original_token_count, prompt_truncated = (
-        official.tokenize_mellow_author_reply_prompt(
-            tokenizer, str(sample["prompt"]), max_prompt_tokens=max_prompt_tokens
-        )
+    (
+        prompt_ids_cpu,
+        prompt_original_token_count,
+        prompt_truncated,
+        prompt_contract,
+    ) = _tokenize_mellow_faithful_fixed_prompt(
+        tokenizer,
+        str(sample["prompt"]),
+        max_prompt_tokens=max_prompt_tokens,
     )
     prompt_ids = prompt_ids_cpu.to(device)
     with torch.inference_mode():
@@ -1047,9 +1165,23 @@ def _run_mmau_author_reply_generation(
         tokenizer.eos_token or "<|endoftext|>"
     )[0]
     generated["decode_policy"] = "mellow_wrapper_decode_then_split_stop_token"
+    if int(audio_prefix.shape[1]) != SHARED_STORE_AUDIO_PREFIX_TOKENS:
+        raise RuntimeError(
+            "fixed639 generation requires a 260-token dual-audio prefix: "
+            f"got {int(audio_prefix.shape[1])}"
+        )
+    if int(prompt_ids.shape[1]) != MELLOW_FAITHFUL_PROMPT_TOKENS:
+        raise RuntimeError(
+            "fixed639 generation requires a 129-token prompt slot: "
+            f"got {int(prompt_ids.shape[1])}"
+        )
     generated["prompt_token_count"] = int(prompt_ids.shape[1])
     generated["prompt_original_token_count"] = prompt_original_token_count
     generated["prompt_truncated"] = prompt_truncated
+    generated.update(prompt_contract)
+    generated["answer_start_position"] = int(
+        SHARED_STORE_AUDIO_PREFIX_TOKENS + MELLOW_FAITHFUL_PROMPT_TOKENS
+    )
     generated["audio1_segment"] = audio_segment
     generated["audio2_segment"] = {
         **audio_segment,
@@ -1086,7 +1218,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         prompt_format=official.MELLOW_AUTHOR_REPLY_PROMPT_FORMAT,
         audio_format=(
             official.MELLOW_AUTHOR_REPLY_AUDIO_FORMAT
-            + "__single_segment_reused_to_match_shared_store_training_contract"
+            + "__single_segment_reused_legacy_eval_policy_for_fixed639_checkpoint"
         ),
         protocol_contract=MMAU_PROTOCOL_CONTRACT,
         generation_protocol={
@@ -1096,9 +1228,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "do_sample": False,
             "use_cache": False,
             "inference_dtype": "float32",
+            "prompt_contract": "training_fixed639_eos_then_right_pad_bang_v1",
+            "prompt_tokens": MELLOW_FAITHFUL_PROMPT_TOKENS,
+            "prompt_eos_appended": True,
+            "prompt_padding_token": MELLOW_FAITHFUL_PAD_TOKEN,
+            "prompt_padding_side": "right",
+            "answer_start_position": int(
+                SHARED_STORE_AUDIO_PREFIX_TOKENS + MELLOW_FAITHFUL_PROMPT_TOKENS
+            ),
         },
         audio_prefix_tokens=SHARED_STORE_AUDIO_PREFIX_TOKENS,
-        stage="mmau_test_mini_audio_smollm2_shared_store_fixed260",
+        stage="mmau_test_mini_audio_smollm2_shared_store_fixed639_prompt_eos_pad",
         logical_trace="standard 30-layer SmolLM2 per generation step",
     )
     inference_failures = int(
