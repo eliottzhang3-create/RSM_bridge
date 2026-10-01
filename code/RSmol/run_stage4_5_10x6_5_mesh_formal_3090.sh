@@ -3,6 +3,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 mkdir -p log
+# Qualification smoke/resume reports are optional diagnostics. This formal
+# wrapper intentionally does not read or require either report; it submits the
+# one-third-epoch FORMAL contract directly from the converted x6 model.
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
 RESUME_FROM="${RSMOL_5_10X6_5_MESH_RESUME_FROM:-}"
 if [[ -n "$RESUME_FROM" ]]; then

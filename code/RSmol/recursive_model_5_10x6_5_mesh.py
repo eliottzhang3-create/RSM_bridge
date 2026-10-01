@@ -1,7 +1,7 @@
 """Isolated MeSH-style SmolLM2 5-10x6-5 causal language model.
 
 The implementation deliberately owns its runtime contract.  The backbone has
-twenty physical Llama decoder layers, while the attention cache has fifty
+twenty physical Llama decoder layers, while the attention cache has seventy
 logical slots (the ten middle layers execute six times).  MeSH memory is a
 per-forward activation and is never put in the cache or checkpoint.
 """

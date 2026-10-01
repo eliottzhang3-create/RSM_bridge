@@ -31,9 +31,14 @@ Optional CPU parquet preflight:
       --data-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data \
       --report-path /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x6_5_mesh/preflight/source_inventory.json
 
-## pdgpu-3090 qualification and training submissions
+## pdgpu-3090 optional diagnostics and formal submission
 
-Run the CUDA architecture audit first, then the ten-step smoke:
+The Stage 1 audit, ten-step smoke, and smoke-resume check are optional
+diagnostics. They are useful for validating a newly converted model or a
+new container, but they are not a prerequisite for formal training: the
+formal wrapper does not read their reports or require their checkpoints.
+
+Optional qualification commands:
 
     bash run_audit_stage1_5_10x6_5_mesh_3090.sh
     bash run_stage4_5_10x6_5_mesh_smoke_3090.sh
@@ -45,13 +50,15 @@ After smoke produces checkpoint-000010, run the two-step resume gate:
 
 The resume gate accepts only a checkpoint produced by this direct-read x6 smoke contract. Checkpoints from x2, x4, audio, or staged-data contracts are rejected by the architecture and training contracts.
 
-Formal training:
+Formal training can be submitted directly after conversion (and optionally
+the audit above):
 
     bash run_stage4_5_10x6_5_mesh_formal_3090.sh
 
-Formal output is formal_third_epoch_3081steps_20260928_3090_v1 by default. A fresh
-formal run starts from the converted x6 model rather than continuing the smoke
-checkpoint.
+Formal output is formal_third_epoch_3081steps_20260928_3090_v1 by default. A
+fresh formal run starts from the converted x6 model rather than continuing a
+smoke checkpoint. No smoke or smoke-resume PASS gate is checked by this
+wrapper.
 
 To continue an interrupted formal run, use the same formal wrapper with a complete
 formal checkpoint and a new output directory:

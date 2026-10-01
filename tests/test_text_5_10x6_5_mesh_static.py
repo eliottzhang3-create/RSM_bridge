@@ -149,6 +149,9 @@ class TextMeshX6StaticTest(unittest.TestCase):
             'RESUME_ENV=" RSMOL_5_10X6_5_MESH_RESUME_FROM=$RESUME_Q"',
         ):
             self.assertIn(expected, formal)
+        self.assertIn("does not read or require either report", formal)
+        self.assertNotIn("run_stage4_5_10x6_5_mesh_smoke_3090.sh", formal)
+        self.assertNotIn("run_stage4_5_10x6_5_mesh_resume_3090.sh", formal)
 
 
 if __name__ == "__main__":
