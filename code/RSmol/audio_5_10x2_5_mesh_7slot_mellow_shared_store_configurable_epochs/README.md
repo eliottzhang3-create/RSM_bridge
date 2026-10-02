@@ -12,7 +12,9 @@ route. Only the text-backbone contract and its runtime gradient audit differ.
 - Text model: 20 physical layers, 30 logical executions (5 + 10x2 + 5),
   seven transient memory slots, and three independent write/read router groups.
 - Text checkpoint: the complete x2/7-slot checkpoint above; its router weights
-  must be present in the optimizer metadata.
+  must be present in the optimizer metadata. The checkpoint metadata stores
+  the canonical `logical_to_physical` schedule; logical/physical/loop counts
+  are derived from that schedule when optional summary fields are absent.
 - Mapper: Mellow c2l(527,768), followed by the existing 768-to-576-to-576,
   dropout 0.5, residual LayerNorm, CLS-preserving avg-pool-8 bridge.
 - Frozen: the HTSAT AudioSet backbone remains in eval mode without gradients.

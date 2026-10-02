@@ -40,6 +40,13 @@ from audio_5_10x2_5_mesh_7slot_mellow_shared_store_configurable_epochs.model imp
     _load_mellow_wrapper,
 )
 from recursive_model_5_10x2_5_mesh_7slot import (
+    LOGICAL_LAYER_COUNT,
+    PHYSICAL_LAYER_COUNT,
+    RECURSIVE_LOOPS,
+    MEMORY_SLOT_COUNT,
+    ROUTER_COUNT,
+    ROUTER_PARAMETER_COUNT,
+    LOGICAL_TO_PHYSICAL,
     MODEL_ARCHITECTURE_CONTRACT as TEXT_MODEL_ARCHITECTURE_CONTRACT,
     RecursiveLlamaForCausalLM,
     register_auto_class as register_x2_7slot_auto_class,
@@ -421,24 +428,42 @@ def _validate_x2_7slot_text_checkpoint(path: Path) -> dict[str, Any]:
     marker = _json(path / "checkpoint_complete.json")
     manifest = _json(path / "checkpoint_manifest.json")
     metadata = _json(path / "mesh_checkpoint_metadata.json")
-    if marker.get("status") != "complete":
-        raise RuntimeError("x2/7-slot text initialization completion marker is invalid")
+    if (marker.get("status") != "complete" or marker.get("complete_marker") is not True
+            or manifest.get("status") != "complete"):
+        raise RuntimeError("x2/7-slot text initialization completion/manifest marker is invalid")
     for label, payload in (("marker", marker), ("manifest", manifest), ("metadata", metadata)):
         if payload.get("architecture_contract") != TEXT_MODEL_ARCHITECTURE_CONTRACT:
             raise RuntimeError(f"x2/7-slot text initialization {label} architecture mismatch")
     if metadata.get("router_parameters_in_optimizer") is not True:
         raise RuntimeError("x2/7-slot text checkpoint does not prove router optimization")
-    if int(metadata.get("memory_slots", -1)) != 7:
+    if int(metadata.get("memory_slots", -1)) != MEMORY_SLOT_COUNT:
         raise RuntimeError("x2/7-slot text checkpoint does not use seven memory slots")
-    if int(metadata.get("router_groups", -1)) != 3:
+    if int(metadata.get("router_groups", -1)) != ROUTER_COUNT:
         raise RuntimeError("x2/7-slot text checkpoint does not use three router groups")
-    if int(metadata.get("router_module_count", -1)) != 6:
+    if int(metadata.get("router_module_count", -1)) != ROUTER_PARAMETER_COUNT:
         raise RuntimeError("x2/7-slot text checkpoint does not use six router modules")
-    if int(metadata.get("logical_layer_count", -1)) != 30:
+
+    # The x2/7-slot text trainer's metadata intentionally stores the canonical
+    # schedule rather than duplicating logical/physical/loop counts.  Derive
+    # those counts from that schedule when the optional summary fields are
+    # absent, while still rejecting any non-canonical schedule.
+    schedule_value = metadata.get("logical_to_physical")
+    if not isinstance(schedule_value, list):
+        raise RuntimeError("x2/7-slot text checkpoint lacks logical_to_physical schedule")
+    try:
+        logical_to_physical = tuple(int(value) for value in schedule_value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("x2/7-slot text checkpoint has an invalid logical_to_physical schedule") from exc
+    if logical_to_physical != tuple(LOGICAL_TO_PHYSICAL):
+        raise RuntimeError("x2/7-slot text checkpoint logical_to_physical schedule mismatch")
+    logical_layer_count = int(metadata.get("logical_layer_count", len(logical_to_physical)))
+    physical_layer_count = int(metadata.get("physical_layer_count", max(logical_to_physical) + 1))
+    recursive_loops = int(metadata.get("recursive_loops", RECURSIVE_LOOPS))
+    if logical_layer_count != LOGICAL_LAYER_COUNT:
         raise RuntimeError("x2/7-slot text checkpoint does not use thirty logical layers")
-    if int(metadata.get("physical_layer_count", -1)) != 20:
+    if physical_layer_count != PHYSICAL_LAYER_COUNT:
         raise RuntimeError("x2/7-slot text checkpoint does not use twenty physical layers")
-    if int(metadata.get("recursive_loops", -1)) != 2:
+    if recursive_loops != RECURSIVE_LOOPS:
         raise RuntimeError("x2/7-slot text checkpoint does not use two recursive loops")
     return {
         "passed": True,
@@ -450,9 +475,14 @@ def _validate_x2_7slot_text_checkpoint(path: Path) -> dict[str, Any]:
         "memory_slots": int(metadata["memory_slots"]),
         "router_groups": int(metadata["router_groups"]),
         "router_module_count": int(metadata["router_module_count"]),
-        "logical_layer_count": int(metadata["logical_layer_count"]),
-        "physical_layer_count": int(metadata["physical_layer_count"]),
-        "recursive_loops": int(metadata["recursive_loops"]),
+        "logical_layer_count": logical_layer_count,
+        "physical_layer_count": physical_layer_count,
+        "recursive_loops": recursive_loops,
+        "logical_to_physical": list(logical_to_physical),
+        "derived_optional_fields": [
+            key for key in ("logical_layer_count", "physical_layer_count", "recursive_loops")
+            if key not in metadata
+        ],
         "fresh_audio_global_step": 0,
     }
 
