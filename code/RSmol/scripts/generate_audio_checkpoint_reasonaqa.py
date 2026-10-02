@@ -11,7 +11,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import torch
 
@@ -545,6 +545,7 @@ def _greedy_decode(
     router_recorder: RouterWeightCsvRecorder | None = None,
     top_p: float | None = None,
     temperature: float = 0.0,
+    expected_trace: Sequence[Mapping[str, int]] | None = None,
 ) -> dict[str, Any]:
     if max_new_tokens <= 0:
         raise ValueError("max-new-tokens must be positive")
@@ -559,7 +560,9 @@ def _greedy_decode(
     eos_ids = _eos_ids(model.mesh_model, tokenizer)
     generated: list[int] = []
     text_ids = prompt_ids
-    expected_trace = _expected_trace()
+    # The historical helper defaults to the x2 trace.  Audio evaluators for
+    # x4/x5 use the same decoder but supply their route-specific trace here.
+    expected_trace = list(expected_trace) if expected_trace is not None else _expected_trace()
     started = time.perf_counter()
     stop_reason = "max_new_tokens" if token_budget == max_new_tokens else "max_context_length"
     for generation_step in range(token_budget):
