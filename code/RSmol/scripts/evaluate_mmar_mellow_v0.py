@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from pathlib import Path
@@ -23,17 +24,18 @@ import evaluate_mmau_test_mini_mellow_v0 as mellow  # noqa: E402
 DEFAULT_DATASET_DIR = Path(official.DEFAULT_DATASET_DIR)
 DEFAULT_OUTPUT_DIR = Path(
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/"
-    "mmar_mellow_v0_dual_scoring_matched_smollm2_113430_v1"
+    "mmar_mellow_v0_dual_scoring_eos_pad_dual_smollm2_113430_v2"
 )
 MMAR_MAX_NEW_TOKENS = 32
 MELLOW_MAX_PROMPT_TOKENS = mellow.MELLOW_PROMPT_TOKENS
 MODEL_CONTRACT_FILENAME = "mellow_v0_mmar_model_contract.json"
-PROTOCOL_CONTRACT = "mellow_v0_mmar_official_dual_scoring_matched_smollm2_113430_v1"
+PROTOCOL_CONTRACT = "mellow_v0_mmar_official_label_stripped_dual_eos_pad_v2"
 PROTOCOL_DESCRIPTION = (
     "official MMAR order and scorer; ReasonAQA lowercase fixed-order labels; "
-    "first-10-second audio; native Mellow two-slot prefix with fixed 129-token "
-    "prompt; decoded prediction passed verbatim; 32-token deterministic argmax; "
-    "official MMAR plus choice-label-prefix scoring"
+    "first-10-second audio; native Mellow two-slot same-waveform prefix with "
+    "fixed 129-token EOS+bang prompt; official scorer receives only the leading "
+    "choice label removed while choice-label-prefix scoring uses raw generated text; "
+    "32-token deterministic argmax; official MMAR plus choice-label-prefix scoring"
 )
 MMAR_COMPARISON_REFERENCE = {
     "model_route": "audio_smollm2_135m_mellow_shared_store_configurable_epochs",
@@ -47,12 +49,15 @@ MMAR_COMPARISON_REFERENCE = {
         "audio_smollm2_135m_mellow_shared_store_configurable_epochs/"
         "formal_30epochs_20260923_v1/mmar_checkpoint_113430_dual_scoring_v1"
     ),
-    "matched_components": [
+        "matched_components": [
         "official MMAR metadata order and complete denominator",
         "official MMAR prompt and fixed choice order",
         "32kHz audio with first-10-second long-audio policy",
         "32 generated tokens",
-        "verbatim decoded prediction with no choice pre-parser",
+        "129-token prompt with training EOS and literal ! right-padding",
+        "official scorer removes only a leading choice label",
+        "choice-label-prefix scorer receives raw EOS-truncated generated text",
+        "same normalized waveform segment supplied to both native audio slots",
         "official MMAR scorer with dynamically detected prediction key",
         "choice-label-prefix diagnostic score over the same predictions",
     ],
@@ -130,17 +135,25 @@ def _model_contract(
         "audio_prefix_tokens": mellow.MELLOW_AUDIO_PREFIX_TOKENS,
         "total_prefix_tokens_before_generation": mellow.MELLOW_PREFIX_TOKENS,
         "generation": {
-            "decoder": "mellow_top_p_filter_then_argmax_greedy_equivalent",
+            "decoder": "mellow_v0_top_p_filter_then_argmax_full_recompute",
             "do_sample": False,
             "top_p": 0.8,
             "temperature": 1.0,
+            "use_cache": False,
             "max_new_tokens": MMAR_MAX_NEW_TOKENS,
             "inference_dtype": "float32",
         },
+        "prompt_contract": "training_eos_then_right_pad_bang_v1",
+        "prompt_eos_token": mellow.EOS_TOKEN,
+        "prompt_padding_token": mellow.PAD_TOKEN,
+        "prompt_padding_side": "right",
+        "audio2_policy": "same_waveform_segment_native_audio1_audio2_dual_encoding",
         "scoring": {
             "official_mmar": True,
             "choice_label_prefix": True,
-            "prediction_text_shared_without_preparse": True,
+            "prediction_text_shared_without_preparse": False,
+            "official_scorer_prediction_source": "predictions_official.json:official_prediction_stripped_leading_label",
+            "choice_label_prefix_prediction_source": "raw_generations.jsonl:generated_text",
         },
         "comparison_reference": MMAR_COMPARISON_REFERENCE,
     }
@@ -177,6 +190,51 @@ def _load_runtime_model(args: argparse.Namespace):
     return model, tokenizer, device, runtime
 
 
+def _mmar_native_segment(waveform: Any):
+    """Keep MMAR's already normalized first-10-second waveform unchanged."""
+
+    import torch
+
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    expected = (1, mellow.official.DEFAULT_SAMPLE_RATE * mellow.official.DEFAULT_AUDIO_SECONDS)
+    if tuple(waveform.shape) != expected:
+        raise RuntimeError(
+            "MMAR native Mellow waveform must be [1, 320000] after normalization: "
+            f"got {tuple(waveform.shape)}"
+        )
+    if not bool(torch.isfinite(waveform).all()):
+        raise RuntimeError("MMAR native Mellow waveform contains non-finite values")
+    return waveform.contiguous(), {
+        "source_samples": int(waveform.shape[-1]),
+        "target_samples": int(waveform.shape[-1]),
+        "policy": "mmar_wrapper_first10s_right_zero_pad",
+        "repeat_factor": 1,
+        "crop_start": 0,
+        "crop_end": int(waveform.shape[-1]),
+    }
+
+
+def _run_model_generation(
+    model: Any,
+    tokenizer: Any,
+    device: Any,
+    sample: Mapping[str, Any],
+    *,
+    max_prompt_tokens: int,
+    max_new_tokens: int,
+) -> dict[str, Any]:
+    return mellow._run_model_generation(
+        model,
+        tokenizer,
+        device,
+        sample,
+        max_prompt_tokens=max_prompt_tokens,
+        max_new_tokens=max_new_tokens,
+        segmenter=_mmar_native_segment,
+    )
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     preflight_report = mellow._load_and_validate_preflight(args)
     args._validated_preflight_report = preflight_report
@@ -184,7 +242,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     report = official.run(
         args,
         load_runtime_model=_load_runtime_model,
-        run_model_generation=mellow._run_model_generation,
+        run_model_generation=_run_model_generation,
         prepare_prediction=mellow.prepare_model_output_for_official_scorer,
         prediction_format=mellow.PREDICTION_FORMAT,
         audio_prefix_tokens=mellow.MELLOW_AUDIO_PREFIX_TOKENS,
@@ -196,20 +254,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "independently in two native audio slots"
     )
     report["protocol"].update({
-        "decoder": "mellow_top_p_filter_then_argmax_greedy_equivalent",
+        "decoder": "mellow_v0_top_p_filter_then_argmax_full_recompute",
         "top_p": 0.8,
         "temperature": 1.0,
         "do_sample": False,
-        "use_cache": "language_model_default_exactly_as_released_wrapper",
+        "use_cache": False,
         "inference_dtype": "float32",
         "native_prompt_tokens": MELLOW_MAX_PROMPT_TOKENS,
+        "prompt_contract": "training_eos_then_right_pad_bang_v1",
+        "prompt_eos_token": mellow.EOS_TOKEN,
+        "prompt_padding_token": mellow.PAD_TOKEN,
+        "prompt_padding_side": "right",
+        "audio2_policy": "same_waveform_native_audio1_audio2_dual_encoding",
+        "generation_use_cache": False,
     })
     report["comparison_reference"] = MMAR_COMPARISON_REFERENCE
     report["native_mellow_protocol_audit"] = {
         "status": "PASS",
         "official_metadata_and_scorer_shared_with_comparison": True,
-        "prediction_text_shared_between_both_scorers": True,
-        "prediction_preparser": None,
+        "prediction_text_shared_between_both_scorers": False,
+        "prediction_preparser": "official scorer removes only leading a)-d) label",
         "max_new_tokens": MMAR_MAX_NEW_TOKENS,
         "fixed_native_prompt_tokens": MELLOW_MAX_PROMPT_TOKENS,
         "top_p_argmax_is_greedy_equivalent": True,
@@ -237,16 +301,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         prediction_key = str(
             report.get("protocol", {}).get("prediction_key", "answer_prediction")
         )
+        raw_by_id = mellow._raw_generation_by_id(args.output_dir)
+        prefix_predictions = []
+        for prediction in predictions:
+            item = copy.deepcopy(prediction)
+            item[prediction_key] = raw_by_id.get(str(item.get("id", "")), "")
+            prefix_predictions.append(item)
         prefix_score = official.write_choice_label_prefix_evaluation(
             args.output_dir,
-            predictions,
+            prefix_predictions,
             output_key=prediction_key,
         )
         report["choice_label_prefix_evaluation"] = prefix_score
         report["dual_scoring"] = {
             "choice_label_prefix": prefix_score.get("status"),
             "official_mmar": report.get("official_evaluation", {}).get("status"),
-            "prediction_text_shared_without_preparse": True,
+            "prediction_text_shared_without_preparse": False,
+            "official_scorer_prediction_source": "predictions_official.json:official_prediction_stripped_leading_label",
+            "choice_label_prefix_prediction_source": "raw_generations.jsonl:generated_text",
         }
     mellow.official._write_json(args.output_dir / "evaluation_report.json", report)
     return report

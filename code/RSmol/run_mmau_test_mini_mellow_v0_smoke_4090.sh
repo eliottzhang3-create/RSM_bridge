@@ -6,9 +6,14 @@ cd "$SCRIPT_DIR"
 mkdir -p log
 
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
-OUTPUT_DIR="${RSMOL_MELLOW_V0_MMAU_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/mmau_test_mini_mellow_author_reply_matched_smollm2_113430_v2}"
+OUTPUT_DIR="${RSMOL_MELLOW_V0_MMAU_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/mmau_test_mini_mellow_author_reply_eos_pad_dual_smollm2_113430_v3}"
 PREFLIGHT_REPORT="${RSMOL_MELLOW_V0_PREFLIGHT_REPORT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/preflight/mellow_v0_artifact_preflight.json}"
-JOB_LOG="$SCRIPT_DIR/log/mmau_mellow_v0_smoke_4090.${RUN_TAG}.JOB.log"
+JOB_LOG="$SCRIPT_DIR/log/mmau_mellow_v0_smoke_3090.${RUN_TAG}.JOB.log"
+JOB_NAME="mellow-mmau-v0-smoke-$RUN_TAG"
+if ((${#JOB_NAME} > 60)); then
+  echo "generated vc job name exceeds 60 characters: $JOB_NAME (${#JOB_NAME})" >&2
+  exit 2
+fi
 
 ARGS=(
   --mode smoke
@@ -18,6 +23,7 @@ ARGS=(
   --max-prompt-tokens 129
   --max-new-tokens 300
   --dtype fp32
+  --run-official-evaluation
 )
 if (($#)); then
   ARGS+=("$@")
@@ -25,10 +31,10 @@ fi
 printf -v CMD_ARGS '%q ' "${ARGS[@]}"
 
 vc submit \
-  -p pdgpu-4090 \
+  -p pdgpu-3090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 8 -m 32G -g 1 -n 1 \
-  -j "mmau-mellow-v0-smoke-${RUN_TAG}" \
+  -j "$JOB_NAME" \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$JOB_LOG" \
   --cmd "bash scripts/evaluate_mmau_test_mini_mellow_v0.sh $CMD_ARGS"

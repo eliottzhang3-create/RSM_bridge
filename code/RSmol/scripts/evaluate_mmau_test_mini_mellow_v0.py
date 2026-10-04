@@ -12,6 +12,7 @@ as MellowWrapper does; it is therefore deterministic rather than sampling.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import sys
@@ -33,7 +34,7 @@ import evaluate_mmau_test_mini_5_10x2_5_mesh_mellow as official  # noqa: E402
 DEFAULT_DATASET_DIR = Path(official.DEFAULT_DATASET_DIR)
 DEFAULT_OUTPUT_DIR = Path(
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/"
-    "mmau_test_mini_mellow_author_reply_matched_smollm2_113430_v2"
+    "mmau_test_mini_mellow_author_reply_eos_pad_dual_smollm2_113430_v3"
 )
 DEFAULT_MAX_PROMPT_TOKENS = 129
 DEFAULT_MAX_NEW_TOKENS = 300
@@ -42,8 +43,10 @@ MELLOW_PROMPT_TOKENS = 129
 MELLOW_AUDIO_PREFIX_TOKENS = 260
 MELLOW_PREFIX_TOKENS = 389
 MELLOW_HIDDEN_SIZE = 576
-PREDICTION_FORMAT = "mellow_author_reply_raw_generation_choice_label_scoring_v1"
-PROTOCOL_CONTRACT = "mellow_v0_mmau_author_reply_matched_smollm2_113430_v2"
+PAD_TOKEN = "!"
+EOS_TOKEN = "<|endoftext|>"
+PREDICTION_FORMAT = "mellow_v0_official_label_stripped_choice_label_raw_eos_pad_v1"
+PROTOCOL_CONTRACT = "mellow_v0_mmau_official_label_stripped_dual_eos_pad_v3"
 MODEL_CONTRACT_FILENAME = "mellow_v0_model_contract.json"
 SHARED_STORAGE_PREFIXES = ("/hpc_stor03", "/mnt/cloudstorfs")
 MMAU_COMPARISON_REFERENCE = {
@@ -59,22 +62,40 @@ MMAU_COMPARISON_REFERENCE = {
         "formal_30epochs_20260923_v1/"
         "mmau_test_mini_checkpoint_113430_mellow_author_reply_protocol_v1"
     ),
-    "matched_components": [
-        "MMAU-v05.15.25 physical-order 1000-row denominator",
-        "Mellow author-reply lowercase prompt and fixed choice labels",
-        "129-token prompt truncation",
-        "32kHz 10-second MellowWrapper audio policy",
-        "300-token top-p-filter-then-argmax decoding",
-        "verbatim generated text supplied to both scorers",
-        "Mellow author choice-label score plus MMAU-v05.15.25 official score",
-    ],
+        "matched_components": [
+            "MMAU-v05.15.25 physical-order 1000-row denominator",
+            "Mellow author-reply lowercase prompt and fixed choice labels",
+            "129-token prompt with training EOS and literal ! right-padding",
+            "32kHz 10-second MellowWrapper audio policy",
+            "300-token top-p-filter-then-argmax decoding",
+            "official scorer receives generated text with only a leading choice label removed",
+            "choice-label-prefix scorer receives the EOS-truncated generated text with its label",
+            "one normalized waveform segment supplied to both native audio slots",
+            "Mellow author choice-label score plus MMAU-v05.15.25 official score",
+        ],
 }
 
 
 def prepare_model_output_for_official_scorer(value: Any) -> str:
-    """Pass decoded Mellow output verbatim to MMAU's official scorer."""
+    """Match the official scorer contract used by the trained Mellow evaluator."""
 
-    return str(value)
+    return official.prepare_model_output_for_official_scorer(value)
+
+
+def _raw_generation_by_id(output_dir: Path) -> dict[str, str]:
+    """Read EOS-truncated generated text before official-label preprocessing."""
+
+    path = output_dir / "raw_generations.jsonl"
+    result: dict[str, str] = {}
+    if not path.is_file():
+        return result
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        if str(item.get("status", "")) == "generated":
+            result[str(item.get("id", ""))] = str(item.get("generated_text", ""))
+    return result
 
 
 def _shared_storage_identity(value: str | Path) -> str:
@@ -199,18 +220,33 @@ def _model_contract(args: argparse.Namespace, preflight_report: Mapping[str, Any
         "mellow_checkpoint": _shared_storage_identity(args.mellow_checkpoint),
         "mellow_checkpoint_sha256": preflight_report["mellow_checkpoint_sha256"],
         "base_smollm2": _shared_storage_identity(args.base_smollm2),
-        "single_audio_policy": "same_source_independently_preprocessed_and_encoded_in_two_native_slots",
+        "single_audio_policy": (
+            "same_normalized_waveform_segment_supplied_to_both_native_slots; "
+            "audio_encoder_invoked_separately_for_each_slot"
+        ),
         "audio_preprocessing": official.MELLOW_AUTHOR_REPLY_AUDIO_FORMAT,
         "prompt_tokens": MELLOW_PROMPT_TOKENS,
+        "prompt_contract": "training_eos_then_right_pad_bang_v1",
+        "prompt_eos_token": EOS_TOKEN,
+        "prompt_padding_token": PAD_TOKEN,
+        "prompt_padding_side": "right",
         "prefix_tokens": MELLOW_PREFIX_TOKENS,
+        "audio2_policy": "same_waveform_segment_native_audio1_audio2_dual_encoding",
         "generation": {
-            "decoder": "mellow_wrapper_top_p_filter_then_argmax_default_lm_cache",
+            "decoder": "mellow_v0_top_p_filter_then_argmax_full_recompute",
             "do_sample": False,
             "top_p": 0.8,
             "temperature": 1.0,
-            "use_cache": "language_model_default_exactly_as_wrapper",
+            "use_cache": False,
             "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
             "inference_dtype": "float32",
+        },
+        "scoring": {
+            "official_mmau": True,
+            "choice_label_prefix": True,
+            "prediction_text_shared_without_preparse": False,
+            "official_scorer_prediction_source": "predictions_fixed_order.json:model_output_stripped_leading_label",
+            "choice_label_prefix_prediction_source": "raw_generations.jsonl:generated_text",
         },
         "prediction_format": PREDICTION_FORMAT,
         "comparison_reference": MMAU_COMPARISON_REFERENCE,
@@ -298,11 +334,13 @@ def _padded_prompt(
     *,
     max_prompt_tokens: int,
     device: Any,
-) -> tuple[dict[str, Any], int]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     import torch
 
+    training_prompt = str(prompt) + " " + EOS_TOKEN
+    tokenizer.padding_side = "right"
     encoded = tokenizer(
-        prompt,
+        training_prompt,
         truncation=True,
         padding="max_length",
         max_length=max_prompt_tokens,
@@ -310,7 +348,7 @@ def _padded_prompt(
         return_tensors="pt",
     )
     untruncated = tokenizer(
-        prompt,
+        training_prompt,
         truncation=False,
         padding=False,
         add_special_tokens=True,
@@ -320,14 +358,33 @@ def _padded_prompt(
     prompt_token_count = len(official._token_rows(untruncated["input_ids"]))
     if tokenizer.pad_token_id is None:
         raise RuntimeError("native Mellow tokenizer has no pad token")
+    pad_id = int(tokenizer.pad_token_id)
+    bang_id = int(tokenizer.convert_tokens_to_ids(PAD_TOKEN))
+    if pad_id != bang_id:
+        raise RuntimeError(
+            f"native Mellow tokenizer pad token is not literal !: "
+            f"pad_id={pad_id}, bang_id={bang_id}"
+        )
     prompt_ids = prompt_ids_cpu.to(device)
     attention_mask = encoded["attention_mask"].to(device)
     if tuple(prompt_ids.shape) != (1, MELLOW_PROMPT_TOKENS):
         raise RuntimeError(f"native Mellow padded prompt shape mismatch: {tuple(prompt_ids.shape)}")
+    padding_positions = attention_mask[0].eq(0)
+    if bool(padding_positions.any()) and not bool(prompt_ids[0][padding_positions].eq(pad_id).all()):
+        raise RuntimeError("native Mellow prompt is not right-padded with tokenizer pad token")
     return {
         "input_ids": prompt_ids,
         "attention_mask": attention_mask,
-    }, prompt_token_count
+    }, {
+        "prompt_training_text_appended_eos": True,
+        "prompt_eos_token": EOS_TOKEN,
+        "prompt_padding_token": PAD_TOKEN,
+        "prompt_padding_token_id": pad_id,
+        "prompt_slot_tokens": MELLOW_PROMPT_TOKENS,
+        "prompt_padding_side": "right",
+        "prompt_original_token_count": prompt_token_count,
+        "prompt_truncated": prompt_token_count > MELLOW_PROMPT_TOKENS,
+    }
 
 
 def _build_native_prefix(
@@ -335,13 +392,17 @@ def _build_native_prefix(
     text_input: Mapping[str, Any],
     waveform: Any,
     device: Any,
+    *,
+    segmenter: Any | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     import torch
 
-    audio1_cpu, audio1_segment = official.mellow_author_reply_audio_segment(waveform)
-    audio2_cpu, audio2_segment = official.mellow_author_reply_audio_segment(waveform)
-    audio1 = audio1_cpu.to(device, non_blocking=True)
-    audio2 = audio2_cpu.to(device, non_blocking=True)
+    if segmenter is None:
+        audio_cpu, audio_segment = official.mellow_author_reply_audio_segment(waveform)
+    else:
+        audio_cpu, audio_segment = segmenter(waveform)
+    audio1 = audio_cpu.to(device, non_blocking=True)
+    audio2 = audio1.clone()
     prefix, _, _ = model.generate_prefix_inference({
         "audio1": audio1,
         "audio2": audio2,
@@ -359,15 +420,17 @@ def _build_native_prefix(
         "audio2_prefix_shape": list(second.shape),
         "combined_prefix_shape": list(prefix.shape),
         "prefix_token_count": MELLOW_PREFIX_TOKENS,
-        "prefix_layout": "audio1_independent_mellow_preprocess_129 + separator + audio2_independent_mellow_preprocess_129 + separator + truncated_padded_prompt_129",
-        "single_audio_slot": True,
+        "prefix_layout": "native_audio1_129 + separator + native_audio2_129 + separator + eos_pad_prompt_129",
+        "single_audio_slot": False,
         "audio2_same_source": True,
         "audio2_reused": False,
-        "audio1_segment": audio1_segment,
-        "audio2_segment": audio2_segment,
+        "audio1_audio2_same_segment": True,
+        "audio1_encoded_separately": True,
         "audio2_encoded_separately": True,
         "native_audio_encoder_invocations": 2,
         "compact_single_audio_prefix_used": False,
+        "audio1_segment": audio_segment,
+        "audio2_segment": {**audio_segment, "same_segment_as_audio1": True},
     }
 
 
@@ -426,11 +489,12 @@ def _greedy_decode_native(
         "effective_token_budget": int(max_new_tokens),
         "generation_seconds": elapsed,
         "tokens_per_second": len(generated_ids) / max(elapsed, 1e-9),
-        "decoder": "mellow_wrapper_top_p_filter_then_argmax_default_lm_cache",
+        "generation_decoder": "mellow_v0_top_p_filter_then_argmax_full_recompute",
         "do_sample": False,
-        "top_p": float(top_p),
-        "temperature": float(temperature),
-        "use_cache": "language_model_default_exactly_as_wrapper",
+        "generation_top_p": float(top_p),
+        "generation_temperature": float(temperature),
+        "generation_use_cache": False,
+        "inference_dtype": "float32",
     }
 
 
@@ -442,10 +506,11 @@ def _run_model_generation(
     *,
     max_prompt_tokens: int,
     max_new_tokens: int,
+    segmenter: Any | None = None,
 ) -> dict[str, Any]:
     import torch
 
-    text_input, prompt_token_count = _padded_prompt(
+    text_input, prompt_audit = _padded_prompt(
         tokenizer,
         str(sample["prompt"]),
         max_prompt_tokens=max_prompt_tokens,
@@ -457,6 +522,7 @@ def _run_model_generation(
             text_input,
             sample["waveform"],
             device,
+            segmenter=segmenter,
         )
         generated = _greedy_decode_native(
             model,
@@ -464,9 +530,9 @@ def _run_model_generation(
             prefix,
             max_new_tokens=max_new_tokens,
         )
-    generated["prompt_token_count"] = prompt_token_count
+    generated["prompt_token_count"] = prompt_audit["prompt_original_token_count"]
     generated["padded_prompt_token_count"] = MELLOW_PROMPT_TOKENS
-    generated["prompt_truncated"] = prompt_token_count > MELLOW_PROMPT_TOKENS
+    generated.update(prompt_audit)
     generated.update(prefix_audit)
     return generated
 
@@ -527,12 +593,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         audio_format=official.MELLOW_AUTHOR_REPLY_AUDIO_FORMAT,
         protocol_contract=PROTOCOL_CONTRACT,
         generation_protocol={
-            "decoder": "mellow_wrapper_top_p_filter_then_argmax_default_lm_cache",
+            "decoder": "mellow_v0_top_p_filter_then_argmax_full_recompute",
             "top_p": 0.8,
             "temperature": 1.0,
             "do_sample": False,
-            "use_cache": "language_model_default_exactly_as_wrapper",
+            "use_cache": False,
             "inference_dtype": "float32",
+            "prompt_contract": "training_eos_then_right_pad_bang_v1",
+            "audio2_policy": "same_waveform_native_audio1_audio2_dual_encoding",
         },
         audio_prefix_tokens=MELLOW_AUDIO_PREFIX_TOKENS,
         stage="mmau_test_mini_native_mellow_v0_matched_protocol",
@@ -553,7 +621,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     predictions_path = args.output_dir / "predictions_fixed_order.json"
     if predictions_path.is_file() and report.get("inference_coverage", {}).get("status") == "PASS":
         predictions = json.loads(predictions_path.read_text(encoding="utf-8"))
-        author_score = official.write_mellow_author_reply_evaluation(args.output_dir, predictions)
+        raw_by_id = _raw_generation_by_id(args.output_dir)
+        author_predictions = []
+        for prediction in predictions:
+            item = copy.deepcopy(prediction)
+            item["model_output"] = raw_by_id.get(str(item.get("id", "")), "")
+            author_predictions.append(item)
+        author_score = official.write_mellow_author_reply_evaluation(
+            args.output_dir, author_predictions
+        )
         payload_sources = report.get("records", {}).get("audio", {}).get("payload_sources", {})
         fallback_audio_rows = sum(
             int(count)
@@ -576,6 +652,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             **author_score["total"],
         }
         report["mmau_v051525_evaluation"] = report.get("official_evaluation", {})
+        report["dual_scoring"] = {
+            "official_mmau": report.get("official_evaluation", {}).get("status"),
+            "mellow_author_reply": author_score.get("status"),
+            "prediction_text_shared_without_preparse": False,
+            "official_scorer_prediction_source": "predictions_fixed_order.json:model_output_stripped_leading_label",
+            "choice_label_prefix_prediction_source": "raw_generations.jsonl:generated_text",
+        }
         report["mellow_author_reply_protocol_audit"] = {
             "official_id_wav_rows": int(payload_sources.get("official_id_wav", 0)),
             "fallback_audio_rows": fallback_audio_rows,

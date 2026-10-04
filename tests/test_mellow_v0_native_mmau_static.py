@@ -104,14 +104,15 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
         ):
             self.assertIn(marker, self.evaluator_text)
 
-    def test_generation_matches_author_reply_top_p_argmax_and_is_verbatim(self) -> None:
+    def test_generation_matches_author_reply_top_p_argmax_and_official_preparse(self) -> None:
         prepare = self.evaluator.prepare_model_output_for_official_scorer
-        for value in ("a) answer", "  D) untouched  ", "free text"):
-            self.assertEqual(prepare(value), value)
+        self.assertEqual(prepare("a) answer"), "answer")
+        self.assertEqual(prepare("  D) untouched  "), "untouched  ")
+        self.assertEqual(prepare("free text"), "free text")
         common = Path(self.evaluator.official.__file__).read_text(encoding="utf-8")
         for marker in (
             "torch.argmax",
-            "language_model_default_exactly_as_wrapper",
+            "mellow_v0_top_p_filter_then_argmax_full_recompute",
             "model.caption_decoder.lm(inputs_embeds=generated)",
             '"do_sample": False',
             '"top_p": 0.8',
@@ -120,6 +121,7 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
             "cumulative_probs",
             "sorted_indices_to_remove",
             "generated_text = str(generation.get",
+            '"prediction_text_shared_without_preparse": False',
         ):
             self.assertIn(marker, self.evaluator_text + "\n" + common)
 
@@ -240,18 +242,18 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
     def test_smoke_and_full_share_output_and_respect_scheduler_limits(self) -> None:
         default_output = (
             "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/"
-            "mmau_test_mini_mellow_author_reply_matched_smollm2_113430_v2"
+            "mmau_test_mini_mellow_author_reply_eos_pad_dual_smollm2_113430_v3"
         )
         for wrapper in (self.smoke, self.full):
             self.assertIn(default_output, wrapper)
-            self.assertIn("-p pdgpu-4090", wrapper)
+            self.assertIn("-p pdgpu-3090", wrapper)
             self.assertIn("-c 8 -m 32G -g 1", wrapper)
             self.assertIn("--preflight-report", wrapper)
             self.assertIn("--max-prompt-tokens 129", wrapper)
             self.assertIn("--max-new-tokens 300", wrapper)
             self.assertIn("--dtype fp32", wrapper)
         self.assertIn("--mode smoke", self.smoke)
-        self.assertNotIn("--run-official-evaluation", self.smoke)
+        self.assertIn("--run-official-evaluation", self.smoke)
         self.assertIn("--mode full", self.full)
         self.assertIn("--run-official-evaluation", self.full)
         self.assertIn("scripts/audit_mellow_v0_artifact.sh", PREFLIGHT_SH.read_text(encoding="utf-8"))
@@ -319,22 +321,22 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
             "evaluate_mmau_test_mini_mellow_v0 as mellow",
             "load_runtime_model=_load_runtime_model",
             'runtime["runtime_model_contract"] = _model_contract',
-            "run_model_generation=mellow._run_model_generation",
+            "run_model_generation=_run_model_generation",
             "prepare_prediction=mellow.prepare_model_output_for_official_scorer",
             "write_choice_label_prefix_evaluation",
             'report["choice_label_prefix_evaluation"]',
             'report["dual_scoring"]',
-            '"prediction_text_shared_without_preparse": True',
+            '"prediction_text_shared_without_preparse": False',
             '"official_metadata_and_scorer_shared_with_comparison": True',
             '"top_p_argmax_is_greedy_equivalent": True',
             '"model_inherent_difference"',
-            '"language_model_default_exactly_as_released_wrapper"',
+            '"mellow_v0_top_p_filter_then_argmax_full_recompute"',
         ):
             self.assertIn(marker, self.mmar_text)
 
     def test_native_mmar_submission_is_isolated_and_official(self) -> None:
         for marker in (
-            "-p pdgpu-4090",
+            "-p pdgpu-3090",
             "-c 8 -m 32G -g 1 -n 1",
             "MMAR-meta.json",
             "mmar-audio",
@@ -343,7 +345,7 @@ class NativeMellowV0MMAUStaticTest(unittest.TestCase):
             "--max-new-tokens 32",
             "--dtype fp32",
             "--run-official-evaluation",
-            "mmar_mellow_v0_dual_scoring_matched_smollm2_113430_v1",
+            "mmar_mellow_v0_dual_scoring_eos_pad_dual_smollm2_113430_v2",
         ):
             self.assertIn(marker, self.mmar_submit)
         self.assertIn("evaluate_mmar_mellow_v0.py", self.mmar_runtime)
