@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MCQ = ROOT / "code" / "RSmol" / "mellow_official_training_c8204d8_adamw_cosine" / "scripts" / "rsmol" / "prepare_reasonaqa_mcq_manifest.py"
 CKPT = ROOT / "code" / "RSmol" / "mellow_official_training_c8204d8_adamw_cosine" / "scripts" / "rsmol" / "audit_reasonaqa_mellow_init_checkpoint.py"
+CONFIG = ROOT / "code" / "RSmol" / "mellow_official_training_c8204d8_adamw_cosine" / "scripts" / "rsmol" / "write_reasonaqa_runtime_config.py"
 
 
 def load_module(path: Path, name: str):
@@ -58,6 +59,20 @@ class MellowOfficialMcqAuditStaticTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("vc submit", text)
             self.assertNotIn("torchrun", text)
+
+    def test_isolated_training_contract_is_present(self):
+        config = CONFIG.read_text(encoding="utf-8")
+        trainer = (ROOT / "code" / "RSmol" / "mellow_official_training_c8204d8_adamw_cosine" / "training" / "trainer.py").read_text(encoding="utf-8")
+        for marker in ("--init-model-checkpoint", "--max-lr", "--min-lr", "init_model_checkpoint"):
+            self.assertIn(marker, config)
+        for marker in ("Initialized model weights from", "optimizer/scheduler/RNG start fresh", "init_model_path"):
+            self.assertIn(marker, trainer)
+        for name in (
+            "run_reasonaqa_mcq_8gpu_smoke.sh",
+            "run_reasonaqa_mcq_8gpu_resume.sh",
+            "run_reasonaqa_mcq_8gpu_formal.sh",
+        ):
+            self.assertTrue((MCQ.parent / name).is_file())
 
 
 if __name__ == "__main__":

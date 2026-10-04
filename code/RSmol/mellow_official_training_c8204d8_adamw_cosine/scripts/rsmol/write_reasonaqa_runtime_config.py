@@ -31,6 +31,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--max-epochs-this-run", type=int, default=0)
     parser.add_argument("--resume-checkpoint", type=Path, default=None)
+    parser.add_argument("--init-model-checkpoint", type=Path, default=None)
+    parser.add_argument("--max-lr", type=float, default=1e-3)
+    parser.add_argument("--min-lr", type=float, default=5e-5)
+    parser.add_argument("--warmup-ratio", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=4)
     return parser.parse_args()
 
@@ -60,11 +64,21 @@ def main() -> int:
     resume_checkpoint = str(args.resume_checkpoint.resolve()) if args.resume_checkpoint else ""
     if resume_checkpoint and not Path(resume_checkpoint).is_file():
         raise FileNotFoundError(f"resume checkpoint does not exist: {resume_checkpoint}")
+    init_model_checkpoint = str(args.init_model_checkpoint.resolve()) if args.init_model_checkpoint else ""
+    if init_model_checkpoint and not Path(init_model_checkpoint).is_file():
+        raise FileNotFoundError(f"initialization checkpoint does not exist: {init_model_checkpoint}")
+    if resume_checkpoint and init_model_checkpoint:
+        raise ValueError("--resume-checkpoint and --init-model-checkpoint are mutually exclusive")
+    if not 0.0 < args.warmup_ratio < 1.0:
+        raise ValueError("--warmup-ratio must be between 0 and 1")
+    if not 0.0 <= args.min_lr <= args.max_lr:
+        raise ValueError("--min-lr must be between 0 and --max-lr")
 
     config: dict[str, Any] = {
         "mode": "train",
         "gpu": True,
         "resume_checkpoint": resume_checkpoint,
+        "init_model_checkpoint": init_model_checkpoint,
         "data": {
             "datapath": str(resolved_stage_root),
             "datafiles": [str(args.data_json.resolve())],
@@ -94,16 +108,17 @@ def main() -> int:
             "input_channels": 1,
             "output_channels": 1,
             "resume_checkpoint": resume_checkpoint,
+            "init_model_checkpoint": init_model_checkpoint,
             "inference_window": 5,
         },
         "train": {
             "optimizer": {
                 "optimizer_type": "AdamW",
                 "betas": [0.9, 0.95],
-                "learning_rate": 1e-3,
-                "max_lr": 1e-3,
-                "min_lr": 5e-5,
-                "warmup_ratio": 0.05,
+                "learning_rate": args.max_lr,
+                "max_lr": args.max_lr,
+                "min_lr": args.min_lr,
+                "warmup_ratio": args.warmup_ratio,
                 "weight_decay": 1e-4,
                 "scheduler": "step_cosine_warmup",
             },

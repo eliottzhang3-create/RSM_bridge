@@ -551,7 +551,17 @@ class Trainer:
         max_grad_norm = self.config["train"]["max_grad_norm"]
         grad_norm_tracker = GradNormTracker(initial_l2_norm=max_grad_norm, initial_max_norm=10 * max_grad_norm)
 
+        init_model_path = self.config.get("init_model_checkpoint", "")
         resume_path = self.config.get("resume_checkpoint", "")
+        if init_model_path and resume_path:
+            raise ValueError("init_model_checkpoint and resume_checkpoint are mutually exclusive")
+        if init_model_path:
+            checkpoint = torch.load(init_model_path, map_location=self.device, weights_only=False)
+            if not isinstance(checkpoint, dict) or not isinstance(checkpoint.get("state_dict"), dict):
+                raise ValueError("model initialization checkpoint must contain a state_dict mapping")
+            model_for_state = model.module if hasattr(model, "module") else model
+            model_for_state.load_state_dict(checkpoint["state_dict"], strict=True)
+            self.logger.info("Initialized model weights from %s; optimizer/scheduler/RNG start fresh", init_model_path)
         if resume_path:
             # The full checkpoint contains Python/NumPy/CUDA RNG objects, so
             # PyTorch's restricted ``weights_only`` loader cannot read it.
