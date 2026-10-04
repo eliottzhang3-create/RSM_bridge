@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-lr", type=float, default=5e-5)
     parser.add_argument("--warmup-ratio", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--max-optimizer-steps", type=int, default=0)
     return parser.parse_args()
 
 
@@ -45,6 +46,8 @@ def main() -> int:
         raise ValueError("--num-epochs must be at least 1")
     if args.max_epochs_this_run < 0:
         raise ValueError("--max-epochs-this-run must be non-negative")
+    if args.max_optimizer_steps < 0:
+        raise ValueError("--max-optimizer-steps must be non-negative")
     resolved_stage_root = args.stage_root.resolve()
     shm_root = Path("/dev/shm").resolve()
     if not resolved_stage_root.is_relative_to(shm_root):
@@ -133,6 +136,7 @@ def main() -> int:
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
             "num_epochs": args.num_epochs,
             "max_epochs_this_run": args.max_epochs_this_run,
+            "max_optimizer_steps": args.max_optimizer_steps,
             "log_step": 1,
             "sav_per_num_epochs": 1,
             "random_seed": 1234,

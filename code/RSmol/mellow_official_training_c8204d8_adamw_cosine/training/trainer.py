@@ -669,6 +669,12 @@ class Trainer:
         ignore_index = dataset.tokenizer.encode(dataset.tokenizer.pad_token)[0]
         configured_epochs = int(self.config["train"]["num_epochs"])
         epochs_this_run = int(self.config["train"].get("max_epochs_this_run", 0))
+        max_optimizer_steps = int(self.config["train"].get("max_optimizer_steps", 0))
+        if max_optimizer_steps < 0:
+            raise ValueError("max_optimizer_steps must be non-negative")
+        target_step = (
+            total_step + max_optimizer_steps if max_optimizer_steps > 0 else None
+        )
         end_epoch = configured_epochs if epochs_this_run <= 0 else min(
             configured_epochs, start_epoch + epochs_this_run
         )
@@ -782,7 +788,26 @@ class Trainer:
                 if self.distributed.rank() == 0:
                     tqdm_handler.update(1)
 
+                if target_step is not None and total_step >= target_step:
+                    break
+
             tqdm_handler.close()
+
+            if target_step is not None and total_step >= target_step:
+                # A step-limited smoke run needs a resumable full checkpoint
+                # even though it may stop in the middle of an epoch.
+                if self.distributed.rank() == 0:
+                    os.makedirs(self.config["save_dir"], exist_ok=True)
+                self.distributed.barrier()
+                checkpoint_path = os.path.join(
+                    self.config["save_dir"], f"model--step-{total_step}.ckpt"
+                )
+                self._save_training_checkpoint(
+                    checkpoint_path, model, optimizer, lr_scheduler, grad_scaler,
+                    grad_norm_tracker, loss_tracker, epoch, total_step,
+                )
+                self.logger.info("Reached max_optimizer_steps=%d", target_step)
+                return
 
             metrics_train["accerr"] = float(accerr_epo)
             if accerr_epo < lowest_accerr_epo and self.distributed.rank() == 0:
