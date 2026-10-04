@@ -150,7 +150,12 @@ def audit(checkpoint: Path, *, hash_files: bool = True) -> dict[str, Any]:
 
     config_checks = {key: {"expected": expected, "actual": config_value(key), "passed": config_value(key) == expected} for key, expected in EXPECTED_CONFIG.items()}
     architecture = config.get("architecture_contract", config.get("mesh_architecture_contract"))
-    architecture_passed = architecture == "logical_30_physical_20_5_10x2_5_mesh"
+    architecture_passed = architecture in {
+        # The converter writes this exact value to mesh_architecture_contract.
+        "logical_30_physical_20_5_10x2_5",
+        # Keep compatibility with artifacts that used the longer label.
+        "logical_30_physical_20_5_10x2_5_mesh",
+    }
     tokenizer_files = sorted(name for name in relative_files if Path(name).name in TOKENIZER_FILES)
     tokenizer_config = {}
     tokenizer_config_path = checkpoint / "tokenizer_config.json"

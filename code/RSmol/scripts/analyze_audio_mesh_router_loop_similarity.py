@@ -105,6 +105,18 @@ def _infer_audio_roots(row: Mapping[str, Any]) -> tuple[Path, ...]:
     return tuple(dict.fromkeys(roots))
 
 
+def _infer_audio_group(row: Mapping[str, Any], logical: str) -> str:
+    task = str(row.get("taskname") or row.get("task_name") or row.get("task") or "").casefold().replace("_", "")
+    prefix = logical.split("/", 1)[0].casefold().replace("_", "")
+    if "clothoaqa" in task or "clothoaqa" in prefix:
+        return "clotho_aqa"
+    if "audiocap" in task or "audiocap" in prefix:
+        return "audiocaps"
+    if "clotho" in task or "clotho" in prefix:
+        return "clotho"
+    return "unknown"
+
+
 def _resolve_audio(raw: str, dataset: Path, audio_root: Path | None) -> Path:
     candidate = Path(raw).expanduser()
     if candidate.is_absolute() and candidate.is_file():
@@ -121,22 +133,62 @@ def _resolve_audio(raw: str, dataset: Path, audio_root: Path | None) -> Path:
     raise FileNotFoundError(f"audio path does not exist: {raw!r}; tried {[str(x) for x in options]}")
 
 
+def _resolve_reasonaqa_audio(raw: str, row: Mapping[str, Any], dataset: Path, audio_root: Path | None) -> Path:
+    """Resolve logical ReasonAQA paths such as AudioCapsLarger/test/foo.wav.
+
+    The official path audit treats the component after the dataset prefix as
+    the logical suffix and maps it into the corresponding physical corpus.
+    We use that same deterministic rule, with basename fallback for Clotho
+    AQA files whose logical directory is virtual.
+    """
+    logical = str(raw).replace("\\", "/").lstrip("./")
+    parts = tuple(part for part in logical.split("/") if part)
+    group = _infer_audio_group(row, logical)
+    if audio_root is not None:
+        direct_roots = (audio_root,)
+    elif group == "audiocaps":
+        direct_roots = (Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2"),)
+    elif group == "clotho":
+        direct_roots = (Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1"),)
+    elif group == "clotho_aqa":
+        direct_roots = (Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_aqa_audio/audio_files"),)
+    else:
+        direct_roots = _infer_audio_roots(row)
+    candidates: list[Path] = []
+    for root in direct_roots:
+        if not parts:
+            continue
+        # Preserve a suffix beginning at a known split directory.
+        split_index = next((i for i, part in enumerate(parts) if part.casefold() in {"train", "val", "test", "development", "validation", "evaluation"}), None)
+        if split_index is not None:
+            candidates.append(root.joinpath(*parts[split_index:]))
+        if len(parts) > 1:
+            candidates.append(root.joinpath(*parts[1:]))
+        candidates.append(root / parts[-1])
+    candidates.extend((Path(raw), dataset.parent / Path(raw), dataset.parent / parts[-1]))
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = candidate.expanduser()
+        key = str(normalized)
+        if key not in seen and normalized.is_file():
+            return normalized.resolve()
+        seen.add(key)
+    # Last resort for renamed or virtual Clotho AQA paths: search only the
+    # selected corpus roots by basename, and fail on ambiguity.
+    basename = parts[-1] if parts else logical
+    matches = sorted({path.resolve() for root in direct_roots if root.is_dir() for path in root.rglob(basename) if path.is_file()})
+    if len(matches) == 1:
+        return matches[0]
+    raise FileNotFoundError(f"logical audio path unresolved: {raw!r}; candidates={[str(x) for x in candidates]}; basename_matches={[str(x) for x in matches[:10]]}")
+
+
 def _sample_item(row: Mapping[str, Any], dataset: Path, audio_root: Path | None, index: int) -> dict[str, Any]:
     first_raw = _value(row, ("audio1_path", "filepath1", "audio_path", "filepath", "audio1", "audio"))
     if not first_raw:
         raise ValueError(f"dataset row {index} has no audio1/filepath1")
     second_raw = _value(row, ("audio2_path", "filepath2", "audio2"))
-    roots = (audio_root,) if audio_root is not None else _infer_audio_roots(row)
-    def resolve(raw: str) -> Path:
-        errors = []
-        for root in roots:
-            try:
-                return _resolve_audio(raw, dataset, root)
-            except FileNotFoundError as exc:
-                errors.append(str(exc))
-        raise FileNotFoundError(f"row {index} audio path {raw!r} unresolved; roots={roots}; details={errors[:2]}")
-    first = resolve(first_raw)
-    second = resolve(second_raw) if second_raw else None
+    first = _resolve_reasonaqa_audio(first_raw, row, dataset, audio_root)
+    second = _resolve_reasonaqa_audio(second_raw, row, dataset, audio_root) if second_raw else None
     prompt = str(row.get("prompt") or row.get("input") or row.get("question") or "")
     if not prompt:
         raise ValueError(f"dataset row {index} has no prompt/question/input")

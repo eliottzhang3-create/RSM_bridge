@@ -69,6 +69,8 @@ def normalized_stem(value: str) -> str:
 
 def build_normalized_stem_index(root: Path) -> dict[str, list[Path]]:
     index: dict[str, list[Path]] = defaultdict(list)
+    if not root.is_dir():
+        return dict(index)
     for path in sorted(root.rglob("*")):
         if path.is_file():
             index[normalized_stem(path.name)].append(path.resolve())
@@ -222,13 +224,15 @@ def main() -> int:
     args = parse_args()
     train_json = args.train_json.expanduser().resolve(strict=True)
     roots = {
-        "audiocaps": args.audiocaps_root.expanduser().resolve(strict=True),
-        "clotho": args.clotho_root.expanduser().resolve(strict=True),
-        "clotho_aqa": args.clotho_aqa_root.expanduser().resolve(strict=True),
+        # Resolve without strict=True so a missing root becomes a reportable
+        # audit failure instead of aborting before prefix statistics are written.
+        "audiocaps": args.audiocaps_root.expanduser().resolve(strict=False),
+        "clotho": args.clotho_root.expanduser().resolve(strict=False),
+        "clotho_aqa": args.clotho_aqa_root.expanduser().resolve(strict=False),
     }
-    for group, root in roots.items():
-        if not root.is_dir():
-            raise SystemExit(f"{group} root is not a directory: {root}")
+    missing_roots = {
+        group: str(root) for group, root in roots.items() if not root.is_dir()
+    }
     clotho_aqa_name_index = build_normalized_stem_index(roots["clotho_aqa"])
     clotho_aqa_name_collisions = {
         stem: [str(path) for path in paths]
@@ -316,12 +320,13 @@ def main() -> int:
 
     unique_sources = {item["source_path"]: item["source_size_bytes"] for item in by_logical.values()}
     resolved_items = [item for item in resolutions.values() if item["status"] == "resolved"]
-    status = "PASS" if not failures and not inconsistent else "FAIL"
+    status = "PASS" if not failures and not inconsistent and not missing_roots else "FAIL"
     report = {
         "status": status,
         "contract": "reasonaqa_raw_audio_path_mapping_v1",
         "train_json": str(train_json),
         "roots": {name: str(path) for name, path in roots.items()},
+        "missing_roots": missing_roots,
         "rows": len(records),
         "slot_references": sum(reference_counts.values()),
         "empty_slots": dict(empty_slots),
