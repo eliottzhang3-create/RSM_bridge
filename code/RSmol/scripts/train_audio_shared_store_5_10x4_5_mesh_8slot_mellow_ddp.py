@@ -446,9 +446,19 @@ def _validate_x4_8slot_text_checkpoint(path: Path) -> dict[str, Any]:
         raise RuntimeError("x4/8-slot text checkpoint does not prove router optimization")
     if int(metadata.get("memory_slots", -1)) != MEMORY_SLOT_COUNT:
         raise RuntimeError("x4/8-slot text checkpoint does not use eight memory slots")
-    if int(metadata.get("router_groups", -1)) != ROUTER_COUNT:
+    # The x4 text trainer that produced this checkpoint predates the explicit
+    # router_groups/router_module_count metadata fields.  Its model config and
+    # architecture contract still encode the same ten router modules; derive
+    # the omitted summary fields while rejecting any fields that are present
+    # but disagree with the isolated x4/8-slot contract.
+    router_groups = int(metadata.get("router_groups", ROUTER_COUNT))
+    router_module_count = int(metadata.get(
+        "router_module_count",
+        metadata.get("router_parameter_count", ROUTER_PARAMETER_COUNT),
+    ))
+    if router_groups != ROUTER_COUNT:
         raise RuntimeError("x4/8-slot text checkpoint does not use five router groups")
-    if int(metadata.get("router_module_count", -1)) != ROUTER_PARAMETER_COUNT:
+    if router_module_count != ROUTER_PARAMETER_COUNT:
         raise RuntimeError("x4/8-slot text checkpoint does not use ten router modules")
 
     # The x4/8-slot text trainer's metadata intentionally stores the canonical
@@ -494,14 +504,17 @@ def _validate_x4_8slot_text_checkpoint(path: Path) -> dict[str, Any]:
         "training_state_loaded": False,
         "optimizer_scheduler_rng_loaded": False,
         "memory_slots": int(metadata["memory_slots"]),
-        "router_groups": int(metadata["router_groups"]),
-        "router_module_count": int(metadata["router_module_count"]),
+        "router_groups": router_groups,
+        "router_module_count": router_module_count,
         "logical_layer_count": logical_layer_count,
         "physical_layer_count": physical_layer_count,
         "recursive_loops": recursive_loops,
         "logical_to_physical": list(logical_to_physical),
         "derived_optional_fields": [
-            key for key in ("logical_layer_count", "physical_layer_count", "recursive_loops")
+            key for key in (
+                "logical_layer_count", "physical_layer_count", "recursive_loops",
+                "router_groups", "router_module_count",
+            )
             if key not in metadata
         ],
         "fresh_audio_global_step": 0,
