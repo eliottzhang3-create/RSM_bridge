@@ -47,12 +47,17 @@ if [[ -n "${RSMOL_MELLOW_RUNTIME_CONFIG:-}" ]]; then ARGS+=(--runtime-config "$R
 if [[ -n "${RSMOL_MELLOW_ROUTE_ROOT:-}" ]]; then ARGS+=(--route-root "$RSMOL_MELLOW_ROUTE_ROOT"); fi
 if (($#)); then ARGS+=("$@"); fi
 printf -v CMD_ARGS '%q ' "${ARGS[@]}"
-JOB_LOG="$SCRIPT_DIR/log/mellow-official-training-mmau-$ROUTE-$MODE.$RUN_TAG.JOB.log"
+JOB_NAME="mellow-mmau-$ROUTE-$MODE-$RUN_TAG"
+if ((${#JOB_NAME} > 60)); then
+  echo "generated vc job name exceeds 60 characters: $JOB_NAME (${#JOB_NAME})" >&2
+  exit 2
+fi
+JOB_LOG="$SCRIPT_DIR/log/$JOB_NAME.JOB.log"
 vc submit \
   -p pdgpu-3090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 8 -m 32G -g 1 -n 1 \
-  -j "mellow-official-training-mmau-$ROUTE-$MODE-$RUN_TAG" \
+  -j "$JOB_NAME" \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$JOB_LOG" \
   --cmd "bash scripts/evaluate_mmau_test_mini_mellow_official_training.sh $CMD_ARGS"
