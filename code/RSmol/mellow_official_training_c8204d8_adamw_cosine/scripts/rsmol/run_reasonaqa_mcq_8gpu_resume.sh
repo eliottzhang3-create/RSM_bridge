@@ -11,9 +11,21 @@ mkdir -p "$OUTPUT_DIR"; USER_CONDA_BASE="${MELLOW_CONDA_BASE:-/hpc_stor03/sjtu_h
 python - "$RESUME_CKPT" <<'PY'
 import sys, torch
 c=torch.load(sys.argv[1],map_location="cpu",weights_only=False)
-assert c.get("schema_version")==2 and c.get("num_epochs")==2 and c.get("epoch_completed")==1
-s=c["scheduler"]; assert s["max_lr"]==1e-4 and s["min_lr"]==1e-5
-assert len(c["random_state_by_rank"])==8
+required={"schema_version","state_dict","optimizer","optimizer_contract","scheduler","grad_scaler","grad_norm_tracker","loss_tracker","epoch_completed","total_step","num_epochs","batch_geometry","random_state_by_rank","loss_reduction"}
+missing=required.difference(c) if isinstance(c,dict) else required
+assert not missing, f"incomplete resume checkpoint, missing={sorted(missing)}"
+assert c.get("schema_version")==2, f"unexpected schema_version={c.get('schema_version')!r}"
+assert c.get("num_epochs")==2, f"unexpected num_epochs={c.get('num_epochs')!r}"
+assert c.get("total_step")==20, f"resume requires step-20 checkpoint, got total_step={c.get('total_step')!r}"
+assert c.get("loss_reduction")=="global_token_mean", f"wrong loss reduction={c.get('loss_reduction')!r}"
+assert c.get("batch_geometry")=={"per_rank_batch_size":8,"world_size":8,"gradient_accumulation_steps":4}, f"unexpected batch geometry={c.get('batch_geometry')!r}"
+contract=c["optimizer_contract"]
+assert contract.get("type")=="AdamW" and tuple(contract.get("betas",()))==(0.9,0.95), f"unexpected optimizer contract={contract!r}"
+s=c["scheduler"]
+assert s.get("scheduler_type")=="step_cosine_warmup" and s.get("last_step")==20, f"unexpected scheduler state={s!r}"
+assert abs(float(s.get("max_lr",-1))-1e-4)<1e-12 and abs(float(s.get("min_lr",-1))-1e-5)<1e-12, f"unexpected scheduler bounds={s!r}"
+assert int(s.get("total_steps",0))>20 and int(s.get("warmup_steps",0))>0, f"invalid scheduler horizon={s!r}"
+assert len(c["random_state_by_rank"])==8, f"expected RNG state for 8 ranks, got {len(c['random_state_by_rank'])}"
 PY
 RUN_ID="${MELLOW_RUN_ID:-${SLURM_JOB_ID:-$$}_$(date +%Y%m%d_%H%M%S%N)_${RANDOM}}"; STAGE_ROOT="/dev/shm/mellow_adamw_cosine_reasonaqa_mcq_resume_$RUN_ID"; CHECKPOINT_ROOT="$OUTPUT_DIR/checkpoints"
 python "$SCRIPT_DIR/stage_reasonaqa_mcq_raw_audio.py" --manifest-json "$MCQ_JSON" --audit-report "$AUDIT_REPORT" --mapping-jsonl "$MAPPING_JSONL" --stage-root "$STAGE_ROOT" --report-path "$OUTPUT_DIR/staging_report.json"

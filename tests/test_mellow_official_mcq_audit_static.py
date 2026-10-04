@@ -74,6 +74,13 @@ class MellowOfficialMcqAuditStaticTests(unittest.TestCase):
         ):
             self.assertTrue((MCQ.parent / name).is_file())
 
+    def test_resume_requires_step20_global_token_checkpoint(self):
+        text = (MCQ.parent / "run_reasonaqa_mcq_8gpu_resume.sh").read_text(encoding="utf-8")
+        for marker in ("total_step"):
+            self.assertIn(marker, text)
+        self.assertIn('c.get("total_step")==20', text)
+        self.assertIn('loss_reduction', text)
+
 
 if __name__ == "__main__":
     unittest.main()
