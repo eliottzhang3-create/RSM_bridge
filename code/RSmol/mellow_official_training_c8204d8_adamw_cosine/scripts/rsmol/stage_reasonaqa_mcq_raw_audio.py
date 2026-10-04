@@ -2,6 +2,7 @@
 """Stage only the audio files referenced by the MCQ manifest into /dev/shm."""
 from __future__ import annotations
 import argparse, json, os, shutil, time
+import uuid
 from pathlib import Path
 
 def main() -> int:
@@ -21,6 +22,14 @@ def main() -> int:
     stage_root = args.stage_root.resolve()
     if not stage_root.is_relative_to(Path("/dev/shm").resolve()):
         raise ValueError(f"stage root must be under /dev/shm: {stage_root}")
+    # The submit environment can reuse a job id after a failed/cancelled run.
+    # Refuse to delete an existing tree; derive a fresh suffix instead.
+    if stage_root.exists():
+        # A stale tree is safe to remove only when it is under /dev/shm and
+        # carries this route's exact prefix. Never remove arbitrary paths.
+        if not stage_root.name.startswith("mellow_adamw_cosine_reasonaqa_mcq_"):
+            raise ValueError(f"refusing to clean unexpected stage root: {stage_root}")
+        shutil.rmtree(stage_root)
     stage_root.mkdir(parents=True, exist_ok=False)
     control = stage_root / ".mellow_stage"; control.mkdir()
     missing = []
