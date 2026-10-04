@@ -1,6 +1,84 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
-## 2026-10-01：文本 5-10x2-5、7 memory slots / 3 router groups 隔离路线
+## 2026-10-03：最新交接补充（优先于下方历史快照）
+
+本节只补充最近已经完成的路线和会影响下一次任务判断的当前事实。后面的按日期排列的小节仍然保留历史实验记录；如果历史快照与本节冲突，以本节、目标路线目录中的 README、远程 runtime config/report 和最终 checkpoint 审计为准。
+
+### 当前工作边界和远程资源
+
+- 本地工作区是 C:\Xlance\GZ_bridge\Recursive_SALM\RSM_bridge；远程代码仓库是 /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM，RSmol 代码位于 /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol。
+- 权重、原始音频、parquet 数据和训练输出只在远程服务器；本地主要保存核心代码、脚本、测试和文档。通过 GitHub 在本地和远程之间同步。
+- GPU 任务必须使用远程 vc submit/wrapper 入口；不要在登录节点直接运行 CUDA 训练。
+- 主要队列是 pdgpu-3090（文本、MeSH 音频和 official Mellow 路线）；AdamW/cosine 对比线和部分旧评测使用 pdgpu-5090。单 GPU 最多 8 个 CPU 核、32G 内存；完整约 70G 原始音频 staging 需要 8 卡节点约 256G。
+- 原始音频 staging 是每次作业在计算节点 /dev/shm 中重新建立的临时副本，作业结束后清理，不能理解为一次 staging 后永久可用。
+
+### 最近新增的文本路线：8 memory slots
+
+最近已经新增两条与既有 7-slot 路线隔离的文本路线；本地 Python 静态检查和 contract/schedule 检查已通过，但本交接时没有远程转换、smoke 或 formal PASS 证据：
+
+| 路线 | 逻辑轨迹 | memory slots | router groups | contract |
+|---|---:|---:|---:|---|
+| text_5_10x4_5_mesh_8slot | 5 + 10×4 + 5 = 50 | 8 | 5 | logical_50_physical_20_5_10x4_5_mesh_8slot_5router |
+| text_5_10x5_5_mesh_8slot | 5 + 10×5 + 5 = 60 | 8 | 6 | logical_60_physical_20_5_10x5_5_mesh_8slot_6router |
+
+对应文件分别使用独立的 _8slot 名称，例如：
+
+    code/RSmol/recursive_model_5_10x4_5_mesh_8slot.py
+    code/RSmol/scripts/convert_stepwise_5_10x4_5_mesh_8slot.py
+    code/RSmol/scripts/convert_stepwise_5_10x4_5_mesh_8slot.sh
+    code/RSmol/scripts/train_stage4_5_10x4_5_mesh_8slot_ddp.py
+    code/RSmol/scripts/train_stage4_5_10x4_5_mesh_8slot_ddp.sh
+    code/RSmol/run_stage4_5_10x4_5_mesh_8slot_formal_3090.sh
+    code/RSmol/text_5_10x4_5_mesh_8slot/README.md
+
+    code/RSmol/recursive_model_5_10x5_5_mesh_8slot.py
+    code/RSmol/scripts/convert_stepwise_5_10x5_5_mesh_8slot.py
+    code/RSmol/scripts/convert_stepwise_5_10x5_5_mesh_8slot.sh
+    code/RSmol/scripts/train_stage4_5_10x5_5_mesh_8slot_ddp.py
+    code/RSmol/scripts/train_stage4_5_10x5_5_mesh_8slot_ddp.sh
+    code/RSmol/run_stage4_5_10x5_5_mesh_8slot_formal_3090.sh
+    code/RSmol/text_5_10x5_5_mesh_8slot/README.md
+
+转换器从干净的 /hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10-5 出发；训练器会检查逻辑层数、物理层数、slot 数、router group 数和 contract。远程执行时要分别使用 x4/x5 的模型输出目录和训练输出目录，不要交叉使用 checkpoint。
+
+共同文本配置仍按这组 MeSH 文本线的合同：pdgpu-3090、8 ranks、microbatch 4、GA 32、effective global batch 1024、context 1024、BF16、AdamW betas (0.9, 0.95)、weight decay 0.1、1e-3 -> 1e-4 step-level cosine、三分之一参考 epoch 为 3,081 optimizer steps。具体以对应 wrapper 生成的 runtime config 为准。
+
+### 官方 Mellow 路线的当前状态
+
+官方 training 分支已经复制到并隔离在：
+
+    code/RSmol/mellow_official_training_c8204d8/
+    code/RSmol/mellow_official_training_c8204d8_adamw_cosine/
+
+目标 commit 为 c8204d8eb99b4384fd7a76ad57995731e0c0c2bf。此前 2026-09-29 历史快照中“尚未 vendoring”的表述已经过时：当前官方代码、独立环境适配、8 卡 staging、answer-token loss、full-checkpoint resume 修复和提交 wrapper 均已落地。官方 8 卡 staging smoke 和 full-checkpoint resume smoke 已由远程报告确认通过；30 epoch formal 是否完成仍必须查看远程最新报告，不能由 smoke 推断。
+
+官方路线保留官方数据/模型训练主语义，项目适配主要是远程路径、vc submit/8 卡 torchrun、每作业 raw-audio staging、输出目录和可恢复 checkpoint。音频 loss 使用右移后的 token-aligned NTP，只对 answer token（包括 EOS）计算；audio prefix 和 prompt 参与 attention，但 label mask 为 -100，padding 也不计 loss。
+
+官方路线环境为 mellow_c8204d8；AdamW/cosine 对比线只改变优化器和 scheduler：AdamW、betas (0.9,0.95)、weight decay 1e-4、max LR 1e-3、warmup 为 optimizer steps 的 5%、step-level cosine、min LR 5e-5。两条路线的模型、数据、staging、DDP、精度和 checkpoint 语义保持隔离。
+
+### 当前 MeSH 音频和评测约定
+
+已确认的 3-epoch 音频 checkpoint 包括：
+
+    /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x2_5_mesh_7slot_mellow_shared_store_configurable_epochs/formal_3epochs_20261002_metadatafix_v1/checkpoint-011343
+    /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x4_5_mesh_mellow_shared_store_configurable_epochs/formal_3epochs_20261002_configfix_v3/checkpoint-011343
+    /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x5_5_mesh_7slot_mellow_shared_store_configurable_epochs/formal_3epochs_20261002_151018142328161-20/checkpoint-011343
+
+MeSH fixed-260 音频路线通常使用 8 GPU × microbatch 8 × GA 4 = effective global batch 256；raw audio 从本次作业 staging 的 /dev/shm 读取。单音频样本第二个 audio slot 按当前 runtime_zero 合同使用 GPU 上创建的全零 waveform，不复制第一条真实音频；双音频样本使用两条真实音频。
+
+`text_5_10x3_5_mesh_7slot` 和 `audio_5_10x3_5_mesh_7slot_mellow_shared_store_configurable_epochs` 也有隔离实现；本交接时没有确认 x3 音频路线的最终正式 checkpoint，不要把它与下方已有 x2/x4/x5 checkpoint 混用或默认为已验证完成。
+
+code/RSmol/scripts/evaluate_mmau_test_mini_audio_mesh_shared_store.py 支持 x2_7slot、x4 和 x5_7slot 路线，当前评测约定为 FP32、fixed-260、单音频第二槽 GPU zero waveform、prompt 最大 129、最多生成 300 token，并同时保存 Mellow 作者回复计分和官方 MMAU 诊断。评测和 smoke 也必须通过 pdgpu-3090 wrapper；不要把旧 evaluator 的“第二槽复用第一音频”语义带到这条新合同。
+
+### 新会话最先做什么
+
+1. 先确认任务属于哪条隔离路线：循环次数、memory slots、router groups、文本或音频阶段。
+2. 读取目标路线目录内 README、model/converter/trainer/evaluator 和 wrapper；不要只依赖历史段落。
+3. 检查远程当前 checkpoint、runtime config、staging report 和 job 日志；本地静态检查不能记为远程 PASS。
+4. 新实验使用独立的模型输出、训练输出和评测输出目录；resume 必须是 schema-version 正确的 full checkpoint。
+5. 训练或评测完成后，把远程 report、checkpoint 和状态补回本 README。
+
+## 2026-10-01：文本 5-10x2-5、7 memory slots / 3 router groups 隔离路线（历史记录）
 
 新增独立路线 `text_5_10x2_5_mesh_7slot`，不修改原 5-slot 的 5-10x2-5，亦不修改
 5-10x4-5 或 5-10x6-5。模型为 20 个物理层、30 个逻辑层，轨迹 `5 + 10×2 + 5`；
@@ -14,8 +92,9 @@ AdamW 和 1e-3→1e-4 step-level cosine。直接读取持久 parquet，不做 `/
 正式目标为参考 9,244 optimizer steps 的三分之一，即 3,081 steps，warmup 155 steps，
 每 500 步及最后一步保存，保留最近 3 个完整 checkpoint。
 
-本地新增静态合同测试已通过，原 x2/x4 静态测试也通过；转换、GPU smoke、resume 和 formal
-尚未在远程运行。远程执行顺序、路径和配置见
+本地新增静态合同测试已通过；这段记录反映该路线刚落地时的状态。后续已产生对应文本
+初始化 checkpoint，具体当前路径和远程状态以路线 README、checkpoint audit 和最新报告为准。
+远程执行顺序、路径和配置见
 `code/RSmol/text_5_10x2_5_mesh_7slot/README.md`。远程 PASS 只能依据作业日志、report 和
 checkpoint audit 记录，不能由本地检查推断。
 
@@ -45,13 +124,13 @@ MMAR 完全复用官方 metadata 顺序、固定选项、32 kHz 首 10 秒/右�
 preflight、GPU smoke/full 和正式分数尚未运行，不能记为 PASS。完整合同、输出文件和
 smoke→full 命令见 `code/RSmol/qwen2_audio_instruct_eval/README.md`。
 
-## 2026-09-29：当前交接状态（新聊天优先阅读）
+## 2026-09-29：交接状态历史快照（已由 2026-10-03 补充覆盖）
 
 ### 仓库、远程环境与状态边界
 
 - 本地仓库只保存核心代码，不保存模型权重、正式数据集或远程训练输出。远程代码目录是 `/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol`，现有主环境是 `/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3/envs/rsmol`；代码通过 GitHub 在本地与远程之间同步。
 - 本次 README 更新前，`main` 与 `origin/main` 都位于 `a984b96`，工作区干净。该提交已经包含 physical-batch-32 probe 的短 job 名修复；本节 README 更新本身仍需由后续操作者按正常流程提交并推送。
-- README 中更早日期的小节是当时的历史快照。若旧小节与本节冲突，以本节和对应隔离路线的当前代码为准。远程作业是否完成只能由远程日志、report 和 checkpoint 证明，本地静态检查不能记作 GPU PASS。
+- 本节记录的是 2026-09-29 当时的状态，保留用于解释后续改动；当前状态请以本文最上方的 2026-10-03 补充、对应隔离路线 README 和最新远程 report/checkpoint 为准。
 
 ### 当前主线一：Mellow `official-faithful-v2` shared-store
 
@@ -75,11 +154,11 @@ bash run_audio_smollm2_mellow_official_faithful_v2_physical_batch32_probe_3090.s
 
 ### 下一条独立路线：直接使用 Mellow 官方 `training` 分支
 
-- 用户决定另开一条与现有 RSmol v2 完全隔离的路线，直接以官方仓库 `soham97/mellow` 的 `training` 分支为基础做全面复现。已确认和审计的目标 commit 同样是 `c8204d8eb99b4384fd7a76ad57995731e0c0c2bf`；截至本次交接，尚未把官方源码 vendoring、环境、配置或提交 wrapper 写入本仓库。
+- 用户决定另开一条与现有 RSmol v2 完全隔离的路线，直接以官方仓库 `soham97/mellow` 的 `training` 分支为基础做全面复现。已确认和审计的目标 commit 同样是 `c8204d8eb99b4384fd7a76ad57995731e0c0c2bf`。本条是 2026-09-29 的历史记录；官方源码、环境适配、staging、loss、resume 修复和 wrapper 后续已在本文顶部补充中落地。
 - 计划是在远程保留官方训练核心语义，只做基础设施适配：独立环境、远程文本模型和 HTSAT checkpoint 路径、ReasonAQA 数据路径、单节点 8-GPU `torchrun`、`vc submit` 的 `pdgpu-3090` 入口、日志与输出目录，以及将官方代码实际读取的原始音频文件预加载到节点共享 `/dev/shm`。
 - 严格官方复现线不要直接复用当前 v2 的预解码 waveform store，因为官方 dataset 在运行时通过音频文件路径加载、重采样和裁剪；改用 waveform store 会改变数据管线语义。现有 JSONL manifest 也未必符合官方 dataset 预期的 JSON 结构，需要先逐字段核对并生成独立的官方格式数据文件。
 - 不要直接修改现有 `rsmol` 环境。优先创建独立环境或克隆环境后审计依赖；官方 `requirements.txt` 带有平台和旧版本约束，不能在 Linux 上盲目整文件安装。也不要在未记录的情况下修复官方 sampler、batch、optimizer、scheduler、HTSAT mode、随机音频选择或 resume 语义，否则失去“直接官方代码复现”的可审计性。
-- 新聊天接手后的下一项工作应先完成官方源码、配置、dataset、DDP launcher 和依赖的逐文件核对，列出必须提供的远程真实路径，再设计隔离目录、环境安装步骤、数据 staging wrapper、1-GPU smoke、8-GPU smoke、checkpoint/reload smoke 和 formal 提交命令。未完成这些审计前不要直接启动长训练。
+- 当时新聊天接手后的下一项工作是完成上述官方源码、配置、dataset、DDP launcher 和依赖审计；该阶段已经推进到本文顶部记录的 vendored/staging/smoke/resume 状态。旧命令和旧状态保留作历史依据，不应覆盖当前路线 README 和远程 report。
 
 ### 新聊天的建议阅读顺序
 
@@ -89,7 +168,7 @@ bash run_audio_smollm2_mellow_official_faithful_v2_physical_batch32_probe_3090.s
 4. 最近五个提交：`457fdcf`、`700dca5`、`11036bc`、`d4fdd32`、`a984b96`。
 5. 再开始官方 Mellow `training` 分支的独立复现路线；不要继续修改正在运行的现有 formal 训练线，除非新的远程日志证明存在必须修复的问题。
 
-## 2026-09-28：Mellow official-faithful-v2 SmolLM2 shared-store 隔离训练线
+## 2026-09-28：Mellow official-faithful-v2 SmolLM2 shared-store 隔离训练线（历史记录）
 
 新增完全隔离的 audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs 路线。它修正旧 Mellow-faithful 路线相对官方运行时合同的三项偏差：冻结 HTSAT 参数但保持 HTSAT train mode、两个音频分隔符固定使用 token ID 0，以及使用锁定 Mellow commit c8204d8eb99b4384fd7a76ad57995731e0c0c2bf 的逐参数 GradNormTracker 代替固定 0.5 梯度裁剪。旧路线的 package、trainer、checkpoint 和 report 保持原合同，不能与 v2 混用。
 
@@ -97,7 +176,7 @@ v2 checkpoint 保存各 rank 的 HTSAT mutable buffers 和 GradNormTracker runni
 
 截至 2026-09-29，formal 已实际运行到首个 epoch 边界，暴露并修复了非连续 tensor 的 NCCL 广播问题；修复后的 formal 已从头重新启动，但 30-epoch 完成状态仍待远程 report 与最终 checkpoint 证明。另有隔离的 physical-batch-32 两步显存 probe 已就绪，远程结果尚未回传。完整合同和命令见 code/RSmol/audio_smollm2_135m_mellow_official_faithful_v2_shared_store_configurable_epochs/README.md。
 
-## 2026-09-28：x4 MeSH 音频 shared-store 隔离训练线
+## 2026-09-28：x4 MeSH 音频 shared-store 隔离训练线（历史记录）
 
 新增隔离路线 audio_5_10x4_5_mesh_mellow_shared_store_configurable_epochs。
 文本模型从 x4 三分之一 epoch 的 checkpoint-003081 仅加载模型与 tokenizer，音频训练
@@ -326,10 +405,9 @@ smoke/resume 跑通；本次 fixed260 合同尚待远程重新运行 20+2，旧 
 
 独立训练合同为 `component_partitions6_rank_ram_fixed260_runtime_silence_second_slot_answer_eos_v2`，LR 为 `1e-3` 经 5% warmup 后 cosine decay 到 `1e-4`。该线拥有独立 model/data 模块、trainer、checkpoint config、20+2 smoke 门禁、report、输出目录和 `pdgpu-5090` 提交入口；拒绝 compact MeSH、SmolLM2 和 recursive checkpoint 跨合同 resume。完整命令和审计项见 `code/RSmol/audio_5_10x2_5_mesh_mellow_silence_slot/README.md`。
 
-> 最后同步：2026-09-23
-> 本文件是新 Codex 会话的首要交接依据。新会话必须先完整阅读本文，再阅读“当前主线文件”中列出的代码与最新远程 report。若本文、旧聊天和代码冲突，以当前代码行为与最新远程证据为准，并及时把差异补回本文。
+> 历史同步：2026-09-23。本文件仍是新 Codex 会话的首要交接依据，但当前状态以本文最上方的 2026-10-03 补充、当前代码行为和最新远程 report 为准。
 
-## 0. 当前状态：先读这一节
+## 历史状态快照（截至 2026-09-23；当前状态先读 2026-10-03 补充）
 
 > 状态口径：`远程 PASS` 只表示已有真实 report/log/checkpoint 证据；`代码就绪` 表示本地实现和静态检查完成，不能写成 GPU PASS。新 Codex 必须先读本节，再读对应路线的代码和测试。
 
@@ -441,7 +519,7 @@ conda 环境:
 当前正式 wrapper 资源：
 
 ```text
-queue: pdgpu-5090
+queue: route-specific; current MeSH text/audio and official Mellow use pdgpu-3090, while selected comparison/evaluation routes use pdgpu-5090
 image: docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1
 resources: -c 32 -m 256G -g 8 -n 1
 ```
@@ -456,8 +534,11 @@ resources: -c 32 -m 256G -g 8 -n 1
 /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/
 formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244
 
-Mellow 官方代码:
+Mellow 官方代码（历史 checkout；当前 vendored 训练目录见上方 2026-10-03 补充）:
 /hpc_stor03/sjtu_home/jinwei.zhang/code/mellow-main
+
+当前 vendored Mellow training:
+/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol/mellow_official_training_c8204d8
 
 HTSAT 官方代码:
 /hpc_stor03/sjtu_home/jinwei.zhang/code/HTS-Audio-Transformer-main
@@ -1373,9 +1454,9 @@ git diff --check
 2. 执行 `git status --short`，保护用户已有修改；不要 reset/checkout 覆盖。
 3. 阅读目标路线的 model/data/trainer/README/static test，不要只根据 README 猜代码。
 4. 明确任务属于六分区正式训练、shared-store、online、silence-slot、历史 PERF20、评测，还是固定 5-10-5/SmolLM2 对照。
-5. 当前 MeSH 新训练默认文本初始化是第二轮 MeSH `checkpoint-009244`；已有音频 checkpoint 只能按其 contract 作为 init/resume。
+5. 旧六分区/固定 MeSH 音频训练默认文本初始化是第二轮 MeSH `checkpoint-009244`；新 7-slot/8-slot 文本转换和各音频路线必须按各自 README 指定的来源 checkpoint，已有音频 checkpoint 只能按其 contract 作为 init/resume。
 6. 区分 `--model-path`、`--init-from-audio-checkpoint` 与 `--resume-from`。
-7. 默认主线使用 partitioned trainer；shared-store 和 online trainer 是隔离路线，不要交叉使用 smoke report 或 checkpoint。
+7. 六分区仍是历史默认训练主线；shared-store、online、official Mellow 以及新的 7/8-slot 文本/音频路线都是隔离路线，不要交叉使用 smoke report 或 checkpoint。
 8. shared-store 必须确认 v3 store、manifest SHA、`/dev/shm` 空间和 8 rank 同 inode 审计。
 9. 任何正式提交都要核对两个同路线 smoke report 的实际绝对路径、seed、contract 和 `PASS`。
 10. 远程失败时先找最早的 Python traceback/rank；末尾 NCCL `ChildFailedError` 通常只是连带结果。
