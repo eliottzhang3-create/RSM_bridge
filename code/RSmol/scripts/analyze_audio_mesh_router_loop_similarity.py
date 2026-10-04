@@ -37,6 +37,31 @@ ROW_NUMBERS = (55, 550, 5500, 55000, 100000)  # user-facing, one-based
 AUDIO_TOKENS = 129
 PREFIX_TOKENS = 260
 REGIONS = ("audio", "text_prompt", "generation")
+DEFAULT_MELLOW_SOURCE_ROOT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/mellow-main")
+DEFAULT_HTSAT_CHECKPOINT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt")
+
+
+def _validate_mellow_source_root(root: Path) -> Path:
+    root = root.expanduser().resolve()
+    package = root / "mellow"
+    required = (package / "__init__.py", package / "model" / "htsat.py")
+    if not all(path.is_file() for path in required):
+        candidates = [
+            root,
+            root / "mellow-main",
+            root.parent / "mellow-main",
+            root.parent / "Mellow-v0",
+        ]
+        for candidate in candidates:
+            candidate = candidate.resolve()
+            if all(path.is_file() for path in (candidate / "mellow" / "__init__.py", candidate / "mellow" / "model" / "htsat.py")):
+                return candidate
+        raise FileNotFoundError(
+            "Mellow source checkout is not importable: expected "
+            f"{package / 'model' / 'htsat.py'}; pass --mellow-root pointing to the Git checkout "
+            "that contains mellow/model/htsat.py, not the Mellow-v0 model snapshot"
+        )
+    return root
 
 
 def _float_cosine(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -388,8 +413,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dataset", type=Path, default=Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/reasonaqa/test.json"))
     parser.add_argument("--audio-root", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--mellow-root", type=Path, default=Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/Mellow-v0"))
-    parser.add_argument("--htsat-checkpoint", type=Path, default=Path(evaluator.DEFAULT_HTSAT))
+    parser.add_argument("--mellow-root", type=Path, default=DEFAULT_MELLOW_SOURCE_ROOT)
+    parser.add_argument("--htsat-checkpoint", type=Path, default=DEFAULT_HTSAT_CHECKPOINT)
     parser.add_argument("--max-prompt-tokens", type=int, default=129)
     parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--x2-checkpoint", type=Path, default=Path(evaluator.DEFAULT_CHECKPOINTS["x2_7slot"]))
@@ -401,6 +426,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("router analysis requires CUDA")
+    args.mellow_root = _validate_mellow_source_root(args.mellow_root)
+    if not args.htsat_checkpoint.is_file():
+        raise FileNotFoundError(f"HTSAT checkpoint not found: {args.htsat_checkpoint}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     rows = _json_rows(args.dataset)
     zero_indices = [number - 1 for number in ROW_NUMBERS]
