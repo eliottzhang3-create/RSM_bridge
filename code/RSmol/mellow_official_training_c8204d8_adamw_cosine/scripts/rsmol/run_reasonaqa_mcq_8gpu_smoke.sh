@@ -25,6 +25,7 @@ assert c.get("schema_version")==2 and c.get("num_epochs")==2 and c.get("total_st
 assert c["optimizer_contract"]["type"]=="AdamW" and tuple(c["optimizer_contract"]["betas"])==(0.9,0.95)
 s=c["scheduler"]; assert s["max_lr"]==1e-4 and s["min_lr"]==1e-5 and s["scheduler_type"]=="step_cosine_warmup"
 assert len(c["random_state_by_rank"])==8 and c["total_step"]>0
+assert c.get("loss_reduction") == "global_token_mean"
 print("MCQ smoke checkpoint audit PASS")
 PY
 rm -rf "$STAGE_ROOT"

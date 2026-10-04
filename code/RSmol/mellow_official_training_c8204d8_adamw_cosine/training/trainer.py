@@ -421,6 +421,20 @@ class Trainer:
             raise ValueError("answer batch contains no valid target tokens")
         return (token_loss * valid).sum() / valid_count
 
+    @staticmethod
+    def _answer_token_loss_sum(logits, target, attention_mask, ignore_index):
+        """Return valid CE sum and count for global-token mean reduction."""
+        if logits.ndim != 3 or target.ndim != 2 or attention_mask.ndim != 2:
+            raise ValueError("expected logits [B,T,V], target [B,T], mask [B,T]")
+        if logits.shape[:2] != target.shape or target.shape != attention_mask.shape:
+            raise ValueError("answer loss shape mismatch")
+        valid = attention_mask.to(dtype=torch.bool) & target.ne(ignore_index)
+        token_loss = F.cross_entropy(logits.transpose(1, 2), target, reduction="none", ignore_index=ignore_index)
+        count = valid.sum().to(dtype=torch.float32)
+        if count.item() <= 0:
+            raise ValueError("answer batch contains no valid target tokens")
+        return (token_loss * valid).sum(), count
+
     def train(self):
         self.logger.info("Training Mellow with data: %s", self.config["data"]["datafiles"])
         self.config["model"]["decoder"]["prefix_dim"] = self.config["model"]["encoder"]["d_proj"]
@@ -692,10 +706,17 @@ class Trainer:
             data_iterator = iter(data_loader)
             for ii in range(num_batches_per_epoch):
                 optimizer.zero_grad(set_to_none=True)
-                accumulated_loss = torch.zeros((), device=self.device, dtype=torch.float32)
+                microbatches = [next(data_iterator) for _ in range(gradient_accumulation_steps)]
+                local_token_count = torch.stack([
+                    batch['answer']['attention_mask'].sum().to(self.device, dtype=torch.float32)
+                    for batch in microbatches
+                ]).sum()
+                global_token_count = self.distributed.all_reduce(local_token_count.detach().clone())
+                if global_token_count.item() <= 0:
+                    raise ValueError("gradient accumulation window has no valid answer tokens")
+                accumulated_token_loss = torch.zeros((), device=self.device, dtype=torch.float32)
 
-                for micro_idx in range(gradient_accumulation_steps):
-                    batch_data_dict = next(data_iterator)
+                for micro_idx, batch_data_dict in enumerate(microbatches):
                     batch_audio1 = batch_data_dict['waveform1']
                     batch_audio2 = batch_data_dict['waveform2']
                     batch_input = batch_data_dict['input']
@@ -737,11 +758,11 @@ class Trainer:
                         logits = model_outputs.logits[:, prefix_length - 1: -1]
                         target = input_dict["answer"]["input_ids"]
                         answer_mask = answer_attention_mask.to(self.device)
-                        loss = self._answer_token_loss(
+                        token_loss_sum, _ = self._answer_token_loss_sum(
                             logits, target, answer_mask, ignore_index
                         )
-                        accumulated_loss = accumulated_loss + loss.detach().float()
-                        grad_scaler.scale(loss / gradient_accumulation_steps).backward()
+                        accumulated_token_loss = accumulated_token_loss + token_loss_sum.detach().float()
+                        grad_scaler.scale(token_loss_sum / global_token_count).backward()
 
                     del batch_audio1, batch_audio2, batch_input, batch_answer
                     del input_dict, model_outputs
@@ -756,9 +777,8 @@ class Trainer:
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
 
-                loss = self.distributed.all_reduce(
-                    (accumulated_loss / gradient_accumulation_steps).detach()
-                ).item()
+                global_token_loss = self.distributed.all_reduce(accumulated_token_loss.detach())
+                loss = (global_token_loss / global_token_count).item()
                 accerr_epo += loss
 
                 if loss_tracker is not None:
@@ -1091,6 +1111,7 @@ class Trainer:
                 "world_size": int(self.distributed.world_size()),
                 "gradient_accumulation_steps": int(self.config["train"].get("gradient_accumulation_steps", 1)),
             },
+            "loss_reduction": "global_token_mean",
             "random_state_by_rank": rank_random_states,
         }
         temporary_path = f"{checkpoint_path}.tmp-{os.getpid()}"
