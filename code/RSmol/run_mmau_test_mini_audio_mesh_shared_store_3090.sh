@@ -26,11 +26,17 @@ if [[ -z "$CHECKPOINT" ]]; then
     x4)
       CHECKPOINT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x4_5_mesh_mellow_shared_store_configurable_epochs/formal_3epochs_20261002_configfix_v3/checkpoint-011343"
       ;;
+    x4_8slot)
+      CHECKPOINT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x4_5_mesh_8slot_mellow_shared_store_configurable_epochs/formal_3epochs_20261004_x4_8slot_v2/checkpoint-011343"
+      ;;
     x3_7slot)
       CHECKPOINT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x3_5_mesh_7slot_mellow_shared_store_configurable_epochs/formal_3epochs_20261003_125649710077883-20/checkpoint-011343"
       ;;
     x5_7slot)
       CHECKPOINT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x5_5_mesh_7slot_mellow_shared_store_configurable_epochs/formal_3epochs_20261002_151018142328161-20/checkpoint-011343"
+      ;;
+    x5_8slot)
+      CHECKPOINT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x5_5_mesh_8slot_mellow_shared_store_configurable_epochs/formal_3epochs_20261004_x5_8slot_v1/checkpoint-011343"
       ;;
     *)
       echo "unsupported RSMOL_MMAU_ROUTE=$ROUTE" >&2

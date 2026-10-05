@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the x2/x3/x4/x5 fixed-260 Audio MeSH checkpoints on MMAU.
+"""Evaluate the x2/x3/x4/x5 7-slot and 8-slot fixed-260 Audio MeSH checkpoints on MMAU.
 
 The benchmark traversal and official scorer are shared with the existing
 MMAU evaluator.  This adapter owns the route-specific MeSH loaders and enforces
@@ -92,6 +92,27 @@ ROUTES: dict[str, RouteSpec] = {
         memory_slots=7,
         router_groups=5,
     ),
+    "x4_8slot": RouteSpec(
+        name="x4_8slot",
+        audio_package="audio_5_10x4_5_mesh_8slot_mellow_shared_store_configurable_epochs",
+        audio_model_module="audio_5_10x4_5_mesh_8slot_mellow_shared_store_configurable_epochs.model",
+        text_model_module="recursive_model_5_10x4_5_mesh_8slot",
+        audio_config_filename="audio_mesh_x4_8slot_fixed260_zero_slot_config.json",
+        audio_model_class="AudioMeshX4EightSlotZeroModel",
+        audio_config_class="AudioMeshX4EightSlotZeroConfig",
+        training_contract=(
+            "node_shared_unique_store_fullshuffle_fixed260_runtime_zero_second_slot_"
+            "answer_eos_x4_8slot_v1"
+        ),
+        audio_architecture_contract=(
+            "logical_50_physical_20_5_10x4_5_mesh_8slot_audio_mellow_"
+            "fixed260_runtime_zero_second_slot"
+        ),
+        logical_layer_count=50,
+        recursive_loops=4,
+        memory_slots=8,
+        router_groups=5,
+    ),
     "x3_7slot": RouteSpec(
         name="x3_7slot",
         audio_package="audio_5_10x3_5_mesh_7slot_mellow_shared_store_configurable_epochs",
@@ -134,6 +155,27 @@ ROUTES: dict[str, RouteSpec] = {
         memory_slots=7,
         router_groups=6,
     ),
+    "x5_8slot": RouteSpec(
+        name="x5_8slot",
+        audio_package="audio_5_10x5_5_mesh_8slot_mellow_shared_store_configurable_epochs",
+        audio_model_module="audio_5_10x5_5_mesh_8slot_mellow_shared_store_configurable_epochs.model",
+        text_model_module="recursive_model_5_10x5_5_mesh_8slot",
+        audio_config_filename="audio_mesh_x5_8slot_fixed260_zero_slot_config.json",
+        audio_model_class="AudioMeshX5EightSlotZeroModel",
+        audio_config_class="AudioMeshX5EightSlotZeroConfig",
+        training_contract=(
+            "node_shared_unique_store_fullshuffle_fixed260_runtime_zero_second_slot_"
+            "answer_eos_x5_8slot_v1"
+        ),
+        audio_architecture_contract=(
+            "logical_60_physical_20_5_10x5_5_mesh_8slot_6router_audio_mellow_"
+            "fixed260_runtime_zero_second_slot"
+        ),
+        logical_layer_count=60,
+        recursive_loops=5,
+        memory_slots=8,
+        router_groups=6,
+    ),
 }
 
 DEFAULT_CHECKPOINTS = {
@@ -156,6 +198,16 @@ DEFAULT_CHECKPOINTS = {
         "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
         "audio_5_10x5_5_mesh_7slot_mellow_shared_store_configurable_epochs/"
         "formal_3epochs_20261002_151018142328161-20/checkpoint-011343"
+    ),
+    "x4_8slot": (
+        "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
+        "audio_5_10x4_5_mesh_8slot_mellow_shared_store_configurable_epochs/"
+        "formal_3epochs_20261004_x4_8slot_v2/checkpoint-011343"
+    ),
+    "x5_8slot": (
+        "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
+        "audio_5_10x5_5_mesh_8slot_mellow_shared_store_configurable_epochs/"
+        "formal_3epochs_20261004_x5_8slot_v1/checkpoint-011343"
     ),
 }
 
@@ -202,6 +254,10 @@ def _infer_route(raw: Sequence[str]) -> str:
             return "x2_7slot"
         if "10x3" in normalized and "7slot" in normalized:
             return "x3_7slot"
+        if "10x4" in normalized and "8slot" in normalized:
+            return "x4_8slot"
+        if "10x5" in normalized and "8slot" in normalized:
+            return "x5_8slot"
         if "10x4" in normalized:
             return "x4"
         if "10x5" in normalized and "7slot" in normalized:
