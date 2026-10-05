@@ -488,6 +488,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 print(json.dumps({"model": name, "samples": len(selected)}, ensure_ascii=False), flush=True)
         merged = RouterRecorder.__new__(RouterRecorder)
         merged.stats = defaultdict(lambda: {"sum": torch.zeros(7), "count": 0})
+        merged.sample_stats = defaultdict(lambda: {"sum": torch.zeros(7), "count": 0})
         for recorder in recorders.values():
             for key, entry in recorder.stats.items():
                 merged.stats[key]["sum"] += entry["sum"]
