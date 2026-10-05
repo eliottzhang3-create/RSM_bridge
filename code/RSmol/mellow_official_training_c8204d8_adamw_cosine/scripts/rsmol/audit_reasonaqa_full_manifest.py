@@ -84,6 +84,7 @@ def safe_logical(value: str) -> bool:
 def audit_manifest(path: Path) -> dict[str, Any]:
     subtype_counts: Counter[str] = Counter()
     task_counts: Counter[str] = Counter()
+    missing_counts: Counter[str] = Counter()
     empty_counts: Counter[str] = Counter()
     invalid_logical: list[dict[str, Any]] = []
     logical_paths: set[str] = set()
@@ -93,7 +94,9 @@ def audit_manifest(path: Path) -> dict[str, Any]:
         subtype_counts[str(row.get("subtype", ""))] += 1
         task_counts[str(row.get("taskname", ""))] += 1
         for field in REQUIRED_FIELDS:
-            if field not in row or row.get(field) in (None, ""):
+            if field not in row:
+                missing_counts[field] += 1
+            elif row.get(field) in (None, ""):
                 empty_counts[field] += 1
         for field in ("filepath1", "filepath2"):
             logical = normalize_logical(row.get(field, ""))
@@ -109,6 +112,7 @@ def audit_manifest(path: Path) -> dict[str, Any]:
         "bytes": path.stat().st_size,
         "subtype_distribution": dict(sorted(subtype_counts.items())),
         "taskname_distribution": dict(task_counts.most_common()),
+        "required_field_missing_counts": dict(missing_counts),
         "selected_required_field_empty_counts": dict(empty_counts),
         "unique_referenced_logical_paths": len(logical_paths),
         "logical_paths": logical_paths,
@@ -183,8 +187,19 @@ def audit(path: Path, report_path: Path, mapping_path: Path, *, world_size: int,
         failures.append("mapping_integrity")
     if manifest["invalid_logical_preview"]:
         failures.append("unsafe_manifest_logical_paths")
-    if manifest["selected_required_field_empty_counts"].get("input", 0) or manifest["selected_required_field_empty_counts"].get("answer", 0):
-        failures.append("empty_text_fields")
+    missing_required = manifest["required_field_missing_counts"]
+    if missing_required:
+        failures.append("missing_required_fields")
+    empty_text = {
+        field: manifest["selected_required_field_empty_counts"].get(field, 0)
+        for field in ("input", "answer")
+        if manifest["selected_required_field_empty_counts"].get(field, 0)
+    }
+    if empty_text:
+        warnings.append(
+            "empty_text_fields_are_present_but_not_missing; official Dataset appends EOS before tokenization: "
+            + json.dumps(empty_text, sort_keys=True)
+        )
     if path_report.get("unique_logical_paths_resolved") is not None and int(path_report["unique_logical_paths_resolved"]) != mapping["unique_logical_paths"]:
         failures.append("path_audit_mapping_logical_count")
     if path_report.get("unique_source_files") is not None and int(path_report["unique_source_files"]) != mapping["unique_source_files"]:

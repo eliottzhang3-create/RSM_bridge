@@ -64,6 +64,26 @@ def _validate_mellow_source_root(root: Path) -> Path:
     return root
 
 
+def _checkpoint_mellow_root(checkpoint: Path, requested: Path) -> Path:
+    config_candidates = (checkpoint / "audio_mesh_config.json", checkpoint / "audio_mesh_x2_7slot_fixed260_zero_slot_config.json", checkpoint / "audio_mesh_x3_7slot_fixed260_zero_slot_config.json", checkpoint / "audio_mesh_x4_fixed260_zero_slot_config.json")
+    for config_path in config_candidates:
+        if not config_path.is_file():
+            continue
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        saved = ((config.get("mellow_provenance") or {}).get("mellow_root"))
+        if saved:
+            saved_root = Path(str(saved)).expanduser()
+            if saved_root.is_dir():
+                try:
+                    return _validate_mellow_source_root(saved_root)
+                except FileNotFoundError:
+                    pass
+    return _validate_mellow_source_root(requested)
+
+
 def _float_cosine(a: torch.Tensor, b: torch.Tensor) -> float:
     a = a.float().reshape(-1)
     b = b.float().reshape(-1)
@@ -426,7 +446,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("router analysis requires CUDA")
-    args.mellow_root = _validate_mellow_source_root(args.mellow_root)
     if not args.htsat_checkpoint.is_file():
         raise FileNotFoundError(f"HTSAT checkpoint not found: {args.htsat_checkpoint}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -444,7 +463,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     snapshots: dict[str, dict[str, Any]] = {}
     try:
         for name, (checkpoint, spec) in checkpoints.items():
-            load_args = argparse.Namespace(checkpoint=checkpoint, mellow_root=args.mellow_root, htsat_checkpoint=args.htsat_checkpoint)
+            mellow_root = _checkpoint_mellow_root(checkpoint, args.mellow_root)
+            load_args = argparse.Namespace(checkpoint=checkpoint, mellow_root=mellow_root, htsat_checkpoint=args.htsat_checkpoint)
             model, tokenizer, device, _config = evaluator._load_runtime_model(load_args, spec)
             models[name], tokenizers[name], devices[name] = model, tokenizer, device
             recorders[name] = RouterRecorder(model, name, spec.router_groups)
