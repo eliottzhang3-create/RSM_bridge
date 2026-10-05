@@ -8,12 +8,14 @@ import torch
 
 def main() -> int:
     # Unequal token counts make the old mean-of-means visibly different.
-    microbatch_sums = torch.tensor([2.0, 6.0], dtype=torch.float32)
+    microbatch_sums = torch.tensor([1.0, 6.0], dtype=torch.float32)
     microbatch_counts = torch.tensor([1.0, 3.0], dtype=torch.float32)
     token_mean = microbatch_sums.sum() / microbatch_counts.sum()
     mean_of_means = (microbatch_sums / microbatch_counts).mean()
-    if not torch.allclose(token_mean, torch.tensor(2.0)):
+    if not torch.allclose(token_mean, torch.tensor(1.75)):
         raise AssertionError(f"unexpected token mean: {token_mean}")
+    if not torch.allclose(mean_of_means, torch.tensor(1.5)):
+        raise AssertionError(f"unexpected mean-of-means: {mean_of_means}")
     if torch.allclose(token_mean, mean_of_means):
         raise AssertionError("audit case did not distinguish token mean from mean-of-means")
 
