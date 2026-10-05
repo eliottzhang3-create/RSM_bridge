@@ -29,7 +29,6 @@ from models.model import get_model_class
 from data.sampler import CustomDistributedSampler
 from utils.utils import retry, numparams, group_weight_decay_params
 from utils.utils import GradNormTracker, LossTrackingLRScheduler, LazyConversionDict
-from metrics.get_metrics import Metric
 from models.generate import generate_greedy, generate_greedy_batch
 from models.recursive_text import EXPECTED_CHECKPOINT_CONTRACT
 
@@ -927,6 +926,8 @@ class Trainer:
 
     # pylint: disable=too-many-locals
     def evaluate_checkpoint(self):
+        from metrics.get_metrics import Metric
+
         self.logger.info("Validate model with data: %s", self.config["data"]["datafiles"])
         self.config["model"]["decoder"]["prefix_dim"] = self.config["model"]["encoder"]["d_proj"]
 
@@ -997,6 +998,8 @@ class Trainer:
             
     # pylint: disable=too-many-locals
     def evaluate_experiment(self):
+        from metrics.get_metrics import Metric
+
         self.logger.info("Evaluate model with data: %s", self.config["data"]["datafiles"])
         self.config["model"]["decoder"]["prefix_dim"] = self.config["model"]["encoder"]["d_proj"]
 
