@@ -36,7 +36,6 @@ from audit_mellow_v0_artifact import (  # noqa: E402
     DEFAULT_BASE_SMOLLM2,
     DEFAULT_MELLOW_CHECKPOINT,
     DEFAULT_MELLOW_SNAPSHOT,
-    DEFAULT_MELLOW_SOURCE_ROOT,
     SOURCE_PREFIXES as NATIVE_SOURCE_PREFIXES,
     _instantiate_native_model,
     _load_state,
@@ -63,6 +62,12 @@ from recursive_model_5_10x2_5_mesh import (  # noqa: E402
 DEFAULT_REPORT = Path(
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/preflight/"
     "mellow_v0_mesh_initialization_audit.json"
+)
+# This is the complete Mellow source checkout.  The Hugging Face snapshot
+# containing config.json and v0.ckpt is a separate artifact and must not be
+# used as --mellow-source-root.
+DEFAULT_MELLOW_SOURCE_ROOT = Path(
+    "/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/mellow-main"
 )
 
 ARTIFACT_CONTRACT = "mellow_v0_to_5_10x2_5_mesh_initialization_audit_v1"
