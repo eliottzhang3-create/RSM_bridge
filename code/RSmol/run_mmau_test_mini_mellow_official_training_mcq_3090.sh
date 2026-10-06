@@ -3,11 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-CHECKPOINT="${RSMOL_MELLOW_MCQ_CHECKPOINT_FILE:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_5090/mcq_formal_global_token_5epochs_v2/checkpoints/mellow_adamw_cosine_reasonaqa_mcq_formal_20_20261004_173020762176060_26018/model--epo-3.ckpt}"
-RUNTIME_CONFIG="${RSMOL_MELLOW_MCQ_RUNTIME_CONFIG:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_5090/mcq_formal_global_token_5epochs_v2/runtime_mcq_3epochs.yaml}"
+CHECKPOINT="${RSMOL_MELLOW_MCQ_CHECKPOINT_FILE:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_3090/mcq_formal_5epochs_20261006_010205/checkpoints/mellow_adamw_cosine_reasonaqa_mcq_formal_20_20261005_170211427784553_24576/model--epo-5.ckpt}"
+RUNTIME_CONFIG="${RSMOL_MELLOW_MCQ_RUNTIME_CONFIG:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_3090/mcq_formal_5epochs_20261006_010205/runtime_mcq_5epochs.yaml}"
 ROUTE_ROOT="${RSMOL_MELLOW_MCQ_ROUTE_ROOT:-$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine}"
 MODE="${RSMOL_MELLOW_MCQ_EVAL_MODE:-smoke}"
-OUTPUT_DIR="${RSMOL_MELLOW_MCQ_MMAU_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_5090/mcq_formal_global_token_5epochs_v2/eval/mmau_test_mini_official_training_v1}"
+OUTPUT_DIR="${RSMOL_MELLOW_MCQ_MMAU_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_3090/mcq_formal_5epochs_20261006_010205/eval/mmau_test_mini_official_training_v1}"
 
 if [[ "$MODE" != "smoke" && "$MODE" != "full" ]]; then
   echo "RSMOL_MELLOW_MCQ_EVAL_MODE must be smoke or full: $MODE" >&2
@@ -33,4 +33,3 @@ RSMOL_MELLOW_RUNTIME_CONFIG="$RUNTIME_CONFIG" \
 RSMOL_MELLOW_ROUTE_ROOT="$ROUTE_ROOT" \
 RSMOL_MELLOW_EVAL_OUTPUT_DIR="$OUTPUT_DIR" \
   bash "$SCRIPT_DIR/run_mmau_test_mini_mellow_official_training_3090.sh" "$@"
-
