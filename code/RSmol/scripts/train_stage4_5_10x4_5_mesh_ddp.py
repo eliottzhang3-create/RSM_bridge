@@ -46,11 +46,11 @@ DEFAULT_MICRO_BATCH_SIZE = 4
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 32
 DEFAULT_CONTEXT_LENGTH = 1024
 DEFAULT_STEPS_PER_EPOCH = 9_244
-DEFAULT_FORMAL_EPOCHS = 1
-DEFAULT_FORMAL_OPTIMIZER_STEPS = 3_081
-DEFAULT_FORMAL_WARMUP_STEPS = 155
+DEFAULT_FORMAL_EPOCHS = 2
+DEFAULT_FORMAL_OPTIMIZER_STEPS = 18_488
+DEFAULT_FORMAL_WARMUP_STEPS = 925
 DEFAULT_MAX_LR = 1e-3
-DEFAULT_MIN_LR = 1e-4
+DEFAULT_MIN_LR = 5e-5
 DEFAULT_SAVE_EVERY = 500
 DEFAULT_CHECKPOINT_RETENTION = 3
 DEFAULT_LOG_INTERVAL_STEPS = 10
@@ -121,13 +121,13 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
     max_steps = args.max_optimizer_steps if args.max_optimizer_steps is not None else (DEFAULT_FORMAL_OPTIMIZER_STEPS if gate == "FORMAL" else (2 if gate == "E" else (10 if gate == "D" else 2)))
     if gate == "FORMAL":
         if (args.world_size, args.micro_batch_size, args.gradient_accumulation_steps, max_steps, args.scheduler_total_steps, args.warmup_steps) != (8, 4, 32, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_WARMUP_STEPS):
-            raise ValueError("FORMAL requires 8 ranks, microbatch=4, GA=32, 3081 steps, scheduler_total_steps=3081, warmup=155")
+            raise ValueError("FORMAL requires 8 ranks, microbatch=4, GA=32, 18488 steps, scheduler_total_steps=18488, warmup=925")
         if (args.steps_per_epoch, args.epochs) != (DEFAULT_STEPS_PER_EPOCH, DEFAULT_FORMAL_EPOCHS):
-            raise ValueError("FORMAL requires reference steps_per_epoch=9244 and epochs=1")
+            raise ValueError("FORMAL requires steps_per_epoch=9244 and epochs=2")
         if not math.isfinite(args.max_lr) or not math.isfinite(args.min_lr) or args.max_lr <= 0.0 or args.min_lr <= 0.0 or args.min_lr >= args.max_lr:
             raise ValueError("FORMAL requires finite positive learning rates with 0 < min_lr < max_lr")
         if not math.isclose(args.max_lr, DEFAULT_MAX_LR) or not math.isclose(args.min_lr, DEFAULT_MIN_LR):
-            raise ValueError("FORMAL requires max_lr=1e-3 and min_lr=1e-4")
+            raise ValueError("FORMAL requires max_lr=1e-3 and min_lr=5e-5")
         if args.save_every != 500:
             raise ValueError("FORMAL requires save_every=500")
     if gate == "E" and args.resume_from is None:
@@ -185,13 +185,14 @@ def _manifest(data_dir: Path) -> list[Path]:
 
 
 class DistributedParquetStream:
-    """Small deterministic row cursor over fixed parquet shard order."""
+    """Deterministic per-rank parquet cursor with an epoch-specific shard order."""
 
-    cursor_policy = "fixed_sorted_shards_rank_round_robin_row_cursor"
+    cursor_policy = "rank_round_robin_epoch_shuffled_shards_row_cursor_v2"
 
     def __init__(self, paths: list[Path], tokenizer: Any, *, rank: int, world_size: int, batch_size: int, context_length: int, pad_token_id: int, seed: int = 0) -> None:
         self.paths = paths
-        self.local_paths = [p for i, p in enumerate(paths) if i % world_size == rank]
+        self.assigned_paths = [p for i, p in enumerate(paths) if i % world_size == rank]
+        self.local_paths = list(self.assigned_paths)
         self.tokenizer = tokenizer
         self.rank = rank
         self.batch_size = batch_size
@@ -201,22 +202,48 @@ class DistributedParquetStream:
         self.row_offset = 0
         self.microbatches_seen = 0
         self.seed = seed
+        self.epoch = 0
+
+    def reset_epoch(self, epoch: int) -> None:
+        if epoch < 0:
+            raise ValueError("epoch must be nonnegative")
+        self.epoch = epoch
+        self.local_paths = list(self.assigned_paths)
+        if epoch > 0:
+            random.Random(self.seed + epoch * 1_000_003 + self.rank).shuffle(self.local_paths)
+        self.shard_index = 0
+        self.row_offset = 0
 
     def cursor(self) -> dict[str, Any]:
-        return {"rank": self.rank, "shard_index": self.shard_index, "row_offset": self.row_offset, "microbatches_seen": self.microbatches_seen, "policy": self.cursor_policy}
+        return {"rank": self.rank, "epoch": self.epoch, "shard_order": [str(path) for path in self.local_paths], "shard_index": self.shard_index, "row_offset": self.row_offset, "microbatches_seen": self.microbatches_seen, "policy": self.cursor_policy}
 
     def restore_cursor(self, value: dict[str, Any] | None) -> None:
         if value:
+            if int(value.get("rank", -1)) != self.rank or value.get("policy") != self.cursor_policy:
+                raise ValueError("checkpoint data cursor rank or policy differs")
+            self.reset_epoch(int(value["epoch"]))
+            if value.get("shard_order") != [str(path) for path in self.local_paths]:
+                raise ValueError("checkpoint data cursor shard order differs")
             self.shard_index = int(value.get("shard_index", 0))
             self.row_offset = int(value.get("row_offset", 0))
             self.microbatches_seen = int(value.get("microbatches_seen", 0))
+            if not 0 <= self.shard_index <= len(self.local_paths) or self.row_offset < 0:
+                raise ValueError("checkpoint data cursor position is invalid")
 
     def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
         import pyarrow.parquet as pq
         while self.shard_index < len(self.local_paths):
             path = self.local_paths[self.shard_index]
             parquet = pq.ParquetFile(path)
+            skipped_rows = 0
+            start_offset = self.row_offset
             for batch in parquet.iter_batches(batch_size=self.batch_size, columns=["text"], use_threads=False):
+                batch_rows = batch.num_rows
+                if skipped_rows < start_offset:
+                    skipped_rows += batch_rows
+                    if skipped_rows > start_offset:
+                        raise ValueError("checkpoint row offset does not match a parquet batch boundary")
+                    continue
                 texts = [str(x or "") for x in batch.column("text").to_pylist()]
                 self.row_offset += len(texts)
                 encoded = self.tokenizer(texts, max_length=self.context_length, truncation=True, padding=True, return_tensors="pt", add_special_tokens=True)
@@ -226,6 +253,8 @@ class DistributedParquetStream:
                 labels[mask == 0] = self.pad_token_id
                 self.microbatches_seen += 1
                 yield {"input_ids": ids, "attention_mask": mask, "labels": labels, "valid_mask": mask.bool()}
+            if skipped_rows < start_offset:
+                raise ValueError("checkpoint row offset exceeds parquet shard length")
             self.shard_index += 1
             self.row_offset = 0
 
@@ -567,12 +596,20 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 raise ValueError("resume checkpoint manifest differs from current persistent parquet manifest")
         stream_obj = DistributedParquetStream(manifest, tokenizer, rank=rank, world_size=world_size, batch_size=config.micro_batch_size, context_length=config.context_length, pad_token_id=int(tokenizer.pad_token_id), seed=config.seed) if manifest else None
         if resume_state and stream_obj is not None:
-            stream_obj.restore_cursor(resume_state.get("data_cursors_by_rank", {}).get(str(rank)))
+            rank_cursor = resume_state.get("data_cursors_by_rank", {}).get(str(rank))
+            if rank_cursor is None:
+                raise ValueError(f"resume checkpoint has no data cursor for rank {rank}")
+            stream_obj.restore_cursor(rank_cursor)
         stream: Iterator[dict[str, torch.Tensor]] = iter(stream_obj) if stream_obj is not None else _synthetic_stream(tokenizer, batch_size=config.micro_batch_size, context_length=config.context_length, vocab_size=int(model.config.vocab_size), pad_token_id=int(tokenizer.pad_token_id), seed=config.seed + rank)
         metrics: list[dict[str, Any]] = []
         routing_warnings: list[dict[str, Any]] = []
         last_checkpoint: str | None = None
         while optimizer_step < config.max_optimizer_steps:
+            if config.gate == "FORMAL" and stream_obj is not None:
+                target_epoch = optimizer_step // config.steps_per_epoch
+                if target_epoch != stream_obj.epoch:
+                    stream_obj.reset_epoch(target_epoch)
+                    stream = iter(stream_obj)
             _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="optimizer_step_start")
             if device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(device)
