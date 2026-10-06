@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,16 +24,28 @@ _AUTO_CLASS_REGISTERED = False
 
 
 def _import_recursive_model() -> tuple[Any, Any, Any]:
-    """Import the repository model without making the official route global."""
-    rsmol_root = Path(__file__).resolve().parents[2]
-    if str(rsmol_root) not in sys.path:
-        sys.path.insert(0, str(rsmol_root))
-    from recursive_model_5_10x2_5_mesh import (  # type: ignore
-        RecursiveLlamaForCausalLM,
-        parameter_audit,
-        register_auto_class,
+    """Load the recursive implementation owned by this isolated route.
+
+    The repository contains several independent 5-10x2-5 implementations.
+    Importing by the global ``recursive_model_5_10x2_5_mesh`` name could pick
+    another route when the launcher has added ``code/RSmol`` to ``sys.path``.
+    Load the sibling file by absolute path instead.
+    """
+    module_path = Path(__file__).with_name("recursive_model_5_10x2_5_mesh.py").resolve(strict=True)
+    module_name = "_mellow_v0_two_stage_recursive_model"
+    module = sys.modules.get(module_name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"unable to load isolated recursive model: {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    return (
+        module.RecursiveLlamaForCausalLM,
+        module.parameter_audit,
+        module.register_auto_class,
     )
-    return RecursiveLlamaForCausalLM, parameter_audit, register_auto_class
 
 
 def validate_recursive_config(config: Any) -> None:

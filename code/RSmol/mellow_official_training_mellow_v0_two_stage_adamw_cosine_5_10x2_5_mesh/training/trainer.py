@@ -21,15 +21,19 @@ from pandas import Series
 from scipy.io.wavfile import write
 import traceback
 import contextlib
+import torch.distributed as torch_distributed
 from torch.nn import functional as F
 import distributed
 from training import log
 from models.model import get_model_class
 from data.sampler import CustomDistributedSampler
-from utils.utils import retry, numparams, group_weight_decay_params
+from utils.utils import retry, numparams
 from utils.utils import GradNormTracker, LossTrackingLRScheduler, LazyConversionDict
-from metrics.get_metrics import Metric
 from models.generate import generate_greedy, generate_greedy_batch
+from models.recursive_text import EXPECTED_CHECKPOINT_CONTRACT
+
+
+ROUTE_CONTRACT = "mellow_v0_official_adamw_cosine_two_stage_5_10x2_5_mesh_v1"
 
 class TrainerMode(Enum):
     Train = "train"
@@ -37,14 +41,13 @@ class TrainerMode(Enum):
 
 
 class StepCosineWarmupScheduler:
-    """Step-level linear warmup followed by cosine decay to ``min_lr``."""
+    """Step-level warmup/cosine schedule with independent group bounds."""
 
     def __init__(
         self,
         optimizer: torch.optim.Optimizer,
         *,
-        max_lr: float,
-        min_lr: float,
+        group_bounds: Sequence[dict[str, Any]],
         total_steps: int,
         warmup_steps: int,
     ):
@@ -55,34 +58,40 @@ class StepCosineWarmupScheduler:
                 f"warmup_steps must be in [1, total_steps], got "
                 f"{warmup_steps} for total_steps={total_steps}"
             )
-        if not 0.0 <= min_lr <= max_lr:
-            raise ValueError(
-                f"expected 0 <= min_lr <= max_lr, got min_lr={min_lr}, max_lr={max_lr}"
-            )
+        if len(group_bounds) != len(optimizer.param_groups):
+            raise ValueError("scheduler group bounds must match optimizer parameter groups")
         self.optimizer = optimizer
-        self.max_lr = float(max_lr)
-        self.min_lr = float(min_lr)
+        self.group_bounds = []
+        for index, bounds in enumerate(group_bounds):
+            max_lr = float(bounds["max_lr"])
+            min_lr = float(bounds["min_lr"])
+            if not 0.0 <= min_lr <= max_lr:
+                raise ValueError(
+                    f"invalid LR bounds for group {index}: min_lr={min_lr}, max_lr={max_lr}"
+                )
+            self.group_bounds.append({
+                "name": str(bounds.get("name", optimizer.param_groups[index].get("lr_group", index))),
+                "max_lr": max_lr,
+                "min_lr": min_lr,
+            })
         self.total_steps = int(total_steps)
         self.warmup_steps = int(warmup_steps)
         self.last_step = 0
-        # The first optimizer update must use the first warmup learning rate.
-        self._set_lr(self._lr_for_step(1))
+        self._set_lr(1)
 
-    def _lr_for_step(self, step: int) -> float:
+    def _lr_for_step(self, step: int, max_lr: float, min_lr: float) -> float:
         step = min(max(int(step), 1), self.total_steps)
         if step <= self.warmup_steps:
-            return self.max_lr * step / self.warmup_steps
+            return max_lr * step / self.warmup_steps
         decay_steps = self.total_steps - self.warmup_steps
         if decay_steps <= 0:
-            return self.min_lr
+            return min_lr
         progress = (step - self.warmup_steps) / decay_steps
-        return self.min_lr + 0.5 * (self.max_lr - self.min_lr) * (
-            1.0 + math.cos(math.pi * progress)
-        )
+        return min_lr + 0.5 * (max_lr - min_lr) * (1.0 + math.cos(math.pi * progress))
 
-    def _set_lr(self, lr: float) -> None:
-        for group in self.optimizer.param_groups:
-            group["lr"] = float(lr)
+    def _set_lr(self, step: int) -> None:
+        for group, bounds in zip(self.optimizer.param_groups, self.group_bounds):
+            group["lr"] = self._lr_for_step(step, bounds["max_lr"], bounds["min_lr"])
 
     def step(self, step: Optional[int] = None) -> None:
         next_step = self.last_step + 1 if step is None else int(step)
@@ -95,7 +104,7 @@ class StepCosineWarmupScheduler:
                 f"scheduler stepped past total_steps={self.total_steps}: {next_step}"
             )
         self.last_step = next_step
-        self._set_lr(self._lr_for_step(self.last_step))
+        self._set_lr(self.last_step)
 
     def get_last_lr(self) -> list[float]:
         return [float(group["lr"]) for group in self.optimizer.param_groups]
@@ -103,8 +112,7 @@ class StepCosineWarmupScheduler:
     def state_dict(self) -> dict[str, Any]:
         return {
             "scheduler_type": "step_cosine_warmup",
-            "max_lr": self.max_lr,
-            "min_lr": self.min_lr,
+            "group_bounds": [dict(bounds) for bounds in self.group_bounds],
             "total_steps": self.total_steps,
             "warmup_steps": self.warmup_steps,
             "last_step": self.last_step,
@@ -113,24 +121,27 @@ class StepCosineWarmupScheduler:
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         if state_dict.get("scheduler_type") != "step_cosine_warmup":
             raise ValueError("checkpoint scheduler is not step_cosine_warmup")
-        for key, current in (
-            ("max_lr", self.max_lr),
-            ("min_lr", self.min_lr),
-            ("total_steps", self.total_steps),
-            ("warmup_steps", self.warmup_steps),
-        ):
+        for key, current in (("total_steps", self.total_steps), ("warmup_steps", self.warmup_steps)):
             saved = state_dict.get(key)
-            if saved is None or not math.isclose(
-                float(saved), float(current), rel_tol=0.0, abs_tol=1e-12
-            ):
-                raise ValueError(
-                    f"scheduler {key} mismatch: checkpoint={saved!r}, current={current!r}"
-                )
+            if saved is None or int(saved) != int(current):
+                raise ValueError(f"scheduler {key} mismatch: checkpoint={saved!r}, current={current!r}")
+        saved_bounds = state_dict.get("group_bounds")
+        if not isinstance(saved_bounds, list) or len(saved_bounds) != len(self.group_bounds):
+            raise ValueError("scheduler group-bound contract mismatch")
+        for index, (saved, current) in enumerate(zip(saved_bounds, self.group_bounds)):
+            if str(saved.get("name")) != str(current["name"]):
+                raise ValueError(f"scheduler group {index} name mismatch")
+            for key in ("max_lr", "min_lr"):
+                if not math.isclose(float(saved.get(key, -1.0)), float(current[key]), rel_tol=0.0, abs_tol=1e-12):
+                    raise ValueError(
+                        f"scheduler group {index} {key} mismatch: "
+                        f"checkpoint={saved.get(key)!r}, current={current[key]!r}"
+                    )
         last_step = int(state_dict.get("last_step", -1))
         if last_step < 0 or last_step > self.total_steps:
             raise ValueError(f"invalid scheduler last_step={last_step}")
         self.last_step = last_step
-        self._set_lr(self._lr_for_step(last_step if last_step > 0 else 1))
+        self._set_lr(last_step if last_step > 0 else 1)
 
 def worker_init_fn(logging_initializer, worker_id):
     # Initialize logging for this worker
@@ -419,7 +430,7 @@ class Trainer:
         valid_count = valid.sum()
         if valid_count.item() == 0:
             raise ValueError("answer batch contains no valid target tokens")
-        return (token_loss * valid).sum() / valid_count
+        return (token_loss.float() * valid).sum() / valid_count.to(dtype=torch.float32)
 
     @staticmethod
     def _answer_token_loss_sum(logits, target, attention_mask, ignore_index):
@@ -433,18 +444,128 @@ class Trainer:
         count = valid.sum().to(dtype=torch.float32)
         if count.item() <= 0:
             raise ValueError("answer batch contains no valid target tokens")
-        return (token_loss * valid).sum(), count
+        # Accumulate CE in FP32 even when the recursive text model runs in
+        # BF16/FP16; the trainer's reduction contract is token-exact.
+        return (token_loss.float() * valid).sum(), count
+
+    @staticmethod
+    def _all_reduce_sum(value: torch.Tensor) -> torch.Tensor:
+        """Return a SUM across ranks without the context's default averaging."""
+        if torch_distributed.is_available() and torch_distributed.is_initialized():
+            torch_distributed.all_reduce(value, op=torch_distributed.ReduceOp.SUM)
+        return value
+
+    @staticmethod
+    def _is_router_parameter(name: str) -> bool:
+        return ".write_routers." in name or ".read_routers." in name
+
+    def _build_parameter_groups(self, model: torch.nn.Module, optimizer_config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Build deterministic AdamW groups for the active two-stage contract."""
+        configured = optimizer_config.get("parameter_groups")
+        if not isinstance(configured, dict) or not configured:
+            raise ValueError("optimizer.parameter_groups is required for the isolated two-stage route")
+        buckets: dict[tuple[str, float], dict[str, Any]] = {}
+        for name, parameter in model.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            group_name = "routers" if "routers" in configured and self._is_router_parameter(name) else "other"
+            if group_name not in configured:
+                group_name = "all" if "all" in configured else group_name
+            if group_name not in configured:
+                raise ValueError(f"no learning-rate contract for trainable parameter {name}")
+            # Keep the official route's weight-decay behavior exactly as
+            # configured, while splitting each LR class into decay/no-decay.
+            no_decay = bool(self.config.get("exclude_bias_bn_from_weight_decay", False)) and (
+                parameter.ndim <= 1 or name.endswith(".bias")
+            )
+            decay = 0.0 if no_decay else float(optimizer_config["weight_decay"])
+            key = (group_name, decay)
+            bucket = buckets.setdefault(key, {"params": [], "param_names": [], "lr_group": group_name, "weight_decay": decay})
+            bucket["params"].append(parameter)
+            bucket["param_names"].append(name)
+
+        if not buckets:
+            raise ValueError("no trainable parameters remain after the HTSAT freeze")
+        groups: list[dict[str, Any]] = []
+        scheduler_bounds: list[dict[str, Any]] = []
+        for (group_name, _decay), bucket in sorted(buckets.items(), key=lambda item: (item[0][0], item[0][1])):
+            bounds = configured[group_name]
+            max_lr = float(bounds["max_lr"])
+            min_lr = float(bounds["min_lr"])
+            if not 0.0 <= min_lr <= max_lr:
+                raise ValueError(f"invalid LR bounds for {group_name}: {bounds!r}")
+            group = dict(bucket)
+            group.update({"lr": max_lr, "max_lr": max_lr, "min_lr": min_lr})
+            groups.append(group)
+            scheduler_bounds.append({"name": group_name, "max_lr": max_lr, "min_lr": min_lr})
+
+        counts: dict[str, int] = {}
+        for group in groups:
+            counts[group["lr_group"]] = counts.get(group["lr_group"], 0) + sum(p.numel() for p in group["params"])
+        if self.distributed.rank() == 0:
+            self.logger.info("Optimizer parameter groups: %s", counts)
+        if "routers" in configured and counts.get("routers", 0) == 0:
+            raise ValueError("stage-1 optimizer contract found no router parameters")
+        if "other" in configured and counts.get("other", 0) == 0:
+            raise ValueError("stage-1 optimizer contract found no non-router parameters")
+        if "all" in configured and counts.get("all", 0) == 0:
+            raise ValueError("stage-2 optimizer contract found no trainable parameters")
+        return groups, scheduler_bounds
+
+    @staticmethod
+    def _optimizer_group_contract(optimizer: torch.optim.Optimizer) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": str(group.get("lr_group", "unknown")),
+                "max_lr": float(group.get("max_lr", group.get("lr", 0.0))),
+                "min_lr": float(group.get("min_lr", group.get("lr", 0.0))),
+                "weight_decay": float(group.get("weight_decay", 0.0)),
+                "parameter_count": int(sum(parameter.numel() for parameter in group["params"])),
+                "parameter_names": list(group.get("param_names", [])),
+            }
+            for group in optimizer.param_groups
+        ]
+
+    @staticmethod
+    def _trainability_contract(model: torch.nn.Module) -> dict[str, Any]:
+        model = model.module if hasattr(model, "module") else model
+        htsat = model.audio_encoder.base.htsat
+        c2l = model.audio_encoder.base.c2l
+        bridge = model.audio_encoder.projection
+        text = model.caption_decoder.lm
+        router_parameters = [
+            parameter for name, parameter in text.named_parameters()
+            if Trainer._is_router_parameter(name)
+        ]
+        return {
+            "htsat_trainable": any(parameter.requires_grad for parameter in htsat.parameters()),
+            "c2l_trainable": any(parameter.requires_grad for parameter in c2l.parameters()),
+            "bridge_trainable": any(parameter.requires_grad for parameter in bridge.parameters()),
+            "text_trainable": any(parameter.requires_grad for parameter in text.parameters()),
+            "router_trainable": any(parameter.requires_grad for parameter in router_parameters),
+        }
 
     def train(self):
         self.logger.info("Training Mellow with data: %s", self.config["data"]["datafiles"])
         self.config["model"]["decoder"]["prefix_dim"] = self.config["model"]["encoder"]["d_proj"]
+        training_stage = str(self.config.get("training_stage", ""))
+        if training_stage not in {"stage1", "stage2"}:
+            raise ValueError("isolated Mellow-v0 route requires training_stage=stage1 or stage2")
 
-        # Download necessary models beforehand
+        # Load the recursive checkpoint through its explicit class.  Calling
+        # AutoModelForCausalLM directly would construct an ordinary Llama model
+        # before the MeSH registration is installed.
         if self.distributed.local_rank() == 0:
-            from transformers import AutoTokenizer, AutoModelForCausalLM
-            AutoModelForCausalLM.from_pretrained(self.config["model"]["decoder"]["text_decoder"])
+            from transformers import AutoTokenizer
+            from models.recursive_text import load_recursive_text_model
+            load_recursive_text_model(self.config["model"]["decoder"]["text_decoder"])
             AutoTokenizer.from_pretrained(self.config["data"]["tokenizer_type"])
         self.distributed.barrier()
+
+        if int(self.config["model"]["decoder"].get("total_prefix_length", 389)) != 389:
+            raise ValueError("5-10x2-5 MeSH official route requires total_prefix_length=389")
+        if int(self.config["model"]["encoder"].get("d_proj", 576)) != 576:
+            raise ValueError("5-10x2-5 MeSH official route requires d_proj=576")
 
         # creating dataset
         dataset, data_sampler, data_loader = self.get_data("datafiles")
@@ -457,29 +578,32 @@ class Trainer:
         model = self.distributed.create_distributed_model(model)
         model.train()
 
+        # HTSAT is frozen by contract but remains in train mode under the
+        # official Mellow implementation; only its c2l/bridge and MeSH text
+        # parameters enter the optimizer according to requires_grad.
+        audio_encoder = (model.module if hasattr(model, "module") else model).audio_encoder
+        if any(parameter.requires_grad for parameter in audio_encoder.base.htsat.parameters()):
+            raise ValueError("official route requires HTSAT backbone parameters frozen")
+        if not any(parameter.requires_grad for parameter in audio_encoder.base.c2l.parameters()):
+            raise ValueError("official route requires HTSAT c2l parameters trainable")
+        if not any(parameter.requires_grad for parameter in audio_encoder.projection.parameters()):
+            raise ValueError("official route requires audio bridge/projection parameters trainable")
+        if not any(
+            parameter.requires_grad
+            for parameter in (model.module if hasattr(model, "module") else model).caption_decoder.lm.parameters()
+        ):
+            raise ValueError("mesh text decoder must be trainable for this comparison route")
+
         if self.distributed.rank() == 0:
             self.logger.info("Mellow has %d parameters of which %d are trainable" % numparams(model))
             self.logger.info("%s", model)
 
-        # add weight decay to appropriate layers
-        weight_decay = self.config["train"]["optimizer"]["weight_decay"]
-        parameters = group_weight_decay_params(
-            model,
-            weight_decay=weight_decay,
-            rnn_weight_decay=None,
-            exclude_bias_bn_from_weight_decay=self.config.get("exclude_bias_bn_from_weight_decay", False)
-        )
-
         optimizer_config = self.config["train"]["optimizer"]
         optimizer_type = optimizer_config["optimizer_type"]
-        max_lr = float(optimizer_config.get("max_lr", optimizer_config["learning_rate"]))
-        if "learning_rate" in optimizer_config and not math.isclose(
-            float(optimizer_config["learning_rate"]), max_lr, rel_tol=0.0, abs_tol=1e-12
-        ):
-            raise ValueError("learning_rate and max_lr must agree in the AdamW comparison route")
+        parameters, scheduler_bounds = self._build_parameter_groups(model, optimizer_config)
+        max_lr = max(float(group["max_lr"]) for group in scheduler_bounds)
         optimizer_kwargs = {
             "lr": max_lr,
-            "weight_decay": weight_decay,
         }
         if optimizer_type == "AdamW":
             betas = tuple(float(value) for value in optimizer_config.get("betas", (0.9, 0.999)))
@@ -542,19 +666,16 @@ class Trainer:
             if not 0.0 < warmup_ratio < 1.0:
                 raise ValueError(f"warmup_ratio must be between 0 and 1, got {warmup_ratio}")
             warmup_steps = max(1, math.ceil(total_optimizer_steps * warmup_ratio))
-            min_lr = float(optimizer_config["min_lr"])
             lr_scheduler = StepCosineWarmupScheduler(
                 optimizer,
-                max_lr=max_lr,
-                min_lr=min_lr,
+                group_bounds=scheduler_bounds,
                 total_steps=total_optimizer_steps,
                 warmup_steps=warmup_steps,
             )
             if self.distributed.rank() == 0:
                 self.logger.info(
-                    "Step cosine schedule: total_optimizer_steps=%d, warmup_steps=%d, "
-                    "max_lr=%.8g, min_lr=%.8g",
-                    total_optimizer_steps, warmup_steps, max_lr, min_lr,
+                    "Step cosine schedule: total_optimizer_steps=%d, warmup_steps=%d, group_bounds=%s",
+                    total_optimizer_steps, warmup_steps, scheduler_bounds,
                 )
         elif lr_schedule is not None:
             raise ValueError(
@@ -573,6 +694,11 @@ class Trainer:
             checkpoint = torch.load(init_model_path, map_location=self.device, weights_only=False)
             if not isinstance(checkpoint, dict) or not isinstance(checkpoint.get("state_dict"), dict):
                 raise ValueError("model initialization checkpoint must contain a state_dict mapping")
+            if training_stage == "stage2":
+                if checkpoint.get("schema_version") != 2:
+                    raise ValueError("stage2 initialization requires a stage1 schema_version=2 checkpoint")
+                if checkpoint.get("route_contract") != ROUTE_CONTRACT or checkpoint.get("training_stage") != "stage1":
+                    raise ValueError("stage2 initialization checkpoint must be produced by this route's stage1")
             model_for_state = model.module if hasattr(model, "module") else model
             model_for_state.load_state_dict(checkpoint["state_dict"], strict=True)
             self.logger.info("Initialized model weights from %s; optimizer/scheduler/RNG start fresh", init_model_path)
@@ -597,12 +723,24 @@ class Trainer:
                 required_fields = {
                     "optimizer", "optimizer_contract", "scheduler", "grad_scaler", "grad_norm_tracker",
                     "loss_tracker", "epoch_completed", "total_step", "num_epochs", "batch_geometry",
-                    "random_state_by_rank",
+                    "random_state_by_rank", "loss_reduction", "route_contract", "text_model_contract",
+                    "training_stage", "optimizer_group_contract",
                 }
                 missing_fields = sorted(required_fields.difference(checkpoint))
                 if missing_fields:
                     raise ValueError(
                         f"full resume checkpoint is missing required fields: {missing_fields}"
+                    )
+                if checkpoint.get("loss_reduction") != "global_token_mean":
+                    raise ValueError("resume checkpoint must use global_token_mean loss")
+                if checkpoint.get("route_contract") != ROUTE_CONTRACT:
+                    raise ValueError("resume checkpoint belongs to a different Mellow route")
+                if checkpoint.get("text_model_contract") != EXPECTED_CHECKPOINT_CONTRACT:
+                    raise ValueError("resume checkpoint uses a different text-model contract")
+                if checkpoint.get("training_stage") != training_stage:
+                    raise ValueError(
+                        f"resume checkpoint stage mismatch: checkpoint={checkpoint.get('training_stage')!r}, "
+                        f"current={training_stage!r}"
                     )
                 saved_geometry = checkpoint.get("batch_geometry", {})
                 current_geometry = {
@@ -635,6 +773,10 @@ class Trainer:
                             f"resume optimizer betas mismatch: checkpoint={saved_betas!r}, "
                             f"current={current_betas!r}"
                         )
+                saved_groups = optimizer_contract.get("parameter_groups")
+                current_groups = self._optimizer_group_contract(optimizer)
+                if saved_groups != current_groups:
+                    raise ValueError("resume optimizer parameter-group contract mismatch")
                 optimizer.load_state_dict(checkpoint["optimizer"])
                 if lr_scheduler is not None:
                     if checkpoint.get("scheduler") is None:
@@ -708,10 +850,15 @@ class Trainer:
                 optimizer.zero_grad(set_to_none=True)
                 microbatches = [next(data_iterator) for _ in range(gradient_accumulation_steps)]
                 local_token_count = torch.stack([
-                    batch['answer']['attention_mask'].sum().to(self.device, dtype=torch.float32)
+                    (
+                        batch['answer']['attention_mask'].to(dtype=torch.bool)
+                        & batch['answer']['input_ids'].ne(ignore_index)
+                    ).sum().to(self.device, dtype=torch.float32)
                     for batch in microbatches
                 ]).sum()
-                global_token_count = self.distributed.all_reduce(local_token_count.detach().clone())
+                # ``TorchDistributedContext.all_reduce`` averages by default;
+                # token mean needs a true global SUM over ranks and windows.
+                global_token_count = self._all_reduce_sum(local_token_count.detach().clone())
                 if global_token_count.item() <= 0:
                     raise ValueError("gradient accumulation window has no valid answer tokens")
                 accumulated_token_loss = torch.zeros((), device=self.device, dtype=torch.float32)
@@ -762,7 +909,18 @@ class Trainer:
                             logits, target, answer_mask, ignore_index
                         )
                         accumulated_token_loss = accumulated_token_loss + token_loss_sum.detach().float()
-                        grad_scaler.scale(token_loss_sum / global_token_count).backward()
+                        # DDP averages gradients across ranks.  Multiplying by
+                        # world_size cancels that average, leaving the gradient
+                        # of (sum CE)/(sum valid tokens) exactly.
+                        backward_denominator = global_token_count.to(
+                            dtype=token_loss_sum.dtype
+                        )
+                        backward_loss = (
+                            token_loss_sum
+                            * float(self.distributed.world_size())
+                            / backward_denominator
+                        )
+                        grad_scaler.scale(backward_loss).backward()
 
                     del batch_audio1, batch_audio2, batch_input, batch_answer
                     del input_dict, model_outputs
@@ -777,8 +935,11 @@ class Trainer:
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
 
-                global_token_loss = self.distributed.all_reduce(accumulated_token_loss.detach())
-                loss = (global_token_loss / global_token_count).item()
+                global_token_loss = self._all_reduce_sum(accumulated_token_loss.detach())
+                loss = (
+                    global_token_loss
+                    / global_token_count.to(dtype=global_token_loss.dtype)
+                ).item()
                 accerr_epo += loss
 
                 if loss_tracker is not None:
@@ -822,9 +983,13 @@ class Trainer:
                 checkpoint_path = os.path.join(
                     self.config["save_dir"], f"model--step-{total_step}.ckpt"
                 )
+                # A smoke target at the final optimizer window of an epoch is
+                # a completed epoch.  This lets the following resume start at
+                # the next shuffled epoch without replaying data.
+                epoch_completed = epoch + 1 if ii + 1 == num_batches_per_epoch else epoch
                 self._save_training_checkpoint(
                     checkpoint_path, model, optimizer, lr_scheduler, grad_scaler,
-                    grad_norm_tracker, loss_tracker, epoch, total_step,
+                    grad_norm_tracker, loss_tracker, epoch_completed, total_step,
                 )
                 self.logger.info("Reached max_optimizer_steps=%d", target_step)
                 return
@@ -864,13 +1029,16 @@ class Trainer:
 
     # pylint: disable=too-many-locals
     def evaluate_checkpoint(self):
+        from metrics.get_metrics import Metric
+
         self.logger.info("Validate model with data: %s", self.config["data"]["datafiles"])
         self.config["model"]["decoder"]["prefix_dim"] = self.config["model"]["encoder"]["d_proj"]
 
         # Download necessary models beforehand
         if self.distributed.local_rank() == 0:
-            from transformers import AutoTokenizer, AutoModelForCausalLM
-            AutoModelForCausalLM.from_pretrained(self.config["model"]["decoder"]["text_decoder"])
+            from transformers import AutoTokenizer
+            from models.recursive_text import load_recursive_text_model
+            load_recursive_text_model(self.config["model"]["decoder"]["text_decoder"])
             AutoTokenizer.from_pretrained(self.config["data"]["tokenizer_type"])
         self.distributed.barrier()
 
@@ -933,13 +1101,16 @@ class Trainer:
             
     # pylint: disable=too-many-locals
     def evaluate_experiment(self):
+        from metrics.get_metrics import Metric
+
         self.logger.info("Evaluate model with data: %s", self.config["data"]["datafiles"])
         self.config["model"]["decoder"]["prefix_dim"] = self.config["model"]["encoder"]["d_proj"]
 
         # Download necessary models beforehand
         if self.distributed.local_rank() == 0:
-            from transformers import AutoTokenizer, AutoModelForCausalLM
-            AutoModelForCausalLM.from_pretrained(self.config["model"]["decoder"]["text_decoder"])
+            from transformers import AutoTokenizer
+            from models.recursive_text import load_recursive_text_model
+            load_recursive_text_model(self.config["model"]["decoder"]["text_decoder"])
             AutoTokenizer.from_pretrained(self.config["data"]["tokenizer_type"])
         self.distributed.barrier()
 
@@ -1098,6 +1269,7 @@ class Trainer:
                 "betas": list(optimizer.param_groups[0]["betas"])
                 if "betas" in optimizer.param_groups[0] else None,
                 "weight_decay": float(optimizer.param_groups[0].get("weight_decay", 0.0)),
+                "parameter_groups": self._optimizer_group_contract(optimizer),
             },
             "scheduler": lr_scheduler.state_dict() if lr_scheduler is not None else None,
             "grad_scaler": grad_scaler.state_dict(),
@@ -1112,6 +1284,11 @@ class Trainer:
                 "gradient_accumulation_steps": int(self.config["train"].get("gradient_accumulation_steps", 1)),
             },
             "loss_reduction": "global_token_mean",
+            "route_contract": ROUTE_CONTRACT,
+            "text_model_contract": EXPECTED_CHECKPOINT_CONTRACT,
+            "training_stage": str(self.config["training_stage"]),
+            "optimizer_group_contract": self._optimizer_group_contract(optimizer),
+            "trainability_contract": self._trainability_contract(model),
             "random_state_by_rank": rank_random_states,
         }
         temporary_path = f"{checkpoint_path}.tmp-{os.getpid()}"
