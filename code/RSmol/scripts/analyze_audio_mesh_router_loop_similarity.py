@@ -4,6 +4,8 @@
 The script deliberately keeps this analysis separate from the MMAU evaluator.
 It loads the same fixed-260, FP32 runtime model, runs five explicitly selected
 ReasonAQA rows, and emits machine-readable parameter and routing comparisons.
+Router output distributions use Jensen-Shannon divergence; model and router
+parameters use symmetric relative L2 distance.
 """
 from __future__ import annotations
 
@@ -14,7 +16,6 @@ import hashlib
 import importlib
 import itertools
 import json
-import math
 import sys
 import time
 from collections import defaultdict
@@ -36,6 +37,7 @@ import generate_audio_checkpoint_reasonaqa as generation
 ROW_NUMBERS = (55, 550, 5500, 55000, 100000)  # user-facing, one-based
 AUDIO_TOKENS = 129
 PREFIX_TOKENS = 260
+ROUTER_OUTPUT_DIM = 7
 REGIONS = ("audio", "text_prompt", "generation")
 DEFAULT_MELLOW_SOURCE_ROOT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/mellow-main")
 DEFAULT_HTSAT_CHECKPOINT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt")
@@ -84,19 +86,64 @@ def _checkpoint_mellow_root(checkpoint: Path, requested: Path) -> Path:
     return _validate_mellow_source_root(requested)
 
 
-def _float_cosine(a: torch.Tensor, b: torch.Tensor) -> float:
+def _symmetric_relative_l2(a: torch.Tensor, b: torch.Tensor) -> float:
+    """Return 2*||a-b||_2 / (||a||_2 + ||b||_2)."""
+
     a = a.float().reshape(-1)
     b = b.float().reshape(-1)
     if a.numel() != b.numel():
-        raise ValueError(f"cosine shape mismatch: {a.numel()} vs {b.numel()}")
-    denom = float(torch.linalg.vector_norm(a) * torch.linalg.vector_norm(b))
-    if denom == 0.0:
-        return 1.0 if bool(torch.equal(a, b)) else 0.0
-    return float(torch.dot(a, b) / denom)
+        raise ValueError(f"relative L2 shape mismatch: {a.numel()} vs {b.numel()}")
+    if not bool(torch.isfinite(a).all()) or not bool(torch.isfinite(b).all()):
+        raise ValueError("relative L2 inputs must be finite")
+    norm_a = torch.linalg.vector_norm(a)
+    norm_b = torch.linalg.vector_norm(b)
+    denominator = norm_a + norm_b
+    if float(denominator) == 0.0:
+        return 0.0
+    return float(2.0 * torch.linalg.vector_norm(a - b) / denominator)
 
 
-def _l2(a: torch.Tensor, b: torch.Tensor) -> float:
-    return float(torch.linalg.vector_norm(a.float().reshape(-1) - b.float().reshape(-1)))
+def _jensen_shannon_divergence(a: torch.Tensor, b: torch.Tensor) -> float:
+    """Return base-2 JSD for two nonnegative probability vectors.
+
+    The router recorder stores softmax probabilities, but normalization is
+    repeated here so the metric remains correct after region aggregation and
+    robust to small floating-point drift.  Zero-probability terms contribute
+    zero to KL, avoiding ``0 * log(0)`` NaNs.
+    """
+
+    p = a.float().reshape(-1)
+    q = b.float().reshape(-1)
+    if p.numel() != q.numel():
+        raise ValueError(f"JSD shape mismatch: {p.numel()} vs {q.numel()}")
+    if not bool(torch.isfinite(p).all()) or not bool(torch.isfinite(q).all()):
+        raise ValueError("JSD inputs must be finite")
+    p = p.clamp_min(0.0)
+    q = q.clamp_min(0.0)
+    p_sum = p.sum()
+    q_sum = q.sum()
+    if float(p_sum) <= 0.0 or float(q_sum) <= 0.0:
+        raise ValueError("JSD inputs must have a positive probability mass")
+    p = p / p_sum
+    q = q / q_sum
+    midpoint = 0.5 * (p + q)
+    tiny = torch.finfo(p.dtype).tiny
+
+    def _kl_to_midpoint(distribution: torch.Tensor) -> torch.Tensor:
+        positive = distribution > 0.0
+        safe_distribution = distribution.clamp_min(tiny)
+        safe_midpoint = midpoint.clamp_min(tiny)
+        terms = distribution * (
+            torch.log2(safe_distribution) - torch.log2(safe_midpoint)
+        )
+        return torch.where(positive, terms, torch.zeros_like(terms)).sum()
+
+    value = 0.5 * (
+        _kl_to_midpoint(p) + _kl_to_midpoint(q)
+    )
+    # Round-off can produce a tiny negative result even though JSD is
+    # mathematically nonnegative.
+    return max(0.0, float(value))
 
 
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]], fieldnames: Sequence[str]) -> None:
@@ -259,8 +306,8 @@ class RouterRecorder:
         self.handles = []
         self.current: dict[str, torch.Tensor] = {}
         self.sample: dict[str, Any] = {}
-        self.stats: dict[tuple[str, str, str, str], dict[str, Any]] = defaultdict(lambda: {"sum": torch.zeros(7), "count": 0})
-        self.sample_stats: dict[tuple[str, int, str, str, str], dict[str, Any]] = defaultdict(lambda: {"sum": torch.zeros(7), "count": 0})
+        self.stats: dict[tuple[str, str, str, str], dict[str, Any]] = defaultdict(lambda: {"sum": torch.zeros(ROUTER_OUTPUT_DIM), "count": 0})
+        self.sample_stats: dict[tuple[str, int, str, str, str], dict[str, Any]] = defaultdict(lambda: {"sum": torch.zeros(ROUTER_OUTPUT_DIM), "count": 0})
         self.router_names = ["pre"] + [str(i) for i in range(router_count - 1)]
         for direction in ("write", "read"):
             modules = getattr(owner, f"{direction}_routers")
@@ -275,8 +322,11 @@ class RouterRecorder:
             if not isinstance(output, torch.Tensor):
                 raise RuntimeError(f"router {name} output is not a tensor")
             weights = torch.softmax(output.float(), dim=-1).detach().cpu()
-            if weights.ndim != 3 or weights.shape[-1] != 7:
-                raise RuntimeError(f"router {name} expected [B,T,7], got {tuple(weights.shape)}")
+            if weights.ndim != 3 or weights.shape[-1] != ROUTER_OUTPUT_DIM:
+                raise RuntimeError(
+                    f"router {name} expected [B,T,{ROUTER_OUTPUT_DIM}], "
+                    f"got {tuple(weights.shape)}"
+                )
             self.current[name] = weights[0]
         return hook
 
@@ -383,11 +433,11 @@ def _parameter_comparisons(snapshots: Mapping[str, Mapping[str, Any]], out: Path
     for left, right in itertools.combinations(snapshots, 2):
         left_vec = torch.cat(list(loop[left].values()))
         right_vec = torch.cat(list(loop[right].values()))
-        loop_overall.append({"model_a": left, "model_b": right, "cosine": _float_cosine(left_vec, right_vec), "l2": _l2(left_vec, right_vec), "parameter_count": left_vec.numel()})
+        loop_overall.append({"model_a": left, "model_b": right, "relative_l2": _symmetric_relative_l2(left_vec, right_vec), "parameter_count": left_vec.numel()})
         for name in sorted(loop[left]):
-            loop_rows.append({"model_a": left, "model_b": right, "parameter": name, "cosine": _float_cosine(loop[left][name], loop[right][name]), "l2": _l2(loop[left][name], loop[right][name]), "parameter_count": loop[left][name].numel()})
-    _write_csv(out / "loop_parameter_overall_similarity.csv", sorted(loop_overall, key=lambda row: row["cosine"], reverse=True), ("model_a", "model_b", "cosine", "l2", "parameter_count"))
-    _write_csv(out / "loop_parameter_similarity.csv", sorted(loop_rows, key=lambda row: row["cosine"], reverse=True), ("model_a", "model_b", "parameter", "cosine", "l2", "parameter_count"))
+            loop_rows.append({"model_a": left, "model_b": right, "parameter": name, "relative_l2": _symmetric_relative_l2(loop[left][name], loop[right][name]), "parameter_count": loop[left][name].numel()})
+    _write_csv(out / "loop_parameter_overall_similarity.csv", sorted(loop_overall, key=lambda row: row["relative_l2"]), ("model_a", "model_b", "relative_l2", "parameter_count"))
+    _write_csv(out / "loop_parameter_similarity.csv", sorted(loop_rows, key=lambda row: row["relative_l2"]), ("model_a", "model_b", "parameter", "relative_l2", "parameter_count"))
 
     for direction in ("read", "write"):
         rows = []
@@ -395,8 +445,8 @@ def _parameter_comparisons(snapshots: Mapping[str, Mapping[str, Any]], out: Path
         for model, snapshot in snapshots.items():
             references.extend((model, index, vector) for index, vector in enumerate(snapshot[direction]))
         for (left, left_index, left_vector), (right, right_index, right_vector) in itertools.combinations(references, 2):
-            rows.append({"direction": direction, "model_a": left, "router_a": left_index, "model_b": right, "router_b": right_index, "parameter": "concat(weight,bias)", "cosine": _float_cosine(left_vector, right_vector), "l2": _l2(left_vector, right_vector)})
-        _write_csv(out / f"{direction}_router_parameter_similarity.csv", sorted(rows, key=lambda row: row["cosine"], reverse=True), ("direction", "model_a", "router_a", "model_b", "router_b", "parameter", "cosine", "l2"))
+            rows.append({"direction": direction, "model_a": left, "router_a": left_index, "model_b": right, "router_b": right_index, "parameter": "concat(weight,bias)", "relative_l2": _symmetric_relative_l2(left_vector, right_vector)})
+        _write_csv(out / f"{direction}_router_parameter_similarity.csv", sorted(rows, key=lambda row: row["relative_l2"]), ("direction", "model_a", "router_a", "model_b", "router_b", "parameter", "relative_l2"))
 
 
 def _output_comparisons(recorder: RouterRecorder, out: Path) -> None:
@@ -410,9 +460,9 @@ def _output_comparisons(recorder: RouterRecorder, out: Path) -> None:
     means = []
     for (model, direction, router, region), vectors in sorted(per_sample.items()):
         vector = torch.stack(vectors).mean(dim=0)
-        means.append({"model": model, "direction": direction, "router": router, "region": region, "slot_0": float(vector[0]), "slot_1": float(vector[1]), "slot_2": float(vector[2]), "slot_3": float(vector[3]), "slot_4": float(vector[4]), "slot_5": float(vector[5]), "slot_6": float(vector[6]), "sample_count": len(vectors), "token_count": counts[(model, direction, router, region)]})
-    _write_csv(out / "router_region_means.csv", means, ("model", "direction", "router", "region", *[f"slot_{i}" for i in range(7)], "sample_count", "token_count"))
-    vectors = {(row["model"], row["direction"], row["router"], row["region"]): torch.tensor([row[f"slot_{i}"] for i in range(7)]) for row in means}
+        means.append({"model": model, "direction": direction, "router": router, "region": region, **{f"slot_{i}": float(vector[i]) for i in range(ROUTER_OUTPUT_DIM)}, "sample_count": len(vectors), "token_count": counts[(model, direction, router, region)]})
+    _write_csv(out / "router_region_means.csv", means, ("model", "direction", "router", "region", *[f"slot_{i}" for i in range(ROUTER_OUTPUT_DIM)], "sample_count", "token_count"))
+    vectors = {(row["model"], row["direction"], row["router"], row["region"]): torch.tensor([row[f"slot_{i}"] for i in range(ROUTER_OUTPUT_DIM)]) for row in means}
     rows = []
     keys = sorted(vectors)
     for direction in ("read", "write"):
@@ -421,11 +471,11 @@ def _output_comparisons(recorder: RouterRecorder, out: Path) -> None:
             for a, b in itertools.combinations(subset, 2):
                 if a == b:
                     continue
-                rows.append({"direction": direction, "region": region, "model_a": a[0], "router_a": a[2], "model_b": b[0], "router_b": b[2], "cosine": _float_cosine(vectors[a], vectors[b]), "l2": _l2(vectors[a], vectors[b])})
-    rows.sort(key=lambda row: row["cosine"], reverse=True)
+                rows.append({"direction": direction, "region": region, "model_a": a[0], "router_a": a[2], "model_b": b[0], "router_b": b[2], "jsd": _jensen_shannon_divergence(vectors[a], vectors[b])})
+    rows.sort(key=lambda row: row["jsd"])
     for rank, row in enumerate(rows, start=1):
         row["rank"] = rank
-    _write_csv(out / "router_output_similarity.csv", rows, ("rank", "direction", "region", "model_a", "router_a", "model_b", "router_b", "cosine", "l2"))
+    _write_csv(out / "router_output_similarity.csv", rows, ("rank", "direction", "region", "model_a", "router_a", "model_b", "router_b", "jsd"))
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -487,8 +537,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     generation_rows.append({"model": name, "sample_ordinal": ordinal, "row_number": item["row_number"], "row_index_zero_based": item["row_index"], "generated_token_count": result["generated_token_count"], "stop_reason": result["stop_reason"], "generated_text": result["generated_text"]})
                 print(json.dumps({"model": name, "samples": len(selected)}, ensure_ascii=False), flush=True)
         merged = RouterRecorder.__new__(RouterRecorder)
-        merged.stats = defaultdict(lambda: {"sum": torch.zeros(7), "count": 0})
-        merged.sample_stats = defaultdict(lambda: {"sum": torch.zeros(7), "count": 0})
+        merged.stats = defaultdict(lambda: {"sum": torch.zeros(ROUTER_OUTPUT_DIM), "count": 0})
+        merged.sample_stats = defaultdict(lambda: {"sum": torch.zeros(ROUTER_OUTPUT_DIM), "count": 0})
         for recorder in recorders.values():
             for key, entry in recorder.stats.items():
                 merged.stats[key]["sum"] += entry["sum"]
@@ -505,7 +555,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-    report = {"status": "PASS", "dataset": str(args.dataset), "dataset_sha256": hashlib.sha256(args.dataset.read_bytes()).hexdigest(), "selected_rows_one_based": list(ROW_NUMBERS), "selected_indices_zero_based": zero_indices, "checkpoints": {name: str(path) for name, (path, _spec) in checkpoints.items()}, "generation": generation_rows, "protocol": {"dtype": "fp32", "prefix_tokens": PREFIX_TOKENS, "max_prompt_tokens": args.max_prompt_tokens, "max_new_tokens": args.max_new_tokens, "decoder": "greedy_full_recompute_use_cache_false", "regions": list(REGIONS), "router_comparison": "read_only_with_read; write_only_with_write", "cosine": "descending_sorted"}}
+    report = {"status": "PASS", "dataset": str(args.dataset), "dataset_sha256": hashlib.sha256(args.dataset.read_bytes()).hexdigest(), "selected_rows_one_based": list(ROW_NUMBERS), "selected_indices_zero_based": zero_indices, "checkpoints": {name: str(path) for name, (path, _spec) in checkpoints.items()}, "generation": generation_rows, "protocol": {"dtype": "fp32", "prefix_tokens": PREFIX_TOKENS, "max_prompt_tokens": args.max_prompt_tokens, "max_new_tokens": args.max_new_tokens, "decoder": "greedy_full_recompute_use_cache_false", "regions": list(REGIONS), "router_comparison": "read_only_with_read; write_only_with_write", "router_output_metric": "jensen_shannon_divergence_base2", "router_output_sort": "ascending", "parameter_metric": "symmetric_relative_l2", "parameter_sort": "ascending", "parameter_formula": "2*||theta1-theta2||2/(||theta1||2+||theta2||2)"}}
     (args.output_dir / "analysis_report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return report
 
