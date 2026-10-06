@@ -38,6 +38,9 @@ if [[ -z "$CHECKPOINT" ]]; then
     x5_8slot)
       CHECKPOINT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x5_5_mesh_8slot_mellow_shared_store_configurable_epochs/formal_3epochs_20261004_x5_8slot_v1/checkpoint-011343"
       ;;
+    x5_9slot)
+      CHECKPOINT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x5_5_mesh_9slot_mellow_shared_store_configurable_epochs/formal_3epochs_20261006_054353274259875-20/checkpoint-011343"
+      ;;
     *)
       echo "unsupported RSMOL_MMAU_ROUTE=$ROUTE" >&2
       exit 2

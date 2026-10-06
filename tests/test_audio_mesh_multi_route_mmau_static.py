@@ -12,6 +12,7 @@ EVALUATOR = SCRIPTS / "evaluate_mmau_test_mini_audio_mesh_shared_store.py"
 RUNTIME = SCRIPTS / "evaluate_mmau_test_mini_audio_mesh_shared_store.sh"
 SUBMIT = RSMOL / "run_mmau_test_mini_audio_mesh_shared_store_3090.sh"
 SMOKE = RSMOL / "run_mmau_test_mini_audio_mesh_shared_store_smoke_3090.sh"
+NINE_SLOT_SUBMIT = RSMOL / "run_mmau_test_mini_audio_mesh_9slot_3090.sh"
 DECODER = SCRIPTS / "generate_audio_checkpoint_reasonaqa.py"
 
 
@@ -21,6 +22,7 @@ class AudioMeshMultiRouteMMAUStaticTest(unittest.TestCase):
         cls.source = EVALUATOR.read_text(encoding="utf-8")
         cls.submit = SUBMIT.read_text(encoding="utf-8")
         cls.smoke = SMOKE.read_text(encoding="utf-8")
+        cls.nine_slot_submit = NINE_SLOT_SUBMIT.read_text(encoding="utf-8")
         cls.decoder = DECODER.read_text(encoding="utf-8")
 
     def test_all_three_route_contracts_are_explicit(self) -> None:
@@ -32,6 +34,26 @@ class AudioMeshMultiRouteMMAUStaticTest(unittest.TestCase):
             "audio_mesh_x5_7slot_fixed260_zero_slot_config.json",
         ):
             self.assertIn(filename, self.source)
+
+    def test_x5_9slot_route_contract_and_submission_entrypoint_are_explicit(self) -> None:
+        for marker in (
+            '"x5_9slot"',
+            "audio_5_10x5_5_mesh_9slot_mellow_shared_store_configurable_epochs",
+            "recursive_model_5_10x5_5_mesh_9slot",
+            "audio_mesh_x5_9slot_fixed260_zero_slot_config.json",
+            "AudioMeshX5NineSlotZeroModel",
+            "memory_slots=9",
+            "formal_3epochs_20261006_054353274259875-20/checkpoint-011343",
+        ):
+            self.assertIn(marker, self.source)
+        self.assertTrue(NINE_SLOT_SUBMIT.is_file())
+        for marker in (
+            'export RSMOL_MMAU_ROUTE="x5_9slot"',
+            'export RSMOL_MMAU_MODE="full"',
+            "mmau_audio_mesh_zero_slot",
+        ):
+            self.assertIn(marker, self.nine_slot_submit)
+        self.assertIn("pdgpu-3090", self.submit)
 
     def test_inference_contract_is_fp32_runtime_zero_and_fixed260(self) -> None:
         for marker in (

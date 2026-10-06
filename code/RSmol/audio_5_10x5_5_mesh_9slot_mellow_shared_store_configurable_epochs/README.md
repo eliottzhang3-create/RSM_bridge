@@ -26,3 +26,22 @@ bash run_audio_shared_store_formal_configurable_epochs_5_10x5_5_mesh_9slot_mello
 The wrapper submits `pdgpu-3090` with 8 GPUs, 32 CPU cores, and 256G memory,
 and writes output below
 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x5_5_mesh_9slot_mellow_shared_store_configurable_epochs`.
+
+## MMAU test-mini full evaluation
+
+The fixed-260 runtime-zero MMAU evaluator uses the same author-reply and
+official scoring contract as the existing 7/8-slot MeSH routes.  It loads the
+completed `checkpoint-011343` above, uses one `pdgpu-3090` GPU, and writes the
+comparison artifacts below `mmau_audio_mesh_zero_slot/x5_9slot`.
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mmau_test_mini_audio_mesh_9slot_3090.sh
+```
+
+To choose a unique output directory explicitly:
+
+```bash
+RSMOL_MMAU_9SLOT_OUTPUT_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mmau_audio_mesh_zero_slot/x5_9slot/full_20261006_9slot \
+  bash run_mmau_test_mini_audio_mesh_9slot_3090.sh
+```

@@ -176,6 +176,27 @@ ROUTES: dict[str, RouteSpec] = {
         memory_slots=8,
         router_groups=6,
     ),
+    "x5_9slot": RouteSpec(
+        name="x5_9slot",
+        audio_package="audio_5_10x5_5_mesh_9slot_mellow_shared_store_configurable_epochs",
+        audio_model_module="audio_5_10x5_5_mesh_9slot_mellow_shared_store_configurable_epochs.model",
+        text_model_module="recursive_model_5_10x5_5_mesh_9slot",
+        audio_config_filename="audio_mesh_x5_9slot_fixed260_zero_slot_config.json",
+        audio_model_class="AudioMeshX5NineSlotZeroModel",
+        audio_config_class="AudioMeshX5NineSlotZeroConfig",
+        training_contract=(
+            "node_shared_unique_store_fullshuffle_fixed260_runtime_zero_second_slot_"
+            "answer_eos_x5_9slot_v1"
+        ),
+        audio_architecture_contract=(
+            "logical_60_physical_20_5_10x5_5_mesh_9slot_6router_audio_mellow_"
+            "fixed260_runtime_zero_second_slot"
+        ),
+        logical_layer_count=60,
+        recursive_loops=5,
+        memory_slots=9,
+        router_groups=6,
+    ),
 }
 
 DEFAULT_CHECKPOINTS = {
@@ -208,6 +229,11 @@ DEFAULT_CHECKPOINTS = {
         "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
         "audio_5_10x5_5_mesh_8slot_mellow_shared_store_configurable_epochs/"
         "formal_3epochs_20261004_x5_8slot_v1/checkpoint-011343"
+    ),
+    "x5_9slot": (
+        "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
+        "audio_5_10x5_5_mesh_9slot_mellow_shared_store_configurable_epochs/"
+        "formal_3epochs_20261006_054353274259875-20/checkpoint-011343"
     ),
 }
 
@@ -258,6 +284,8 @@ def _infer_route(raw: Sequence[str]) -> str:
             return "x4_8slot"
         if "10x5" in normalized and "8slot" in normalized:
             return "x5_8slot"
+        if "10x5" in normalized and "9slot" in normalized:
+            return "x5_9slot"
         if "10x4" in normalized:
             return "x4"
         if "10x5" in normalized and "7slot" in normalized:
