@@ -30,7 +30,7 @@ from typing import Any, Iterable
 CONTRACT = "reasonaqa_raw_audio_tmpfs_staging_probe_v1"
 AUDIT_CONTRACT = "reasonaqa_raw_audio_path_mapping_v1"
 CONTROL_DIR_NAME = ".mellow_stage"
-STAGE_PREFIX = "mellow_adamw_cosine_reasonaqa_"
+STAGE_PREFIX = "mellow_v0_two_stage_reasonaqa_"
 
 
 def parse_args() -> argparse.Namespace:
