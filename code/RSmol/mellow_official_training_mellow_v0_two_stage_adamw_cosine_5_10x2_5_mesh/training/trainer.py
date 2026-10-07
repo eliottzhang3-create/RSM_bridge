@@ -440,13 +440,13 @@ class Trainer:
         if logits.shape[:2] != target.shape or target.shape != attention_mask.shape:
             raise ValueError("answer loss shape mismatch")
         valid = attention_mask.to(dtype=torch.bool) & target.ne(ignore_index)
-        token_loss = F.cross_entropy(logits.transpose(1, 2), target, reduction="none", ignore_index=ignore_index)
         count = valid.sum().to(dtype=torch.float32)
         if count.item() <= 0:
             raise ValueError("answer batch contains no valid target tokens")
-        # Accumulate CE in FP32 even when the recursive text model runs in
-        # BF16/FP16; the trainer's reduction contract is token-exact.
-        return (token_loss.float() * valid).sum(), count
+        # Select valid positions before CE. NaN at a masked position must not
+        # contaminate the reduction through NaN * 0.
+        token_loss = F.cross_entropy(logits[valid].float(), target[valid], reduction="sum")
+        return token_loss, count
 
     @staticmethod
     def _all_reduce_sum(value: torch.Tensor) -> torch.Tensor:
