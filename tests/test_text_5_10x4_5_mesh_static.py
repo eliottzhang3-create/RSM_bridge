@@ -56,7 +56,8 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertIn("ROUTER_COUNT = 5", source)
         self.assertIn("ROUTER_PARAMETER_COUNT = 10", source)
         self.assertIn("tuple(range(5, 15)) * RECURSIVE_LOOPS", source)
-        self.assertIn("range(15, 20), 45", source)
+        self.assertIn("suffix_logical_start = 25 if self.ablate_after_two_loops else 45", source)
+        self.assertIn("range(15, 20), suffix_logical_start", source)
 
     def test_formal_training_contract(self) -> None:
         source = TRAINER.read_text(encoding="utf-8")

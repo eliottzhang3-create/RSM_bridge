@@ -269,6 +269,8 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         # boundary tensors; normal training leaves this disabled.
         self.gradient_audit_mode = False
         self.routing_stats_mode = False
+        # Inference-only ReasonAQA ablation; the saved x4 configuration and weights stay intact.
+        self.ablate_after_two_loops = False
         self.last_forward_trace: list[dict[str, int]] = []
         self.last_memory_shape: tuple[int, ...] | None = None
         self.last_router_weights: dict[str, torch.Tensor] = {}
@@ -339,6 +341,10 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         use_cache = bool(_cfg(self.config, "use_cache", True) if use_cache is None else use_cache)
         output_attentions = bool(_cfg(self.config, "output_attentions", False) if output_attentions is None else output_attentions)
         output_hidden_states = bool(_cfg(self.config, "output_hidden_states", False) if output_hidden_states is None else output_hidden_states)
+        if self.ablate_after_two_loops and self.training:
+            raise RuntimeError("two-loop ablation is inference-only")
+        if self.ablate_after_two_loops and use_cache:
+            raise ValueError("two-loop ablation requires use_cache=False")
         return_dict = bool(_cfg(self.config, "use_return_dict", True) if return_dict is None else return_dict)
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids.to(self.embed_tokens.weight.device))
@@ -399,7 +405,7 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         hidden = self._read(memory, read_pre)
         if output_hidden_states:
             hidden_states.append(hidden)
-        for loop in range(RECURSIVE_LOOPS):
+        for loop in range(2 if self.ablate_after_two_loops else RECURSIVE_LOOPS):
             if self.gradient_audit_mode and hidden.requires_grad:
                 hidden.retain_grad()
                 self.last_core_input_refs.append(hidden)
@@ -414,7 +420,8 @@ class MeshLlamaModel(LlamaPreTrainedModel):
             if self.audit_mode:
                 self.last_core_outputs.append(core.detach().cpu())
             write = self._route(self.write_routers[loop + 1], hidden, f"write_{loop}")
-            read = self._route(self.read_routers[loop + 1], hidden, f"read_{loop}")
+            read_index = 4 if self.ablate_after_two_loops and loop == 1 else loop + 1
+            read = self._route(self.read_routers[read_index], hidden, f"read_{read_index - 1}")
             memory = self._write(memory, core, write)
             if self.audit_mode:
                 self.last_memory_write_history.append(memory.detach().cpu())
@@ -422,7 +429,8 @@ class MeshLlamaModel(LlamaPreTrainedModel):
             if output_hidden_states:
                 hidden_states.append(hidden)
         with record_function("mesh/suffix_5"):
-            hidden = self._run_stack(hidden, range(15, 20), 45, attention_mask=mask, position_ids=position_ids, cache=cache, use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings, output_attentions=output_attentions, all_attentions=attentions)
+            suffix_logical_start = 25 if self.ablate_after_two_loops else 45
+            hidden = self._run_stack(hidden, range(15, 20), suffix_logical_start, attention_mask=mask, position_ids=position_ids, cache=cache, use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings, output_attentions=output_attentions, all_attentions=attentions)
         hidden = self.norm(hidden)
         if self.audit_mode:
             self.last_memory_shape = tuple(memory.shape)
