@@ -5,11 +5,13 @@ implementation. It is separate from every earlier `5_10x2_5_mesh` experiment.
 
 Initialization uses:
 
-`/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/converted/mellow_v0_5_10x2_5_mesh_initialization`
+`/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/converted/mellow_v0_5_10x2_5_mesh_epoch17_routers`
 
 The directory must contain `text_model/` and
 `mellow_v0_5_10x2_5_mesh_init.pt`. The init checkpoint is loaded as model
 weights only; optimizer, scheduler, and RNG state start fresh.
+The 12 router tensors come from the audited epoch-17 checkpoint. The other
+389 tensors retain their original Mellow-v0 initialization values.
 
 ## Training stages
 

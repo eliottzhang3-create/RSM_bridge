@@ -15,7 +15,7 @@ ROUTE_CONTRACT = "mellow_v0_official_adamw_cosine_two_stage_5_10x2_5_mesh_v1"
 TEXT_CONTRACT = "logical_30_physical_20_5_10x2_5"
 MELLOW_INIT_ROOT = Path(
     "/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/converted/"
-    "mellow_v0_5_10x2_5_mesh_initialization"
+    "mellow_v0_5_10x2_5_mesh_epoch17_routers"
 )
 
 

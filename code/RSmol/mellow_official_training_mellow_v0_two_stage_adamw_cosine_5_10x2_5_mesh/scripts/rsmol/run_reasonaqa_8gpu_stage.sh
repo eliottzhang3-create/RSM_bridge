@@ -41,7 +41,7 @@ CONDA_ENV="${MELLOW_CONDA_ENV:-mellow_c8204d8}"
 source "$USER_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
-MELLOW_INIT_ROOT="${MELLOW_V0_INIT_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/converted/mellow_v0_5_10x2_5_mesh_initialization}"
+MELLOW_INIT_ROOT="${MELLOW_V0_INIT_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/converted/mellow_v0_5_10x2_5_mesh_epoch17_routers}"
 RUN_ID="${MELLOW_RUN_ID:-${SLURM_JOB_ID:-$$}_$(date +%Y%m%d_%H%M%S%N)}"
 STAGE_ROOT="/dev/shm/mellow_v0_two_stage_reasonaqa_${STAGE}_${MODE}_$RUN_ID"
 STAGING_REPORT="$OUTPUT_DIR/staging_report.json"
