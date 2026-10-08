@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--router-min-lr", type=float, default=1e-4)
     parser.add_argument("--other-max-lr", type=float, default=1e-4)
     parser.add_argument("--other-min-lr", type=float, default=1e-5)
-    parser.add_argument("--all-max-lr", type=float, default=1e-3)
+    parser.add_argument("--all-max-lr", type=float, default=5e-4)
     parser.add_argument("--all-min-lr", type=float, default=5e-5)
     parser.add_argument("--warmup-ratio", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -76,8 +76,13 @@ def main() -> int:
     args = parse_args()
     if args.num_epochs < 1 or args.max_epochs_this_run < 0 or args.max_optimizer_steps < 0:
         raise ValueError("epoch and optimizer-step limits must be non-negative, with num_epochs >= 1")
-    if args.batch_size != 8 or args.gradient_accumulation_steps != 4:
-        raise ValueError("the isolated route requires per-rank batch 8 and accumulation 4")
+    expected_batch_geometry = {"stage1": (8, 4), "stage2": (4, 1)}
+    expected_batch_size, expected_accumulation = expected_batch_geometry[args.training_stage]
+    if (args.batch_size, args.gradient_accumulation_steps) != (expected_batch_size, expected_accumulation):
+        raise ValueError(
+            f"{args.training_stage} requires per-rank batch {expected_batch_size} "
+            f"and accumulation {expected_accumulation}"
+        )
     if not 0.0 < args.warmup_ratio < 1.0:
         raise ValueError("--warmup-ratio must be between 0 and 1")
     resolved_stage_root = args.stage_root.resolve()

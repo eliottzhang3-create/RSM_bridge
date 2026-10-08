@@ -84,7 +84,7 @@ MAX_STEPS=0
 if [[ "$MODE" == smoke ]]; then MAX_STEPS=20; fi
 if [[ "$MODE" == resume ]]; then MAX_STEPS=2; fi
 if [[ "$MODE" == formal && "$STAGE" == stage1 ]]; then NUM_EPOCHS=5; fi
-if [[ "$MODE" == formal && "$STAGE" == stage2 ]]; then NUM_EPOCHS=10; fi
+if [[ "$MODE" == formal && "$STAGE" == stage2 ]]; then NUM_EPOCHS=5; fi
 
 CONFIG_ARGS=(
   --stage-root "$STAGE_ROOT"
@@ -97,11 +97,23 @@ CONFIG_ARGS=(
   --max-optimizer-steps "$MAX_STEPS"
   --num-workers 4
 )
+if [[ "$STAGE" == stage2 ]]; then
+  CONFIG_ARGS+=(
+    --batch-size 4
+    --gradient-accumulation-steps 1
+    --all-max-lr 5e-4
+    --all-min-lr 5e-5
+  )
+fi
 if [[ "$MODE" == resume ]]; then
   python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$SOURCE_CHECKPOINT" --stage "$STAGE" --expected-epochs 2 --expected-total-step 20
   CONFIG_ARGS+=(--resume-checkpoint "$SOURCE_CHECKPOINT")
 elif [[ "$STAGE" == stage2 ]]; then
-  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$SOURCE_CHECKPOINT" --stage stage1
+  if [[ "$MODE" == formal ]]; then
+    python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$SOURCE_CHECKPOINT" --stage stage1 --expected-epochs 5 --require-complete
+  else
+    python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$SOURCE_CHECKPOINT" --stage stage1
+  fi
   CONFIG_ARGS+=(--init-model-checkpoint "$SOURCE_CHECKPOINT")
 fi
 
@@ -121,8 +133,8 @@ elif [[ "$MODE" == resume ]]; then
   FINAL_CHECKPOINT="$CHECKPOINT_ROOT/$MELLOW_JOB_ID/model--step-22.ckpt"
   python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$FINAL_CHECKPOINT" --stage "$STAGE" --expected-epochs 2 --expected-total-step 22
 else
-  EXPECTED_EPOCHS="$([[ "$STAGE" == stage1 ]] && echo 5 || echo 10)"
+  EXPECTED_EPOCHS=5
   FINAL_CHECKPOINT="$CHECKPOINT_ROOT/$MELLOW_JOB_ID/model--epo-${EXPECTED_EPOCHS}.ckpt"
-  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$FINAL_CHECKPOINT" --stage "$STAGE" --expected-epochs "$EXPECTED_EPOCHS"
+  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$FINAL_CHECKPOINT" --stage "$STAGE" --expected-epochs "$EXPECTED_EPOCHS" --require-complete
 fi
 echo "PASS: stage=$STAGE mode=$MODE checkpoint=$FINAL_CHECKPOINT" >&2

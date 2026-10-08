@@ -20,6 +20,7 @@ def main() -> int:
     parser.add_argument("--stage", choices=("stage1", "stage2"), required=True)
     parser.add_argument("--expected-epochs", type=int, default=None)
     parser.add_argument("--expected-total-step", type=int, default=None)
+    parser.add_argument("--require-complete", action="store_true")
     args = parser.parse_args()
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     required = {
@@ -38,11 +39,12 @@ def main() -> int:
         raise SystemExit(f"stage mismatch: checkpoint={checkpoint['training_stage']!r} expected={args.stage!r}")
     if checkpoint["loss_reduction"] != "global_token_mean":
         raise SystemExit("checkpoint does not declare global_token_mean")
-    if checkpoint["batch_geometry"] != {
-        "per_rank_batch_size": 8,
+    expected_geometry = {
+        "per_rank_batch_size": 8 if args.stage == "stage1" else 4,
         "world_size": 8,
-        "gradient_accumulation_steps": 4,
-    }:
+        "gradient_accumulation_steps": 4 if args.stage == "stage1" else 1,
+    }
+    if checkpoint["batch_geometry"] != expected_geometry:
         raise SystemExit(f"unexpected batch geometry: {checkpoint['batch_geometry']!r}")
     if len(checkpoint["random_state_by_rank"]) != 8:
         raise SystemExit("checkpoint does not contain RNG state for all ranks")
@@ -54,6 +56,20 @@ def main() -> int:
             raise SystemExit(f"expected trainable component missing: {key}")
     if args.expected_epochs is not None and int(checkpoint["num_epochs"]) != args.expected_epochs:
         raise SystemExit(f"unexpected epoch horizon: {checkpoint['num_epochs']}")
+    if args.require_complete and int(checkpoint["epoch_completed"]) != int(checkpoint["num_epochs"]):
+        raise SystemExit(
+            f"checkpoint is not complete: epoch_completed={checkpoint['epoch_completed']} "
+            f"num_epochs={checkpoint['num_epochs']}"
+        )
+    if args.require_complete:
+        nonfinite = [
+            name for name, tensor in checkpoint["state_dict"].items()
+            if isinstance(tensor, torch.Tensor)
+            and (tensor.is_floating_point() or tensor.is_complex())
+            and not torch.isfinite(tensor).all().item()
+        ]
+        if nonfinite:
+            raise SystemExit(f"checkpoint has non-finite model tensors: {nonfinite[:8]}")
     if args.expected_total_step is not None and int(checkpoint["total_step"]) != args.expected_total_step:
         raise SystemExit(f"unexpected total_step: {checkpoint['total_step']}")
     scheduler = checkpoint["scheduler"]
@@ -63,9 +79,11 @@ def main() -> int:
         raise SystemExit("scheduler and checkpoint step disagree")
     if not (0 < int(scheduler.get("warmup_steps", 0)) <= int(scheduler.get("total_steps", 0))):
         raise SystemExit(f"invalid scheduler horizon: {scheduler!r}")
+    if args.require_complete and int(checkpoint["total_step"]) != int(scheduler["total_steps"]):
+        raise SystemExit("completed checkpoint step does not match scheduler horizon")
     expected_bounds = {
         "stage1": {"routers": (1e-3, 1e-4), "other": (1e-4, 1e-5)},
-        "stage2": {"all": (1e-3, 5e-5)},
+        "stage2": {"all": (5e-4, 5e-5)},
     }[args.stage]
     for bounds in scheduler.get("group_bounds", []):
         name = str(bounds.get("name"))
