@@ -1,6 +1,6 @@
 # Full ReasonAQA: global batch 32, 10 epochs
 
-This directory is an isolated copy of the original full ReasonAQA Mellow AdamW/cosine training runtime. It does not use the MCQ manifest or MCQ training scripts. The model, dataset, trainer, and loss implementation are copied without changes. The existing loss sums answer-token cross-entropies and divides by the globally reduced count of non-padding answer tokens.
+This directory is an isolated copy of the original full ReasonAQA Mellow AdamW/cosine training runtime. It does not use the MCQ manifest or MCQ training scripts. The model, training dataset, and loss implementation are copied without changes. Evaluation imports in the trainer are deferred so that the training entry point runs without the omitted `metrics` directory. The existing loss sums answer-token cross-entropies and divides by the globally reduced count of non-padding answer tokens. Use the original route for evaluation.
 
 The formal route fixes 8 GPU ranks, per-rank batch size 4, gradient accumulation 1, and 10 full epochs, for an effective global batch of 32. It retains the original full ReasonAQA audited data mapping, 5090 resource request, AdamW betas (0.9, 0.95), learning rate 1e-3 to 5e-5 with step cosine and 5% warmup, weight decay 1e-4, FP32 training, and per-epoch checkpoints.
 

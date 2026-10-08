@@ -15,6 +15,8 @@ MAPPING_JSONL="${MELLOW_REASONAQA_MAPPING_JSONL:-/hpc_stor03/sjtu_home/jinwei.zh
 OUTPUT_DIR="${MELLOW_V0_TWO_STAGE_OUTPUT_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0_two_stage_reasonaqa}/${STAGE}_${MODE}_$RUN_TAG"
 SOURCE_CHECKPOINT=""
 SMOKE_ROWS="${MELLOW_REASONAQA_SMOKE_ROWS:-5120}"
+DIAGNOSTICS_STEPS="${MELLOW_RUNTIME_DIAGNOSTICS_STEPS:-0}"
+[[ "$DIAGNOSTICS_STEPS" =~ ^(0|[1-9][0-9]{0,2}|1000)$ ]] || { echo "MELLOW_RUNTIME_DIAGNOSTICS_STEPS must be an integer in [0, 1000]" >&2; exit 2; }
 [[ $# -ge 3 ]] && AUDIT_REPORT="$3"
 [[ $# -ge 4 ]] && MAPPING_JSONL="$4"
 [[ $# -ge 5 ]] && OUTPUT_DIR="$5"
@@ -48,6 +50,6 @@ vc submit \
   -j mellow-v0-two-stage-${STAGE}-${MODE}-3090-$RUN_TAG \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$SCRIPT_DIR/log/mellow_v0_two_stage_${STAGE}_${MODE}_3090.$RUN_TAG.JOB.log" \
-  --cmd "bash scripts/rsmol/run_reasonaqa_8gpu_stage.sh $CMD_ARGS"
+  --cmd "MELLOW_RUNTIME_DIAGNOSTICS_STEPS=$DIAGNOSTICS_STEPS bash scripts/rsmol/run_reasonaqa_8gpu_stage.sh $CMD_ARGS"
 
 echo "Submitted pdgpu-3090 8-GPU Mellow-v0 $STAGE/$MODE; output directory: $OUTPUT_DIR"

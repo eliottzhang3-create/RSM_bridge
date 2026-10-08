@@ -25,6 +25,7 @@ import torch.distributed as torch_distributed
 from torch.nn import functional as F
 import distributed
 from training import log
+from training.runtime_diagnostics import StepRuntimeDiagnostics
 from models.model import get_model_class
 from data.sampler import CustomDistributedSampler
 from utils.utils import retry, numparams
@@ -440,13 +441,13 @@ class Trainer:
         if logits.shape[:2] != target.shape or target.shape != attention_mask.shape:
             raise ValueError("answer loss shape mismatch")
         valid = attention_mask.to(dtype=torch.bool) & target.ne(ignore_index)
-        token_loss = F.cross_entropy(logits.transpose(1, 2), target, reduction="none", ignore_index=ignore_index)
         count = valid.sum().to(dtype=torch.float32)
         if count.item() <= 0:
             raise ValueError("answer batch contains no valid target tokens")
-        # Accumulate CE in FP32 even when the recursive text model runs in
-        # BF16/FP16; the trainer's reduction contract is token-exact.
-        return (token_loss.float() * valid).sum(), count
+        # Select valid positions before CE. NaN at a masked position must not
+        # contaminate the reduction through NaN * 0.
+        token_loss = F.cross_entropy(logits[valid].float(), target[valid], reduction="sum")
+        return token_loss, count
 
     @staticmethod
     def _all_reduce_sum(value: torch.Tensor) -> torch.Tensor:
@@ -691,7 +692,10 @@ class Trainer:
         if init_model_path and resume_path:
             raise ValueError("init_model_checkpoint and resume_checkpoint are mutually exclusive")
         if init_model_path:
-            checkpoint = torch.load(init_model_path, map_location=self.device, weights_only=False)
+            # A stage-1 full checkpoint also contains AdamW tensors. Keep the
+            # initialization payload on CPU so unused optimizer/RNG tensors do
+            # not occupy GPU memory during stage 2.
+            checkpoint = torch.load(init_model_path, map_location="cpu", weights_only=False)
             if not isinstance(checkpoint, dict) or not isinstance(checkpoint.get("state_dict"), dict):
                 raise ValueError("model initialization checkpoint must contain a state_dict mapping")
             if training_stage == "stage2":
@@ -701,6 +705,7 @@ class Trainer:
                     raise ValueError("stage2 initialization checkpoint must be produced by this route's stage1")
             model_for_state = model.module if hasattr(model, "module") else model
             model_for_state.load_state_dict(checkpoint["state_dict"], strict=True)
+            del checkpoint
             self.logger.info("Initialized model weights from %s; optimizer/scheduler/RNG start fresh", init_model_path)
         if resume_path:
             # The full checkpoint contains Python/NumPy/CUDA RNG objects, so
@@ -834,6 +839,11 @@ class Trainer:
         end_epoch = configured_epochs if epochs_this_run <= 0 else min(
             configured_epochs, start_epoch + epochs_this_run
         )
+        runtime_diagnostics = StepRuntimeDiagnostics(
+            self.device, self.distributed, self.logger, dataset=dataset,
+            data_json=self.config["data"]["datafiles"][0],
+            output_path=Path(self.config["save_dir"]).parent / "runtime_diagnostics.json",
+        )
         for epoch in range(start_epoch, end_epoch):
             # set epoch to use different seeds for different epochs during sampling
             data_sampler.set_epoch(epoch)
@@ -847,20 +857,23 @@ class Trainer:
             
             data_iterator = iter(data_loader)
             for ii in range(num_batches_per_epoch):
+                runtime_diagnostics.begin_step()
                 optimizer.zero_grad(set_to_none=True)
-                microbatches = [next(data_iterator) for _ in range(gradient_accumulation_steps)]
-                local_token_count = torch.stack([
-                    (
-                        batch['answer']['attention_mask'].to(dtype=torch.bool)
-                        & batch['answer']['input_ids'].ne(ignore_index)
-                    ).sum().to(self.device, dtype=torch.float32)
-                    for batch in microbatches
-                ]).sum()
-                # ``TorchDistributedContext.all_reduce`` averages by default;
-                # token mean needs a true global SUM over ranks and windows.
-                global_token_count = self._all_reduce_sum(local_token_count.detach().clone())
-                if global_token_count.item() <= 0:
-                    raise ValueError("gradient accumulation window has no valid answer tokens")
+                with runtime_diagnostics.phase("data_wait"):
+                    microbatches = [next(data_iterator) for _ in range(gradient_accumulation_steps)]
+                with runtime_diagnostics.phase("token_count_reduce"):
+                    local_token_count = torch.stack([
+                        (
+                            batch['answer']['attention_mask'].to(dtype=torch.bool)
+                            & batch['answer']['input_ids'].ne(ignore_index)
+                        ).sum().to(self.device, dtype=torch.float32)
+                        for batch in microbatches
+                    ]).sum()
+                    # ``TorchDistributedContext.all_reduce`` averages by default;
+                    # token mean needs a true global SUM over ranks and windows.
+                    global_token_count = self._all_reduce_sum(local_token_count.detach().clone())
+                    if global_token_count.item() <= 0:
+                        raise ValueError("gradient accumulation window has no valid answer tokens")
                 accumulated_token_loss = torch.zeros((), device=self.device, dtype=torch.float32)
 
                 for micro_idx, batch_data_dict in enumerate(microbatches):
@@ -900,14 +913,16 @@ class Trainer:
                         else contextlib.nullcontext()
                     )
                     with sync_context:
-                        model_outputs = model(input_dict)
+                        with runtime_diagnostics.phase("forward"):
+                            model_outputs = model(input_dict)
                         prefix_length = self.config["model"]["decoder"]["total_prefix_length"]
                         logits = model_outputs.logits[:, prefix_length - 1: -1]
                         target = input_dict["answer"]["input_ids"]
                         answer_mask = answer_attention_mask.to(self.device)
-                        token_loss_sum, _ = self._answer_token_loss_sum(
-                            logits, target, answer_mask, ignore_index
-                        )
+                        with runtime_diagnostics.phase("answer_loss"):
+                            token_loss_sum, _ = self._answer_token_loss_sum(
+                                logits, target, answer_mask, ignore_index
+                            )
                         accumulated_token_loss = accumulated_token_loss + token_loss_sum.detach().float()
                         # DDP averages gradients across ranks.  Multiplying by
                         # world_size cancels that average, leaving the gradient
@@ -920,26 +935,31 @@ class Trainer:
                             * float(self.distributed.world_size())
                             / backward_denominator
                         )
-                        grad_scaler.scale(backward_loss).backward()
+                        with runtime_diagnostics.phase("backward"):
+                            grad_scaler.scale(backward_loss).backward()
 
                     del batch_audio1, batch_audio2, batch_input, batch_answer
                     del input_dict, model_outputs
 
-                grad_scaler.unscale_(optimizer)
-                total_norm, grad_scale = grad_norm_tracker.track_and_clip_(
-                    list(model.named_parameters())
-                )
+                with runtime_diagnostics.phase("gradient_clip"):
+                    grad_scaler.unscale_(optimizer)
+                    total_norm, grad_scale = grad_norm_tracker.track_and_clip_(
+                        list(model.named_parameters())
+                    )
                 next_optimizer_step = total_step + 1
                 if lr_scheduler is not None:
                     lr_scheduler.step(next_optimizer_step)
-                grad_scaler.step(optimizer)
-                grad_scaler.update()
+                with runtime_diagnostics.phase("optimizer"):
+                    grad_scaler.step(optimizer)
+                    grad_scaler.update()
 
-                global_token_loss = self._all_reduce_sum(accumulated_token_loss.detach())
-                loss = (
-                    global_token_loss
-                    / global_token_count.to(dtype=global_token_loss.dtype)
-                ).item()
+                with runtime_diagnostics.phase("loss_reduce"):
+                    global_token_loss = self._all_reduce_sum(accumulated_token_loss.detach())
+                    loss = (
+                        global_token_loss
+                        / global_token_count.to(dtype=global_token_loss.dtype)
+                    ).item()
+                runtime_diagnostics.end_step()
                 accerr_epo += loss
 
                 if loss_tracker is not None:

@@ -25,6 +25,25 @@ The 12 router tensors come from the audited epoch-17 checkpoint. The other
 - Both stages use 5% step warmup followed by cosine decay. Stage 2 does not
   restore stage 1 optimizer or scheduler state.
 
+Model-only initialization reads the checkpoint on CPU, strictly copies model
+tensors into the existing model, and releases the checkpoint before training.
+The unused stage 1 AdamW state therefore does not remain on GPU in stage 2.
+
+The loss implementation matches the successful epoch-17-router Stage 1 code
+(commit `bf1a733`): valid answer positions are selected before FP32 cross entropy.
+The earlier pre-router initialization code is not the baseline for this run.
+
+For a timing investigation, set `MELLOW_RUNTIME_DIAGNOSTICS_STEPS=30` when calling
+a submission wrapper. This skips ten startup steps, measures steps 11 through
+40, then writes one `Runtime diagnostics:` JSON line containing all eight ranks.
+It reports data wait, token-count reduction, forward, answer loss, backward,
+gradient clipping, optimizer and loss reduction, plus GPU memory and allocation
+retries. Phase wall times and CUDA stream times can overlap and must not be added
+together. The probe synchronizes the training stream once at the end of each
+measured step, after the existing loss `.item()` synchronization. It performs
+one extra gather after the window; optimizer, scheduler, RNG and sampling are
+unmodified. Diagnostics are disabled by default.
+
 The route writes schema-v2 full checkpoints with explicit route, stage,
 trainability, parameter-group, scheduler, and resume contracts.
 
