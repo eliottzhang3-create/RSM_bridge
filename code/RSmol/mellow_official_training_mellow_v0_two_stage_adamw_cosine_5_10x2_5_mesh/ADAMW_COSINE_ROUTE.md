@@ -20,9 +20,8 @@ The 12 router tensors come from the audited epoch-17 checkpoint. The other
   parameters use `1e-4 -> 1e-5`.
 - Stage 2: a fresh additional 5 ReasonAQA epochs initialized from the stage
   1 full checkpoint. HTSAT remains frozen and every other trainable parameter
-  uses `5e-4 -> 5e-5`. Stage 2 runs on eight GPUs with per-rank batch 4
-  and no gradient accumulation, giving effective global batch 32. Stage 1
-  retains per-rank batch 8 and accumulation 4, giving global batch 256.
+  uses `5e-4 -> 5e-5`. Both stages run on eight GPUs with per-rank batch 8
+  and gradient accumulation 4, giving effective global batch 256.
 - Both stages use 5% step warmup followed by cosine decay. Stage 2 does not
   restore stage 1 optimizer or scheduler state.
 

@@ -76,7 +76,7 @@ def main() -> int:
     args = parse_args()
     if args.num_epochs < 1 or args.max_epochs_this_run < 0 or args.max_optimizer_steps < 0:
         raise ValueError("epoch and optimizer-step limits must be non-negative, with num_epochs >= 1")
-    expected_batch_geometry = {"stage1": (8, 4), "stage2": (4, 1)}
+    expected_batch_geometry = {"stage1": (8, 4), "stage2": (8, 4)}
     expected_batch_size, expected_accumulation = expected_batch_geometry[args.training_stage]
     if (args.batch_size, args.gradient_accumulation_steps) != (expected_batch_size, expected_accumulation):
         raise ValueError(

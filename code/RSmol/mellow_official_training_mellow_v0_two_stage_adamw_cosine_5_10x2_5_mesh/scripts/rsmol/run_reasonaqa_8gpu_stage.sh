@@ -99,8 +99,8 @@ CONFIG_ARGS=(
 )
 if [[ "$STAGE" == stage2 ]]; then
   CONFIG_ARGS+=(
-    --batch-size 4
-    --gradient-accumulation-steps 1
+    --batch-size 8
+    --gradient-accumulation-steps 4
     --all-max-lr 5e-4
     --all-min-lr 5e-5
   )

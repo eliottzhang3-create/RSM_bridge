@@ -40,9 +40,9 @@ def main() -> int:
     if checkpoint["loss_reduction"] != "global_token_mean":
         raise SystemExit("checkpoint does not declare global_token_mean")
     expected_geometry = {
-        "per_rank_batch_size": 8 if args.stage == "stage1" else 4,
+        "per_rank_batch_size": 8,
         "world_size": 8,
-        "gradient_accumulation_steps": 4 if args.stage == "stage1" else 1,
+        "gradient_accumulation_steps": 4,
     }
     if checkpoint["batch_geometry"] != expected_geometry:
         raise SystemExit(f"unexpected batch geometry: {checkpoint['batch_geometry']!r}")
