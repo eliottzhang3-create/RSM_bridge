@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-ROUTE_ROOT = SCRIPT_DIR.parents[2]
+ROUTE_ROOT = SCRIPT_DIR.parent.parent
 RSMOL_ROOT = ROUTE_ROOT.parent
 BASE_SCRIPTS = RSMOL_ROOT / "scripts"
 for import_root in (SCRIPT_DIR, BASE_SCRIPTS, ROUTE_ROOT):
