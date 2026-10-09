@@ -98,12 +98,14 @@ def _validate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("checkpoint belongs to another training route")
     if checkpoint["text_model_contract"] != TEXT_CONTRACT:
         raise RuntimeError("checkpoint belongs to another text model contract")
+    checkpoint_stage = str(checkpoint["training_stage"])
+    if checkpoint_stage not in {"stage1", "stage2"}:
+        raise RuntimeError(f"unsupported two-stage checkpoint stage: {checkpoint_stage!r}")
     if (
-        checkpoint["training_stage"] != "stage1"
-        or int(checkpoint["epoch_completed"]) != 5
+        int(checkpoint["epoch_completed"]) != 5
         or int(checkpoint["num_epochs"]) != 5
     ):
-        raise RuntimeError("MMAU target must be a completed Stage 1 five-epoch checkpoint")
+        raise RuntimeError("MMAU target must be a completed five-epoch Stage 1 or Stage 2 checkpoint")
     config = yaml.safe_load(args.runtime_config.read_text(encoding="utf-8")) or {}
     if not isinstance(config, dict):
         raise RuntimeError("runtime config must be a mapping")
@@ -111,8 +113,11 @@ def _validate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("runtime config route contract mismatch")
     if config.get("text_model_contract") != TEXT_CONTRACT:
         raise RuntimeError("runtime config text contract mismatch")
-    if config.get("training_stage") != "stage1":
-        raise RuntimeError("runtime config is not Stage 1")
+    runtime_stage = str(config.get("training_stage", ""))
+    if runtime_stage != checkpoint_stage:
+        raise RuntimeError(
+            f"runtime config stage mismatch: checkpoint={checkpoint_stage} runtime={runtime_stage}"
+        )
     if int((config.get("train") or {}).get("num_epochs", -1)) != 5:
         raise RuntimeError("runtime config does not declare num_epochs=5")
     state = checkpoint["state_dict"]
@@ -128,6 +133,7 @@ def _validate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         "schema_version": checkpoint["schema_version"],
         "epoch_completed": checkpoint["epoch_completed"],
         "num_epochs": checkpoint["num_epochs"],
+        "training_stage": checkpoint_stage,
         "state_tensor_count": len(state),
         "route_contract": checkpoint["route_contract"],
         "text_model_contract": checkpoint["text_model_contract"],
