@@ -63,7 +63,7 @@ PY
 )
 
 RUN_TAG="$(date +%Y%m%d_%H%M%S%N)"
-OUTPUT_DIR="${OUTPUT_DIR:-${MELLOW_REASONAQA_OLDMEAN_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_old_microbatch_mean_5090/formal_5epochs_maxlr_${LR_TAG}_${RUN_TAG}}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${MELLOW_REASONAQA_OLDMEAN_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_old_microbatch_mean_3090/formal_5epochs_maxlr_${LR_TAG}_${RUN_TAG}}}"
 [[ -f "$AUDIT_REPORT" && -f "$MAPPING_JSONL" ]] || {
   echo "audit report or mapping is missing" >&2
   exit 2
@@ -88,7 +88,7 @@ if [[ -n "$RESUME_CHECKPOINT" ]]; then
 fi
 printf -v CMD_ARGS '%q ' "${INNER_ARGS[@]}"
 vc submit \
-  -p pdgpu-5090 \
+  -p pdgpu-3090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 32 -m 256G -g 8 -n 1 \
   -j "mellow-oldmean256-1e-3-${RUN_TAG}" \

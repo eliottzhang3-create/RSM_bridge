@@ -24,11 +24,11 @@ batch 256, five epochs, FP32, AdamW betas (0.9, 0.95), weight decay 1e-4,
 From the remote repository's `code/RSmol` directory, submit a fresh run with:
 
 ```bash
-bash run_mellow_official_reasonaqa_adamw_cosine_gbs256_old_microbatch_mean_1e-3_5epochs_5090.sh --max-lr 1e-3
+bash run_mellow_official_reasonaqa_adamw_cosine_gbs256_old_microbatch_mean_1e-3_5epochs_3090.sh --max-lr 1e-3
 ```
 
 The default output root is
-`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_old_microbatch_mean_5090/`.
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_old_microbatch_mean_3090/`.
 The wrapper stages raw audio into a job-local `/dev/shm` directory and audits
 the final schema-v2 `model--epo-5.ckpt`, including the loss reduction, batch
 geometry, optimizer, and scheduler contracts. Optional arguments are
