@@ -31,8 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--htsat-root", type=Path, default=Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT"))
     parser.add_argument("--init-model-checkpoint", type=Path, default=None)
     parser.add_argument("--resume-checkpoint", type=Path, default=None)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=None)
     parser.add_argument("--num-epochs", type=int, required=True)
     parser.add_argument("--max-epochs-this-run", type=int, default=0)
     parser.add_argument("--max-optimizer-steps", type=int, default=0)
@@ -76,8 +76,12 @@ def main() -> int:
     args = parse_args()
     if args.num_epochs < 1 or args.max_epochs_this_run < 0 or args.max_optimizer_steps < 0:
         raise ValueError("epoch and optimizer-step limits must be non-negative, with num_epochs >= 1")
-    expected_batch_geometry = {"stage1": (8, 4), "stage2": (8, 4)}
+    expected_batch_geometry = {"stage1": (8, 4), "stage2": (4, 1)}
     expected_batch_size, expected_accumulation = expected_batch_geometry[args.training_stage]
+    if args.batch_size is None:
+        args.batch_size = expected_batch_size
+    if args.gradient_accumulation_steps is None:
+        args.gradient_accumulation_steps = expected_accumulation
     if (args.batch_size, args.gradient_accumulation_steps) != (expected_batch_size, expected_accumulation):
         raise ValueError(
             f"{args.training_stage} requires per-rank batch {expected_batch_size} "

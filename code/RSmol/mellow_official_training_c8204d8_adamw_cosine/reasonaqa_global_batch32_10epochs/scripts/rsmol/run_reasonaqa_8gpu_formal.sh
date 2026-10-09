@@ -11,7 +11,7 @@ ROUTE_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 AUDIT_REPORT=$(readlink -f "$1")
 MAPPING_JSONL=$(readlink -f "$2")
 OUTPUT_DIR=$(readlink -m "$3")
-NUM_EPOCHS=${4:-10}
+NUM_EPOCHS=${4:-5}
 RESUME_CHECKPOINT=${5:-}
 RESUME_ARGS=()
 if [[ -n "$RESUME_CHECKPOINT" ]]; then
@@ -24,8 +24,8 @@ if [[ ! -f "$AUDIT_REPORT" || ! -f "$MAPPING_JSONL" ]]; then
   echo "audit report or mapping is missing" >&2
   exit 2
 fi
-if [[ "$NUM_EPOCHS" -ne 10 ]]; then
-  echo "formal route requires exactly 10 epochs" >&2
+if [[ "$NUM_EPOCHS" -ne 5 ]]; then
+  echo "formal route requires exactly 5 epochs" >&2
   exit 2
 fi
 mkdir -p "$OUTPUT_DIR"
@@ -37,7 +37,7 @@ conda activate mellow_c8204d8
 RUN_ID="${MELLOW_RUN_ID:-${SLURM_JOB_ID:-$$}_$(date +%Y%m%d_%H%M%S%N)}"
 STAGE_ROOT="/dev/shm/mellow_adamw_cosine_reasonaqa_gbs32_$RUN_ID"
 STAGING_REPORT="$OUTPUT_DIR/staging_report.json"
-RUNTIME_CONFIG="$OUTPUT_DIR/runtime_10epochs.yaml"
+RUNTIME_CONFIG="$OUTPUT_DIR/runtime_5epochs.yaml"
 CHECKPOINT_ROOT="$OUTPUT_DIR/checkpoints"
 
 cleanup() {
@@ -79,7 +79,7 @@ python "$SCRIPT_DIR/write_reasonaqa_runtime_config.py" \
 
 export MELLOW_JOB_ID="mellow_adamw_cosine_reasonaqa_gbs32_formal_$RUN_ID"
 cd "$ROUTE_ROOT"
-echo "[mellow-formal] launching 10-epoch torchrun world_size=8, batch=4, accumulation=1, global_batch=32" >&2
+echo "[mellow-formal] launching 5-epoch torchrun world_size=8, batch=4, accumulation=1, global_batch=32" >&2
 torchrun --standalone --nnodes=1 --nproc_per_node=8 train.py \
   --config "$RUNTIME_CONFIG" \
   --distributed-backend nccl \

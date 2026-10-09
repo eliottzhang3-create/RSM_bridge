@@ -8,7 +8,7 @@ mkdir -p log
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
 AUDIT_REPORT="${MELLOW_REASONAQA_AUDIT_REPORT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_c8204d8/preflight/path_audit_20260929_190423/path_audit.json}"
 MAPPING_JSONL="${MELLOW_REASONAQA_MAPPING_JSONL:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_c8204d8/preflight/path_audit_20260929_190423/train_audio_mapping.jsonl}"
-OUTPUT_DIR="${MELLOW_REASONAQA_GBS32_FORMAL_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs32_5090/formal_10epochs_$RUN_TAG}"
+OUTPUT_DIR="${MELLOW_REASONAQA_GBS32_FORMAL_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs32_5090/formal_5epochs_$RUN_TAG}"
 RESUME_CHECKPOINT="${MELLOW_REASONAQA_RESUME_CHECKPOINT:-}"
 
 if [[ $# -gt 4 ]]; then
@@ -24,7 +24,7 @@ if [[ -n "$RESUME_CHECKPOINT" && ! -f "$RESUME_CHECKPOINT" ]]; then
   exit 2
 fi
 
-INNER_ARGS=("$AUDIT_REPORT" "$MAPPING_JSONL" "$OUTPUT_DIR" 10)
+INNER_ARGS=("$AUDIT_REPORT" "$MAPPING_JSONL" "$OUTPUT_DIR" 5)
 if [[ -n "$RESUME_CHECKPOINT" ]]; then
   INNER_ARGS+=("$RESUME_CHECKPOINT")
 fi
@@ -38,4 +38,4 @@ vc submit \
   JOB=1:1 "$SCRIPT_DIR/log/mellow_official_reasonaqa_gbs32_formal_5090.$RUN_TAG.JOB.log" \
   --cmd "bash mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch32_10epochs/scripts/rsmol/run_reasonaqa_8gpu_formal.sh $CMD_ARGS"
 
-echo "Submitted 8-GPU 10-epoch full ReasonAQA AdamW/cosine Mellow training (global batch 32); output directory: $OUTPUT_DIR"
+echo "Submitted 8-GPU 5-epoch full ReasonAQA AdamW/cosine Mellow training (global batch 32); output directory: $OUTPUT_DIR"
