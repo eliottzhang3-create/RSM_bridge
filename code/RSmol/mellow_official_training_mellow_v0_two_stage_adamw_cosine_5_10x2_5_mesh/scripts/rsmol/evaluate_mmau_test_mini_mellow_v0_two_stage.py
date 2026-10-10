@@ -42,6 +42,7 @@ DEFAULT_OUTPUT = Path(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="full")
+    parser.add_argument("--expected-training-stage", choices=("stage1", "stage2"))
     parser.add_argument("--checkpoint-file", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--runtime-config", type=Path, default=DEFAULT_RUNTIME)
     parser.add_argument("--route-root", type=Path, default=ROUTE_ROOT)
@@ -101,6 +102,11 @@ def _validate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     checkpoint_stage = str(checkpoint["training_stage"])
     if checkpoint_stage not in {"stage1", "stage2"}:
         raise RuntimeError(f"unsupported two-stage checkpoint stage: {checkpoint_stage!r}")
+    if args.expected_training_stage and checkpoint_stage != args.expected_training_stage:
+        raise RuntimeError(
+            "checkpoint training stage mismatch: "
+            f"expected={args.expected_training_stage!r} actual={checkpoint_stage!r}"
+        )
     if (
         int(checkpoint["epoch_completed"]) != 5
         or int(checkpoint["num_epochs"]) != 5
@@ -120,6 +126,36 @@ def _validate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         )
     if int((config.get("train") or {}).get("num_epochs", -1)) != 5:
         raise RuntimeError("runtime config does not declare num_epochs=5")
+    runtime_train = config.get("train") or {}
+    expected_geometry = (
+        {
+            "per_rank_batch_size": 8,
+            "world_size": 8,
+            "gradient_accumulation_steps": 4,
+        }
+        if checkpoint_stage == "stage1"
+        else {
+            "per_rank_batch_size": 4,
+            "world_size": 8,
+            "gradient_accumulation_steps": 1,
+        }
+    )
+    checkpoint_geometry = checkpoint.get("batch_geometry")
+    if checkpoint_geometry != expected_geometry:
+        raise RuntimeError(
+            f"{checkpoint_stage} checkpoint batch geometry mismatch: "
+            f"expected={expected_geometry!r} actual={checkpoint_geometry!r}"
+        )
+    runtime_geometry = {
+        "per_rank_batch_size": int(runtime_train.get("batch_size", -1)),
+        "world_size": 8,
+        "gradient_accumulation_steps": int(runtime_train.get("gradient_accumulation_steps", -1)),
+    }
+    if runtime_geometry != expected_geometry:
+        raise RuntimeError(
+            f"{checkpoint_stage} runtime batch geometry mismatch: "
+            f"expected={expected_geometry!r} actual={runtime_geometry!r}"
+        )
     state = checkpoint["state_dict"]
     nonfinite = [
         key for key, value in state.items()
@@ -137,6 +173,10 @@ def _validate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         "state_tensor_count": len(state),
         "route_contract": checkpoint["route_contract"],
         "text_model_contract": checkpoint["text_model_contract"],
+        "batch_geometry": checkpoint_geometry,
+        "effective_global_batch": (
+            256 if checkpoint_stage == "stage1" else 32
+        ),
     }
 
 
