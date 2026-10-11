@@ -1,5 +1,18 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-12：标准 Mellow gbs256 四条独立五 epoch 消融训练路线
+
+在 `code/RSmol/mellow_official_training_c8204d8_adamw_cosine/` 下新增四个薄覆盖目录，均以 `reasonaqa_global_batch256_lr_ablation_5epochs/` 为共同基线，并通过各自的 `PYTHONPATH` 优先加载覆盖文件。每条路线只复制训练必需且需要隔离的入口、trainer、配置生成器和脚本；未复制权重、数据或评测实现。原基线代码未修改。
+
+| 路线目录后缀 | 唯一训练语义改动 | `code/RSmol/` 下的提交入口 |
+|---|---|---|
+| `reasonaqa_global_batch256_global_clip_5epochs` | 全模型可训练参数的梯度全局 L2 范数硬裁剪至 0.5；不使用 EMA 梯度范数跟踪器 | `run_mellow_official_reasonaqa_adamw_cosine_gbs256_global_clip_1e-3_5epochs_5090.sh` |
+| `reasonaqa_global_batch256_attention_mask_5epochs` | 音频前缀全有效，prompt 和 answer padding 无效；因果模型屏蔽未来 token，loss 仍仅计 answer token 与 EOS | `run_mellow_official_reasonaqa_adamw_cosine_gbs256_attention_mask_1e-3_5epochs_5090.sh` |
+| `reasonaqa_global_batch256_htsat_frozen_5epochs` | HTSAT 参数冻结，前向处于 eval/no_grad；c2l 与投影保持可训练 | `run_mellow_official_reasonaqa_adamw_cosine_gbs256_htsat_frozen_1e-3_5epochs_5090.sh` |
+| `reasonaqa_global_batch256_zero_audio2_5epochs` | 仅原始 `filepath2 == ''` 时第二路输入改为 10 秒、32 kHz 的零波形；读音频失败的回退逻辑不变 | `run_mellow_official_reasonaqa_adamw_cosine_gbs256_zero_audio2_1e-3_5epochs_5090.sh` |
+
+四条线均固定 8 GPU × 每卡 microbatch 8 × 累积 4 = global batch 256、5 epochs、FP32、AdamW、max LR 1e-3、min LR 1e-4、5% warmup 和按优化步的 cosine 调度。将代码经 GitHub 同步到远端后，从远端 `code/RSmol/` 目录分别运行对应脚本并传入 `--max-lr 1e-3`；脚本通过 `vc submit` 提交到 `pdgpu-5090`，使用各自独立的输出目录。当前只完成本地静态核验，未在本地或远端执行训练，也未实现这四条线的评测。
+
 ## 2026-10-10：补充交接——标准 Mellow gbs256 学习率／损失归一化消融与统一 MMAU 评测
 
 本段记录标准 mellow_official_training_c8204d8_adamw_cosine 线路，与紧随其后的 Mellow-v0 两阶段 5 + 10×2 + 5 MeSH 主线并行且完全隔离。下方 Mellow-v0 两阶段段落仍是该主线的当前状态；不能把两条线路的模型目录、runtime YAML、checkpoint 或 MMAU evaluator 交叉使用。
