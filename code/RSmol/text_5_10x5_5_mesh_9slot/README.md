@@ -6,7 +6,7 @@ route.
 ## Fixed contract
 
 - 20 physical decoder layers and 60 logical executions: `5 + 10 * 5 + 5`.
-- Eight transient MeSH memory slots. The logical cache still has 60 entries.
+- Nine transient MeSH memory slots. The logical cache still has 60 entries.
 - Six independent router groups (prefix plus five loop transitions). Each
   group owns one write router and one read router: twelve independent router
   parameter modules.

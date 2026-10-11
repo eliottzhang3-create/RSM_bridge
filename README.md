@@ -1,6 +1,251 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
-## 2026-10-03：最新交接补充（优先于下方历史快照）
+## 2026-10-10：补充交接——标准 Mellow gbs256 学习率／损失归一化消融与统一 MMAU 评测
+
+本段记录标准 mellow_official_training_c8204d8_adamw_cosine 线路，与紧随其后的 Mellow-v0 两阶段 5 + 10×2 + 5 MeSH 主线并行且完全隔离。下方 Mellow-v0 两阶段段落仍是该主线的当前状态；不能把两条线路的模型目录、runtime YAML、checkpoint 或 MMAU evaluator 交叉使用。
+
+### 标准 Mellow 的 gbs256、五 epoch ReasonAQA 学习率消融
+
+- 路线根目录：
+
+  ~~~text
+  code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_lr_ablation_5epochs/
+  ~~~
+
+- 这是完整 ReasonAQA 训练线路，不是 MCQ。合同固定为 8 ranks、每 rank microbatch 8、gradient accumulation 4、effective global batch 256、5 epochs、FP32、AdamW betas (0.9, 0.95)、weight decay 1e-4、5% warmup 和按 optimizer step 的 cosine 衰减。max_lr 由提交 wrapper 显式传入，min_lr = 0.1 × max_lr；该消融计划覆盖 2e-3、1e-3、8e-4、4e-4、2e-4。
+- 训练提交入口是 code/RSmol/run_mellow_official_reasonaqa_adamw_cosine_gbs256_lr_ablation_5epochs_5090.sh，提交到 pdgpu-5090、8 GPU、32 CPU、256G。checkpoint 写入 loss_reduction = global_token_mean。
+- 本会话用于 MMAU 的已知目标 checkpoint 是用户提供的：
+
+  ~~~text
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_lr_ablation_5090/formal_5epochs_maxlr_1e-3_20261009_151832898359917/checkpoints/mellow_adamw_cosine_reasonaqa_gbs256_lr_formal_20_20261009_074133259050800/model--epo-5.ckpt
+  ~~~
+
+  本地工作区无法替代远程文件系统确认该 artifact 当前可用；后续操作前应在远程检查文件、同一 run root 下的 runtime_5epochs.yaml 和作业日志。
+
+### 同几何的旧 microbatch 均值损失消融
+
+- 隔离路线根目录：
+
+  ~~~text
+  code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_old_microbatch_mean_5epochs/
+  ~~~
+
+- 它与 global-token 基线保持同一模型、数据、batch geometry、优化器和 scheduler，只改变损失归一化。8 个 rank、每 rank 4 个累积 microbatch 时使用：
+
+  ~~~text
+  L_old = (1 / (R G)) sum_r sum_g [ sum_t CE[r,g,t] / N[r,g] ], R=8, G=4
+  ~~~
+
+  即先在每个 microbatch 内对有效答案 token 平均，再对累积步和 DDP ranks 平均；它不是基线的全局有效 token 加权平均。checkpoint 写入 loss_reduction = equal_microbatch_token_mean，因此拒绝从 global_token_mean checkpoint 恢复，反之亦然。
+- 提交入口是 code/RSmol/run_mellow_official_reasonaqa_adamw_cosine_gbs256_old_microbatch_mean_1e-3_5epochs_3090.sh。该消融固定 max_lr = 1e-3、min_lr = 1e-4，提交到 pdgpu-3090（8 GPU、32 CPU、256G），默认输出根为：
+
+  ~~~text
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_old_microbatch_mean_3090/
+  ~~~
+
+  从远程 code/RSmol 目录提交：
+
+  ~~~bash
+  bash run_mellow_official_reasonaqa_adamw_cosine_gbs256_old_microbatch_mean_1e-3_5epochs_3090.sh --max-lr 1e-3
+  ~~~
+
+### 两种 gbs256 checkpoint 共用的 MMAU test-mini evaluator
+
+以下三个文件已经落地，专用于完成的标准 Mellow gbs256、五 epoch checkpoint：
+
+~~~text
+code/RSmol/scripts/evaluate_mmau_test_mini_mellow_gbs256.py
+code/RSmol/scripts/evaluate_mmau_test_mini_mellow_gbs256.sh
+code/RSmol/submit_mmau_test_mini_mellow_gbs256_3090.sh
+~~~
+
+- evaluator 只接受 schema-v2 完成态的五 epoch checkpoint，并核对 batch geometry 为 8 × 8 × 4 = 256、AdamW betas、5% warmup、step cosine、min_lr = 0.1 × max_lr 和同一 run root 下的 runtime YAML。
+- 它根据 checkpoint 的 loss_reduction 自动选择训练代码根：global_token_mean 对应学习率消融路线，equal_microbatch_token_mean 对应旧 microbatch 均值路线。手工传入不匹配的 route-root 会失败，避免错误加载模型代码。
+- 生成和评分委托给既有标准 Mellow MMAU 实现，保留 Mellow author-reply prompt／音频协议、FP32、129-token prompt、300 个新 token 与官方 MMAU scorer。它不适用于 Mellow-v0 两阶段 checkpoint；后者必须使用已有专用 evaluator。
+- 提交 wrapper 使用 pdgpu-3090、1 GPU、16 CPU、64G。输出目录有 gbs256_eval_identity.json，绑定 checkpoint、runtime YAML 及其 SHA256；非空但没有 marker 的目录，或 marker 与本次输入不一致时会拒绝继续，防止不同 checkpoint 的生成混写。
+
+对上面的 max_lr=1e-3 checkpoint 做完整评测，从远程 code/RSmol 目录运行：
+
+~~~bash
+bash submit_mmau_test_mini_mellow_gbs256_3090.sh \
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_lr_ablation_5090/formal_5epochs_maxlr_1e-3_20261009_151832898359917/checkpoints/mellow_adamw_cosine_reasonaqa_gbs256_lr_formal_20_20261009_074133259050800/model--epo-5.ckpt
+~~~
+
+full 是默认模式。wrapper 默认从 checkpoint 所属 run root 读取 runtime_5epochs.yaml，并将该例输出到：
+
+~~~text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_lr_ablation_5090/formal_5epochs_maxlr_1e-3_20261009_151832898359917/eval_mmau_test_mini/mellow_adamw_cosine_reasonaqa_gbs256_lr_formal_20_20261009_074133259050800/model--epo-5/full
+~~~
+
+复用命令只需替换第一个位置参数为另一个完整 model--epo-5.ckpt 路径：
+
+~~~bash
+bash submit_mmau_test_mini_mellow_gbs256_3090.sh /complete/path/to/model--epo-5.ckpt
+~~~
+
+可选位置参数依次为 runtime-config、output-dir、full|smoke、dataset-dir、route-root；通常不要手传 route-root，让 evaluator 从 checkpoint 合同自动选择。正式结果必须以输出目录的 evaluation_report.json、官方 scorer 输出和 job log 为准。
+
+### 当前可证实状态与下一位 agent 的起点
+
+- 以上训练和评测代码已完成本地静态检查：相关 Python 文件可解析、Bash 语法通过，并以 mock checkpoint／mock vc submit 覆盖了 batch、学习率、loss-reduction、路径派生和输出 identity 的关键拒绝条件。
+- 本地工作区没有可用于证明远程训练或 MMAU full job 已完成的回传报告。不要因为代码已经存在就推断远程训练或评测已成功；先检查远程 checkpoint、gbs256_eval_identity.json、evaluation_report.json、官方 scorer 输出和提交日志。
+- 接手时先区分标准 Mellow c8204d8、Mellow-v0 两阶段 MeSH、以及更下方的历史音频／文本路线；保留所有历史说明，按目标 checkpoint 的合同选择同一路线的 loader、runtime config 和 evaluator。
+
+### 同日补充：其他近期隔离路线索引
+
+以下路线均与标准 Mellow gbs256、以及紧随其后的 Mellow-v0 两阶段主线隔离。除明确给出的用户提供 checkpoint 外，本地代码存在不等于远程训练、生成或 full evaluation 已完成；接手时先查目标输出目录中的报告和 job log。
+
+- **x5、9-slot 文本与音频链路。** 文本路线是 code/RSmol/text_5_10x5_5_mesh_9slot/，核心实现为 recursive_model_5_10x5_5_mesh_9slot.py、convert_stepwise_5_10x5_5_mesh_9slot.py、train_stage4_5_10x5_5_mesh_9slot_ddp.py 和 run_stage4_5_10x5_5_mesh_9slot_formal_3090.sh。固定合同为 20 个物理层、60 次逻辑执行（5 + 10×5 + 5）、9 个 transient memory slots、6 组 router、12 个 router 模块，contract 为 logical_60_physical_20_5_10x5_5_mesh_9slot_6router。它从干净的 SmolLM2-5-10-5 CPU 转换到 /hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x5-5-mesh-9slot；formal 文本训练为 pdgpu-3090、8 GPU、microbatch 4、GA 32、3,081 steps。
+- **9-slot 音频续训与 MMAU。** 音频路线为 code/RSmol/audio_5_10x5_5_mesh_9slot_mellow_shared_store_configurable_epochs/，从以下 text checkpoint 初始化，且只载入模型／tokenizer，不继承文本 optimizer、scheduler、RNG 或数据游标：
+
+  ~~~text
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x5_5_mesh_9slot/formal_third_epoch_3081steps_20261005_212437_3090_v1/checkpoint-003081
+  ~~~
+
+  它沿用 fixed-260 shared-store、runtime-zero 第二音频槽、8 GPU × microbatch 8 × GA 4、3 epochs、LR 1e-3 → 1e-4 的音频合同；formal wrapper 是 run_audio_shared_store_formal_configurable_epochs_5_10x5_5_mesh_9slot_mellow_3090.sh。9-slot MMAU 的专用入口是 run_mmau_test_mini_audio_mesh_9slot_3090.sh，默认 checkpoint 是：
+
+  ~~~text
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audio_5_10x5_5_mesh_9slot_mellow_shared_store_configurable_epochs/formal_3epochs_20261006_054353274259875-20/checkpoint-011343
+  ~~~
+
+  它强制 route=x5_9slot、full、pdgpu-3090 单 GPU，默认输出在 outputs/RSmol/mmau_audio_mesh_zero_slot/x5_9slot/ 下；不得让 x2/x4/x5-7slot evaluator 加载此 checkpoint。
+- **x4 文本的当前两 epoch 合同。** code/RSmol/text_5_10x4_5_mesh/ 仍是 20 个物理层、50 次逻辑执行、7 slots、5 组 router 的路线，但当前 formal 合同已经是从 /hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x4-5-mesh 初始化，pdgpu-3090、8 GPU、microbatch 4、GA 32、global batch 1024、直接 persistent Parquet 读取、两 epoch 共 18,488 steps。第二 epoch 仅确定性打乱每个 rank 的 shard 顺序，shard 所属和 shard 内行顺序不变；LR 925-step warmup 到 1e-3，再在全程降到 5e-5。当前 formal 入口是 run_stage4_5_10x4_5_mesh_formal_3090.sh，默认输出名为 formal_2epochs_18488steps_<timestamp>_3090_v1。更下方 2026-09-27 的描述是历史快照，不能覆盖这里的 batch、读取方式、队列和 LR 合同。
+- **x4 两循环 ReasonAQA generation 探究。** scripts/generate_reasonaqa_x4_two_loop_ablation.py、scripts/generate_reasonaqa_x4_two_loop_ablation.sh、run_reasonaqa_x4_two_loop_ablation_generation_3090.sh 构成独立推理路线。它使用 x4/7-slot checkpoint-011343 的前五个 ReasonAQA test 行，执行 prefix 与前两次中段循环；第二次写入后由 read_routers[4] 读取，再执行最后五层，第三、四次中段循环跳过。该实验不会修改 checkpoint 或训练实现；输出为独立 timestamp 目录中的 samples.jsonl 和 generation_report.json。
+- **router／循环相似性分析指标已替换。** run_analyze_audio_mesh_router_loop_similarity_3090.sh 调用 scripts/analyze_audio_mesh_router_loop_similarity.py，在 pdgpu-3090 单 GPU 上比较 x2/x3/x4 的五个固定 ReasonAQA 样本。router 输出的 7 维 softmax 分布使用以 2 为底的 Jensen-Shannon divergence，升序输出；循环模块与 router 参数展平后使用对称 Relative L2 distance：2×||θ1-θ2||₂ / (||θ1||₂ + ||θ2||₂)。旧 cosine similarity 与普通 L2 similarity 已不再是该分析输出指标。
+- **标准 Mellow gbs32 训练。** code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch32_10epochs/ 是完整 ReasonAQA、全局有效答案 token 平均 CE 的隔离副本。目录名保留 10epochs 兼容历史，但当前实际训练是 5 epochs：8 ranks、microbatch 4、GA 1、global batch 32、FP32、AdamW betas (0.9, 0.95)、5% warmup、1e-3 → 5e-5 step cosine、pdgpu-5090。提交入口是 run_mellow_official_reasonaqa_adamw_cosine_gbs32_10epochs_5090.sh。
+- **5-10×2-5 官方 Mellow MeSH 的独立 full evaluator。** code/RSmol/mellow_official_training_adamw_cosine_5_10x2_5_mesh/ 下的 run_mmau_test_mini_mellow_official_training_adamw_cosine_5_10x2_5_mesh_full_3090.sh 和 run_mmar_mellow_official_training_adamw_cosine_5_10x2_5_mesh_full_3090.sh 分别是 MMAU、MMAR full 入口。它们只接收该 route-root 的 checkpoint 与 runtime config，使用 pdgpu-3090 单 GPU；脚本中的 30-epoch 默认路径必须先在远程验证存在，不能把它当成已完成作业的证明。
+
+## 2026-10-10：最新交接补充（优先于所有下方历史快照）
+
+本节记录当前会话结束时已知的最新事实。它只覆盖同一事项的旧状态，不删除下方任何仍有参考价值的历史路线、实验背景或旧产物记录。下一位 agent 应先读本节，再读取目标隔离路线内的文档、远程 runtime config、checkpoint 审计和作业日志；远程证据优先于本地静态检查。
+
+### 当前活跃路线：Mellow-v0 初始化的两阶段 ReasonAQA 训练
+
+当前需要重点区分的路线为：
+
+~~~text
+code/RSmol/mellow_official_training_mellow_v0_two_stage_adamw_cosine_5_10x2_5_mesh/
+~~~
+
+它是从原生 Mellow-v0 初始化的 5 + 10×2 + 5、5-memory-slot、3 组 write/read router 的递归 MeSH 路线；它与下列旧路线相互隔离，不能混用模型、runtime config、checkpoint 或 evaluator：
+
+~~~text
+code/RSmol/mellow_official_training_adamw_cosine_5_10x2_5_mesh/
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/
+code/RSmol/mellow_official_training_c8204d8/
+~~~
+
+训练主调用链为：
+
+~~~text
+submit_stage{1,2}_{smoke,resume,formal}_3090.sh
+  -> submit_reasonaqa_stage_3090.sh
+  -> scripts/rsmol/run_reasonaqa_8gpu_stage.sh
+  -> stage_reasonaqa_raw_audio.py
+  -> write_reasonaqa_runtime_config.py
+  -> torchrun --nproc_per_node=8 train.py
+  -> training/trainer.py
+~~~
+
+每次训练仍在计算节点的 /dev/shm 重新 staging 原始音频；正式训练必须从 pdgpu-3090 的 8-GPU wrapper 提交，不能在登录节点直接运行 CUDA 训练。
+
+### Mellow-v0 来源、审计与当前初始化产物
+
+- Mellow 权重快照只有 config.json 和 v0.ckpt，位于：
+  /hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/Mellow-v0/models--soham97--mellow/snapshots/83672db0dae28764e283210d5bb732621e903d8a/
+- Mellow 源码 checkout 不是上述 snapshot；审计所需的 mellow/config/v0_local.yaml 位于：
+  /hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/mellow-main/。此前把 snapshot 当作 source root 导致的 v0_local.yaml 缺失错误已经解释清楚，不应再次将两类目录混用。
+- CPU 初始化审计已通过：原生文本 decoder 为 30 层、hidden size 576、vocab 49152；目标模型为 30 个逻辑层、20 个物理层、2 次中间循环、5 个 memory slots、6 个 router 对象，即 3 组 write/read routers。逻辑到物理层 schedule 为 0..14, 5..14, 15..19。
+- 当前训练必须使用 router-transfer 初始化目录：
+
+  ~~~text
+  /hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/converted/mellow_v0_5_10x2_5_mesh_epoch17_routers
+  ~~~
+
+  其中需要同时存在 text_model/ 与 mellow_v0_5_10x2_5_mesh_init.pt。
+- 该初始化 checkpoint 有 401 个 state tensors、160,374,966 个参数；其中 389 个 tensor 继承 Mellow-v0，12 个 router tensor 精确来自以下 epoch-17 checkpoint：
+
+  ~~~text
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_5_10x2_5_mesh_5090/formal_30epochs_20261005_175504/checkpoints/mellow_adamw_cosine_reasonaqa_mesh_formal_20_20261005_095511181778133/model--epo-17.ckpt
+  ~~~
+
+  router source SHA256 为 3eeed406c6125056d3bc2be4b9d136085a1ded7864e174f18fa83fefb657e4b9。因此当前模型参数均有明确来源，并没有 fresh-random router；5 个 memory slots 是 forward 中的运行时状态，首槽按模型合同承载原始 input embeddings，并不是待初始化的独立参数。
+- 初始化同时复制 Mellow-v0 的 HTSAT、c2l 和 bridge 权重；训练合同只冻结 HTSAT backbone，c2l、bridge、文本 decoder 和 routers 均可训练。初始化 artifact 不携带 optimizer、scheduler 或 RNG state。
+- 转换报告为 mellow_v0_5_10x2_5_mesh_epoch17_routers_conversion.json，位于远程 outputs/RSmol/mellow_v0/preflight/；转换工具是 code/RSmol/scripts/initialize_mellow_v0_to_5_10x2_5_mesh.py。部分已有报告打印 /mnt/cloudstorfs/... 前缀，实际提交前应以当前机器上可解析的路径和 wrapper 默认的 /hpc_stor03/... 初始化根目录为准。
+
+### 两阶段训练合同与已产生的 checkpoint
+
+| 项目 | Stage 1 | Stage 2（当前默认版本） |
+|---|---|---|
+| 初始化 | epoch-17-router Mellow-v0 初始化 artifact | 仅加载 Stage 1 的模型权重 |
+| 训练时长 | ReasonAQA 5 epochs | 额外、独立的 ReasonAQA 5 epochs |
+| HTSAT | 冻结 | 冻结 |
+| 其他可训练部分 | c2l、bridge、text decoder、routers | c2l、bridge、text decoder、routers |
+| 学习率 | routers 1e-3 -> 1e-4；其他 1e-4 -> 1e-5 | 单一参数组 5e-4 -> 5e-5 |
+| scheduler | 5% optimizer-step warmup，随后 step-level cosine | 同左 |
+| 每 rank batch / GA | 8 / 4 | 4 / 1 |
+| effective global batch（8 GPUs） | 256 | 32 |
+| 精度 | FP32，use_mixed_precision 为 false | FP32，use_mixed_precision 为 false |
+| optimizer / scheduler / RNG | 新建 | 新建；不恢复 Stage 1 的 optimizer、scheduler 或 RNG |
+
+write_reasonaqa_runtime_config.py 会拒绝不符合上述 batch geometry 的输入；当前 Stage 2 代码默认是 global batch 32。曾运行过 global-batch-256 或 diagnostic 的 Stage 2 变体，它们是历史实验，不能当作当前 Stage 2 默认合同。
+
+已确认存在并被后续流程使用的正式 checkpoint：
+
+~~~text
+# Stage 1，epoch-17 routers 初始化，5 epochs
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0_two_stage_reasonaqa/stage1_formal_5epochs_epoch17_routers/checkpoints/mellow_v0_two_stage_stage1_formal_20_20261007_045627285353623/model--epo-5.ckpt
+
+# Stage 2，global batch 32，5 epochs
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0_two_stage_reasonaqa/stage2_formal_5epochs_gbs32_20261009_111507/checkpoints/mellow_v0_two_stage_stage2_formal_20_20261009_031515074161572/model--epo-5.ckpt
+~~~
+
+Stage 1 的 20-step smoke retry 已通过，产物在 stage1_smoke_20steps_retry1 下的 model--step-20.ckpt。每个 schema-v2 full checkpoint 都应由 scripts/rsmol/audit_stage_checkpoint.py 审计其 route、stage、batch geometry、trainability、parameter groups、scheduler 和 completion contract；不要仅按文件名判断来源。
+
+### 当前评测与未解决的质量回退
+
+- 两阶段路线的 MMAU test-mini evaluator 是 scripts/rsmol/evaluate_mmau_test_mini_mellow_v0_two_stage.py 与 scripts/rsmol/evaluate_mmau_test_mini_mellow_v0_two_stage.sh。
+- 通用提交入口 submit_mmau_test_mini_mellow_v0_two_stage_3090.sh 对应 Stage 1 风格调用；当前 global-batch-32 Stage 2 checkpoint 的专用入口是 submit_mmau_test_mini_stage2_gbs32_3090.sh，默认输出目录为：
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0_two_stage_reasonaqa/eval_stage2_formal_epoch5_mmau_test_mini_20261009_gbs32。
+- 用户已观察到：当前 Stage 2 的选项正确率低于 Stage 1，文本生成质量也下降。这是未解决的回退问题；目前没有证据能够归因于训练实现、初始化、数据/staging、checkpoint/evaluator 不匹配或学习率选择中的任一单项。不得把它描述为已修复或已定位。
+- 曾为吞吐异常加入 training/runtime_diagnostics.py。仅在提交时显式设置 MELLOW_RUNTIME_DIAGNOSTICS_STEPS=30 才会启用；它默认关闭，且诊断窗口会额外同步 CUDA stream，不应使用启用诊断的短窗口衡量正式训练吞吐。此前 Stage 1/2 出现的约三倍速度差尚无确定根因结论。
+- 当前下一步是对完整训练链做独立代码审查，优先顺序：submission/wrapper、run_reasonaqa_8gpu_stage.sh、staging、runtime config writer、training/trainer.py、training/runtime_diagnostics.py、dataset/sampler、distributed helper、audio/recursive model 和 checkpoint audit。审查尚未产出结论，因此不要更改历史实验的解释或删除任何 checkpoint。
+
+### 已新增的 CPU-only Mellow 对照 case 分析
+
+已新增无模型导入、无 GPU 的脚本：
+
+~~~text
+code/RSmol/scripts/compare_mmau_mellow_reproduction_cases.py
+~~~
+
+它比较以下两份 raw_generations.jsonl：
+
+~~~text
+# 复现模型
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_5090/formal_30epochs_20261001_003838/eval/mmau_test_mini_official_training_v1/raw_generations.jsonl
+
+# 原生 Mellow
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0/mmau_test_mini_mellow_author_reply_matched_smollm2_113430_v2/raw_generations.jsonl
+~~~
+
+脚本按 row_index + id 对齐，验证题目、选项和 gold metadata，并只列出原生 Mellow 正确、复现模型错误的样本。它生成两份独立 Markdown 报告：
+
+~~~text
+mellow_correct_reproduction_wrong_choice_letter.md
+mellow_correct_reproduction_wrong_official_text.md
+~~~
+
+前者严格按 Mellow author-reply 规则比较首个 ) 前的 choice label，转小写且不额外 trim；后者复现并 SHA256 校验 MMAU 官方 scorer 的 token-set string_match。它还输出 comparison_audit.json。截至本次 README 同步，脚本已落地但其远程运行结果尚未回传，不能假定报告已生成或完整。
+
+### 新 agent 的最短接手顺序
+
+1. 先读本节和 code/RSmol/mellow_official_training_mellow_v0_two_stage_adamw_cosine_5_10x2_5_mesh/ADAMW_COSINE_ROUTE.md。
+2. 读取本次目标 checkpoint 同目录的 runtime_stage*.yaml、staging_report.json、作业日志和 audit_stage_checkpoint.py 输出。
+3. 明确目标究竟是旧 MeSH 官方路线、Mellow-v0 两阶段路线，还是原生 Mellow 评测；三者不可交叉引用配置。
+4. 对性能或质量问题先记录证据，不基于历史聊天推断远程状态；如更新本 README，请在本节上方添加新的带日期补充，而不是删除历史路线说明。
+
+## 2026-10-03：交接补充（历史快照；已由 2026-10-10 更新覆盖）
 
 本节只补充最近已经完成的路线和会影响下一次任务判断的当前事实。后面的按日期排列的小节仍然保留历史实验记录；如果历史快照与本节冲突，以本节、目标路线目录中的 README、远程 runtime config/report 和最终 checkpoint 审计为准。
 
@@ -1195,9 +1440,9 @@ router/memory、递归或共享层，不能与 partition、MeSH 或 recursive ch
 code/RSmol/audio_smollm2_135m_mellow_shared_store/README.md
 code/RSmol/scripts/train_audio_smollm2_shared_store_135m_mellow_ddp.py
 code/RSmol/scripts/train_audio_smollm2_shared_store_configurable_epochs_135m_mellow_ddp.py
-code/RSmol/run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_3090.sh
-code/RSmol/run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_3090.sh
-code/RSmol/run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_3090.sh
+code/RSmol/run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_5090.sh
+code/RSmol/run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_5090.sh
+code/RSmol/run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_5090.sh
 ```
 
 这条新线当前是“本地代码就绪”，远程 smoke20、resume2 和 30-epoch formal 均尚未登记 PASS。
@@ -1344,9 +1589,9 @@ code/RSmol/scripts/train_audio_smollm2_shared_store_configurable_epochs_135m_mel
 code/RSmol/scripts/train_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_ddp.sh
 code/RSmol/scripts/train_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_ddp.sh
 code/RSmol/scripts/train_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_ddp.sh
-code/RSmol/run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_3090.sh
-code/RSmol/run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_3090.sh
-code/RSmol/run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_3090.sh
+code/RSmol/run_audio_smollm2_shared_store_smoke20_configurable_epochs_135m_mellow_5090.sh
+code/RSmol/run_audio_smollm2_shared_store_resume2_configurable_epochs_135m_mellow_5090.sh
+code/RSmol/run_audio_smollm2_shared_store_formal_configurable_epochs_135m_mellow_5090.sh
 code/RSmol/audio_smollm2_135m_mellow_shared_store/README.md
 code/RSmol/scripts/train_audio_perf20_5_10x2_5_mesh_mellow_ddp.sh
 code/RSmol/run_audio_perf20_5_10x2_5_mesh_mellow_5090.sh

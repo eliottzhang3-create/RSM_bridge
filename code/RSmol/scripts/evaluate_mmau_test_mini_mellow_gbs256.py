@@ -21,6 +21,8 @@ ROUTE_ROOTS = {
     "equal_microbatch_token_mean": "reasonaqa_global_batch256_old_microbatch_mean_5epochs",
 }
 ROUTE_PARENT = Path(__file__).resolve().parent.parent / "mellow_official_training_c8204d8_adamw_cosine"
+LEGACY_IDENTITY_FILENAME = "gbs256_eval_identity.json"
+IDENTITY_SIDECAR_SUFFIX = ".gbs256_eval_identity.json"
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -201,9 +203,8 @@ def _delegate_args(args: argparse.Namespace) -> argparse.Namespace:
     return delegated
 
 
-def _claim_output(args: argparse.Namespace) -> None:
-    """Protect the resumable evaluation store from a different checkpoint."""
-    identity = {
+def _evaluation_identity(args: argparse.Namespace) -> dict[str, str]:
+    return {
         "checkpoint_file": str(args.checkpoint_file),
         "checkpoint_sha256": adapter.sha256_file(args.checkpoint_file),
         "runtime_config": str(args.runtime_config),
@@ -211,18 +212,68 @@ def _claim_output(args: argparse.Namespace) -> None:
         "route_root": str(args.route_root),
         "dataset_dir": str(args.dataset_dir),
     }
-    marker = args.output_dir / "gbs256_eval_identity.json"
-    if marker.is_file():
+
+
+def _identity_sidecar(output_dir: Path) -> Path:
+    """Keep gbs256 ownership outside the official evaluator's resumable store."""
+    return output_dir.parent / f".{output_dir.name}{IDENTITY_SIDECAR_SUFFIX}"
+
+
+def _read_matching_identity(marker: Path, expected: dict[str, str]) -> None:
+    if not marker.is_file():
+        raise RuntimeError(f"evaluation identity marker is not a regular file: {marker}")
+    try:
         previous = json.loads(marker.read_text(encoding="utf-8"))
-        if previous != identity:
-            raise RuntimeError(f"evaluation output belongs to a different checkpoint or config: {marker}")
-        return
-    if args.output_dir.exists() and any(args.output_dir.iterdir()):
-        raise RuntimeError(f"evaluation output is nonempty and has no gbs256 identity marker: {args.output_dir}")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    with marker.open("x", encoding="utf-8") as handle:
-        json.dump(identity, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot read evaluation identity marker: {marker}") from exc
+    if previous != expected:
+        raise RuntimeError(f"evaluation output belongs to a different checkpoint or config: {marker}")
+
+
+def _write_identity_once(marker: Path, identity: dict[str, str]) -> None:
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with marker.open("x", encoding="utf-8") as handle:
+            json.dump(identity, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+    except FileExistsError:
+        # A concurrent submission may have claimed this output after the
+        # caller checked for it.  It is safe only when it has the same owner.
+        _read_matching_identity(marker, identity)
+
+
+def _claim_output(args: argparse.Namespace) -> None:
+    """Protect the resumable evaluation store from a different checkpoint.
+
+    The delegated official evaluator reserves ``run_config.json`` as the first
+    and only ownership record inside ``output_dir``.  Keep this wrapper's
+    checkpoint identity in a same-parent sidecar so the official evaluator can
+    initialize an otherwise empty directory.
+    """
+    identity = _evaluation_identity(args)
+    marker = _identity_sidecar(args.output_dir)
+    legacy_marker = args.output_dir / LEGACY_IDENTITY_FILENAME
+
+    if marker.exists():
+        _read_matching_identity(marker, identity)
+    elif legacy_marker.exists():
+        # Repair directories created by the original gbs256 wrapper.  The old
+        # marker prevented the official evaluator from creating run_config.json
+        # on its first call.  Claim the sidecar before deleting only the known,
+        # validated legacy marker, so an interrupted migration remains safe.
+        _read_matching_identity(legacy_marker, identity)
+        _write_identity_once(marker, identity)
+    else:
+        if args.output_dir.exists() and any(args.output_dir.iterdir()):
+            raise RuntimeError(
+                "evaluation output is nonempty and has no gbs256 identity sidecar: "
+                f"{args.output_dir}"
+            )
+        _write_identity_once(marker, identity)
+
+    if legacy_marker.exists():
+        _read_matching_identity(legacy_marker, identity)
+        legacy_marker.unlink()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
