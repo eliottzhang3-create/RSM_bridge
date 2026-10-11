@@ -11,7 +11,7 @@
 | `reasonaqa_global_batch256_htsat_frozen_5epochs` | HTSAT 参数冻结，前向处于 eval/no_grad；c2l 与投影保持可训练 | `run_mellow_official_reasonaqa_adamw_cosine_gbs256_htsat_frozen_1e-3_5epochs_5090.sh` |
 | `reasonaqa_global_batch256_zero_audio2_5epochs` | 仅原始 `filepath2 == ''` 时第二路输入改为 10 秒、32 kHz 的零波形；读音频失败的回退逻辑不变 | `run_mellow_official_reasonaqa_adamw_cosine_gbs256_zero_audio2_1e-3_5epochs_5090.sh` |
 
-四条线均固定 8 GPU × 每卡 microbatch 8 × 累积 4 = global batch 256、5 epochs、FP32、AdamW、max LR 1e-3、min LR 1e-4、5% warmup 和按优化步的 cosine 调度。将代码经 GitHub 同步到远端后，从远端 `code/RSmol/` 目录分别运行对应脚本并传入 `--max-lr 1e-3`；脚本通过 `vc submit` 提交到 `pdgpu-5090`，使用各自独立的输出目录。当前只完成本地静态核验，未在本地或远端执行训练，也未实现这四条线的评测。
+四条线均固定 8 GPU × 每卡 microbatch 8 × 累积 4 = global batch 256、5 epochs、FP32、AdamW、max LR 1e-3、min LR 1e-4、5% warmup 和按优化步的 cosine 调度。将代码经 GitHub 同步到远端后，从远端 `code/RSmol/` 目录分别运行对应脚本并传入 `--max-lr 1e-3`；脚本通过 `vc submit` 提交到 `pdgpu-5090`，使用各自独立的输出目录。2026-10-12 收到的首个 `global_clip` 作业日志显示，共用 staging 脚本因临时目录缺少 `mellow_adamw_cosine_reasonaqa_gbs256_lr_` 前缀而拒绝启动；四条路线的临时目录名现已改为该前缀后接各自路线与 RUN_ID。该作业尚未进入训练，修复后的远端训练结果仍待验证；这四条线的评测尚未实现。
 
 ## 2026-10-10：补充交接——标准 Mellow gbs256 学习率／损失归一化消融与统一 MMAU 评测
 

@@ -45,7 +45,7 @@ if not math.isfinite(max_lr) or max_lr <= 0 or max_lr * 0.1 <= 0:
 PY
 
 RUN_ID="${MELLOW_RUN_ID:-${SLURM_JOB_ID:-$$}_$(date +%Y%m%d_%H%M%S%N)}"
-STAGE_ROOT="/dev/shm/mellow_adamw_cosine_reasonaqa_gbs256_attention_mask_$RUN_ID"
+STAGE_ROOT="/dev/shm/mellow_adamw_cosine_reasonaqa_gbs256_lr_attention_mask_$RUN_ID"
 STAGING_REPORT="$OUTPUT_DIR/staging_report.json"
 RUNTIME_CONFIG="$OUTPUT_DIR/runtime_5epochs.yaml"
 CHECKPOINT_ROOT="$OUTPUT_DIR/checkpoints"
