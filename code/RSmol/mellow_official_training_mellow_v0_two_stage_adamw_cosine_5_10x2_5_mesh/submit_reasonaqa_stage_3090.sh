@@ -16,8 +16,22 @@ STAGE2_PROFILE="${MELLOW_STAGE2_PROFILE:-stage2_gbs256_lr1e-4_min1e-5}"
 STAGE2_OUTPUT_SUFFIX=""
 if [[ "$STAGE" == stage2 ]]; then STAGE2_OUTPUT_SUFFIX="_${STAGE2_PROFILE}"; fi
 OUTPUT_DIR="${MELLOW_V0_TWO_STAGE_OUTPUT_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0_two_stage_reasonaqa}/${STAGE}_${MODE}${STAGE2_OUTPUT_SUFFIX}_$RUN_TAG"
-JOB_SUFFIX=""
-if [[ "$STAGE" == stage2 ]]; then JOB_SUFFIX="-${STAGE2_PROFILE}"; fi
+JOB_PROFILE_TAG=""
+if [[ "$STAGE" == stage2 ]]; then
+  case "$STAGE2_PROFILE" in
+    stage2_gbs32_lr5e-4) JOB_PROFILE_TAG="g32" ;;
+    stage2_gbs256_lr1e-4) JOB_PROFILE_TAG="g256-old" ;;
+    stage2_gbs256_lr1e-4_min1e-5) JOB_PROFILE_TAG="g256-l14m15" ;;
+    *) echo "unsupported MELLOW_STAGE2_PROFILE: $STAGE2_PROFILE" >&2; exit 2 ;;
+  esac
+fi
+JOB_NAME="mellow-v0-${STAGE}-${MODE}"
+if [[ -n "$JOB_PROFILE_TAG" ]]; then JOB_NAME="${JOB_NAME}-${JOB_PROFILE_TAG}"; fi
+JOB_NAME="${JOB_NAME}-3090-${RUN_TAG}"
+if [[ ${#JOB_NAME} -gt 60 ]]; then
+  echo "job name exceeds vc limit of 60 characters (${#JOB_NAME}): $JOB_NAME" >&2
+  exit 2
+fi
 SOURCE_CHECKPOINT=""
 SMOKE_ROWS="${MELLOW_REASONAQA_SMOKE_ROWS:-5120}"
 DIAGNOSTICS_STEPS="${MELLOW_RUNTIME_DIAGNOSTICS_STEPS:-0}"
@@ -53,7 +67,7 @@ vc submit \
   -p pdgpu-3090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 32 -m 256G -g 8 -n 1 \
-  -j mellow-v0-two-stage-${STAGE}-${MODE}${JOB_SUFFIX}-3090-$RUN_TAG \
+  -j "$JOB_NAME" \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$SCRIPT_DIR/log/mellow_v0_two_stage_${STAGE}_${MODE}${STAGE2_OUTPUT_SUFFIX}_3090.$RUN_TAG.JOB.log" \
   --cmd "MELLOW_RUNTIME_DIAGNOSTICS_STEPS=$DIAGNOSTICS_STEPS MELLOW_STAGE2_PROFILE=$STAGE2_PROFILE bash scripts/rsmol/run_reasonaqa_8gpu_stage.sh $CMD_ARGS"
