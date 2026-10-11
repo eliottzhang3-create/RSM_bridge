@@ -12,6 +12,9 @@ import torch
 
 ROUTE = "mellow_v0_official_adamw_cosine_two_stage_5_10x2_5_mesh_v1"
 TEXT = "logical_30_physical_20_5_10x2_5"
+STAGE1_PROFILE = "stage1_gbs256_router1e-3_other1e-4"
+STAGE2_GBS32_PROFILE = "stage2_gbs32_lr5e-4"
+STAGE2_GBS256_PROFILE = "stage2_gbs256_lr1e-4"
 
 
 def main() -> int:
@@ -21,6 +24,7 @@ def main() -> int:
     parser.add_argument("--expected-epochs", type=int, default=None)
     parser.add_argument("--expected-total-step", type=int, default=None)
     parser.add_argument("--require-complete", action="store_true")
+    parser.add_argument("--expected-profile", choices=(STAGE1_PROFILE, STAGE2_GBS32_PROFILE, STAGE2_GBS256_PROFILE), default=None)
     args = parser.parse_args()
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     required = {
@@ -39,7 +43,31 @@ def main() -> int:
         raise SystemExit(f"stage mismatch: checkpoint={checkpoint['training_stage']!r} expected={args.stage!r}")
     if checkpoint["loss_reduction"] != "global_token_mean":
         raise SystemExit("checkpoint does not declare global_token_mean")
-    per_rank_batch_size, accumulation_steps = {"stage1": (8, 4), "stage2": (4, 1)}[args.stage]
+    if args.expected_profile is not None:
+        expected_profile = args.expected_profile
+    elif args.stage == "stage1":
+        expected_profile = STAGE1_PROFILE
+    elif checkpoint.get("training_profile") in {STAGE2_GBS32_PROFILE, STAGE2_GBS256_PROFILE}:
+        expected_profile = str(checkpoint["training_profile"])
+    elif checkpoint.get("batch_geometry", {}).get("per_rank_batch_size") == 4:
+        expected_profile = STAGE2_GBS32_PROFILE
+    else:
+        expected_profile = STAGE2_GBS256_PROFILE
+    if args.stage == "stage1" and expected_profile != STAGE1_PROFILE:
+        raise SystemExit("stage1 checkpoints require the stage1 profile")
+    if args.stage == "stage2" and expected_profile == STAGE1_PROFILE:
+        raise SystemExit("stage2 checkpoints cannot use the stage1 profile")
+    if "training_profile" in checkpoint and checkpoint["training_profile"] != expected_profile:
+        raise SystemExit(
+            f"profile mismatch: checkpoint={checkpoint['training_profile']!r} "
+            f"expected={expected_profile!r}"
+        )
+    profile_contract = {
+        STAGE1_PROFILE: ((8, 4), {"routers": (1e-3, 1e-4), "other": (1e-4, 1e-5)}),
+        STAGE2_GBS32_PROFILE: ((4, 1), {"all": (5e-4, 5e-5)}),
+        STAGE2_GBS256_PROFILE: ((8, 4), {"all": (1e-4, 5e-5)}),
+    }
+    (per_rank_batch_size, accumulation_steps), expected_bounds = profile_contract[expected_profile]
     expected_geometry = {
         "per_rank_batch_size": per_rank_batch_size,
         "world_size": 8,
@@ -82,10 +110,6 @@ def main() -> int:
         raise SystemExit(f"invalid scheduler horizon: {scheduler!r}")
     if args.require_complete and int(checkpoint["total_step"]) != int(scheduler["total_steps"]):
         raise SystemExit("completed checkpoint step does not match scheduler horizon")
-    expected_bounds = {
-        "stage1": {"routers": (1e-3, 1e-4), "other": (1e-4, 1e-5)},
-        "stage2": {"all": (5e-4, 5e-5)},
-    }[args.stage]
     for bounds in scheduler.get("group_bounds", []):
         name = str(bounds.get("name"))
         if name not in expected_bounds:

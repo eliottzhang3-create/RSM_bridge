@@ -42,6 +42,7 @@ source "$USER_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
 MELLOW_INIT_ROOT="${MELLOW_V0_INIT_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/converted/mellow_v0_5_10x2_5_mesh_epoch17_routers}"
+STAGE2_PROFILE="${MELLOW_STAGE2_PROFILE:-stage2_gbs256_lr1e-4}"
 RUN_ID="${MELLOW_RUN_ID:-${SLURM_JOB_ID:-$$}_$(date +%Y%m%d_%H%M%S%N)}"
 STAGE_ROOT="/dev/shm/mellow_v0_two_stage_reasonaqa_${STAGE}_${MODE}_$RUN_ID"
 STAGING_REPORT="$OUTPUT_DIR/staging_report.json"
@@ -98,21 +99,41 @@ CONFIG_ARGS=(
   --num-workers 4
 )
 if [[ "$STAGE" == stage2 ]]; then
-  CONFIG_ARGS+=(
-    --batch-size 4
-    --gradient-accumulation-steps 1
-    --all-max-lr 5e-4
-    --all-min-lr 5e-5
-  )
+  case "$STAGE2_PROFILE" in
+    stage2_gbs32_lr5e-4)
+      CONFIG_ARGS+=(
+        --stage2-profile "$STAGE2_PROFILE"
+        --batch-size 4
+        --gradient-accumulation-steps 1
+        --all-max-lr 5e-4
+        --all-min-lr 5e-5
+      )
+      ;;
+    stage2_gbs256_lr1e-4)
+      CONFIG_ARGS+=(
+        --stage2-profile "$STAGE2_PROFILE"
+        --batch-size 8
+        --gradient-accumulation-steps 4
+        --all-max-lr 1e-4
+        --all-min-lr 5e-5
+      )
+      ;;
+    *)
+      echo "unsupported MELLOW_STAGE2_PROFILE: $STAGE2_PROFILE" >&2
+      exit 2
+      ;;
+  esac
 fi
 if [[ "$MODE" == resume ]]; then
-  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$SOURCE_CHECKPOINT" --stage "$STAGE" --expected-epochs 2 --expected-total-step 20
+  SOURCE_PROFILE="stage1_gbs256_router1e-3_other1e-4"
+  if [[ "$STAGE" == stage2 ]]; then SOURCE_PROFILE="$STAGE2_PROFILE"; fi
+  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$SOURCE_CHECKPOINT" --stage "$STAGE" --expected-profile "$SOURCE_PROFILE" --expected-epochs 2 --expected-total-step 20
   CONFIG_ARGS+=(--resume-checkpoint "$SOURCE_CHECKPOINT")
 elif [[ "$STAGE" == stage2 ]]; then
   if [[ "$MODE" == formal ]]; then
-    python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$SOURCE_CHECKPOINT" --stage stage1 --expected-epochs 5 --require-complete
+    python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$SOURCE_CHECKPOINT" --stage stage1 --expected-profile stage1_gbs256_router1e-3_other1e-4 --expected-epochs 5 --require-complete
   else
-    python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$SOURCE_CHECKPOINT" --stage stage1
+    python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$SOURCE_CHECKPOINT" --stage stage1 --expected-profile stage1_gbs256_router1e-3_other1e-4
   fi
   CONFIG_ARGS+=(--init-model-checkpoint "$SOURCE_CHECKPOINT")
 fi
@@ -128,13 +149,19 @@ torchrun --standalone --nnodes=1 --nproc_per_node=8 train.py \
 
 if [[ "$MODE" == smoke ]]; then
   FINAL_CHECKPOINT="$CHECKPOINT_ROOT/$MELLOW_JOB_ID/model--step-20.ckpt"
-  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$FINAL_CHECKPOINT" --stage "$STAGE" --expected-epochs 2 --expected-total-step 20
+  EXPECTED_PROFILE="stage1_gbs256_router1e-3_other1e-4"
+  if [[ "$STAGE" == stage2 ]]; then EXPECTED_PROFILE="$STAGE2_PROFILE"; fi
+  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$FINAL_CHECKPOINT" --stage "$STAGE" --expected-profile "$EXPECTED_PROFILE" --expected-epochs 2 --expected-total-step 20
 elif [[ "$MODE" == resume ]]; then
   FINAL_CHECKPOINT="$CHECKPOINT_ROOT/$MELLOW_JOB_ID/model--step-22.ckpt"
-  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$FINAL_CHECKPOINT" --stage "$STAGE" --expected-epochs 2 --expected-total-step 22
+  EXPECTED_PROFILE="stage1_gbs256_router1e-3_other1e-4"
+  if [[ "$STAGE" == stage2 ]]; then EXPECTED_PROFILE="$STAGE2_PROFILE"; fi
+  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$FINAL_CHECKPOINT" --stage "$STAGE" --expected-profile "$EXPECTED_PROFILE" --expected-epochs 2 --expected-total-step 22
 else
   EXPECTED_EPOCHS=5
   FINAL_CHECKPOINT="$CHECKPOINT_ROOT/$MELLOW_JOB_ID/model--epo-${EXPECTED_EPOCHS}.ckpt"
-  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$FINAL_CHECKPOINT" --stage "$STAGE" --expected-epochs "$EXPECTED_EPOCHS" --require-complete
+  EXPECTED_PROFILE="stage1_gbs256_router1e-3_other1e-4"
+  if [[ "$STAGE" == stage2 ]]; then EXPECTED_PROFILE="$STAGE2_PROFILE"; fi
+  python "$SCRIPT_DIR/audit_stage_checkpoint.py" "$FINAL_CHECKPOINT" --stage "$STAGE" --expected-profile "$EXPECTED_PROFILE" --expected-epochs "$EXPECTED_EPOCHS" --require-complete
 fi
 echo "PASS: stage=$STAGE mode=$MODE checkpoint=$FINAL_CHECKPOINT" >&2

@@ -35,6 +35,10 @@ from models.recursive_text import EXPECTED_CHECKPOINT_CONTRACT
 
 
 ROUTE_CONTRACT = "mellow_v0_official_adamw_cosine_two_stage_5_10x2_5_mesh_v1"
+STAGE1_PROFILE = "stage1_gbs256_router1e-3_other1e-4"
+STAGE2_GBS32_PROFILE = "stage2_gbs32_lr5e-4"
+STAGE2_GBS256_PROFILE = "stage2_gbs256_lr1e-4"
+
 
 class TrainerMode(Enum):
     Train = "train"
@@ -460,6 +464,106 @@ class Trainer:
     def _is_router_parameter(name: str) -> bool:
         return ".write_routers." in name or ".read_routers." in name
 
+    def _validate_runtime_profile_contract(self, training_stage: str) -> str:
+        """Reject a runtime YAML that diverges from a named route profile."""
+        profile = str(self.config.get("training_profile", ""))
+        contracts = {
+            STAGE1_PROFILE: {
+                "stage": "stage1",
+                "batch_size": 8,
+                "world_size": 8,
+                "gradient_accumulation_steps": 4,
+                "parameter_groups": {
+                    "routers": (1e-3, 1e-4),
+                    "other": (1e-4, 1e-5),
+                },
+            },
+            STAGE2_GBS32_PROFILE: {
+                "stage": "stage2",
+                "batch_size": 4,
+                "world_size": 8,
+                "gradient_accumulation_steps": 1,
+                "parameter_groups": {"all": (5e-4, 5e-5)},
+            },
+            STAGE2_GBS256_PROFILE: {
+                "stage": "stage2",
+                "batch_size": 8,
+                "world_size": 8,
+                "gradient_accumulation_steps": 4,
+                "parameter_groups": {"all": (1e-4, 5e-5)},
+            },
+        }
+        if profile not in contracts:
+            raise ValueError(
+                "isolated Mellow-v0 route requires a recognized training_profile; "
+                f"got {profile!r}"
+            )
+        contract = contracts[profile]
+        if contract["stage"] != training_stage:
+            raise ValueError(
+                f"training_profile={profile!r} is incompatible with "
+                f"training_stage={training_stage!r}"
+            )
+
+        train_config = self.config["train"]
+        actual_geometry = {
+            "batch_size": int(train_config["batch_size"]),
+            "world_size": int(self.distributed.world_size()),
+            "gradient_accumulation_steps": int(
+                train_config.get("gradient_accumulation_steps", 1)
+            ),
+        }
+        expected_geometry = {
+            key: int(contract[key])
+            for key in ("batch_size", "world_size", "gradient_accumulation_steps")
+        }
+        if actual_geometry != expected_geometry:
+            raise ValueError(
+                f"runtime batch geometry mismatch for {profile}: "
+                f"expected={expected_geometry!r}, actual={actual_geometry!r}"
+            )
+        expected_global_batch = (
+            expected_geometry["batch_size"]
+            * expected_geometry["world_size"]
+            * expected_geometry["gradient_accumulation_steps"]
+        )
+        declared_global_batch = int(
+            train_config.get("effective_global_batch_size", expected_global_batch)
+        )
+        if declared_global_batch != expected_global_batch:
+            raise ValueError(
+                f"runtime effective_global_batch_size mismatch for {profile}: "
+                f"expected={expected_global_batch}, declared={declared_global_batch}"
+            )
+
+        optimizer_config = train_config["optimizer"]
+        if str(optimizer_config.get("scheduler")) != "step_cosine_warmup":
+            raise ValueError("two-stage route requires scheduler=step_cosine_warmup")
+        if not math.isclose(
+            float(optimizer_config.get("warmup_ratio", -1.0)), 0.05,
+            rel_tol=0.0, abs_tol=1e-12,
+        ):
+            raise ValueError("two-stage route requires warmup_ratio=0.05")
+        configured_groups = optimizer_config.get("parameter_groups")
+        expected_groups = contract["parameter_groups"]
+        if not isinstance(configured_groups, dict) or set(configured_groups) != set(expected_groups):
+            raise ValueError(
+                f"optimizer parameter-group contract mismatch for {profile}: "
+                f"expected={sorted(expected_groups)!r}, "
+                f"actual={sorted(configured_groups) if isinstance(configured_groups, dict) else configured_groups!r}"
+            )
+        for name, (expected_max_lr, expected_min_lr) in expected_groups.items():
+            bounds = configured_groups[name]
+            if not isinstance(bounds, dict) or not (
+                math.isclose(float(bounds.get("max_lr", -1.0)), expected_max_lr, rel_tol=0.0, abs_tol=1e-12)
+                and math.isclose(float(bounds.get("min_lr", -1.0)), expected_min_lr, rel_tol=0.0, abs_tol=1e-12)
+            ):
+                raise ValueError(
+                    f"optimizer LR contract mismatch for {profile}/{name}: "
+                    f"expected max/min=({expected_max_lr}, {expected_min_lr}), got {bounds!r}"
+                )
+        return profile
+
     def _build_parameter_groups(self, model: torch.nn.Module, optimizer_config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Build deterministic AdamW groups for the active two-stage contract."""
         configured = optimizer_config.get("parameter_groups")
@@ -552,6 +656,9 @@ class Trainer:
         training_stage = str(self.config.get("training_stage", ""))
         if training_stage not in {"stage1", "stage2"}:
             raise ValueError("isolated Mellow-v0 route requires training_stage=stage1 or stage2")
+        training_profile = self._validate_runtime_profile_contract(training_stage)
+        if self.distributed.rank() == 0:
+            self.logger.info("Training profile: %s", training_profile)
 
         # Load the recursive checkpoint through its explicit class.  Calling
         # AutoModelForCausalLM directly would construct an ordinary Llama model
@@ -633,6 +740,17 @@ class Trainer:
             * self.distributed.world_size()
             * gradient_accumulation_steps
         )
+        declared_effective_global_batch_size = int(
+            self.config["train"].get(
+                "effective_global_batch_size", effective_global_batch_size
+            )
+        )
+        if declared_effective_global_batch_size != effective_global_batch_size:
+            raise ValueError(
+                "runtime effective_global_batch_size mismatch: "
+                f"declared={declared_effective_global_batch_size}, "
+                f"actual={effective_global_batch_size}"
+            )
         if self.distributed.rank() == 0:
             self.logger.info(
                 "Batch geometry: per_rank_microbatch=%d, world_size=%d, "
@@ -1307,6 +1425,7 @@ class Trainer:
             "route_contract": ROUTE_CONTRACT,
             "text_model_contract": EXPECTED_CHECKPOINT_CONTRACT,
             "training_stage": str(self.config["training_stage"]),
+            "training_profile": str(self.config.get("training_profile", "legacy")),
             "optimizer_group_contract": self._optimizer_group_contract(optimizer),
             "trainability_contract": self._trainability_contract(model),
             "random_state_by_rank": rank_random_states,

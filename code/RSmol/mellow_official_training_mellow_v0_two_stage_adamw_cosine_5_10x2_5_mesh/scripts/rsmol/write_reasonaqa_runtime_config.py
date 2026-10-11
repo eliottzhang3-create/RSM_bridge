@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,9 @@ import yaml
 
 ROUTE_CONTRACT = "mellow_v0_official_adamw_cosine_two_stage_5_10x2_5_mesh_v1"
 TEXT_CONTRACT = "logical_30_physical_20_5_10x2_5"
+STAGE1_PROFILE = "stage1_gbs256_router1e-3_other1e-4"
+STAGE2_GBS32_PROFILE = "stage2_gbs32_lr5e-4"
+STAGE2_GBS256_PROFILE = "stage2_gbs256_lr1e-4"
 MELLOW_INIT_ROOT = Path(
     "/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/converted/"
     "mellow_v0_5_10x2_5_mesh_epoch17_routers"
@@ -40,8 +44,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--router-min-lr", type=float, default=1e-4)
     parser.add_argument("--other-max-lr", type=float, default=1e-4)
     parser.add_argument("--other-min-lr", type=float, default=1e-5)
-    parser.add_argument("--all-max-lr", type=float, default=5e-4)
+    parser.add_argument("--all-max-lr", type=float, default=1e-4)
     parser.add_argument("--all-min-lr", type=float, default=5e-5)
+    parser.add_argument(
+        "--stage2-profile",
+        choices=(STAGE2_GBS32_PROFILE, STAGE2_GBS256_PROFILE),
+        default=STAGE2_GBS256_PROFILE,
+        help="Stage-2 batch/LR contract; ignored for stage1.",
+    )
     parser.add_argument("--warmup-ratio", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=4)
     return parser.parse_args()
@@ -76,8 +86,12 @@ def main() -> int:
     args = parse_args()
     if args.num_epochs < 1 or args.max_epochs_this_run < 0 or args.max_optimizer_steps < 0:
         raise ValueError("epoch and optimizer-step limits must be non-negative, with num_epochs >= 1")
-    expected_batch_geometry = {"stage1": (8, 4), "stage2": (4, 1)}
-    expected_batch_size, expected_accumulation = expected_batch_geometry[args.training_stage]
+    if args.training_stage == "stage1":
+        expected_batch_size, expected_accumulation = (8, 4)
+    elif args.stage2_profile == STAGE2_GBS256_PROFILE:
+        expected_batch_size, expected_accumulation = (8, 4)
+    else:
+        expected_batch_size, expected_accumulation = (4, 1)
     if args.batch_size is None:
         args.batch_size = expected_batch_size
     if args.gradient_accumulation_steps is None:
@@ -87,6 +101,26 @@ def main() -> int:
             f"{args.training_stage} requires per-rank batch {expected_batch_size} "
             f"and accumulation {expected_accumulation}"
         )
+    if args.training_stage == "stage2":
+        expected_profile_values = {
+            STAGE2_GBS32_PROFILE: (4, 1, 5e-4, 5e-5),
+            STAGE2_GBS256_PROFILE: (8, 4, 1e-4, 5e-5),
+        }[args.stage2_profile]
+        actual_profile_values = (
+            int(args.batch_size),
+            int(args.gradient_accumulation_steps),
+            float(args.all_max_lr),
+            float(args.all_min_lr),
+        )
+        if (
+            actual_profile_values[:2] != expected_profile_values[:2]
+            or not math.isclose(actual_profile_values[2], expected_profile_values[2], rel_tol=0.0, abs_tol=1e-12)
+            or not math.isclose(actual_profile_values[3], expected_profile_values[3], rel_tol=0.0, abs_tol=1e-12)
+        ):
+            raise ValueError(
+                f"{args.stage2_profile} requires batch/GA/max_lr/min_lr="
+                f"{expected_profile_values}, got {actual_profile_values}"
+            )
     if not 0.0 < args.warmup_ratio < 1.0:
         raise ValueError("--warmup-ratio must be between 0 and 1")
     resolved_stage_root = args.stage_root.resolve()
@@ -115,11 +149,13 @@ def main() -> int:
         raise ValueError("stage2 requires a stage1 initialization checkpoint or a stage2 resume checkpoint")
 
     if args.training_stage == "stage1":
+        training_profile = STAGE1_PROFILE
         parameter_groups = {
             "routers": {"max_lr": args.router_max_lr, "min_lr": args.router_min_lr},
             "other": {"max_lr": args.other_max_lr, "min_lr": args.other_min_lr},
         }
     else:
+        training_profile = args.stage2_profile
         parameter_groups = {"all": {"max_lr": args.all_max_lr, "min_lr": args.all_min_lr}}
     for name, bounds in parameter_groups.items():
         if not 0.0 <= float(bounds["min_lr"]) <= float(bounds["max_lr"]):
@@ -131,6 +167,7 @@ def main() -> int:
         "route_contract": ROUTE_CONTRACT,
         "text_model_contract": TEXT_CONTRACT,
         "training_stage": args.training_stage,
+        "training_profile": training_profile,
         "resume_checkpoint": resume_path,
         "init_model_checkpoint": init_path,
         "data": {
@@ -184,6 +221,9 @@ def main() -> int:
             "sync_batchnorm": True,
             "batch_size": args.batch_size,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "effective_global_batch_size": (
+                int(args.batch_size) * 8 * int(args.gradient_accumulation_steps)
+            ),
             "num_epochs": args.num_epochs,
             "max_epochs_this_run": args.max_epochs_this_run,
             "max_optimizer_steps": args.max_optimizer_steps,
