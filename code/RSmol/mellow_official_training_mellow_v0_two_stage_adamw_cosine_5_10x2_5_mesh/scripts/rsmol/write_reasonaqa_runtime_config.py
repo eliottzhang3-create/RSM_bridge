@@ -17,6 +17,7 @@ TEXT_CONTRACT = "logical_30_physical_20_5_10x2_5"
 STAGE1_PROFILE = "stage1_gbs256_router1e-3_other1e-4"
 STAGE2_GBS32_PROFILE = "stage2_gbs32_lr5e-4"
 STAGE2_GBS256_PROFILE = "stage2_gbs256_lr1e-4"
+STAGE2_GBS256_LR1E4_MIN1E5_PROFILE = "stage2_gbs256_lr1e-4_min1e-5"
 MELLOW_INIT_ROOT = Path(
     "/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/converted/"
     "mellow_v0_5_10x2_5_mesh_epoch17_routers"
@@ -45,11 +46,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--other-max-lr", type=float, default=1e-4)
     parser.add_argument("--other-min-lr", type=float, default=1e-5)
     parser.add_argument("--all-max-lr", type=float, default=1e-4)
-    parser.add_argument("--all-min-lr", type=float, default=5e-5)
+    parser.add_argument("--all-min-lr", type=float, default=1e-5)
     parser.add_argument(
         "--stage2-profile",
-        choices=(STAGE2_GBS32_PROFILE, STAGE2_GBS256_PROFILE),
-        default=STAGE2_GBS256_PROFILE,
+        choices=(STAGE2_GBS32_PROFILE, STAGE2_GBS256_PROFILE, STAGE2_GBS256_LR1E4_MIN1E5_PROFILE),
+        default=STAGE2_GBS256_LR1E4_MIN1E5_PROFILE,
         help="Stage-2 batch/LR contract; ignored for stage1.",
     )
     parser.add_argument("--warmup-ratio", type=float, default=0.05)
@@ -88,7 +89,7 @@ def main() -> int:
         raise ValueError("epoch and optimizer-step limits must be non-negative, with num_epochs >= 1")
     if args.training_stage == "stage1":
         expected_batch_size, expected_accumulation = (8, 4)
-    elif args.stage2_profile == STAGE2_GBS256_PROFILE:
+    elif args.stage2_profile in {STAGE2_GBS256_PROFILE, STAGE2_GBS256_LR1E4_MIN1E5_PROFILE}:
         expected_batch_size, expected_accumulation = (8, 4)
     else:
         expected_batch_size, expected_accumulation = (4, 1)
@@ -105,6 +106,7 @@ def main() -> int:
         expected_profile_values = {
             STAGE2_GBS32_PROFILE: (4, 1, 5e-4, 5e-5),
             STAGE2_GBS256_PROFILE: (8, 4, 1e-4, 5e-5),
+            STAGE2_GBS256_LR1E4_MIN1E5_PROFILE: (8, 4, 1e-4, 1e-5),
         }[args.stage2_profile]
         actual_profile_values = (
             int(args.batch_size),

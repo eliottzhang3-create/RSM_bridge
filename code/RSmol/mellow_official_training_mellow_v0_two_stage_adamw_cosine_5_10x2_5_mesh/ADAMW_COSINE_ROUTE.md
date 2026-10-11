@@ -20,11 +20,12 @@ The 12 router tensors come from the audited epoch-17 checkpoint. The other
   parameters use `1e-4 -> 1e-5`.
 - Stage 2: a fresh additional 5 ReasonAQA epochs initialized from the stage
   1 full checkpoint. HTSAT remains frozen and every other trainable parameter
-  uses `1e-4 -> 5e-5`. Both stages run on eight GPUs. Stage 1 uses per-rank
+  uses `1e-4 -> 1e-5`. Both stages run on eight GPUs. Stage 1 uses per-rank
   batch 8 and gradient accumulation 4 (effective global batch 256). Stage 2
   uses per-rank batch 8 and gradient accumulation 4 (effective global batch 256).
-  The historical GBS32 profile remains available only when explicitly selecting
-  `MELLOW_STAGE2_PROFILE=stage2_gbs32_lr5e-4`.
+  The current profile is `stage2_gbs256_lr1e-4_min1e-5`. Historical
+  GBS32 (`stage2_gbs32_lr5e-4`) and GBS256 (`stage2_gbs256_lr1e-4`,
+  min LR 5e-5) profiles remain available only by explicit selection.
 - Both stages use 5% step warmup followed by cosine decay. Stage 2 does not
   restore stage 1 optimizer or scheduler state.
 

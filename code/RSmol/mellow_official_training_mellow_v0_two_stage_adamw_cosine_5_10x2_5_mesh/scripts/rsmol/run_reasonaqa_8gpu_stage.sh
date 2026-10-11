@@ -42,7 +42,7 @@ source "$USER_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
 MELLOW_INIT_ROOT="${MELLOW_V0_INIT_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/models/mellow-main/converted/mellow_v0_5_10x2_5_mesh_epoch17_routers}"
-STAGE2_PROFILE="${MELLOW_STAGE2_PROFILE:-stage2_gbs256_lr1e-4}"
+STAGE2_PROFILE="${MELLOW_STAGE2_PROFILE:-stage2_gbs256_lr1e-4_min1e-5}"
 RUN_ID="${MELLOW_RUN_ID:-${SLURM_JOB_ID:-$$}_$(date +%Y%m%d_%H%M%S%N)}"
 STAGE_ROOT="/dev/shm/mellow_v0_two_stage_reasonaqa_${STAGE}_${MODE}_$RUN_ID"
 STAGING_REPORT="$OUTPUT_DIR/staging_report.json"
@@ -116,6 +116,15 @@ if [[ "$STAGE" == stage2 ]]; then
         --gradient-accumulation-steps 4
         --all-max-lr 1e-4
         --all-min-lr 5e-5
+      )
+      ;;
+    stage2_gbs256_lr1e-4_min1e-5)
+      CONFIG_ARGS+=(
+        --stage2-profile "$STAGE2_PROFILE"
+        --batch-size 8
+        --gradient-accumulation-steps 4
+        --all-max-lr 1e-4
+        --all-min-lr 1e-5
       )
       ;;
     *)

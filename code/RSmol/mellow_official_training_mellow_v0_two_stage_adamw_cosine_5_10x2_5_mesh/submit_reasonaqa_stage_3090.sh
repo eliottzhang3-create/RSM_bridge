@@ -12,7 +12,7 @@ MODE="$2"
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
 AUDIT_REPORT="${MELLOW_REASONAQA_AUDIT_REPORT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_c8204d8/preflight/path_audit_20260929_190423/path_audit.json}"
 MAPPING_JSONL="${MELLOW_REASONAQA_MAPPING_JSONL:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_c8204d8/preflight/path_audit_20260929_190423/train_audio_mapping.jsonl}"
-STAGE2_PROFILE="${MELLOW_STAGE2_PROFILE:-stage2_gbs256_lr1e-4}"
+STAGE2_PROFILE="${MELLOW_STAGE2_PROFILE:-stage2_gbs256_lr1e-4_min1e-5}"
 STAGE2_OUTPUT_SUFFIX=""
 if [[ "$STAGE" == stage2 ]]; then STAGE2_OUTPUT_SUFFIX="_${STAGE2_PROFILE}"; fi
 OUTPUT_DIR="${MELLOW_V0_TWO_STAGE_OUTPUT_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_v0_two_stage_reasonaqa}/${STAGE}_${MODE}${STAGE2_OUTPUT_SUFFIX}_$RUN_TAG"
@@ -22,7 +22,7 @@ SOURCE_CHECKPOINT=""
 SMOKE_ROWS="${MELLOW_REASONAQA_SMOKE_ROWS:-5120}"
 DIAGNOSTICS_STEPS="${MELLOW_RUNTIME_DIAGNOSTICS_STEPS:-0}"
 [[ "$DIAGNOSTICS_STEPS" =~ ^(0|[1-9][0-9]{0,2}|1000)$ ]] || { echo "MELLOW_RUNTIME_DIAGNOSTICS_STEPS must be an integer in [0, 1000]" >&2; exit 2; }
-[[ "$STAGE2_PROFILE" == stage2_gbs32_lr5e-4 || "$STAGE2_PROFILE" == stage2_gbs256_lr1e-4 ]] || { echo "unsupported MELLOW_STAGE2_PROFILE: $STAGE2_PROFILE" >&2; exit 2; }
+[[ "$STAGE2_PROFILE" == stage2_gbs32_lr5e-4 || "$STAGE2_PROFILE" == stage2_gbs256_lr1e-4 || "$STAGE2_PROFILE" == stage2_gbs256_lr1e-4_min1e-5 ]] || { echo "unsupported MELLOW_STAGE2_PROFILE: $STAGE2_PROFILE" >&2; exit 2; }
 [[ $# -ge 3 ]] && AUDIT_REPORT="$3"
 [[ $# -ge 4 ]] && MAPPING_JSONL="$4"
 [[ $# -ge 5 ]] && OUTPUT_DIR="$5"

@@ -38,6 +38,7 @@ ROUTE_CONTRACT = "mellow_v0_official_adamw_cosine_two_stage_5_10x2_5_mesh_v1"
 STAGE1_PROFILE = "stage1_gbs256_router1e-3_other1e-4"
 STAGE2_GBS32_PROFILE = "stage2_gbs32_lr5e-4"
 STAGE2_GBS256_PROFILE = "stage2_gbs256_lr1e-4"
+STAGE2_GBS256_LR1E4_MIN1E5_PROFILE = "stage2_gbs256_lr1e-4_min1e-5"
 
 
 class TrainerMode(Enum):
@@ -491,6 +492,13 @@ class Trainer:
                 "world_size": 8,
                 "gradient_accumulation_steps": 4,
                 "parameter_groups": {"all": (1e-4, 5e-5)},
+            },
+            STAGE2_GBS256_LR1E4_MIN1E5_PROFILE: {
+                "stage": "stage2",
+                "batch_size": 8,
+                "world_size": 8,
+                "gradient_accumulation_steps": 4,
+                "parameter_groups": {"all": (1e-4, 1e-5)},
             },
         }
         if profile not in contracts:

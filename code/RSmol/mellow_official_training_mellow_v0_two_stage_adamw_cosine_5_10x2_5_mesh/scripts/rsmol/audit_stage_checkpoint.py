@@ -15,6 +15,7 @@ TEXT = "logical_30_physical_20_5_10x2_5"
 STAGE1_PROFILE = "stage1_gbs256_router1e-3_other1e-4"
 STAGE2_GBS32_PROFILE = "stage2_gbs32_lr5e-4"
 STAGE2_GBS256_PROFILE = "stage2_gbs256_lr1e-4"
+STAGE2_GBS256_LR1E4_MIN1E5_PROFILE = "stage2_gbs256_lr1e-4_min1e-5"
 
 
 def main() -> int:
@@ -24,7 +25,7 @@ def main() -> int:
     parser.add_argument("--expected-epochs", type=int, default=None)
     parser.add_argument("--expected-total-step", type=int, default=None)
     parser.add_argument("--require-complete", action="store_true")
-    parser.add_argument("--expected-profile", choices=(STAGE1_PROFILE, STAGE2_GBS32_PROFILE, STAGE2_GBS256_PROFILE), default=None)
+    parser.add_argument("--expected-profile", choices=(STAGE1_PROFILE, STAGE2_GBS32_PROFILE, STAGE2_GBS256_PROFILE, STAGE2_GBS256_LR1E4_MIN1E5_PROFILE), default=None)
     args = parser.parse_args()
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     required = {
@@ -47,7 +48,7 @@ def main() -> int:
         expected_profile = args.expected_profile
     elif args.stage == "stage1":
         expected_profile = STAGE1_PROFILE
-    elif checkpoint.get("training_profile") in {STAGE2_GBS32_PROFILE, STAGE2_GBS256_PROFILE}:
+    elif checkpoint.get("training_profile") in {STAGE2_GBS32_PROFILE, STAGE2_GBS256_PROFILE, STAGE2_GBS256_LR1E4_MIN1E5_PROFILE}:
         expected_profile = str(checkpoint["training_profile"])
     elif checkpoint.get("batch_geometry", {}).get("per_rank_batch_size") == 4:
         expected_profile = STAGE2_GBS32_PROFILE
@@ -66,6 +67,7 @@ def main() -> int:
         STAGE1_PROFILE: ((8, 4), {"routers": (1e-3, 1e-4), "other": (1e-4, 1e-5)}),
         STAGE2_GBS32_PROFILE: ((4, 1), {"all": (5e-4, 5e-5)}),
         STAGE2_GBS256_PROFILE: ((8, 4), {"all": (1e-4, 5e-5)}),
+        STAGE2_GBS256_LR1E4_MIN1E5_PROFILE: ((8, 4), {"all": (1e-4, 1e-5)}),
     }
     (per_rank_batch_size, accumulation_steps), expected_bounds = profile_contract[expected_profile]
     expected_geometry = {
