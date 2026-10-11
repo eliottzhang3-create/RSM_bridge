@@ -57,12 +57,13 @@
 code/RSmol/scripts/evaluate_mmau_test_mini_mellow_gbs256.py
 code/RSmol/scripts/evaluate_mmau_test_mini_mellow_gbs256.sh
 code/RSmol/submit_mmau_test_mini_mellow_gbs256_3090.sh
+code/RSmol/submit_mmau_test_mini_mellow_gbs256_ablation_3090.sh
 ~~~
 
 - evaluator 只接受 schema-v2 完成态的五 epoch checkpoint，并核对 batch geometry 为 8 × 8 × 4 = 256、AdamW betas、5% warmup、step cosine、min_lr = 0.1 × max_lr 和同一 run root 下的 runtime YAML。
 - 它根据 checkpoint 的 loss_reduction 自动选择训练代码根：global_token_mean 对应学习率消融路线，equal_microbatch_token_mean 对应旧 microbatch 均值路线。手工传入不匹配的 route-root 会失败，避免错误加载模型代码。
 - 生成和评分委托给既有标准 Mellow MMAU 实现，保留 Mellow author-reply prompt／音频协议、FP32、129-token prompt、300 个新 token 与官方 MMAU scorer。它不适用于 Mellow-v0 两阶段 checkpoint；后者必须使用已有专用 evaluator。
-- 提交 wrapper 使用 pdgpu-3090、1 GPU、16 CPU、64G。输出目录有 gbs256_eval_identity.json，绑定 checkpoint、runtime YAML 及其 SHA256；非空但没有 marker 的目录，或 marker 与本次输入不一致时会拒绝继续，防止不同 checkpoint 的生成混写。
+- 提交 wrapper 使用 pdgpu-3090、1 GPU、16 CPU、64G。checkpoint、runtime YAML 与其 SHA256 的 identity 写在 output directory 同级的 `.<output-dir-name>.gbs256_eval_identity.json` sidecar 中，避免抢占底层 official evaluator 在 output directory 内的 `run_config.json` 所有权记录。旧版目录内 `gbs256_eval_identity.json` 会在内容匹配时自动迁移为 sidecar；非空但没有有效 identity 的目录，或 identity 与本次输入不一致时会拒绝继续，防止不同 checkpoint 的生成混写。
 
 对上面的 max_lr=1e-3 checkpoint 做完整评测，从远程 code/RSmol 目录运行：
 
@@ -85,10 +86,18 @@ bash submit_mmau_test_mini_mellow_gbs256_3090.sh /complete/path/to/model--epo-5.
 
 可选位置参数依次为 runtime-config、output-dir、full|smoke、dataset-dir、route-root；通常不要手传 route-root，让 evaluator 从 checkpoint 合同自动选择。正式结果必须以输出目录的 evaluation_report.json、官方 scorer 输出和 job log 为准。
 
+用户在 2026-10-11 提供的六个完成态 checkpoint（old-microbatch-mean 的 1e-3，以及 global-token 的 2e-3、1e-3、8e-4、4e-4、2e-4）已固化在批量入口中。它逐个调用上述单 checkpoint wrapper，因此每个模型仍使用自己 run root 的 `runtime_5epochs.yaml` 和独立输出目录；单个提交失败会报告失败但不会阻止其余五个提交：
+
+~~~bash
+bash submit_mmau_test_mini_mellow_gbs256_ablation_3090.sh
+~~~
+
+默认是 full；仅需检查提交链路时可传入 `smoke`。该批量脚本只提交六个独立的 1-GPU pdgpu-3090 作业，不等待它们完成。
+
 ### 当前可证实状态与下一位 agent 的起点
 
 - 以上训练和评测代码已完成本地静态检查：相关 Python 文件可解析、Bash 语法通过，并以 mock checkpoint／mock vc submit 覆盖了 batch、学习率、loss-reduction、路径派生和输出 identity 的关键拒绝条件。
-- 本地工作区没有可用于证明远程训练或 MMAU full job 已完成的回传报告。不要因为代码已经存在就推断远程训练或评测已成功；先检查远程 checkpoint、gbs256_eval_identity.json、evaluation_report.json、官方 scorer 输出和提交日志。
+- 本地工作区没有可用于证明远程训练或 MMAU full job 已完成的回传报告。不要因为代码已经存在就推断远程训练或评测已成功；先检查远程 checkpoint、同级 `.gbs256_eval_identity.json` sidecar、output directory 内的 `run_config.json` 与 `evaluation_report.json`、官方 scorer 输出和提交日志。
 - 接手时先区分标准 Mellow c8204d8、Mellow-v0 两阶段 MeSH、以及更下方的历史音频／文本路线；保留所有历史说明，按目标 checkpoint 的合同选择同一路线的 loader、runtime config 和 evaluator。
 
 ### 同日补充：其他近期隔离路线索引
