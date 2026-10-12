@@ -25,5 +25,5 @@ if [[ -z "$RESUME_CHECKPOINT" && -d "$OUTPUT_DIR" && -n "$(find "$OUTPUT_DIR" -m
 mkdir -p "$SCRIPT_DIR/log"
 args=("$AUDIT_REPORT" "$MAPPING_JSONL" "$OUTPUT_DIR" "$BRIDGE_MAX_LR" "$LM_MAX_LR"); [[ -z "$RESUME_CHECKPOINT" ]] || args+=("$RESUME_CHECKPOINT")
 printf -v cmd_args '%q ' "${args[@]}"
-vc submit -p pdgpu-5090 -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 -c 32 -m 256G -g 8 -n 1 -j "mellow-bridge-lm-${TAG}-${RUN_TAG}" -d "$SCRIPT_DIR" JOB=1:1 "$SCRIPT_DIR/log/mellow_bridge_lm_${TAG}.${RUN_TAG}.JOB.log" --cmd "bash mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_bridge_lm_lr_5epochs/scripts/rsmol/run_reasonaqa_8gpu_formal.sh $cmd_args"
+vc submit -p pdgpu-5090 -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 -c 32 -m 256G -g 8 -n 1 -j "mbl-${RUN_TAG}" -d "$SCRIPT_DIR" JOB=1:1 "$SCRIPT_DIR/log/mellow_bridge_lm_${TAG}.${RUN_TAG}.JOB.log" --cmd "bash mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_bridge_lm_lr_5epochs/scripts/rsmol/run_reasonaqa_8gpu_formal.sh $cmd_args"
 echo "Submitted grouped-LR training: bridge=$BRIDGE_MAX_LR, lm=$LM_MAX_LR; output=$OUTPUT_DIR"
