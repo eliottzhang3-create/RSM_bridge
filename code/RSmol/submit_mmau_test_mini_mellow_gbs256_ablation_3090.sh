@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 
-# Submit the six fixed gbs256 ReasonAQA checkpoints for the same MMAU
-# test-mini evaluation. The single-checkpoint wrapper derives each
-# checkpoint's runtime_5epochs.yaml and isolated output directory.
+# Submit gbs256 ReasonAQA checkpoints for the same MMAU test-mini evaluation.
+# With no checkpoint arguments this keeps the original six-checkpoint batch;
+# custom checkpoint paths can be supplied after the optional mode.
+# Usage: $0 [full|smoke] [checkpoint-file ...]
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SINGLE_SUBMIT="$SCRIPT_DIR/submit_mmau_test_mini_mellow_gbs256_3090.sh"
 MODE="${1:-full}"
 
-if (( $# > 1 )); then
-  echo "usage: $0 [full|smoke]" >&2
-  exit 2
+if [[ "$MODE" == full || "$MODE" == smoke ]]; then
+  shift
+else
+  MODE=full
 fi
 if [[ "$MODE" != full && "$MODE" != smoke ]]; then
   echo "mode must be full or smoke: $MODE" >&2
@@ -30,6 +32,9 @@ CHECKPOINTS=(
   "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_lr_ablation_5090/formal_5epochs_maxlr_4e-4_20261010_210023713300705/checkpoints/mellow_adamw_cosine_reasonaqa_gbs256_lr_formal_20_20261010_132413418875990/model--epo-5.ckpt"
   "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_lr_ablation_5090/formal_5epochs_maxlr_8e-4_20261010_210000727826895/checkpoints/mellow_adamw_cosine_reasonaqa_gbs256_lr_formal_20_20261010_150900245347077/model--epo-5.ckpt"
 )
+if (( $# > 0 )); then
+  CHECKPOINTS=("$@")
+fi
 
 submitted=0
 failed=0

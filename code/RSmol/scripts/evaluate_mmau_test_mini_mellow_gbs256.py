@@ -20,6 +20,12 @@ ROUTE_ROOTS = {
     "global_token_mean": "reasonaqa_global_batch256_lr_ablation_5epochs",
     "equal_microbatch_token_mean": "reasonaqa_global_batch256_old_microbatch_mean_5epochs",
 }
+ABLATION_ROUTE_ROOTS = {
+    "global_clip": "reasonaqa_global_batch256_global_clip_5epochs",
+    "attention_mask": "reasonaqa_global_batch256_attention_mask_5epochs",
+    "htsat_frozen": "reasonaqa_global_batch256_htsat_frozen_5epochs",
+    "zero_audio2": "reasonaqa_global_batch256_zero_audio2_5epochs",
+}
 ROUTE_PARENT = Path(__file__).resolve().parent.parent / "mellow_official_training_c8204d8_adamw_cosine"
 LEGACY_IDENTITY_FILENAME = "gbs256_eval_identity.json"
 IDENTITY_SIDECAR_SUFFIX = ".gbs256_eval_identity.json"
@@ -94,6 +100,15 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
     loss_reduction = str(checkpoint["loss_reduction"])
     if loss_reduction not in ROUTE_ROOTS:
         raise RuntimeError(f"unsupported gbs256 loss reduction: {loss_reduction!r}")
+    route_variant = checkpoint.get("route_variant")
+    if route_variant is not None:
+        route_variant = str(route_variant).strip() or None
+    if route_variant is not None and route_variant not in ABLATION_ROUTE_ROOTS:
+        raise RuntimeError(f"unsupported gbs256 route variant: {route_variant!r}")
+    if route_variant is not None and loss_reduction != "global_token_mean":
+        raise RuntimeError(
+            "isolated gbs256 route variants must use global_token_mean loss reduction"
+        )
     optimizer = checkpoint["optimizer_contract"]
     if optimizer.get("type") != "AdamW" or tuple(optimizer.get("betas", ())) != (0.9, 0.95):
         raise RuntimeError(f"unexpected optimizer contract: {optimizer!r}")
@@ -122,6 +137,7 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
         "batch_geometry": expected_geometry,
         "effective_global_batch": 256,
         "loss_reduction": loss_reduction,
+        "route_variant": route_variant,
         "optimizer_contract": optimizer,
         "scheduler": {
             "scheduler_type": scheduler["scheduler_type"],
@@ -134,10 +150,62 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
     }
 
 
+def _runtime_route_variant(path: Path) -> str | None:
+    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(config, dict):
+        raise RuntimeError("runtime config must be a mapping")
+    value = config.get("route_variant")
+    if value is None:
+        return None
+    route_variant = str(value).strip() or None
+    if route_variant not in ABLATION_ROUTE_ROOTS:
+        raise RuntimeError(f"unsupported runtime route variant: {route_variant!r}")
+    return route_variant
+
+
+def _resolve_route(
+    loss_reduction: str,
+    checkpoint_route_variant: str | None,
+    runtime_route_variant: str | None,
+) -> tuple[str, str | None]:
+    if (
+        checkpoint_route_variant is not None
+        and runtime_route_variant is not None
+        and checkpoint_route_variant != runtime_route_variant
+    ):
+        raise RuntimeError(
+            "checkpoint and runtime config route variants differ: "
+            f"checkpoint={checkpoint_route_variant!r}, runtime={runtime_route_variant!r}"
+        )
+    route_variant = checkpoint_route_variant or runtime_route_variant
+    if route_variant is not None:
+        if loss_reduction != "global_token_mean":
+            raise RuntimeError(
+                "isolated gbs256 route variants must use global_token_mean loss reduction"
+            )
+        return ABLATION_ROUTE_ROOTS[route_variant], route_variant
+    return ROUTE_ROOTS[loss_reduction], None
+
+
 def _validate_runtime(path: Path, checkpoint_contract: dict[str, Any]) -> dict[str, Any]:
     config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(config, dict):
         raise RuntimeError("runtime config must be a mapping")
+    runtime_route_variant = config.get("route_variant")
+    if runtime_route_variant is not None:
+        runtime_route_variant = str(runtime_route_variant).strip() or None
+    if runtime_route_variant is not None and runtime_route_variant not in ABLATION_ROUTE_ROOTS:
+        raise RuntimeError(f"unsupported runtime route variant: {runtime_route_variant!r}")
+    checkpoint_route_variant = checkpoint_contract.get("route_variant")
+    if (
+        checkpoint_route_variant is not None
+        and runtime_route_variant is not None
+        and checkpoint_route_variant != runtime_route_variant
+    ):
+        raise RuntimeError(
+            "checkpoint and runtime config route variants differ: "
+            f"checkpoint={checkpoint_route_variant!r}, runtime={runtime_route_variant!r}"
+        )
     model = config.get("model") or {}
     encoder = model.get("encoder") or {}
     decoder = model.get("decoder") or {}
@@ -182,7 +250,9 @@ def _validate_runtime(path: Path, checkpoint_contract: dict[str, Any]) -> dict[s
         "text_decoder": str(decoder.get("text_decoder")),
         "htsat_root": str(encoder.get("pretrained_audioencoder_path")),
         "batch_geometry": {"per_rank_batch_size": 8, "world_size": 8, "gradient_accumulation_steps": 4},
-        "num_epochs": 5, "optimizer": train.get("optimizer") or {},
+        "num_epochs": 5,
+        "route_variant": checkpoint_route_variant or runtime_route_variant,
+        "optimizer": train.get("optimizer") or {},
     }
 
 
@@ -200,6 +270,7 @@ def _delegate_args(args: argparse.Namespace) -> argparse.Namespace:
             delegate_argv.extend([option, str(value)])
     delegated = official_training.parse_args(delegate_argv)
     delegated.training_branch = str(args.route_root.name)
+    delegated.route_fallback_root = getattr(args, "route_fallback_root", None)
     return delegated
 
 
@@ -279,10 +350,22 @@ def _claim_output(args: argparse.Namespace) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     checkpoint_contract = _load_checkpoint(args.checkpoint_file)
-    expected_route = (ROUTE_PARENT / ROUTE_ROOTS[checkpoint_contract["loss_reduction"]]).resolve(strict=True)
+    runtime_route_variant = _runtime_route_variant(args.runtime_config)
+    route_name, route_variant = _resolve_route(
+        checkpoint_contract["loss_reduction"],
+        checkpoint_contract.get("route_variant"),
+        runtime_route_variant,
+    )
+    expected_route = (ROUTE_PARENT / route_name).resolve(strict=True)
     if args.route_root is not None and args.route_root != expected_route:
         raise RuntimeError(f"route root does not match loss reduction: expected={expected_route}, actual={args.route_root}")
     args.route_root = expected_route
+    args.route_variant = route_variant
+    args.route_fallback_root = (
+        (ROUTE_PARENT / ROUTE_ROOTS["global_token_mean"]).resolve(strict=True)
+        if route_variant is not None
+        else None
+    )
     run_root = args.checkpoint_file.parent.parent.parent
     if args.runtime_config.parent != run_root:
         raise RuntimeError(f"runtime config must belong to checkpoint run {run_root}")
@@ -292,6 +375,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     report["gbs256_checkpoint_contract"] = checkpoint_contract
     report["gbs256_runtime_contract"] = runtime_contract
     report["gbs256_route_root"] = str(args.route_root)
+    report["gbs256_route_variant"] = route_variant
     adapter.write_json(args.output_dir / "evaluation_report.json", report)
     print(json.dumps({"status": report.get("status"), "mode": report.get("mode"), "loss_reduction": checkpoint_contract["loss_reduction"], "primary_comparison_score": report.get("primary_comparison_score", {}), "report": str(args.output_dir / "evaluation_report.json")}, ensure_ascii=False, default=official_training.official._json_default))
     comparable = bool((report.get("primary_comparison_score") or {}).get("comparable"))

@@ -118,14 +118,29 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return dict(config)
 
 
-def _import_route_model(route_root: Path):
-    route_root = route_root.resolve()
-    if not route_root.is_dir():
-        raise FileNotFoundError(f"official Mellow source root not found: {route_root}")
-    text = str(route_root)
-    if text in sys.path:
-        sys.path.remove(text)
-    sys.path.insert(0, text)
+def _import_route_model(route_root: Path, fallback_route_root: Path | None = None):
+    route_roots = [route_root.resolve()]
+    if fallback_route_root is not None:
+        fallback = fallback_route_root.resolve()
+        if fallback not in route_roots:
+            route_roots.append(fallback)
+    for root in route_roots:
+        if not root.is_dir():
+            raise FileNotFoundError(f"official Mellow source root not found: {root}")
+    # The ablation routes are thin overlays.  Keep the overlay first so its
+    # models/mellow.py wins, while the baseline supplies shared modules such
+    # as models/model.py, models/audio.py, and models/decoder.py.
+    for root in reversed(route_roots):
+        text = str(root)
+        while text in sys.path:
+            sys.path.remove(text)
+        sys.path.insert(0, text)
+    # Tests and multi-checkpoint callers may load more than one route in one
+    # interpreter.  Clear the namespace package before rebuilding its search
+    # path so a previous route cannot leak into the next model.
+    for module_name in list(sys.modules):
+        if module_name == "models" or module_name.startswith("models."):
+            del sys.modules[module_name]
     importlib.invalidate_caches()
     model_module = importlib.import_module("models.model")
     return model_module.get_model_class("Mellow")
@@ -180,7 +195,10 @@ def load_runtime_model(args: Any) -> tuple[Any, Any, Any, dict[str, Any]]:
         raise FileNotFoundError(f"official training checkpoint not found: {checkpoint_path}")
     config = _load_yaml(runtime_config_path)
     model_args = _config_model_args(config)
-    route_model = _import_route_model(route_root)
+    fallback_route_root = getattr(args, "route_fallback_root", None)
+    if fallback_route_root:
+        fallback_route_root = Path(fallback_route_root).resolve()
+    route_model = _import_route_model(route_root, fallback_route_root)
     model = route_model(**model_args)
     tokenizer = _make_tokenizer(config)
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -220,6 +238,11 @@ def load_runtime_model(args: Any) -> tuple[Any, Any, Any, dict[str, Any]]:
         "model_family": "official_mellow_training",
         "training_branch": str(args.training_branch),
         "route_root": str(route_root),
+        "route_fallback_root": str(fallback_route_root) if fallback_route_root else None,
+        "model_search_roots": [
+            str(route_root),
+            *([str(fallback_route_root)] if fallback_route_root else []),
+        ],
         "checkpoint_file": str(checkpoint_path),
         "checkpoint_sha256": sha256_file(checkpoint_path),
         "runtime_config": str(runtime_config_path),
