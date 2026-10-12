@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any, Sequence
@@ -26,6 +27,55 @@ ROUTE_CONTRACT = "mellow_v0_official_adamw_cosine_two_stage_5_10x2_5_mesh_v1"
 TEXT_CONTRACT = "logical_30_physical_20_5_10x2_5"
 PROTOCOL_CONTRACT = "mellow_v0_two_stage_mmau_author_reply_eos_pad_recursive_mesh_v1"
 PREDICTION_FORMAT = "mellow_v0_two_stage_author_reply_raw_choice_label_scoring_eos_pad_v1"
+STAGE1_PROFILE = "stage1_gbs256_router1e-3_other1e-4"
+STAGE2_GBS32_PROFILE = "stage2_gbs32_lr5e-4"
+STAGE2_GBS256_PROFILE = "stage2_gbs256_lr1e-4"
+STAGE2_GBS256_LR1E4_MIN1E5_PROFILE = "stage2_gbs256_lr1e-4_min1e-5"
+PROFILE_CONTRACTS = {
+    STAGE1_PROFILE: {
+        "stage": "stage1",
+        "geometry": {
+            "per_rank_batch_size": 8,
+            "world_size": 8,
+            "gradient_accumulation_steps": 4,
+        },
+        "effective_global_batch": 256,
+        "group_bounds": {
+            "routers": (1e-3, 1e-4),
+            "other": (1e-4, 1e-5),
+        },
+    },
+    STAGE2_GBS32_PROFILE: {
+        "stage": "stage2",
+        "geometry": {
+            "per_rank_batch_size": 4,
+            "world_size": 8,
+            "gradient_accumulation_steps": 1,
+        },
+        "effective_global_batch": 32,
+        "group_bounds": {"all": (5e-4, 5e-5)},
+    },
+    STAGE2_GBS256_PROFILE: {
+        "stage": "stage2",
+        "geometry": {
+            "per_rank_batch_size": 8,
+            "world_size": 8,
+            "gradient_accumulation_steps": 4,
+        },
+        "effective_global_batch": 256,
+        "group_bounds": {"all": (1e-4, 5e-5)},
+    },
+    STAGE2_GBS256_LR1E4_MIN1E5_PROFILE: {
+        "stage": "stage2",
+        "geometry": {
+            "per_rank_batch_size": 8,
+            "world_size": 8,
+            "gradient_accumulation_steps": 4,
+        },
+        "effective_global_batch": 256,
+        "group_bounds": {"all": (1e-4, 1e-5)},
+    },
+}
 DEFAULT_CHECKPOINT = Path(
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
     "mellow_v0_two_stage_reasonaqa/stage1_formal_5epochs_epoch17_routers/checkpoints/"
@@ -43,6 +93,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), default="full")
     parser.add_argument("--expected-training-stage", choices=("stage1", "stage2"))
+    parser.add_argument(
+        "--expected-training-profile",
+        choices=tuple(PROFILE_CONTRACTS),
+        help="Require the checkpoint and runtime config to use this training profile.",
+    )
     parser.add_argument("--checkpoint-file", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--runtime-config", type=Path, default=DEFAULT_RUNTIME)
     parser.add_argument("--route-root", type=Path, default=ROUTE_ROOT)
@@ -107,6 +162,36 @@ def _validate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
             "checkpoint training stage mismatch: "
             f"expected={args.expected_training_stage!r} actual={checkpoint_stage!r}"
         )
+    checkpoint_geometry = checkpoint.get("batch_geometry")
+    checkpoint_profile = checkpoint.get("training_profile")
+    if checkpoint_profile is None:
+        # Older schema-v2 checkpoints did not always record the profile name.
+        # Keep those historical evaluations usable by inferring only from stage
+        # and geometry; a profile-pinned wrapper still requires the field.
+        if args.expected_training_profile:
+            raise RuntimeError("checkpoint does not declare training_profile")
+        if checkpoint_stage == "stage1":
+            checkpoint_profile = STAGE1_PROFILE
+        elif isinstance(checkpoint_geometry, dict) and int(
+            checkpoint_geometry.get("per_rank_batch_size", -1)
+        ) == 4:
+            checkpoint_profile = STAGE2_GBS32_PROFILE
+        else:
+            checkpoint_profile = STAGE2_GBS256_PROFILE
+    checkpoint_profile = str(checkpoint_profile)
+    if checkpoint_profile not in PROFILE_CONTRACTS:
+        raise RuntimeError(f"unsupported two-stage training profile: {checkpoint_profile!r}")
+    if args.expected_training_profile and checkpoint_profile != args.expected_training_profile:
+        raise RuntimeError(
+            "checkpoint training profile mismatch: "
+            f"expected={args.expected_training_profile!r} actual={checkpoint_profile!r}"
+        )
+    profile_contract = PROFILE_CONTRACTS[checkpoint_profile]
+    if profile_contract["stage"] != checkpoint_stage:
+        raise RuntimeError(
+            f"training profile/stage mismatch: profile={checkpoint_profile!r} "
+            f"stage={checkpoint_stage!r}"
+        )
     if (
         int(checkpoint["epoch_completed"]) != 5
         or int(checkpoint["num_epochs"]) != 5
@@ -124,26 +209,21 @@ def _validate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(
             f"runtime config stage mismatch: checkpoint={checkpoint_stage} runtime={runtime_stage}"
         )
+    runtime_profile = config.get("training_profile")
+    if runtime_profile is not None and str(runtime_profile) != checkpoint_profile:
+        raise RuntimeError(
+            f"runtime config profile mismatch: checkpoint={checkpoint_profile} "
+            f"runtime={runtime_profile}"
+        )
+    if args.expected_training_profile and str(runtime_profile) != checkpoint_profile:
+        raise RuntimeError("profile-pinned evaluation requires runtime config training_profile")
     if int((config.get("train") or {}).get("num_epochs", -1)) != 5:
         raise RuntimeError("runtime config does not declare num_epochs=5")
     runtime_train = config.get("train") or {}
-    expected_geometry = (
-        {
-            "per_rank_batch_size": 8,
-            "world_size": 8,
-            "gradient_accumulation_steps": 4,
-        }
-        if checkpoint_stage == "stage1"
-        else {
-            "per_rank_batch_size": 4,
-            "world_size": 8,
-            "gradient_accumulation_steps": 1,
-        }
-    )
-    checkpoint_geometry = checkpoint.get("batch_geometry")
+    expected_geometry = profile_contract["geometry"]
     if checkpoint_geometry != expected_geometry:
         raise RuntimeError(
-            f"{checkpoint_stage} checkpoint batch geometry mismatch: "
+            f"{checkpoint_profile} checkpoint batch geometry mismatch: "
             f"expected={expected_geometry!r} actual={checkpoint_geometry!r}"
         )
     runtime_geometry = {
@@ -153,9 +233,27 @@ def _validate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     }
     if runtime_geometry != expected_geometry:
         raise RuntimeError(
-            f"{checkpoint_stage} runtime batch geometry mismatch: "
+            f"{checkpoint_profile} runtime batch geometry mismatch: "
             f"expected={expected_geometry!r} actual={runtime_geometry!r}"
         )
+    scheduler = checkpoint.get("scheduler") or {}
+    scheduler_bounds = scheduler.get("group_bounds") or []
+    expected_bounds = profile_contract["group_bounds"]
+    if scheduler_bounds:
+        actual_bounds = {str(item.get("name")): item for item in scheduler_bounds}
+        if set(actual_bounds) != set(expected_bounds):
+            raise RuntimeError(
+                f"{checkpoint_profile} scheduler parameter groups mismatch: "
+                f"expected={sorted(expected_bounds)!r} actual={sorted(actual_bounds)!r}"
+            )
+        for name, (expected_max, expected_min) in expected_bounds.items():
+            bounds = actual_bounds[name]
+            if not math.isclose(float(bounds.get("max_lr", -1)), expected_max, abs_tol=1e-12):
+                raise RuntimeError(f"wrong max LR for {name}: {bounds}")
+            if not math.isclose(float(bounds.get("min_lr", -1)), expected_min, abs_tol=1e-12):
+                raise RuntimeError(f"wrong min LR for {name}: {bounds}")
+    elif args.expected_training_profile:
+        raise RuntimeError("profile-pinned evaluation requires scheduler group_bounds")
     state = checkpoint["state_dict"]
     nonfinite = [
         key for key, value in state.items()
@@ -173,10 +271,10 @@ def _validate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         "state_tensor_count": len(state),
         "route_contract": checkpoint["route_contract"],
         "text_model_contract": checkpoint["text_model_contract"],
+        "training_profile": checkpoint_profile,
         "batch_geometry": checkpoint_geometry,
-        "effective_global_batch": (
-            256 if checkpoint_stage == "stage1" else 32
-        ),
+        "effective_global_batch": profile_contract["effective_global_batch"],
+        "scheduler_group_bounds": expected_bounds,
     }
 
 
