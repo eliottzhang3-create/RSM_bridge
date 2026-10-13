@@ -7,6 +7,7 @@ import sys
 import tempfile
 import types
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -131,6 +132,204 @@ class GBS256OutputClaimTest(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "different checkpoint or config"):
                 self._claim(args)
+
+
+class GBS256NewRouteTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = load_module()
+
+    def test_grouped_learning_rate_checkpoint_and_runtime(self) -> None:
+        for bridge_max_lr in (4e-4, 8e-4):
+            with self.subTest(bridge_max_lr=bridge_max_lr), tempfile.TemporaryDirectory() as temporary:
+                checkpoint = {
+                    "schema_version": 2,
+                    "state_dict": {"weight": object()},
+                    "epoch_completed": 5,
+                    "num_epochs": 5,
+                    "batch_geometry": {
+                        "per_rank_batch_size": 8,
+                        "world_size": 8,
+                        "gradient_accumulation_steps": 4,
+                    },
+                    "loss_reduction": "global_token_mean",
+                    "optimizer_contract": {
+                        "type": "AdamW",
+                        "betas": [0.9, 0.95],
+                        "lr_groups": [{"lr_group": "bridge"}, {"lr_group": "lm"}],
+                    },
+                    "scheduler": {
+                        "scheduler_type": "step_cosine_warmup",
+                        "max_lr_by_group": {"bridge": bridge_max_lr, "lm": 1e-4},
+                        "min_lr_by_group": {"bridge": bridge_max_lr * 0.1, "lm": 1e-5},
+                        "total_steps": 100,
+                        "warmup_steps": 5,
+                        "last_step": 100,
+                    },
+                    "total_step": 100,
+                }
+                torch_stub = types.ModuleType("torch")
+                torch_stub.load = lambda *_args, **_kwargs: checkpoint
+                with mock.patch.dict(sys.modules, {"torch": torch_stub}):
+                    contract = self.module._load_checkpoint(Path(temporary) / "model--epo-5.ckpt")
+                runtime_config = {
+                    "data": {"ip_text_len": 129},
+                    "model": {
+                        "model_type": "Mellow",
+                        "encoder": {
+                            "audioenc_name": "HTSAT",
+                            "d_proj": 576,
+                            "pretrained_audioencoder_path": "/models/HTSAT",
+                        },
+                        "decoder": {
+                            "prefix_length": 40,
+                            "total_prefix_length": 389,
+                            "text_decoder": "/models/SmolLM2",
+                        },
+                    },
+                    "train": {
+                        "batch_size": 8,
+                        "gradient_accumulation_steps": 4,
+                        "num_epochs": 5,
+                        "optimizer": {
+                            "optimizer_type": "AdamW",
+                            "betas": [0.9, 0.95],
+                            "learning_rate": bridge_max_lr,
+                            "lr_groups": {
+                                "bridge": {"max_lr": bridge_max_lr, "min_lr": bridge_max_lr * 0.1},
+                                "lm": {"max_lr": 1e-4, "min_lr": 1e-5},
+                            },
+                            "warmup_ratio": 0.05,
+                            "weight_decay": 1e-4,
+                        },
+                    },
+                }
+                runtime_path = Path(temporary) / "runtime_5epochs.yaml"
+                runtime_path.write_text(json.dumps(runtime_config), encoding="utf-8")
+                with mock.patch.object(self.module.yaml, "safe_load", side_effect=json.loads):
+                    self.assertEqual(self.module._runtime_route_variant(runtime_path), "bridge_lm_lr")
+                    runtime_contract = self.module._validate_runtime(runtime_path, contract)
+                self.assertTrue(contract["lr_grouped"])
+                self.assertTrue(runtime_contract["lr_grouped"])
+                self.assertEqual(
+                    self.module._resolve_route(
+                        contract["loss_reduction"], contract["route_variant"], runtime_contract["route_variant"]
+                    )[0],
+                    "reasonaqa_global_batch256_bridge_lm_lr_5epochs",
+                )
+
+    def test_attention_mask_flag_is_route_specific(self) -> None:
+        for route_variant in ("attention_mask", "global_clip", "bridge_lm_lr", None):
+            with self.subTest(route_variant=route_variant):
+                args = types.SimpleNamespace(
+                    route_variant=route_variant,
+                    mode="full",
+                    checkpoint_file=Path("model--epo-5.ckpt"),
+                    runtime_config=Path("runtime_5epochs.yaml"),
+                    route_root=Path("route"),
+                    dataset_dir=Path("dataset"),
+                    output_dir=Path("output"),
+                    parquet_batch_size=8,
+                    max_prompt_tokens=129,
+                    max_new_tokens=300,
+                    dtype="fp32",
+                    parquet=None,
+                    metadata_json=None,
+                    evaluation_script=None,
+                    audio_root=None,
+                )
+                delegated = self.module._delegate_args(args)
+                self.assertEqual(delegated.attention_mask_generation, route_variant == "attention_mask")
+                with mock.patch.object(self.module.adapter, "sha256_file", return_value="digest"):
+                    identity = self.module._evaluation_identity(args)
+                self.assertEqual(
+                    "generation_attention_mask" in identity,
+                    route_variant == "attention_mask",
+                )
+
+    def test_attention_mask_prefix_preserves_right_padding(self) -> None:
+        class Mask:
+            def __init__(self, values):
+                self.values = values
+                self.shape = (1, len(values))
+                self.dtype = "long"
+                self.device = "cpu"
+
+        torch_stub = types.ModuleType("torch")
+        torch_stub.inference_mode = nullcontext
+        torch_stub.ones = lambda shape, **_kwargs: Mask([1] * shape[1])
+        torch_stub.cat = lambda tensors, dim: Mask([value for tensor in tensors for value in tensor.values])
+        prompt_mask = Mask([1] * 40 + [0] * 89)
+        prefix = types.SimpleNamespace(shape=(1, 389, 576), device="cpu")
+        adapter = self.module.adapter
+        with (
+            mock.patch.dict(sys.modules, {"torch": torch_stub}),
+            mock.patch.object(adapter, "tokenize_training_prompt", return_value=({"attention_mask": prompt_mask}, {})),
+            mock.patch.object(adapter, "build_native_prefix", return_value=(prefix, {})),
+            mock.patch.object(adapter, "greedy_decode_native", return_value={}) as decode,
+        ):
+            adapter.run_generation(
+                None, None, "cpu", {"prompt": "question", "waveform": None},
+                max_prompt_tokens=129, max_new_tokens=300, common=None,
+                use_padding_attention_mask=True,
+            )
+            mask = decode.call_args.kwargs["attention_mask"]
+            self.assertEqual(mask.values, [1] * 300 + [0] * 89)
+            adapter.run_generation(
+                None, None, "cpu", {"prompt": "question", "waveform": None},
+                max_prompt_tokens=129, max_new_tokens=300, common=None,
+            )
+            self.assertIsNone(decode.call_args.kwargs["attention_mask"])
+
+    def test_generated_tokens_extend_mask_without_changing_legacy_calls(self) -> None:
+        class Tensor:
+            def __init__(self, values, width=None):
+                self.values = values
+                self.shape = (1, len(values)) if width is None else (1, len(values), width)
+                self.dtype = "long"
+                self.device = "cpu"
+
+            def to(self, **_kwargs):
+                return self
+
+        torch_stub = types.ModuleType("torch")
+        torch_stub.long = "long"
+        torch_stub.tensor = lambda *_args, **_kwargs: object()
+        torch_stub.ones = lambda shape, **_kwargs: Tensor([1] * shape[1])
+        torch_stub.cat = lambda tensors, dim: Tensor(
+            [value for tensor in tensors for value in tensor.values],
+            tensors[0].shape[2] if len(tensors[0].shape) == 3 else None,
+        )
+        torch_stub.sort = lambda *_args, **_kwargs: (mock.MagicMock(), mock.MagicMock())
+        torch_stub.softmax = lambda *_args, **_kwargs: mock.MagicMock()
+        removable = mock.MagicMock()
+        removable.shape = (0,)
+        cumulative = mock.MagicMock()
+        cumulative.__gt__.return_value = removable
+        torch_stub.cumsum = lambda *_args, **_kwargs: cumulative
+        torch_stub.argmax = mock.Mock(side_effect=[types.SimpleNamespace(item=lambda: 7)] * 3)
+
+        logits = mock.MagicMock()
+        logits.__getitem__.return_value = mock.MagicMock()
+        lm = mock.Mock(return_value=types.SimpleNamespace(logits=logits))
+        lm.model = types.SimpleNamespace(embed_tokens=lambda _token: Tensor([0], 576))
+        model = types.SimpleNamespace(caption_decoder=types.SimpleNamespace(lm=lm))
+        tokenizer = types.SimpleNamespace(
+            eos_token_id=99,
+            eos_token="<|endoftext|>",
+            decode=lambda *_args, **_kwargs: "answer",
+        )
+        prefix = Tensor([0] * 389, 576)
+        initial_mask = Tensor([1] * 300 + [0] * 89)
+        with mock.patch.dict(sys.modules, {"torch": torch_stub}):
+            self.module.adapter.greedy_decode_native(
+                model, tokenizer, prefix, max_new_tokens=2, attention_mask=initial_mask
+            )
+            self.assertEqual(lm.call_args_list[0].kwargs["attention_mask"].values, initial_mask.values)
+            self.assertEqual(lm.call_args_list[1].kwargs["attention_mask"].values, initial_mask.values + [1])
+            lm.reset_mock()
+            self.module.adapter.greedy_decode_native(model, tokenizer, prefix, max_new_tokens=1)
+            self.assertNotIn("attention_mask", lm.call_args.kwargs)
 
 
 if __name__ == "__main__":

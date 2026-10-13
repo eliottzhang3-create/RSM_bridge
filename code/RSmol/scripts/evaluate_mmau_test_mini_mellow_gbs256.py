@@ -26,6 +26,11 @@ ABLATION_ROUTE_ROOTS = {
     "htsat_frozen": "reasonaqa_global_batch256_htsat_frozen_5epochs",
     "zero_audio2": "reasonaqa_global_batch256_zero_audio2_5epochs",
 }
+GROUPED_LR_ROUTE = "bridge_lm_lr"
+VARIANT_ROUTE_ROOTS = {
+    **ABLATION_ROUTE_ROOTS,
+    GROUPED_LR_ROUTE: "reasonaqa_global_batch256_bridge_lm_lr_5epochs",
+}
 ROUTE_PARENT = Path(__file__).resolve().parent.parent / "mellow_official_training_c8204d8_adamw_cosine"
 LEGACY_IDENTITY_FILENAME = "gbs256_eval_identity.json"
 IDENTITY_SIDECAR_SUFFIX = ".gbs256_eval_identity.json"
@@ -103,7 +108,30 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
     route_variant = checkpoint.get("route_variant")
     if route_variant is not None:
         route_variant = str(route_variant).strip() or None
-    if route_variant is not None and route_variant not in ABLATION_ROUTE_ROOTS:
+    scheduler = checkpoint["scheduler"]
+    if not isinstance(scheduler, dict) or scheduler.get("scheduler_type") != "step_cosine_warmup":
+        raise RuntimeError(f"unexpected scheduler contract: {scheduler!r}")
+    grouped_scheduler = isinstance(scheduler.get("max_lr_by_group"), dict) or isinstance(
+        scheduler.get("min_lr_by_group"), dict
+    )
+    if grouped_scheduler:
+        max_lr_by_group = scheduler.get("max_lr_by_group")
+        min_lr_by_group = scheduler.get("min_lr_by_group")
+        if set(max_lr_by_group or {}) != {"bridge", "lm"} or set(min_lr_by_group or {}) != {"bridge", "lm"}:
+            raise RuntimeError(
+                "grouped-LR checkpoint must define exactly bridge and lm max/min LR groups"
+            )
+        for group_name in ("bridge", "lm"):
+            max_value = float(max_lr_by_group[group_name])
+            min_value = float(min_lr_by_group[group_name])
+            if not math.isfinite(max_value) or not math.isfinite(min_value) or not (0.0 < min_value <= max_value):
+                raise RuntimeError(f"invalid grouped scheduler LR bounds for {group_name}: {scheduler!r}")
+            if not math.isclose(min_value, 0.1 * max_value, rel_tol=0.0, abs_tol=1e-12):
+                raise RuntimeError(f"grouped scheduler {group_name} min_lr must be 0.1 * max_lr")
+        if route_variant is not None:
+            raise RuntimeError("grouped-LR checkpoint must not declare an isolated ablation route_variant")
+        route_variant = GROUPED_LR_ROUTE
+    elif route_variant is not None and route_variant not in ABLATION_ROUTE_ROOTS:
         raise RuntimeError(f"unsupported gbs256 route variant: {route_variant!r}")
     if route_variant is not None and loss_reduction != "global_token_mean":
         raise RuntimeError(
@@ -112,15 +140,20 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
     optimizer = checkpoint["optimizer_contract"]
     if optimizer.get("type") != "AdamW" or tuple(optimizer.get("betas", ())) != (0.9, 0.95):
         raise RuntimeError(f"unexpected optimizer contract: {optimizer!r}")
-    scheduler = checkpoint["scheduler"]
-    if not isinstance(scheduler, dict) or scheduler.get("scheduler_type") != "step_cosine_warmup":
-        raise RuntimeError(f"unexpected scheduler contract: {scheduler!r}")
-    max_lr = float(scheduler.get("max_lr", 0.0))
-    min_lr = float(scheduler.get("min_lr", 0.0))
-    if not math.isfinite(max_lr) or not math.isfinite(min_lr) or not (0.0 < min_lr <= max_lr):
-        raise RuntimeError(f"invalid scheduler learning-rate bounds: {scheduler!r}")
-    if not math.isclose(min_lr, 0.1 * max_lr, rel_tol=0.0, abs_tol=1e-12):
-        raise RuntimeError("checkpoint scheduler min_lr must be 0.1 * max_lr")
+    if grouped_scheduler:
+        lr_groups = optimizer.get("lr_groups")
+        if not isinstance(lr_groups, list) or not lr_groups:
+            raise RuntimeError("grouped-LR checkpoint optimizer contract lacks lr_groups")
+        declared_groups = {str(item.get("lr_group")) for item in lr_groups if isinstance(item, dict)}
+        if declared_groups != {"bridge", "lm"}:
+            raise RuntimeError(f"grouped-LR optimizer contract must cover bridge/lm groups: {lr_groups!r}")
+    else:
+        max_lr = float(scheduler.get("max_lr", 0.0))
+        min_lr = float(scheduler.get("min_lr", 0.0))
+        if not math.isfinite(max_lr) or not math.isfinite(min_lr) or not (0.0 < min_lr <= max_lr):
+            raise RuntimeError(f"invalid scheduler learning-rate bounds: {scheduler!r}")
+        if not math.isclose(min_lr, 0.1 * max_lr, rel_tol=0.0, abs_tol=1e-12):
+            raise RuntimeError("checkpoint scheduler min_lr must be 0.1 * max_lr")
     total_steps = int(scheduler.get("total_steps", -1))
     warmup_steps = int(scheduler.get("warmup_steps", -1))
     if (
@@ -141,11 +174,18 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
         "optimizer_contract": optimizer,
         "scheduler": {
             "scheduler_type": scheduler["scheduler_type"],
-            "max_lr": max_lr,
-            "min_lr": min_lr,
+            **(
+                {
+                    "max_lr_by_group": {name: float(scheduler["max_lr_by_group"][name]) for name in ("bridge", "lm")},
+                    "min_lr_by_group": {name: float(scheduler["min_lr_by_group"][name]) for name in ("bridge", "lm")},
+                }
+                if grouped_scheduler
+                else {"max_lr": max_lr, "min_lr": min_lr}
+            ),
             "total_steps": total_steps,
             "warmup_steps": warmup_steps,
         },
+        "lr_grouped": grouped_scheduler,
         "state_tensor_count": len(checkpoint["state_dict"]),
     }
 
@@ -155,11 +195,18 @@ def _runtime_route_variant(path: Path) -> str | None:
     if not isinstance(config, dict):
         raise RuntimeError("runtime config must be a mapping")
     value = config.get("route_variant")
+    optimizer = ((config.get("train") or {}).get("optimizer") or {})
+    lr_groups = optimizer.get("lr_groups")
+    inferred_grouped = isinstance(lr_groups, dict) and set(lr_groups) == {"bridge", "lm"}
+    if value is None and inferred_grouped:
+        return GROUPED_LR_ROUTE
     if value is None:
         return None
     route_variant = str(value).strip() or None
-    if route_variant not in ABLATION_ROUTE_ROOTS:
+    if route_variant not in VARIANT_ROUTE_ROOTS:
         raise RuntimeError(f"unsupported runtime route variant: {route_variant!r}")
+    if inferred_grouped and route_variant != GROUPED_LR_ROUTE:
+        raise RuntimeError("runtime config grouped LR groups conflict with route_variant")
     return route_variant
 
 
@@ -183,7 +230,7 @@ def _resolve_route(
             raise RuntimeError(
                 "isolated gbs256 route variants must use global_token_mean loss reduction"
             )
-        return ABLATION_ROUTE_ROOTS[route_variant], route_variant
+        return VARIANT_ROUTE_ROOTS[route_variant], route_variant
     return ROUTE_ROOTS[loss_reduction], None
 
 
@@ -192,9 +239,14 @@ def _validate_runtime(path: Path, checkpoint_contract: dict[str, Any]) -> dict[s
     if not isinstance(config, dict):
         raise RuntimeError("runtime config must be a mapping")
     runtime_route_variant = config.get("route_variant")
+    optimizer = (config.get("train") or {}).get("optimizer") or {}
+    lr_groups = optimizer.get("lr_groups")
+    inferred_grouped = isinstance(lr_groups, dict) and set(lr_groups) == {"bridge", "lm"}
+    if runtime_route_variant is None and inferred_grouped:
+        runtime_route_variant = GROUPED_LR_ROUTE
     if runtime_route_variant is not None:
         runtime_route_variant = str(runtime_route_variant).strip() or None
-    if runtime_route_variant is not None and runtime_route_variant not in ABLATION_ROUTE_ROOTS:
+    if runtime_route_variant is not None and runtime_route_variant not in VARIANT_ROUTE_ROOTS:
         raise RuntimeError(f"unsupported runtime route variant: {runtime_route_variant!r}")
     checkpoint_route_variant = checkpoint_contract.get("route_variant")
     if (
@@ -231,16 +283,42 @@ def _validate_runtime(path: Path, checkpoint_contract: dict[str, Any]) -> dict[s
     scheduler = checkpoint_contract["scheduler"]
     if optimizer.get("optimizer_type") != "AdamW" or tuple(optimizer.get("betas", ())) != (0.9, 0.95):
         raise RuntimeError("runtime config optimizer must be AdamW with betas (0.9, 0.95)")
-    for name in ("max_lr", "min_lr"):
-        runtime_value = float(optimizer.get(name, float("nan")))
-        if not math.isclose(runtime_value, scheduler[name], rel_tol=0.0, abs_tol=1e-12):
-            raise RuntimeError(f"runtime config {name} differs from checkpoint scheduler")
+    if checkpoint_contract.get("lr_grouped"):
+        runtime_groups = optimizer.get("lr_groups")
+        if not isinstance(runtime_groups, dict) or set(runtime_groups) != {"bridge", "lm"}:
+            raise RuntimeError("grouped-LR runtime config must define bridge and lm lr_groups")
+        for group_name in ("bridge", "lm"):
+            runtime_group = runtime_groups[group_name]
+            if not isinstance(runtime_group, dict):
+                raise RuntimeError(f"grouped-LR runtime group is not a mapping: {group_name}")
+            for bound in ("max_lr", "min_lr"):
+                runtime_value = float(runtime_group.get(bound, float("nan")))
+                expected_value = scheduler[f"{bound}_by_group"][group_name]
+                if not math.isclose(runtime_value, expected_value, rel_tol=0.0, abs_tol=1e-12):
+                    raise RuntimeError(
+                        f"runtime config {group_name}.{bound} differs from checkpoint scheduler"
+                    )
+    else:
+        for name in ("max_lr", "min_lr"):
+            runtime_value = float(optimizer.get(name, float("nan")))
+            if not math.isclose(runtime_value, scheduler[name], rel_tol=0.0, abs_tol=1e-12):
+                raise RuntimeError(f"runtime config {name} differs from checkpoint scheduler")
     if not math.isclose(float(optimizer.get("warmup_ratio", float("nan"))), 0.05, rel_tol=0.0, abs_tol=1e-12):
         raise RuntimeError("runtime config warmup ratio must be 0.05")
     if not math.isclose(float(optimizer.get("weight_decay", float("nan"))), 1e-4, rel_tol=0.0, abs_tol=1e-12):
         raise RuntimeError("runtime config weight decay must be 1e-4")
-    if not math.isclose(float(optimizer.get("learning_rate", float("nan"))), scheduler["max_lr"], rel_tol=0.0, abs_tol=1e-12):
-        raise RuntimeError("runtime config learning_rate differs from checkpoint scheduler max_lr")
+    expected_learning_rate = (
+        scheduler["max_lr_by_group"]["bridge"]
+        if checkpoint_contract.get("lr_grouped")
+        else scheduler["max_lr"]
+    )
+    if not math.isclose(
+        float(optimizer.get("learning_rate", float("nan"))),
+        expected_learning_rate,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise RuntimeError("runtime config learning_rate differs from checkpoint scheduler")
     if not str(decoder.get("text_decoder", "")).endswith("/SmolLM2"):
         raise RuntimeError("runtime config must use the standard SmolLM2 decoder")
     if not str(encoder.get("pretrained_audioencoder_path", "")).endswith("/HTSAT"):
@@ -252,6 +330,7 @@ def _validate_runtime(path: Path, checkpoint_contract: dict[str, Any]) -> dict[s
         "batch_geometry": {"per_rank_batch_size": 8, "world_size": 8, "gradient_accumulation_steps": 4},
         "num_epochs": 5,
         "route_variant": checkpoint_route_variant or runtime_route_variant,
+        "lr_grouped": bool(checkpoint_contract.get("lr_grouped")),
         "optimizer": train.get("optimizer") or {},
     }
 
@@ -269,13 +348,14 @@ def _delegate_args(args: argparse.Namespace) -> argparse.Namespace:
         if value is not None:
             delegate_argv.extend([option, str(value)])
     delegated = official_training.parse_args(delegate_argv)
+    delegated.attention_mask_generation = args.route_variant == "attention_mask"
     delegated.training_branch = str(args.route_root.name)
     delegated.route_fallback_root = getattr(args, "route_fallback_root", None)
     return delegated
 
 
 def _evaluation_identity(args: argparse.Namespace) -> dict[str, str]:
-    return {
+    identity = {
         "checkpoint_file": str(args.checkpoint_file),
         "checkpoint_sha256": adapter.sha256_file(args.checkpoint_file),
         "runtime_config": str(args.runtime_config),
@@ -283,6 +363,9 @@ def _evaluation_identity(args: argparse.Namespace) -> dict[str, str]:
         "route_root": str(args.route_root),
         "dataset_dir": str(args.dataset_dir),
     }
+    if getattr(args, "route_variant", None) == "attention_mask":
+        identity["generation_attention_mask"] = "training_aligned_full_multimodal_prefix_mask"
+    return identity
 
 
 def _identity_sidecar(output_dir: Path) -> Path:

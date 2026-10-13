@@ -92,6 +92,7 @@ def _raw_generation_by_id(output_dir: Path) -> dict[str, str]:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     loaded_runtime: dict[str, Any] = {}
+    attention_mask_generation = bool(getattr(args, "attention_mask_generation", False))
 
     def load_model(current_args: argparse.Namespace):
         result = adapter.load_runtime_model(current_args)
@@ -105,6 +106,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             max_prompt_tokens=max_prompt_tokens,
             max_new_tokens=max_new_tokens,
             common=official,
+            use_padding_attention_mask=attention_mask_generation,
         )
 
     report = official.run(
@@ -129,6 +131,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "inference_dtype": "float32",
             "prompt_contract": "training_eos_then_right_pad_bang_v1",
             "audio2_policy": "same_waveform_native_dual_encoding",
+            **(
+                {"padding_attention_mask": "training_aligned_full_multimodal_prefix_mask"}
+                if attention_mask_generation else {}
+            ),
         },
         audio_prefix_tokens=adapter.AUDIO_PREFIX_TOKENS,
         stage="mmau_test_mini_official_mellow_training_native_dual",

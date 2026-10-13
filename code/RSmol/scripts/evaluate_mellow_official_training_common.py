@@ -356,17 +356,39 @@ def build_native_prefix(model: Any, common: Any, waveform: Any, text_input: Mapp
     }
 
 
-def greedy_decode_native(model: Any, tokenizer: Any, prefix: Any, *, max_new_tokens: int, top_p: float = 0.8, temperature: float = 1.0):
+def greedy_decode_native(
+    model: Any,
+    tokenizer: Any,
+    prefix: Any,
+    *,
+    max_new_tokens: int,
+    top_p: float = 0.8,
+    temperature: float = 1.0,
+    attention_mask: Any | None = None,
+):
     import time
     import torch
 
     eos_id = int(tokenizer.eos_token_id)
+    if attention_mask is not None:
+        if tuple(attention_mask.shape) != (prefix.shape[0], prefix.shape[1]):
+            raise ValueError(
+                "generation attention mask must initially match prefix shape: "
+                f"prefix={tuple(prefix.shape)}, mask={tuple(attention_mask.shape)}"
+            )
+        attention_mask = attention_mask.to(device=prefix.device)
     generated_ids: list[int] = []
     generated = prefix
     started = time.perf_counter()
     stop_reason = "max_new_tokens"
     for _ in range(max_new_tokens):
-        output = model.caption_decoder.lm(inputs_embeds=generated)
+        if attention_mask is None:
+            output = model.caption_decoder.lm(inputs_embeds=generated)
+        else:
+            output = model.caption_decoder.lm(
+                inputs_embeds=generated,
+                attention_mask=attention_mask,
+            )
         logits = output.logits[:, -1, :] / (temperature if temperature > 0 else 1.0)
         sorted_logits, sorted_indices = torch.sort(logits, descending=True)
         cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
@@ -380,13 +402,25 @@ def greedy_decode_native(model: Any, tokenizer: Any, prefix: Any, *, max_new_tok
         token_tensor = torch.tensor([[next_token]], dtype=torch.long, device=generated.device)
         token_embed = model.caption_decoder.lm.model.embed_tokens(token_tensor)
         generated = torch.cat((generated, token_embed), dim=1)
+        if attention_mask is not None:
+            attention_mask = torch.cat(
+                (
+                    attention_mask,
+                    torch.ones(
+                        (attention_mask.shape[0], 1),
+                        dtype=attention_mask.dtype,
+                        device=attention_mask.device,
+                    ),
+                ),
+                dim=1,
+            )
         if next_token == eos_id:
             stop_reason = "eos_token"
             break
     elapsed = time.perf_counter() - started
     raw = tokenizer.decode(generated_ids, skip_special_tokens=False)
     text = raw.split(tokenizer.eos_token or EOS_TOKEN)[0]
-    return {
+    result = {
         "generated_token_ids": generated_ids,
         "generated_text_raw": raw,
         "generated_text": text,
@@ -402,9 +436,23 @@ def greedy_decode_native(model: Any, tokenizer: Any, prefix: Any, *, max_new_tok
         "generation_use_cache": False,
         "inference_dtype": "float32",
     }
+    if attention_mask is not None:
+        result["generation_attention_mask"] = "full_multimodal_padding_mask"
+    return result
 
 
-def run_generation(model: Any, tokenizer: Any, device: Any, sample: Mapping[str, Any], *, max_prompt_tokens: int, max_new_tokens: int, common: Any, segmenter: Any | None = None) -> dict[str, Any]:
+def run_generation(
+    model: Any,
+    tokenizer: Any,
+    device: Any,
+    sample: Mapping[str, Any],
+    *,
+    max_prompt_tokens: int,
+    max_new_tokens: int,
+    common: Any,
+    segmenter: Any | None = None,
+    use_padding_attention_mask: bool = False,
+) -> dict[str, Any]:
     import torch
 
     text_input, prompt_audit = tokenize_training_prompt(
@@ -414,12 +462,35 @@ def run_generation(model: Any, tokenizer: Any, device: Any, sample: Mapping[str,
         prefix, prefix_audit = build_native_prefix(
             model, common, sample["waveform"], text_input, device, segmenter=segmenter
         )
+        generation_attention_mask = None
+        if use_padding_attention_mask:
+            audio_mask = torch.ones(
+                (prefix.shape[0], AUDIO_PREFIX_TOKENS),
+                dtype=text_input["attention_mask"].dtype,
+                device=device,
+            )
+            generation_attention_mask = torch.cat(
+                (audio_mask, text_input["attention_mask"]),
+                dim=1,
+            )
+            if tuple(generation_attention_mask.shape) != (prefix.shape[0], TOTAL_PREFIX_TOKENS):
+                raise RuntimeError(
+                    "attention-mask evaluation prefix mask shape mismatch: "
+                    f"prefix={tuple(prefix.shape)}, mask={tuple(generation_attention_mask.shape)}"
+                )
         generated = greedy_decode_native(
-            model, tokenizer, prefix, max_new_tokens=max_new_tokens
+            model,
+            tokenizer,
+            prefix,
+            max_new_tokens=max_new_tokens,
+            attention_mask=generation_attention_mask,
         )
     generated.update(prompt_audit)
     generated.update(prefix_audit)
     generated["answer_start_position"] = TOTAL_PREFIX_TOKENS
+    if use_padding_attention_mask:
+        generated["prompt_padding_masked"] = True
+        generated["prompt_padding_mask_policy"] = "training_aligned_full_multimodal_prefix_mask"
     return generated
 
 
