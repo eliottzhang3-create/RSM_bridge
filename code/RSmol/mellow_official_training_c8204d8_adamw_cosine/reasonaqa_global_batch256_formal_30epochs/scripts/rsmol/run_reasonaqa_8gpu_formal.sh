@@ -13,8 +13,8 @@ AUDIT_REPORT=$(readlink -f "$1")
 MAPPING_JSONL=$(readlink -f "$2")
 OUTPUT_DIR=$(readlink -m "$3")
 NUM_EPOCHS=30
-MAX_LR=2e-4
-MIN_LR=1e-5
+MAX_LR=4e-5
+MIN_LR=4e-6
 RESUME_CHECKPOINT=${4:-}
 RESUME_ARGS=()
 if [[ -n "$RESUME_CHECKPOINT" ]]; then

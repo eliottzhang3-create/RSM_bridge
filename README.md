@@ -2,7 +2,7 @@
 
 ## 2026-10-13：标准 Mellow gbs256 完整 30-epoch ReasonAQA 训练代码准备
 
-在 `code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_formal_30epochs/` 新增独立薄覆盖路线，提交入口为 `code/RSmol/run_mellow_official_reasonaqa_gbs256_formal30_5090.sh`。训练合同：8 GPU × 每卡 batch 8 × 累积 4 = GBS 256；从 HTSAT/SmolLM2 预训练组件重新开始，bridge 和 LM 共用 AdamW 的 max LR `2e-4`、min LR `1e-5`，按 optimizer step 做 5% warmup + cosine，30 epochs，FP32，全局梯度 L2 范数硬裁剪 0.5。HTSAT eval/no-grad 冻结，`c2l`、投影和 LM 可训练；空第二音频槽输入静音。文本序列为 260 位双音频前缀 + 不补齐的 prompt/EOS + answer/EOS，只有 answer/EOS 后才右填充；padding 不参与注意力，只监督 answer 与其 EOS，按全局有效目标 token 数归一化。prompt/answer 分别保留 129/250 token 上限并保留 EOS。代码已在本地准备，远程训练结果尚待提交与确认；该路线评测尚未实现。详情见路线 README。
+在 `code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_formal_30epochs/` 新增独立薄覆盖路线，提交入口为 `code/RSmol/run_mellow_official_reasonaqa_gbs256_formal30_5090.sh`。训练合同：8 GPU × 每卡 batch 8 × 累积 4 = GBS 256；从 HTSAT/SmolLM2 预训练组件重新开始，bridge 和 LM 共用 AdamW 的 max LR `4e-5`、min LR `4e-6`，按 optimizer step 做 5% warmup + cosine，30 epochs，FP32，全局梯度 L2 范数硬裁剪 0.5。HTSAT eval/no-grad 冻结，`c2l`、投影和 LM 可训练；空第二音频槽输入静音。文本序列为 260 位双音频前缀 + 不补齐的 prompt/EOS + answer/EOS，只有 answer/EOS 后才右填充；padding 不参与注意力，只监督 answer 与其 EOS，按全局有效目标 token 数归一化。prompt/answer 分别保留 129/250 token 上限并保留 EOS。代码已在本地准备，远程训练结果尚待提交与确认；该路线评测尚未实现。详情见路线 README。
 
 ## 2026-10-12：标准 Mellow gbs256 四条独立五 epoch 消融训练路线
 

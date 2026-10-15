@@ -39,8 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-epochs-this-run", type=int, default=0)
     parser.add_argument("--resume-checkpoint", type=Path, default=None)
     parser.add_argument("--init-model-checkpoint", type=Path, default=None)
-    parser.add_argument("--max-lr", type=float, default=2e-4)
-    parser.add_argument("--min-lr", type=float, default=1e-5)
+    parser.add_argument("--max-lr", type=float, default=4e-5)
+    parser.add_argument("--min-lr", type=float, default=4e-6)
     parser.add_argument("--warmup-ratio", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--max-optimizer-steps", type=int, default=0)
@@ -53,10 +53,10 @@ def main() -> int:
         raise ValueError("the formal route requires exactly 30 epochs")
     if args.max_epochs_this_run != 0 or args.max_optimizer_steps != 0:
         raise ValueError("the formal route requires a complete 30-epoch horizon")
-    if not math.isclose(args.max_lr, 2e-4, rel_tol=0.0, abs_tol=1e-12):
-        raise ValueError("this formal route requires max_lr=2e-4")
-    if not math.isclose(args.min_lr, 1e-5, rel_tol=0.0, abs_tol=1e-12):
-        raise ValueError("this formal route requires min_lr=1e-5")
+    if not math.isclose(args.max_lr, 4e-5, rel_tol=0.0, abs_tol=1e-12):
+        raise ValueError("this formal route requires max_lr=4e-5")
+    if not math.isclose(args.min_lr, 4e-6, rel_tol=0.0, abs_tol=1e-12):
+        raise ValueError("this formal route requires min_lr=4e-6")
     resolved_stage_root = args.stage_root.resolve()
     shm_root = Path("/dev/shm").resolve()
     if not resolved_stage_root.is_relative_to(shm_root):

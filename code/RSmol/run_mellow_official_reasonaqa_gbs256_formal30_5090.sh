@@ -53,4 +53,4 @@ vc submit \
   JOB=1:1 "$SCRIPT_DIR/log/mellow_official_reasonaqa_formal30.${RUN_TAG}.JOB.log" \
   --cmd "bash mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_formal_30epochs/scripts/rsmol/run_reasonaqa_8gpu_formal.sh $CMD_ARGS"
 
-echo "Submitted 30-epoch ReasonAQA training: GBS=256, max_lr=2e-4, min_lr=1e-5; output directory: $OUTPUT_DIR"
+echo "Submitted 30-epoch ReasonAQA training: GBS=256, max_lr=4e-5, min_lr=4e-6; output directory: $OUTPUT_DIR"
