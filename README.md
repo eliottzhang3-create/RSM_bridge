@@ -1,5 +1,19 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-15：formal30 的 5-10×2-5 MeSH 文本骨干对比线
+
+新增隔离路线 `code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_formal_30epochs_5_10x2_5_mesh/`，母本是当前 `run_mellow_official_reasonaqa_gbs256_formal30_5090.sh` 对应的 formal30。仅把文本骨干换成 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244` 的文本权重；音频模型、canonical SmolLM2 tokenizer、260 位前缀、文本拼接/mask/answer-EOS loss、GBS256、30 epochs、FP32、AdamW、`4e-5 → 4e-6`、5% warmup/cosine 和全局硬裁剪 0.5 保持基准合同。旧路线和共享递归实现未改动。
+
+按用户要求直接准备正式训练，不新增或运行 smoke。经 GitHub 同步后，从远端 `code/RSmol/` 提交：
+
+```bash
+bash run_mellow_official_reasonaqa_gbs256_formal30_5_10x2_5_mesh_5090.sh
+```
+
+同一 `pdgpu-5090` 资源/容器与 `mellow_c8204d8` 环境，独立输出根目录 `outputs/RSmol/mellow_official_reasonaqa_gbs256_formal30_5_10x2_5_mesh_5090/`。启动校验源码/配置等价、tokenizer 兼容、完整 FP32 文本加载和音频初值/CPU RNG 精确对齐，记录权重/代码/数据/环境身份并拒绝跨路线 resume。cache/attention 使用基准实际设置，不直接沿用旧 adapter。详细提交、输出与恢复限制见新路线 README。
+
+此处记录本地实现，不代表远端加载或训练完成。递归实现目标 Transformers 4.54.1，旧环境快照为 4.47.1；实际环境兼容性和训练须以远端正式日志为准，不自动升级或改超参。该 checkpoint 有额外文本训练历史，因此属于文本骨干替换对比，不能把结果单独归因于架构。新路线 evaluator 尚未实现。
+
 ## 2026-10-15：x4 checkpoint-018488 的一致单卡 Stage 3 文本评测
 
 新增独立入口 `code/RSmol/run_stage3_eval_5_10x4_5_mesh_5090.sh`，默认评测 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/formal_2epochs_18488steps_20261007_004959_3090_v1/checkpoint-018488`。它调用 `scripts/evaluate_stage3_5_10x4_5_mesh.sh` 和同名 Python evaluator，参考原 x2 的 `run_stage3_eval_5_10x2_5_mesh_5090.sh`，原 x2 文件保持不变。
