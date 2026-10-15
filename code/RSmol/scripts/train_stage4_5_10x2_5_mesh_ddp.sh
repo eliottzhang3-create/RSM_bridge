@@ -22,8 +22,8 @@ DATA="${RSMOL_5_10X2_5_MESH_DATA_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/Sm
 OUTPUT="${RSMOL_5_10X2_5_MESH_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/${GATE,,}_fp32_$(date +%Y%m%d_%H%M%S)}"
 if [[ "$GATE" == "FORMAL" && "$WORLD_SIZE" != "8" ]]; then echo "FORMAL requires WORLD_SIZE=8" >&2; exit 2; fi
 if [[ "$GATE" == "FORMAL" ]]; then
-  MICRO=8; GA=16; MAX_STEPS=18488; SCHEDULER=18488; WARMUP=925
-  STEPS_PER_EPOCH=9244; EPOCHS=2
+  MICRO=8; GA=16; MAX_STEPS=9244; SCHEDULER=9244; WARMUP=463
+  STEPS_PER_EPOCH=9244; EPOCHS=1
   MAX_LR="${RSMOL_5_10X2_5_MESH_MAX_LR:-8e-4}"
   MIN_LR="${RSMOL_5_10X2_5_MESH_MIN_LR:-2e-5}"
 else

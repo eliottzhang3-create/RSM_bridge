@@ -1,10 +1,10 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
-## 2026-10-15：原 5-slot 文本 x2 MeSH 改为 FP32 连续两轮训练
+## 2026-10-15：原 5-slot 文本 x2 MeSH 改为 FP32 单轮训练
 
-直接更新原入口 `code/RSmol/run_stage4_5_10x2_5_mesh_3090.sh` 及其 Stage 4 trainer，没有新建训练路线。`FORMAL` 固定使用 FP32 参数和前反向，关闭 BF16 autocast 和 TF32；每 epoch 固定 9,244 个 optimizer steps，两轮共 18,488 steps。全局前 925 steps（ceil(5% × 18488)）warmup，之后沿用原 cosine 公式，max LR `8e-4`、min LR `2e-5`，轮间不重置 optimizer 或 scheduler。第二轮参考 x4 MeSH 实现，以 seed/epoch/rank 确定性重排每 rank 原有的 parquet 分片，不改变 rank 分片分配，也不做分片内行级 shuffle。
+直接更新原入口 `code/RSmol/run_stage4_5_10x2_5_mesh_3090.sh` 及其 Stage 4 trainer，没有新建训练路线。按最新确认，`FORMAL` 只训练 1 epoch，共 9,244 个 optimizer steps；固定使用 FP32 参数和前反向，关闭 BF16 autocast 和 TF32。全局前 463 steps（ceil(5% × 9244)）warmup，之后沿用原 cosine 公式，max LR `8e-4`、min LR `2e-5`，scheduler 总步数同为 9,244。保留原 rank 分片分配、首轮分片顺序和分片内行顺序，第 9,244 步结束后停止，不进入第二轮。
 
-其他合同保留：8 GPU、每卡 microbatch 8、GA 16（GBS 1024）、context length 1024、全局有效 token 加权梯度、AdamW betas (0.9, 0.95)、weight decay 0.1（原有 no-decay 分组）、eps 1e-8、梯度裁剪 1.0；每 500 steps 和最终步保存，只保留最近三份。默认初始化仍是远程 `/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x2-5-mesh`，数据路径不变。checkpoint 新增 FP32 和 epoch 合同，游标保存 epoch、分片顺序和行位置；resume 会实际跳过已消费行，并校验训练配置与 manifest，旧 BF16/单轮 checkpoint 不能作为本轮的 resume。
+其他合同保留：8 GPU、每卡 microbatch 8、GA 16（GBS 1024）、context length 1024、全局有效 token 加权梯度、AdamW betas (0.9, 0.95)、weight decay 0.1（原有 no-decay 分组）、eps 1e-8、梯度裁剪 1.0；每 500 steps 和最终步保存，只保留最近三份。默认初始化仍是远程 `/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x2-5-mesh`，数据路径不变。checkpoint 保留 FP32 和 epoch 合同，游标保存 epoch、分片顺序和行位置；resume 会实际跳过已消费行，并校验训练配置与 manifest，旧 BF16 或两轮调度的 checkpoint 不能作为本轮的 resume。
 
 代码经 GitHub 同步到远端后，在远端 `code/RSmol/` 目录提交新的正式训练（清空 resume，显式指定本轮 LR）：
 

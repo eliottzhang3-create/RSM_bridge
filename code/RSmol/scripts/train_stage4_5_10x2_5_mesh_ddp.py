@@ -2,9 +2,9 @@
 """Isolated Stage 4 DDP trainer for MeSH 5-10x2-5.
 
 The implementation keeps the rank-assigned parquet shards and token-weighted
-gradient contract used by the project. Formal training uses FP32 and two fixed
-9244-step epochs with one continuous warmup/cosine schedule. Only the local
-shard order is reshuffled at the second epoch, as in the x4 MeSH trainer.
+gradient contract used by the project. Formal training uses FP32 for one fixed
+9244-step epoch with a 5% warmup/cosine schedule. The resumable stream keeps
+the epoch-aware cursor contract used by the x4 MeSH trainer.
 """
 
 from __future__ import annotations
@@ -48,9 +48,9 @@ DEFAULT_MICRO_BATCH_SIZE = 8
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 16
 DEFAULT_CONTEXT_LENGTH = 1024
 DEFAULT_STEPS_PER_EPOCH = 9244
-DEFAULT_FORMAL_EPOCHS = 2
+DEFAULT_FORMAL_EPOCHS = 1
 DEFAULT_FORMAL_OPTIMIZER_STEPS = DEFAULT_STEPS_PER_EPOCH * DEFAULT_FORMAL_EPOCHS
-DEFAULT_FORMAL_WARMUP_STEPS = 925
+DEFAULT_FORMAL_WARMUP_STEPS = 463
 DEFAULT_MAX_LR = 8e-4
 DEFAULT_MIN_LR = 2e-5
 DEFAULT_SAVE_EVERY = 500
@@ -124,7 +124,7 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
     max_steps = args.max_optimizer_steps if args.max_optimizer_steps is not None else (DEFAULT_FORMAL_OPTIMIZER_STEPS if gate == "FORMAL" else (2 if gate == "E" else (10 if gate == "D" else 2)))
     if gate == "FORMAL":
         if (args.world_size, args.micro_batch_size, args.gradient_accumulation_steps, max_steps, args.scheduler_total_steps, args.warmup_steps, args.steps_per_epoch, args.epochs) != (8, 8, 16, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_WARMUP_STEPS, DEFAULT_STEPS_PER_EPOCH, DEFAULT_FORMAL_EPOCHS):
-            raise ValueError("FORMAL requires 8 ranks, microbatch=8, GA=16, 18488 steps, 9244 steps/epoch, scheduler_total_steps=18488, warmup=925, epochs=2")
+            raise ValueError("FORMAL requires 8 ranks, microbatch=8, GA=16, 9244 steps, 9244 steps/epoch, scheduler_total_steps=9244, warmup=463, epochs=1")
         if not math.isfinite(args.max_lr) or not math.isfinite(args.min_lr) or args.max_lr <= 0.0 or args.min_lr <= 0.0 or args.min_lr >= args.max_lr:
             raise ValueError("FORMAL requires finite positive learning rates with 0 < min_lr < max_lr")
         if not math.isclose(args.max_lr, DEFAULT_MAX_LR, rel_tol=0.0, abs_tol=1e-12) or not math.isclose(args.min_lr, DEFAULT_MIN_LR, rel_tol=0.0, abs_tol=1e-12):
@@ -516,7 +516,7 @@ def _validate_resume_contract(state: dict[str, Any], config: Stage4Config) -> No
         if scheduler.get(key) != expected_value:
             mismatches.append(f"scheduler.{key}: expected {expected_value!r}, found {scheduler.get(key)!r}")
     if config.gate == "FORMAL" and (saved_config.get("gate") != "FORMAL" or saved_config.get("max_optimizer_steps") != config.max_optimizer_steps):
-        mismatches.append("FORMAL resume requires a checkpoint from the same two-epoch formal run")
+        mismatches.append("FORMAL resume requires a checkpoint from the same one-epoch formal run")
     if config.gate == "E" and (saved_config.get("gate") != "D" or int(state.get("optimizer_step", -1)) != 10):
         mismatches.append("Gate E requires a Gate D checkpoint at optimizer_step=10")
     if not 0 <= int(state.get("optimizer_step", -1)) <= config.scheduler_total_steps:

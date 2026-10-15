@@ -103,18 +103,17 @@ class TextMeshX2TrainingTest(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             return self.trainer._parse_args(["--gate", "FORMAL", *args])
 
-    def test_formal_schedule_uses_global_steps_across_epoch_boundary(self):
+    def test_formal_schedule_uses_one_epoch_and_five_percent_warmup(self):
         config = self.formal_config()
-        self.assertEqual((config.precision, config.steps_per_epoch, config.epochs, config.max_optimizer_steps, config.scheduler_total_steps, config.warmup_steps), ("fp32", 9244, 2, 18488, 18488, 925))
+        self.assertEqual((config.precision, config.steps_per_epoch, config.epochs, config.max_optimizer_steps, config.scheduler_total_steps, config.warmup_steps), ("fp32", 9244, 1, 9244, 9244, 463))
+        self.assertEqual(config.warmup_steps, math.ceil(0.05 * config.scheduler_total_steps))
         self.assertEqual((config.max_lr, config.min_lr), (8e-4, 2e-5))
         lr = [self.trainer._cosine_lr(step, config) for step in range(config.scheduler_total_steps)]
-        self.assertAlmostEqual(lr[0], 8e-4 / 925)
-        self.assertEqual(lr[924], 8e-4)
-        self.assertTrue(all(left >= right for left, right in zip(lr[925:], lr[926:])))
-        self.assertGreater(lr[9243], lr[9244])
-        self.assertGreater(lr[9244], config.min_lr)
+        self.assertAlmostEqual(lr[0], 8e-4 / 463)
+        self.assertEqual(lr[462], 8e-4)
+        self.assertTrue(all(left >= right for left, right in zip(lr[463:], lr[464:])))
         self.assertAlmostEqual(lr[-1], config.min_lr, delta=1e-10)
-        for invalid in (["--epochs", "1"], ["--steps-per-epoch", "9245"], ["--warmup-steps", "463"], ["--max-lr", "1e-3"], ["--min-lr", "8e-5"]):
+        for invalid in (["--epochs", "2"], ["--steps-per-epoch", "9245"], ["--max-optimizer-steps", "18488"], ["--scheduler-total-steps", "18488"], ["--warmup-steps", "925"], ["--max-lr", "1e-3"], ["--min-lr", "8e-5"]):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.formal_config(*invalid)
 
@@ -152,34 +151,30 @@ class TextMeshX2TrainingTest(unittest.TestCase):
                     remaining = [value for next_batch in resumed for value in next_batch["input_ids"].values]
                     self.assertEqual(consumed + remaining, expected)
 
-    def test_production_epoch_transition_at_9244_and_resume_at_boundary(self):
+    def test_production_loop_stops_at_9244_without_starting_second_epoch(self):
         tree = ast.parse(TRAINER.read_text(encoding="utf-8"))
         run = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_training")
         loop = next(node for node in run.body if isinstance(node, ast.Try)).body
         loop = next(node for node in loop if isinstance(node, ast.While))
+        condition = compile(ast.fix_missing_locations(ast.Expression(body=loop.test)), str(TRAINER), "eval")
         transition = compile(ast.fix_missing_locations(ast.Module(body=[loop.body[0]], type_ignores=[])), str(TRAINER), "exec")
         stream = self.new_stream()
         stream.row_offset = 4
         stream.microbatches_seen = 100
         original_iterator = iter(stream)
-        scope = {"config": self.formal_config(), "stream_obj": stream, "stream": original_iterator, "rank": 1, "optimizer_step": 9243}
-        exec(transition, scope)
-        self.assertIs(scope["stream"], original_iterator)
-        self.assertEqual(stream.row_offset, 4)
-        # A checkpoint saved immediately after step 9244 still holds epoch 0.
-        boundary_cursor = stream.cursor()
+        scope = {"config": self.formal_config(), "stream_obj": stream, "stream": original_iterator, "rank": 1}
+        for step in (0, 5000, 9243):
+            scope["optimizer_step"] = step
+            self.assertTrue(eval(condition, scope))
+            exec(transition, scope)
+            self.assertIs(scope["stream"], original_iterator)
+            self.assertEqual((stream.epoch, stream.row_offset), (0, 4))
+        # Resuming the final checkpoint must not consume another batch.
         resumed = self.new_stream()
-        resumed.restore_cursor(boundary_cursor)
+        resumed.restore_cursor(stream.cursor())
         scope.update(stream_obj=resumed, stream=iter(resumed), optimizer_step=9244)
-        exec(transition, scope)
-        self.assertEqual((resumed.epoch, resumed.row_offset, resumed.microbatches_seen), (1, 0, 100))
-        with self.parquet_modules():
-            first = next(scope["stream"])["input_ids"].values
-            self.assertEqual(first, self.rows[resumed.local_paths[0]][:2])
-        current_iterator = scope["stream"]
-        exec(transition, scope)
-        self.assertIs(scope["stream"], current_iterator)
-        self.assertEqual(resumed.row_offset, 2)
+        self.assertFalse(eval(condition, scope))
+        self.assertEqual((resumed.epoch, resumed.row_offset, resumed.microbatches_seen), (0, 4, 100))
 
     def test_resume_rejects_changed_shards_and_invalid_row_offsets(self):
         stream = self.new_stream()
@@ -196,9 +191,9 @@ class TextMeshX2TrainingTest(unittest.TestCase):
 
     def test_resume_rejects_old_precision_or_schedule(self):
         config = self.formal_config()
-        state = {"configuration": asdict(config), "optimizer_step": 9244, "scheduler": {"type": "cosine_warmup", "step": 9244, "total_steps": 18488, "warmup_steps": 925, "max_lr": 8e-4, "min_lr": 2e-5}}
+        state = {"configuration": asdict(config), "optimizer_step": 9244, "scheduler": {"type": "cosine_warmup", "step": 9244, "total_steps": 9244, "warmup_steps": 463, "max_lr": 8e-4, "min_lr": 2e-5}}
         self.trainer._validate_resume_contract(state, config)
-        for key, value in (("precision", "bf16"), ("epochs", 1), ("scheduler_total_steps", 9244), ("warmup_steps", 463), ("seed", 8)):
+        for key, value in (("precision", "bf16"), ("epochs", 2), ("scheduler_total_steps", 18488), ("warmup_steps", 925), ("seed", 8)):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "contract mismatch"):
                 self.trainer._validate_resume_contract({**state, "configuration": {**state["configuration"], key: value}}, config)
         with self.assertRaises(ValueError):
