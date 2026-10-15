@@ -22,7 +22,7 @@ GATE="${RSMOL_5_10X4_5_MESH_STAGE4_GATE:-D}"
 WORLD_SIZE="${RSMOL_5_10X4_5_MESH_WORLD_SIZE:-8}"
 MODEL="${RSMOL_5_10X4_5_MESH_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x4-5-mesh}"
 DATA="${RSMOL_5_10X4_5_MESH_DATA_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data}"
-OUTPUT="${RSMOL_5_10X4_5_MESH_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/${GATE,,}_2epochs_$(date +%Y%m%d_%H%M%S)}"
+OUTPUT="${RSMOL_5_10X4_5_MESH_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/${GATE,,}_1epoch_fp32_$(date +%Y%m%d_%H%M%S)}"
 
 if [[ "$GATE" == "FORMAL" ]]; then
   if [[ "$WORLD_SIZE" != "8" ]]; then
@@ -31,13 +31,13 @@ if [[ "$GATE" == "FORMAL" ]]; then
   fi
   MICRO=4
   GA=32
-  MAX_STEPS=18488
-  SCHEDULER=18488
-  WARMUP=925
+  MAX_STEPS=9244
+  SCHEDULER=9244
+  WARMUP=463
   STEPS_PER_EPOCH=9244
-  EPOCHS=2
-  MAX_LR="${RSMOL_5_10X4_5_MESH_MAX_LR:-1e-3}"
-  MIN_LR="${RSMOL_5_10X4_5_MESH_MIN_LR:-5e-5}"
+  EPOCHS=1
+  MAX_LR="${RSMOL_5_10X4_5_MESH_MAX_LR:-8e-4}"
+  MIN_LR="${RSMOL_5_10X4_5_MESH_MIN_LR:-2e-5}"
   export RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS="${RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS:-10}"
 else
   MICRO="${RSMOL_5_10X4_5_MESH_MICRO_BATCH_SIZE:-4}"
@@ -47,8 +47,8 @@ else
   WARMUP="${RSMOL_5_10X4_5_MESH_WARMUP_STEPS:-1}"
   STEPS_PER_EPOCH="${RSMOL_5_10X4_5_MESH_STEPS_PER_EPOCH:-9244}"
   EPOCHS="${RSMOL_5_10X4_5_MESH_EPOCHS:-1}"
-  MAX_LR="${RSMOL_5_10X4_5_MESH_MAX_LR:-1e-3}"
-  MIN_LR="${RSMOL_5_10X4_5_MESH_MIN_LR:-1e-4}"
+  MAX_LR="${RSMOL_5_10X4_5_MESH_MAX_LR:-8e-4}"
+  MIN_LR="${RSMOL_5_10X4_5_MESH_MIN_LR:-2e-5}"
   export RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS="${RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS:-1}"
 fi
 
@@ -88,6 +88,7 @@ ARGS=(
 [[ -n "${RSMOL_5_10X4_5_MESH_RESUME_FROM:-}" ]] && ARGS+=(--resume-from "$RSMOL_5_10X4_5_MESH_RESUME_FROM")
 ARGS+=("$@")
 
+echo "[stage4] gate=$GATE precision=FP32 epochs=$EPOCHS steps_per_epoch=$STEPS_PER_EPOCH total_steps=$MAX_STEPS warmup=$WARMUP lr=$MAX_LR->$MIN_LR output=$OUTPUT"
 torchrun --standalone --nproc_per_node="$WORLD_SIZE" \
   code/RSmol/scripts/train_stage4_5_10x4_5_mesh_ddp.py \
   "${ARGS[@]}"

@@ -4,6 +4,7 @@
 This is the direct persistent-parquet training path for the isolated x4 model.
 Its data streaming and DDP execution intentionally follow the previously
 validated x2 text trainer; only the x4 model contract and training target differ.
+Formal training uses FP32 for one 9244-step epoch with 463 warmup steps.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from recursive_model_5_10x4_5_mesh import (  # noqa: E402
     register_auto_class,
 )
 
+PRECISION_CONTRACT = "fp32"
 DATA_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data")
 OUTPUT_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh")
 DEFAULT_WORLD_SIZE = 8
@@ -46,11 +48,11 @@ DEFAULT_MICRO_BATCH_SIZE = 4
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 32
 DEFAULT_CONTEXT_LENGTH = 1024
 DEFAULT_STEPS_PER_EPOCH = 9_244
-DEFAULT_FORMAL_EPOCHS = 2
-DEFAULT_FORMAL_OPTIMIZER_STEPS = 18_488
-DEFAULT_FORMAL_WARMUP_STEPS = 925
-DEFAULT_MAX_LR = 1e-3
-DEFAULT_MIN_LR = 5e-5
+DEFAULT_FORMAL_EPOCHS = 1
+DEFAULT_FORMAL_OPTIMIZER_STEPS = 9_244
+DEFAULT_FORMAL_WARMUP_STEPS = 463
+DEFAULT_MAX_LR = 8e-4
+DEFAULT_MIN_LR = 2e-5
 DEFAULT_SAVE_EVERY = 500
 DEFAULT_CHECKPOINT_RETENTION = 3
 DEFAULT_LOG_INTERVAL_STEPS = 10
@@ -64,6 +66,7 @@ DEFAULT_ADAMW_AMSGRAD = False
 @dataclass
 class Stage4Config:
     gate: str = "D"
+    precision: str = PRECISION_CONTRACT
     model_path: Path | None = None
     tokenizer_path: Path | None = None
     data_dir: Path = DATA_ROOT_DEFAULT
@@ -121,13 +124,13 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
     max_steps = args.max_optimizer_steps if args.max_optimizer_steps is not None else (DEFAULT_FORMAL_OPTIMIZER_STEPS if gate == "FORMAL" else (2 if gate == "E" else (10 if gate == "D" else 2)))
     if gate == "FORMAL":
         if (args.world_size, args.micro_batch_size, args.gradient_accumulation_steps, max_steps, args.scheduler_total_steps, args.warmup_steps) != (8, 4, 32, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_WARMUP_STEPS):
-            raise ValueError("FORMAL requires 8 ranks, microbatch=4, GA=32, 18488 steps, scheduler_total_steps=18488, warmup=925")
+            raise ValueError("FORMAL requires 8 ranks, microbatch=4, GA=32, 9244 steps, scheduler_total_steps=9244, warmup=463")
         if (args.steps_per_epoch, args.epochs) != (DEFAULT_STEPS_PER_EPOCH, DEFAULT_FORMAL_EPOCHS):
-            raise ValueError("FORMAL requires steps_per_epoch=9244 and epochs=2")
+            raise ValueError("FORMAL requires steps_per_epoch=9244 and epochs=1")
         if not math.isfinite(args.max_lr) or not math.isfinite(args.min_lr) or args.max_lr <= 0.0 or args.min_lr <= 0.0 or args.min_lr >= args.max_lr:
             raise ValueError("FORMAL requires finite positive learning rates with 0 < min_lr < max_lr")
         if not math.isclose(args.max_lr, DEFAULT_MAX_LR) or not math.isclose(args.min_lr, DEFAULT_MIN_LR):
-            raise ValueError("FORMAL requires max_lr=1e-3 and min_lr=5e-5")
+            raise ValueError("FORMAL requires max_lr=8e-4 and min_lr=2e-5")
         if args.save_every != 500:
             raise ValueError("FORMAL requires save_every=500")
     if gate == "E" and args.resume_from is None:
@@ -161,6 +164,19 @@ def _seed(seed: int, rank: int) -> None:
     torch.manual_seed(value)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(value)
+
+
+def _configure_fp32() -> None:
+    torch.set_default_dtype(torch.float32)
+    torch.set_float32_matmul_precision("highest")
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+
+
+def _assert_fp32_model(model: torch.nn.Module) -> None:
+    invalid = [(name, str(parameter.dtype)) for name, parameter in model.named_parameters() if parameter.is_floating_point() and parameter.dtype != torch.float32]
+    if invalid:
+        raise ValueError(f"FP32 training requires all floating parameters to be float32: {invalid[:8]}")
 
 
 def _manifest(data_dir: Path) -> list[Path]:
@@ -347,6 +363,10 @@ def _failure_diagnostic(config: Stage4Config, *, rank: int, device: torch.device
 
 def _startup_diagnostics(config: Stage4Config, *, rank: int, world_size: int, device: torch.device) -> None:
     local = {
+        "precision": PRECISION_CONTRACT,
+        "float32_matmul_precision": torch.get_float32_matmul_precision(),
+        "cuda_matmul_allow_tf32": torch.backends.cuda.matmul.allow_tf32,
+        "cudnn_allow_tf32": torch.backends.cudnn.allow_tf32,
         "rank": rank,
         "world_size": world_size,
         "hostname": socket.gethostname(),
@@ -424,7 +444,7 @@ def _checkpoint(model: torch.nn.Module, tokenizer: Any, optimizer: torch.optim.O
     unwrapped.save_pretrained(temporary, safe_serialization=True)
     tokenizer.save_pretrained(temporary)
     torch.save({"optimizer": optimizer.state_dict(), "scheduler": {"type": "cosine_warmup", "step": scheduler_step, "max_lr": config.max_lr, "min_lr": config.min_lr, "warmup_steps": config.warmup_steps, "total_steps": config.scheduler_total_steps}, "optimizer_step": scheduler_step, "configuration": asdict(config), "manifest": state.get("manifest", []), "data_cursors_by_rank": state.get("data_cursors_by_rank", {}), "rng_state": torch.get_rng_state(), "rng_states_by_rank": state.get("rng_states_by_rank", {}), "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest"}, temporary / "training_state.pt")
-    checkpoint_metadata = {"architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "optimizer_step": scheduler_step, "router_parameters_in_optimizer": bool(state.get("router_parameters_in_optimizer", False)), "memory_slots": MEMORY_SLOT_COUNT, "logical_to_physical": list(LOGICAL_TO_PHYSICAL)}
+    checkpoint_metadata = {"architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "precision": PRECISION_CONTRACT, "steps_per_epoch": config.steps_per_epoch, "epochs": config.epochs, "optimizer_step": scheduler_step, "router_parameters_in_optimizer": bool(state.get("router_parameters_in_optimizer", False)), "memory_slots": MEMORY_SLOT_COUNT, "logical_to_physical": list(LOGICAL_TO_PHYSICAL)}
     (temporary / "mesh_checkpoint_metadata.json").write_text(json.dumps(checkpoint_metadata, indent=2) + "\n", encoding="utf-8")
     data_manifest = {"architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "optimizer_step": scheduler_step, "data_shards": state.get("manifest", []), "data_cursors_by_rank": state.get("data_cursors_by_rank", {})}
     (temporary / "data_manifest.json").write_text(json.dumps(data_manifest, indent=2, default=str) + "\n", encoding="utf-8")
@@ -483,6 +503,8 @@ def _validate_resume_contract(state: dict[str, Any], config: Stage4Config) -> No
     if not isinstance(saved_config, dict):
         raise ValueError("resume checkpoint does not contain a configuration contract")
     expected = {
+        "precision": config.precision,
+        "seed": config.seed,
         "world_size": config.world_size,
         "micro_batch_size": config.micro_batch_size,
         "gradient_accumulation_steps": config.gradient_accumulation_steps,
@@ -507,6 +529,12 @@ def _validate_resume_contract(state: dict[str, Any], config: Stage4Config) -> No
         mismatches.append("scheduler.total_steps disagrees with saved configuration")
     if int(scheduler.get("warmup_steps", -1)) != int(saved_config.get("warmup_steps", -2)):
         mismatches.append("scheduler.warmup_steps disagrees with saved configuration")
+    if config.gate == "FORMAL":
+        for key in ("gate", "max_optimizer_steps", "scheduler_total_steps", "warmup_steps"):
+            if saved_config.get(key) != getattr(config, key):
+                mismatches.append(f"FORMAL resume requires saved {key}={getattr(config, key)!r}, found {saved_config.get(key)!r}")
+        if not 0 <= int(state.get("optimizer_step", -1)) <= config.max_optimizer_steps:
+            mismatches.append("optimizer_step is outside the formal training range")
     if config.gate == "E":
         smoke_contract = {
             "gate": "D",
@@ -541,6 +569,8 @@ def _validate_checkpoint_complete(path: Path) -> None:
     metadata = json.loads((path / "mesh_checkpoint_metadata.json").read_text(encoding="utf-8"))
     if metadata.get("architecture_contract") != MODEL_ARCHITECTURE_CONTRACT or metadata.get("router_parameters_in_optimizer") is not True:
         raise ValueError("checkpoint metadata does not satisfy the x4 router contract")
+    if metadata.get("precision") != PRECISION_CONTRACT:
+        raise ValueError("checkpoint metadata does not satisfy the FP32 x4 MeSH contract")
     state = torch.load(path / "training_state.pt", map_location="cpu", weights_only=False)
     required_state = ("optimizer", "scheduler", "optimizer_step", "data_cursors_by_rank", "rng_state", "rng_states_by_rank", "manifest", "checkpoint_contract")
     missing_state = [key for key in required_state if key not in state]
@@ -553,6 +583,11 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
     _seed(config.seed, rank)
     report: dict[str, Any] = {"status": "FAIL", "gate": config.gate, "configuration": asdict(config), "architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "world_size": world_size, "rank": rank, "device": str(device), "diagnostics_dir": str(config.output_dir / "ddp_diagnostics"), "checks": [], "warnings": [], "hard_failures": []}
     try:
+        _configure_fp32()
+        if config.precision != PRECISION_CONTRACT:
+            raise ValueError("this training route requires FP32")
+        if world_size != config.world_size:
+            raise ValueError(f"actual world_size={world_size} differs from configured world_size={config.world_size}")
         _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
         _heartbeat(config, rank=rank, device=device, optimizer_step=0, phase="startup_complete")
         model_path = config.resume_from or config.model_path
@@ -567,7 +602,11 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
-        model.to(device)
+        model.to(device=device, dtype=torch.float32)
+        model.config.torch_dtype = torch.float32
+        _assert_fp32_model(model)
+        if rank == 0:
+            print(f"[precision] parameters=float32 autocast=disabled tf32=disabled; epochs={config.epochs} steps_per_epoch={config.steps_per_epoch} total_steps={config.max_optimizer_steps} warmup={config.warmup_steps} max_lr={config.max_lr} min_lr={config.min_lr}", flush=True)
         model.model.routing_stats_mode = True
         optimizer, optimizer_group_audit = _optimizer(model, config)
         resume_state = _load_checkpoint_state(config.resume_from) if config.resume_from else None
@@ -634,9 +673,8 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 mask = batch["attention_mask"].to(device)
                 labels = batch["labels"].to(device)
                 valid = batch["valid_mask"].to(device)[:, 1:].bool()
-                amp = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else contextlib.nullcontext()
                 sync = contextlib.nullcontext() if not hasattr(ddp_model, "no_sync") or micro == config.gradient_accumulation_steps - 1 else ddp_model.no_sync()
-                with sync, amp:
+                with sync:
                     if heartbeat_due:
                         _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, micro=micro, phase="before_forward")
                     out = ddp_model(input_ids=ids, attention_mask=mask, use_cache=False)
@@ -729,6 +767,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 break
         if config.gate == "FORMAL" and optimizer_step != DEFAULT_FORMAL_OPTIMIZER_STEPS:
             raise RuntimeError(f"FORMAL stopped at {optimizer_step}, expected {DEFAULT_FORMAL_OPTIMIZER_STEPS}")
+        report.update({"precision": PRECISION_CONTRACT, "autocast_enabled": False, "tf32_enabled": False})
         report.update({"status": "PASS", "configuration": asdict(config), "optimizer_steps": optimizer_step, "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS, "steps_per_epoch": config.steps_per_epoch, "epochs": config.epochs, "warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS, "metrics": metrics, "warnings": routing_warnings if rank == 0 else [], "manifest": [str(p) for p in manifest], "data_cursors_by_rank": {str(rank): stream_obj.cursor() if stream_obj is not None else {"synthetic": True}}, "optimizer_group_audit": optimizer_group_audit, "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest", "checkpoint_retention": config.checkpoint_retention, "final_checkpoint": last_checkpoint, "logical_to_physical": list(LOGICAL_TO_PHYSICAL), "memory_slots": MEMORY_SLOT_COUNT, "use_cache": False, "ddp_broadcast_buffers": False, "router_audit_policy": "non_fatal_diagnostic_only", "diagnostics_dir": str(_diagnostic_dir(config))})
     except Exception as exc:
         report["hard_failures"].append({"error": repr(exc), "traceback": traceback.format_exc()})

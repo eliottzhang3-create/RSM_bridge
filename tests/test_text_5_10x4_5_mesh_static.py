@@ -62,13 +62,20 @@ class TextMeshX4StaticTest(unittest.TestCase):
     def test_formal_training_contract(self) -> None:
         source = TRAINER.read_text(encoding="utf-8")
         self.assertIn("DEFAULT_STEPS_PER_EPOCH = 9_244", source)
-        self.assertIn("DEFAULT_FORMAL_EPOCHS = 2", source)
-        self.assertIn("DEFAULT_FORMAL_OPTIMIZER_STEPS = 18_488", source)
-        self.assertIn("DEFAULT_FORMAL_WARMUP_STEPS = 925", source)
+        self.assertIn("DEFAULT_FORMAL_EPOCHS = 1", source)
+        self.assertIn("DEFAULT_FORMAL_OPTIMIZER_STEPS = 9_244", source)
+        self.assertIn("DEFAULT_FORMAL_WARMUP_STEPS = 463", source)
         self.assertIn("DEFAULT_MICRO_BATCH_SIZE = 4", source)
         self.assertIn("DEFAULT_GRADIENT_ACCUMULATION_STEPS = 32", source)
-        self.assertIn("DEFAULT_MAX_LR = 1e-3", source)
-        self.assertIn("DEFAULT_MIN_LR = 5e-5", source)
+        self.assertIn("DEFAULT_MAX_LR = 8e-4", source)
+        self.assertIn("DEFAULT_MIN_LR = 2e-5", source)
+        self.assertIn("model.to(device=device, dtype=torch.float32)", source)
+        self.assertIn("_assert_fp32_model(model)", source)
+        self.assertIn('torch.set_float32_matmul_precision("highest")', source)
+        self.assertIn("torch.backends.cuda.matmul.allow_tf32 = False", source)
+        self.assertIn("torch.backends.cudnn.allow_tf32 = False", source)
+        self.assertNotIn("torch.autocast", source)
+        self.assertNotIn("torch.bfloat16", source)
         self.assertIn("checkpoint_retention=DEFAULT_CHECKPOINT_RETENTION", source)
         self.assertIn("def _dist_setup", source)
         self.assertNotIn("def _init_process_group", source)
@@ -77,7 +84,7 @@ class TextMeshX4StaticTest(unittest.TestCase):
         run_training = source[source.index("def run_training"):]
         self.assertLess(
             run_training.index("_dist_setup(config)"),
-            run_training.index("\n        model.to(device)"),
+            run_training.index("\n        model.to(device=device, dtype=torch.float32)"),
         )
         self.assertNotIn('phase="nccl_warmup_start"', run_training)
         self.assertNotIn("warmup_work", run_training)
@@ -90,12 +97,12 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertIn("stream_obj.reset_epoch(target_epoch)", source)
         train_shell = (ROOT / "code/RSmol/scripts/train_stage4_5_10x4_5_mesh_ddp.sh").read_text(encoding="utf-8")
         self.assertIn('--data-dir "$DATA"', train_shell)
-        self.assertIn("MAX_STEPS=18488", train_shell)
-        self.assertIn("SCHEDULER=18488", train_shell)
-        self.assertIn("WARMUP=925", train_shell)
+        self.assertIn("MAX_STEPS=9244", train_shell)
+        self.assertIn("SCHEDULER=9244", train_shell)
+        self.assertIn("WARMUP=463", train_shell)
         self.assertIn("STEPS_PER_EPOCH=9244", train_shell)
-        self.assertIn("EPOCHS=2", train_shell)
-        self.assertIn('MIN_LR="${RSMOL_5_10X4_5_MESH_MIN_LR:-5e-5}"', train_shell)
+        self.assertIn("EPOCHS=1", train_shell)
+        self.assertIn('MIN_LR="${RSMOL_5_10X4_5_MESH_MIN_LR:-2e-5}"', train_shell)
         self.assertIn("MICRO=4", train_shell)
         self.assertIn("GA=32", train_shell)
         self.assertIn("RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS", train_shell)
@@ -196,7 +203,7 @@ class TextMeshX4StaticTest(unittest.TestCase):
         self.assertIn("training_state.pt", resume)
         self.assertIn("RSMOL_5_10X4_5_MESH_RESUME_FROM", resume)
         formal = wrappers["formal"].read_text(encoding="utf-8")
-        self.assertIn("formal_2epochs_18488steps_${RUN_TAG}_3090_v1", formal)
+        self.assertIn("formal_1epoch_9244steps_fp32_${RUN_TAG}_3090_v1", formal)
 
 
 if __name__ == "__main__":

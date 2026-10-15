@@ -1,5 +1,19 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-15：原 7-slot 文本 x4 MeSH 改为 FP32 单轮训练
+
+当前 x4 文本入口为 `code/RSmol/run_stage4_5_10x4_5_mesh_formal_3090.sh`；历史 `run_stage4_5_10x4_5_mesh_formal_4090.sh` 调用相同 trainer，仅队列不同。两个正式入口现均为 1 epoch、9,244 optimizer steps、463-step warmup（ceil(5% × 9244)）、max LR `8e-4`、min LR `2e-5`，随后沿用原 cosine 公式。强制 FP32 参数与前反向，关闭 BF16 autocast 和 TF32，并在启动日志、诊断及 checkpoint 中记录。
+
+其余合同保持：20 个物理层执行 50 个逻辑层（5 + 10×4 + 5）、7 slots、5 组 write/read routers；8 GPU × microbatch 4 × GA 32 = GBS 1024、context 1024、原 AdamW 分组和全局有效 token 加权梯度、裁剪 1.0、persistent Parquet 直接读取、每 500 步及最终步保存、保留最近三份。默认初始化为 `/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x4-5-mesh`。旧 BF16／两轮调度 checkpoint 不能作为本次正式训练的 resume。
+
+代码经 GitHub 同步到远端后，在远端 `code/RSmol/` 目录运行：
+
+```bash
+bash run_stage4_5_10x4_5_mesh_formal_3090.sh
+```
+
+正式 wrapper 显式指定 LR 并清空 resume，默认输出名为 `formal_1epoch_9244steps_fp32_<timestamp>_3090_v1`；4090 入口对应后缀为 `_4090_v1`。此次仅完成本地代码和检查，远程 FP32 显存、吞吐及训练结果尚待验证。下方 x4 两轮描述均为历史快照，当前设置以本节及路线 README 为准。
+
 ## 2026-10-15：原 5-slot 文本 x2 MeSH 改为 FP32 单轮训练
 
 直接更新原入口 `code/RSmol/run_stage4_5_10x2_5_mesh_3090.sh` 及其 Stage 4 trainer，没有新建训练路线。按最新确认，`FORMAL` 只训练 1 epoch，共 9,244 个 optimizer steps；固定使用 FP32 参数和前反向，关闭 BF16 autocast 和 TF32。全局前 463 steps（ceil(5% × 9244)）warmup，之后沿用原 cosine 公式，max LR `8e-4`、min LR `2e-5`，scheduler 总步数同为 9,244。保留原 rank 分片分配、首轮分片顺序和分片内行顺序，第 9,244 步结束后停止，不进入第二轮。
