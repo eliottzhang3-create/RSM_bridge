@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Isolated Stage 4 DDP trainer for MeSH 5-10x2-5.
 
-The implementation keeps the fixed parquet manifest/cursor and token-weighted
-gradient contract used by the project while making the MeSH model and its six
-routers explicit.  It is intentionally self-contained so the older training
-scripts remain byte-for-byte untouched.
+The implementation keeps the rank-assigned parquet shards and token-weighted
+gradient contract used by the project. Formal training uses FP32 and two fixed
+9244-step epochs with one continuous warmup/cosine schedule. Only the local
+shard order is reshuffled at the second epoch, as in the x4 MeSH trainer.
 """
 
 from __future__ import annotations
@@ -40,16 +40,19 @@ from recursive_model_5_10x2_5_mesh import (  # noqa: E402
 )
 
 MODEL_ARCHITECTURE_CONTRACT = "logical_30_physical_20_5_10x2_5_mesh"
+PRECISION_CONTRACT = "fp32"
 DATA_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data")
 OUTPUT_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh")
 DEFAULT_WORLD_SIZE = 8
 DEFAULT_MICRO_BATCH_SIZE = 8
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 16
 DEFAULT_CONTEXT_LENGTH = 1024
-DEFAULT_FORMAL_OPTIMIZER_STEPS = 9244
-DEFAULT_FORMAL_WARMUP_STEPS = 463
+DEFAULT_STEPS_PER_EPOCH = 9244
+DEFAULT_FORMAL_EPOCHS = 2
+DEFAULT_FORMAL_OPTIMIZER_STEPS = DEFAULT_STEPS_PER_EPOCH * DEFAULT_FORMAL_EPOCHS
+DEFAULT_FORMAL_WARMUP_STEPS = 925
 DEFAULT_MAX_LR = 8e-4
-DEFAULT_MIN_LR = 8e-5
+DEFAULT_MIN_LR = 2e-5
 DEFAULT_SAVE_EVERY = 500
 DEFAULT_CHECKPOINT_RETENTION = 3
 DEFAULT_LOG_INTERVAL_STEPS = 10
@@ -63,6 +66,7 @@ DEFAULT_ADAMW_AMSGRAD = False
 @dataclass
 class Stage4Config:
     gate: str = "D"
+    precision: str = PRECISION_CONTRACT
     model_path: Path | None = None
     tokenizer_path: Path | None = None
     data_dir: Path = DATA_ROOT_DEFAULT
@@ -76,6 +80,8 @@ class Stage4Config:
     max_optimizer_steps: int = 10
     scheduler_total_steps: int = DEFAULT_FORMAL_OPTIMIZER_STEPS
     warmup_steps: int = DEFAULT_FORMAL_WARMUP_STEPS
+    steps_per_epoch: int = DEFAULT_STEPS_PER_EPOCH
+    epochs: int = DEFAULT_FORMAL_EPOCHS
     max_lr: float = DEFAULT_MAX_LR
     min_lr: float = DEFAULT_MIN_LR
     save_every: int = DEFAULT_SAVE_EVERY
@@ -106,6 +112,8 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
     parser.add_argument("--max-optimizer-steps", type=int, default=None)
     parser.add_argument("--scheduler-total-steps", type=int, default=int(_env("RSMOL_5_10X2_5_MESH_SCHEDULER_TOTAL_STEPS", DEFAULT_FORMAL_OPTIMIZER_STEPS)))
     parser.add_argument("--warmup-steps", type=int, default=int(_env("RSMOL_5_10X2_5_MESH_WARMUP_STEPS", DEFAULT_FORMAL_WARMUP_STEPS)))
+    parser.add_argument("--steps-per-epoch", type=int, default=int(_env("RSMOL_5_10X2_5_MESH_STEPS_PER_EPOCH", DEFAULT_STEPS_PER_EPOCH)))
+    parser.add_argument("--epochs", type=int, default=int(_env("RSMOL_5_10X2_5_MESH_EPOCHS", DEFAULT_FORMAL_EPOCHS)))
     parser.add_argument("--max-lr", type=float, default=float(_env("RSMOL_5_10X2_5_MESH_MAX_LR", DEFAULT_MAX_LR)))
     parser.add_argument("--min-lr", type=float, default=float(_env("RSMOL_5_10X2_5_MESH_MIN_LR", DEFAULT_MIN_LR)))
     parser.add_argument("--save-every", type=int, default=int(_env("RSMOL_5_10X2_5_MESH_SAVE_EVERY", DEFAULT_SAVE_EVERY)))
@@ -115,15 +123,19 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
     gate = str(args.gate).upper()
     max_steps = args.max_optimizer_steps if args.max_optimizer_steps is not None else (DEFAULT_FORMAL_OPTIMIZER_STEPS if gate == "FORMAL" else (2 if gate == "E" else (10 if gate == "D" else 2)))
     if gate == "FORMAL":
-        if (args.world_size, args.micro_batch_size, args.gradient_accumulation_steps, max_steps, args.scheduler_total_steps, args.warmup_steps) != (8, 8, 16, 9244, 9244, 463):
-            raise ValueError("FORMAL requires 8 ranks, microbatch=8, GA=16, 9244 steps, scheduler_total_steps=9244, warmup=463")
+        if (args.world_size, args.micro_batch_size, args.gradient_accumulation_steps, max_steps, args.scheduler_total_steps, args.warmup_steps, args.steps_per_epoch, args.epochs) != (8, 8, 16, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_WARMUP_STEPS, DEFAULT_STEPS_PER_EPOCH, DEFAULT_FORMAL_EPOCHS):
+            raise ValueError("FORMAL requires 8 ranks, microbatch=8, GA=16, 18488 steps, 9244 steps/epoch, scheduler_total_steps=18488, warmup=925, epochs=2")
         if not math.isfinite(args.max_lr) or not math.isfinite(args.min_lr) or args.max_lr <= 0.0 or args.min_lr <= 0.0 or args.min_lr >= args.max_lr:
             raise ValueError("FORMAL requires finite positive learning rates with 0 < min_lr < max_lr")
+        if not math.isclose(args.max_lr, DEFAULT_MAX_LR, rel_tol=0.0, abs_tol=1e-12) or not math.isclose(args.min_lr, DEFAULT_MIN_LR, rel_tol=0.0, abs_tol=1e-12):
+            raise ValueError("FORMAL requires max_lr=8e-4 and min_lr=2e-5")
         if args.save_every != 500:
             raise ValueError("FORMAL requires save_every=500")
     if gate == "E" and args.resume_from is None:
         raise ValueError("Gate E requires --resume-from")
-    return Stage4Config(gate=gate, model_path=args.model_path, tokenizer_path=args.tokenizer_path, data_dir=args.data_dir, output_dir=args.output_dir, report_path=args.report_path, resume_from=args.resume_from, world_size=args.world_size, micro_batch_size=args.micro_batch_size, gradient_accumulation_steps=args.gradient_accumulation_steps, context_length=args.context_length, max_optimizer_steps=max_steps, scheduler_total_steps=args.scheduler_total_steps, warmup_steps=args.warmup_steps, max_lr=args.max_lr, min_lr=args.min_lr, save_every=args.save_every, checkpoint_retention=DEFAULT_CHECKPOINT_RETENTION, seed=args.seed, max_microbatches=args.max_microbatches)
+    if args.steps_per_epoch <= 0 or args.epochs <= 0:
+        raise ValueError("steps_per_epoch and epochs must be positive")
+    return Stage4Config(gate=gate, model_path=args.model_path, tokenizer_path=args.tokenizer_path, data_dir=args.data_dir, output_dir=args.output_dir, report_path=args.report_path, resume_from=args.resume_from, world_size=args.world_size, micro_batch_size=args.micro_batch_size, gradient_accumulation_steps=args.gradient_accumulation_steps, context_length=args.context_length, max_optimizer_steps=max_steps, scheduler_total_steps=args.scheduler_total_steps, warmup_steps=args.warmup_steps, steps_per_epoch=args.steps_per_epoch, epochs=args.epochs, max_lr=args.max_lr, min_lr=args.min_lr, save_every=args.save_every, checkpoint_retention=DEFAULT_CHECKPOINT_RETENTION, seed=args.seed, max_microbatches=args.max_microbatches)
 
 
 def token_weighted_gradient_scale(*, world_size: int, global_window_tokens: int, gradient_accumulation_steps: int) -> float:
@@ -154,6 +166,19 @@ def _seed(seed: int, rank: int) -> None:
         torch.cuda.manual_seed_all(value)
 
 
+def _configure_fp32() -> None:
+    torch.set_default_dtype(torch.float32)
+    torch.set_float32_matmul_precision("highest")
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+
+
+def _assert_fp32_model(model: torch.nn.Module) -> None:
+    invalid = [(name, str(parameter.dtype)) for name, parameter in model.named_parameters() if parameter.is_floating_point() and parameter.dtype != torch.float32]
+    if invalid:
+        raise ValueError(f"FP32 training requires all floating parameters to be float32: {invalid[:8]}")
+
+
 def _manifest(data_dir: Path) -> list[Path]:
     candidates = [data_dir]
     nested_data = data_dir / "data"
@@ -176,13 +201,14 @@ def _manifest(data_dir: Path) -> list[Path]:
 
 
 class DistributedParquetStream:
-    """Small deterministic row cursor over fixed parquet shard order."""
+    """Fixed rank assignment, epoch-local shard shuffle and resumable row cursor."""
 
-    cursor_policy = "fixed_sorted_shards_rank_round_robin_row_cursor"
+    cursor_policy = "rank_round_robin_epoch_shuffled_shards_row_cursor_v2"
 
     def __init__(self, paths: list[Path], tokenizer: Any, *, rank: int, world_size: int, batch_size: int, context_length: int, pad_token_id: int, seed: int = 0) -> None:
         self.paths = paths
-        self.local_paths = [p for i, p in enumerate(paths) if i % world_size == rank]
+        self.assigned_paths = [p for i, p in enumerate(paths) if i % world_size == rank]
+        self.local_paths = list(self.assigned_paths)
         self.tokenizer = tokenizer
         self.rank = rank
         self.batch_size = batch_size
@@ -192,22 +218,48 @@ class DistributedParquetStream:
         self.row_offset = 0
         self.microbatches_seen = 0
         self.seed = seed
+        self.reset_epoch(0)
+
+    def reset_epoch(self, epoch: int) -> None:
+        if epoch < 0:
+            raise ValueError("epoch must be nonnegative")
+        self.epoch = epoch
+        self.local_paths = list(self.assigned_paths)
+        if epoch > 0:
+            random.Random(self.seed + epoch * 1_000_003 + self.rank).shuffle(self.local_paths)
+        self.shard_index = 0
+        self.row_offset = 0
 
     def cursor(self) -> dict[str, Any]:
-        return {"rank": self.rank, "shard_index": self.shard_index, "row_offset": self.row_offset, "microbatches_seen": self.microbatches_seen, "policy": self.cursor_policy}
+        return {"rank": self.rank, "epoch": self.epoch, "shard_order": [str(path) for path in self.local_paths], "shard_index": self.shard_index, "row_offset": self.row_offset, "microbatches_seen": self.microbatches_seen, "policy": self.cursor_policy}
 
     def restore_cursor(self, value: dict[str, Any] | None) -> None:
         if value:
+            if int(value.get("rank", -1)) != self.rank or value.get("policy") != self.cursor_policy:
+                raise ValueError("checkpoint data cursor rank or policy differs")
+            self.reset_epoch(int(value["epoch"]))
+            if value.get("shard_order") != [str(path) for path in self.local_paths]:
+                raise ValueError("checkpoint data cursor shard order differs")
             self.shard_index = int(value.get("shard_index", 0))
             self.row_offset = int(value.get("row_offset", 0))
             self.microbatches_seen = int(value.get("microbatches_seen", 0))
+            if not 0 <= self.shard_index <= len(self.local_paths) or self.row_offset < 0 or self.microbatches_seen < 0 or (self.shard_index == len(self.local_paths) and self.row_offset != 0):
+                raise ValueError("checkpoint data cursor position is invalid")
 
     def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
         import pyarrow.parquet as pq
         while self.shard_index < len(self.local_paths):
             path = self.local_paths[self.shard_index]
             parquet = pq.ParquetFile(path)
+            skipped_rows = 0
+            start_offset = self.row_offset
             for batch in parquet.iter_batches(batch_size=self.batch_size, columns=["text"], use_threads=False):
+                batch_rows = batch.num_rows
+                if skipped_rows < start_offset:
+                    skipped_rows += batch_rows
+                    if skipped_rows > start_offset:
+                        raise ValueError("checkpoint row offset does not match a parquet batch boundary")
+                    continue
                 texts = [str(x or "") for x in batch.column("text").to_pylist()]
                 self.row_offset += len(texts)
                 encoded = self.tokenizer(texts, max_length=self.context_length, truncation=True, padding=True, return_tensors="pt", add_special_tokens=True)
@@ -217,6 +269,8 @@ class DistributedParquetStream:
                 labels[mask == 0] = self.pad_token_id
                 self.microbatches_seen += 1
                 yield {"input_ids": ids, "attention_mask": mask, "labels": labels, "valid_mask": mask.bool()}
+            if skipped_rows < start_offset:
+                raise ValueError("checkpoint row offset exceeds parquet shard length")
             self.shard_index += 1
             self.row_offset = 0
 
@@ -309,6 +363,10 @@ def _failure_diagnostic(config: Stage4Config, *, rank: int, device: torch.device
 
 def _startup_diagnostics(config: Stage4Config, *, rank: int, world_size: int, device: torch.device) -> None:
     local = {
+        "precision": PRECISION_CONTRACT,
+        "float32_matmul_precision": torch.get_float32_matmul_precision(),
+        "cuda_matmul_allow_tf32": torch.backends.cuda.matmul.allow_tf32,
+        "cudnn_allow_tf32": torch.backends.cudnn.allow_tf32,
         "rank": rank,
         "world_size": world_size,
         "hostname": socket.gethostname(),
@@ -383,7 +441,7 @@ def _checkpoint(model: torch.nn.Module, tokenizer: Any, optimizer: torch.optim.O
     unwrapped.save_pretrained(temporary, safe_serialization=True)
     tokenizer.save_pretrained(temporary)
     torch.save({"optimizer": optimizer.state_dict(), "scheduler": {"type": "cosine_warmup", "step": scheduler_step, "max_lr": config.max_lr, "min_lr": config.min_lr, "warmup_steps": config.warmup_steps, "total_steps": config.scheduler_total_steps}, "optimizer_step": scheduler_step, "configuration": asdict(config), "manifest": state.get("manifest", []), "data_cursors_by_rank": state.get("data_cursors_by_rank", {}), "rng_state": torch.get_rng_state(), "rng_states_by_rank": state.get("rng_states_by_rank", {}), "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest"}, temporary / "training_state.pt")
-    checkpoint_metadata = {"architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "optimizer_step": scheduler_step, "router_parameters_in_optimizer": True, "memory_slots": MEMORY_SLOT_COUNT, "logical_to_physical": list(LOGICAL_TO_PHYSICAL)}
+    checkpoint_metadata = {"architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "precision": PRECISION_CONTRACT, "steps_per_epoch": config.steps_per_epoch, "epochs": config.epochs, "optimizer_step": scheduler_step, "router_parameters_in_optimizer": True, "memory_slots": MEMORY_SLOT_COUNT, "logical_to_physical": list(LOGICAL_TO_PHYSICAL)}
     (temporary / "mesh_checkpoint_metadata.json").write_text(json.dumps(checkpoint_metadata, indent=2) + "\n", encoding="utf-8")
     data_manifest = {"architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "optimizer_step": scheduler_step, "data_shards": state.get("manifest", []), "data_cursors_by_rank": state.get("data_cursors_by_rank", {})}
     (temporary / "data_manifest.json").write_text(json.dumps(data_manifest, indent=2, default=str) + "\n", encoding="utf-8")
@@ -437,6 +495,36 @@ def _load_checkpoint_state(path: Path) -> dict[str, Any]:
     return torch.load(path / "training_state.pt", map_location="cpu", weights_only=False)
 
 
+def _validate_resume_contract(state: dict[str, Any], config: Stage4Config) -> None:
+    saved_config = state.get("configuration")
+    if not isinstance(saved_config, dict):
+        raise ValueError("resume checkpoint does not contain a configuration contract")
+    keys = ("precision", "world_size", "micro_batch_size", "gradient_accumulation_steps", "context_length", "max_lr", "min_lr", "steps_per_epoch", "epochs", "scheduler_total_steps", "warmup_steps", "seed")
+    mismatches = []
+    for key in keys:
+        expected_value = getattr(config, key)
+        actual_value = saved_config.get(key)
+        if isinstance(expected_value, float):
+            equal = actual_value is not None and math.isclose(float(actual_value), expected_value, rel_tol=0.0, abs_tol=1e-12)
+        else:
+            equal = actual_value == expected_value
+        if not equal:
+            mismatches.append(f"{key}: expected {expected_value!r}, found {actual_value!r}")
+    scheduler = state.get("scheduler", {})
+    expected_scheduler = {"type": "cosine_warmup", "step": state.get("optimizer_step"), "total_steps": config.scheduler_total_steps, "warmup_steps": config.warmup_steps, "max_lr": config.max_lr, "min_lr": config.min_lr}
+    for key, expected_value in expected_scheduler.items():
+        if scheduler.get(key) != expected_value:
+            mismatches.append(f"scheduler.{key}: expected {expected_value!r}, found {scheduler.get(key)!r}")
+    if config.gate == "FORMAL" and (saved_config.get("gate") != "FORMAL" or saved_config.get("max_optimizer_steps") != config.max_optimizer_steps):
+        mismatches.append("FORMAL resume requires a checkpoint from the same two-epoch formal run")
+    if config.gate == "E" and (saved_config.get("gate") != "D" or int(state.get("optimizer_step", -1)) != 10):
+        mismatches.append("Gate E requires a Gate D checkpoint at optimizer_step=10")
+    if not 0 <= int(state.get("optimizer_step", -1)) <= config.scheduler_total_steps:
+        mismatches.append("optimizer_step is outside the scheduler range")
+    if mismatches:
+        raise ValueError("resume checkpoint training contract mismatch: " + "; ".join(mismatches))
+
+
 def _validate_checkpoint_complete(path: Path) -> None:
     marker_path = path / "checkpoint_complete.json"
     manifest_path = path / "checkpoint_manifest.json"
@@ -451,6 +539,9 @@ def _validate_checkpoint_complete(path: Path) -> None:
     missing = [name for name in manifest.get("files", []) if not (path / name).is_file()]
     if missing:
         raise ValueError(f"checkpoint manifest lists missing files: {missing}")
+    metadata = json.loads((path / "mesh_checkpoint_metadata.json").read_text(encoding="utf-8"))
+    if metadata.get("architecture_contract") != MODEL_ARCHITECTURE_CONTRACT or metadata.get("precision") != PRECISION_CONTRACT:
+        raise ValueError("checkpoint metadata does not satisfy the FP32 x2 MeSH contract")
     state = torch.load(path / "training_state.pt", map_location="cpu", weights_only=False)
     required_state = ("optimizer", "scheduler", "optimizer_step", "data_cursors_by_rank", "rng_state", "rng_states_by_rank", "manifest", "checkpoint_contract")
     missing_state = [key for key in required_state if key not in state]
@@ -460,9 +551,14 @@ def _validate_checkpoint_complete(path: Path) -> None:
 
 def run_training(config: Stage4Config) -> dict[str, Any]:
     rank, world_size, device = _dist_setup(config)
+    _configure_fp32()
     _seed(config.seed, rank)
     report: dict[str, Any] = {"status": "FAIL", "gate": config.gate, "configuration": asdict(config), "architecture_contract": MODEL_ARCHITECTURE_CONTRACT, "world_size": world_size, "rank": rank, "device": str(device), "diagnostics_dir": str(config.output_dir / "ddp_diagnostics"), "checks": [], "warnings": [], "hard_failures": []}
     try:
+        if world_size != config.world_size:
+            raise ValueError(f"actual world_size={world_size} differs from configured world_size={config.world_size}")
+        if config.precision != PRECISION_CONTRACT:
+            raise ValueError("this training route requires FP32")
         _startup_diagnostics(config, rank=rank, world_size=world_size, device=device)
         _heartbeat(config, rank=rank, device=device, optimizer_step=0, phase="startup_complete")
         model_path = config.resume_from or config.model_path
@@ -477,11 +573,17 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
-        model.to(device)
+        model.to(device=device, dtype=torch.float32)
+        model.config.torch_dtype = torch.float32
+        _assert_fp32_model(model)
+        if rank == 0:
+            print(f"[precision] parameters=float32 autocast=disabled tf32=disabled; epochs={config.epochs} steps_per_epoch={config.steps_per_epoch} total_steps={config.max_optimizer_steps} warmup={config.warmup_steps} max_lr={config.max_lr} min_lr={config.min_lr}", flush=True)
         model.model.routing_stats_mode = True
         optimizer, optimizer_group_audit = _optimizer(model, config)
         resume_state = _load_checkpoint_state(config.resume_from) if config.resume_from else None
         optimizer_step = int(resume_state.get("optimizer_step", 0)) if resume_state else 0
+        if resume_state is not None:
+            _validate_resume_contract(resume_state, config)
         if config.gate == "E":
             config.max_optimizer_steps = optimizer_step + 2
         if resume_state:
@@ -497,14 +599,26 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         # localize and avoids stalling on the rotary buffer broadcast.
         ddp_model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device.index] if device.type == "cuda" and world_size > 1 else None, broadcast_buffers=False, find_unused_parameters=False) if world_size > 1 else model
         manifest = _manifest(config.data_dir) if config.gate != "A" else []
+        if resume_state is not None and resume_state.get("manifest") != [str(path) for path in manifest]:
+            raise ValueError("resume checkpoint manifest differs from current persistent parquet manifest")
         stream_obj = DistributedParquetStream(manifest, tokenizer, rank=rank, world_size=world_size, batch_size=config.micro_batch_size, context_length=config.context_length, pad_token_id=int(tokenizer.pad_token_id), seed=config.seed) if manifest else None
         if resume_state and stream_obj is not None:
-            stream_obj.restore_cursor(resume_state.get("data_cursors_by_rank", {}).get(str(rank)))
+            rank_cursor = resume_state.get("data_cursors_by_rank", {}).get(str(rank))
+            if not rank_cursor:
+                raise ValueError(f"resume checkpoint has no data cursor for rank {rank}")
+            stream_obj.restore_cursor(rank_cursor)
         stream: Iterator[dict[str, torch.Tensor]] = iter(stream_obj) if stream_obj is not None else _synthetic_stream(tokenizer, batch_size=config.micro_batch_size, context_length=config.context_length, vocab_size=int(model.config.vocab_size), pad_token_id=int(tokenizer.pad_token_id), seed=config.seed + rank)
         metrics: list[dict[str, Any]] = []
         routing_warnings: list[dict[str, Any]] = []
         last_checkpoint: str | None = None
         while optimizer_step < config.max_optimizer_steps:
+            if config.gate == "FORMAL" and stream_obj is not None:
+                target_epoch = optimizer_step // config.steps_per_epoch
+                if target_epoch != stream_obj.epoch:
+                    stream_obj.reset_epoch(target_epoch)
+                    stream = iter(stream_obj)
+                    if rank == 0:
+                        print(f"[epoch] epoch={target_epoch + 1}/{config.epochs} global_step={optimizer_step} local_shards_reshuffled=true", flush=True)
             _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, phase="optimizer_step_start")
             if device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(device)
@@ -529,9 +643,8 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 mask = batch["attention_mask"].to(device)
                 labels = batch["labels"].to(device)
                 valid = batch["valid_mask"].to(device)[:, 1:].bool()
-                amp = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else contextlib.nullcontext()
                 sync = contextlib.nullcontext() if not hasattr(ddp_model, "no_sync") or micro == config.gradient_accumulation_steps - 1 else ddp_model.no_sync()
-                with sync, amp:
+                with sync:
                     if heartbeat_due:
                         _heartbeat(config, rank=rank, device=device, optimizer_step=optimizer_step, micro=micro, phase="before_forward")
                     out = ddp_model(input_ids=ids, attention_mask=mask, use_cache=False)
@@ -623,7 +736,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
                 break
         if config.gate == "FORMAL" and optimizer_step != DEFAULT_FORMAL_OPTIMIZER_STEPS:
             raise RuntimeError(f"FORMAL stopped at {optimizer_step}, expected {DEFAULT_FORMAL_OPTIMIZER_STEPS}")
-        report.update({"status": "PASS", "configuration": asdict(config), "optimizer_steps": optimizer_step, "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS, "warmup_steps": DEFAULT_FORMAL_WARMUP_STEPS, "metrics": metrics, "warnings": routing_warnings if rank == 0 else [], "manifest": [str(p) for p in manifest], "data_cursors_by_rank": {str(rank): stream_obj.cursor() if stream_obj is not None else {"synthetic": True}}, "optimizer_group_audit": optimizer_group_audit, "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest", "checkpoint_retention": config.checkpoint_retention, "final_checkpoint": last_checkpoint, "logical_to_physical": list(LOGICAL_TO_PHYSICAL), "memory_slots": MEMORY_SLOT_COUNT, "use_cache": False, "ddp_broadcast_buffers": False, "router_audit_policy": "non_fatal_diagnostic_only", "diagnostics_dir": str(_diagnostic_dir(config))})
+        report.update({"status": "PASS", "configuration": asdict(config), "optimizer_steps": optimizer_step, "formal_optimizer_steps": DEFAULT_FORMAL_OPTIMIZER_STEPS, "warmup_steps": config.warmup_steps, "steps_per_epoch": config.steps_per_epoch, "epochs": config.epochs, "precision": PRECISION_CONTRACT, "autocast_enabled": False, "tf32_enabled": False, "metrics": metrics, "warnings": routing_warnings if rank == 0 else [], "manifest": [str(p) for p in manifest], "data_cursors_by_rank": {str(rank): stream_obj.cursor() if stream_obj is not None else {"synthetic": True}}, "optimizer_group_audit": optimizer_group_audit, "checkpoint_contract": "model_config_tokenizer_optimizer_scheduler_step_data_cursors_rng_manifest", "checkpoint_retention": config.checkpoint_retention, "final_checkpoint": last_checkpoint, "logical_to_physical": list(LOGICAL_TO_PHYSICAL), "memory_slots": MEMORY_SLOT_COUNT, "use_cache": False, "ddp_broadcast_buffers": False, "router_audit_policy": "non_fatal_diagnostic_only", "diagnostics_dir": str(_diagnostic_dir(config))})
     except Exception as exc:
         report["hard_failures"].append({"error": repr(exc), "traceback": traceback.format_exc()})
         try:

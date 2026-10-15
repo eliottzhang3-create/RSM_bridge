@@ -1,5 +1,23 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-15：原 5-slot 文本 x2 MeSH 改为 FP32 连续两轮训练
+
+直接更新原入口 `code/RSmol/run_stage4_5_10x2_5_mesh_3090.sh` 及其 Stage 4 trainer，没有新建训练路线。`FORMAL` 固定使用 FP32 参数和前反向，关闭 BF16 autocast 和 TF32；每 epoch 固定 9,244 个 optimizer steps，两轮共 18,488 steps。全局前 925 steps（ceil(5% × 18488)）warmup，之后沿用原 cosine 公式，max LR `8e-4`、min LR `2e-5`，轮间不重置 optimizer 或 scheduler。第二轮参考 x4 MeSH 实现，以 seed/epoch/rank 确定性重排每 rank 原有的 parquet 分片，不改变 rank 分片分配，也不做分片内行级 shuffle。
+
+其他合同保留：8 GPU、每卡 microbatch 8、GA 16（GBS 1024）、context length 1024、全局有效 token 加权梯度、AdamW betas (0.9, 0.95)、weight decay 0.1（原有 no-decay 分组）、eps 1e-8、梯度裁剪 1.0；每 500 steps 和最终步保存，只保留最近三份。默认初始化仍是远程 `/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x2-5-mesh`，数据路径不变。checkpoint 新增 FP32 和 epoch 合同，游标保存 epoch、分片顺序和行位置；resume 会实际跳过已消费行，并校验训练配置与 manifest，旧 BF16/单轮 checkpoint 不能作为本轮的 resume。
+
+代码经 GitHub 同步到远端后，在远端 `code/RSmol/` 目录提交新的正式训练（清空 resume，显式指定本轮 LR）：
+
+```bash
+RSMOL_5_10X2_5_MESH_STAGE4_GATE=FORMAL \
+RSMOL_5_10X2_5_MESH_RESUME_FROM= \
+RSMOL_5_10X2_5_MESH_MAX_LR=8e-4 \
+RSMOL_5_10X2_5_MESH_MIN_LR=2e-5 \
+bash run_stage4_5_10x2_5_mesh_3090.sh
+```
+
+默认队列为 `pdgpu-3090`，输出为 `outputs/RSmol/stage4_5_10x2_5_mesh/formal_fp32_<timestamp>/`。本地验证不等于远程训练完成，实际 FP32 显存、吞吐和训练结果须以远程日志与 checkpoint 为准。
+
 ## 2026-10-13：标准 Mellow gbs256 完整 30-epoch ReasonAQA 训练代码准备
 
 在 `code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_formal_30epochs/` 新增独立薄覆盖路线，提交入口为 `code/RSmol/run_mellow_official_reasonaqa_gbs256_formal30_5090.sh`。训练合同：8 GPU × 每卡 batch 8 × 累积 4 = GBS 256；从 HTSAT/SmolLM2 预训练组件重新开始，bridge 和 LM 共用 AdamW 的 max LR `4e-5`、min LR `4e-6`，按 optimizer step 做 5% warmup + cosine，30 epochs，FP32，全局梯度 L2 范数硬裁剪 0.5。HTSAT eval/no-grad 冻结，`c2l`、投影和 LM 可训练；空第二音频槽输入静音。文本序列为 260 位双音频前缀 + 不补齐的 prompt/EOS + answer/EOS，只有 answer/EOS 后才右填充；padding 不参与注意力，只监督 answer 与其 EOS，按全局有效目标 token 数归一化。prompt/answer 分别保留 129/250 token 上限并保留 EOS。代码已在本地准备，远程训练结果尚待提交与确认；该路线评测尚未实现。详情见路线 README。
