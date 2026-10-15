@@ -1,6 +1,50 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
-## 2026-10-15：原 7-slot 文本 x4 MeSH 改为 FP32 单轮训练
+## 2026-10-15：x4 checkpoint-018488 的一致单卡 Stage 3 文本评测
+
+新增独立入口 `code/RSmol/run_stage3_eval_5_10x4_5_mesh_5090.sh`，默认评测 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/formal_2epochs_18488steps_20261007_004959_3090_v1/checkpoint-018488`。它调用 `scripts/evaluate_stage3_5_10x4_5_mesh.sh` 和同名 Python evaluator，参考原 x2 的 `run_stage3_eval_5_10x2_5_mesh_5090.sh`，原 x2 文件保持不变。
+
+评测配置沿用 x2：`pdgpu-5090` 单 GPU、8 CPU、32G；`cuda:0`、BF16、batch size 1、seed 0；完整 HellaSwag、MMLU、GSM8K、ARC-Easy、ARC-Challenge。MMLU/GSM8K 均为 5-shot；复用相同的离线 benchmark 路径、固定依赖版本校验，以及官方任务 YAML 的 prompt、数据处理、生成和评分协议。评测 BF16 设置与最近修改的 FP32 文本训练设置各自独立。`max_new_tokens=2` 只用于模型 preflight 的生成检查，不会限制 GSM8K 正式生成长度。
+
+仅将模型结构审计适配到原 x4：20 个物理层、50 次逻辑执行（5 + 10×4 + 5）、7 个 transient memory slots、5 组/10 个 router 模块及 50 个逻辑 KV cache 槽位。保留 no-cache/prefill、增量解码、greedy generation、save/reload 检查及 router 失衡非致命诊断。
+
+代码经 GitHub 同步后，在远端 `code/RSmol/` 提交：
+
+```bash
+bash run_stage3_eval_5_10x4_5_mesh_5090.sh
+```
+
+默认结果目录为 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage3_eval_5_10x4_5_mesh_018488/`，包含 `audit_report.json`、`summary.json`、`summary.csv` 和各任务的 `lm_eval_results.json`、样本日志及 `task_protocol.json`。日志位于 `outputs/RSmol/eval_logs/stage3_5_10x4_5_mesh_018488/`，缓存位于 `outputs/RSmol/eval_cache/stage3_5_10x4_5_mesh_018488/`，均与 x2 隔离。可通过 `RSMOL_STAGE3_5_10X4_5_MESH_*` 环境变量覆盖模型、结果路径或评测配置；比较时应与 x2 使用相同配置。本地仅完成代码与 mock 检查，远端权重加载、CUDA 审计及完整 benchmark 结果尚未验证。
+
+## 2026-10-15：文本 x2 / x4 从历史权重开始 FP32 三分之一轮续训（当前设置）
+
+直接修改原 Stage 4 文本训练路线。用户已确认 x2 也只加载权重、使用新 AdamW；两条路线均将指定 checkpoint 的模型权重加载为 FP32，并从本段 optimizer step 0 开始。旧 optimizer、scheduler、RNG、数据游标和历史步数均不恢复；tokenizer 默认从同一 checkpoint 加载，数据从原首轮顺序的起点读取。
+
+| 路线 | 权重初始化目录 | batch geometry |
+|---|---|---|
+| x2，5 slots | `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244` | 8 GPU × microbatch 8 × GA 16 = GBS 1024 |
+| x4，7 slots | `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/formal_2epochs_18488steps_20261007_004959_3090_v1/checkpoint-018488` | 8 GPU × microbatch 4 × GA 32 = GBS 1024 |
+
+完整 epoch 仍固定为 9,244 步，本段取 `9244 // 3 = 3081` 个新 optimizer steps。前 `ceil(3081 × 5%) = 155` 步 warmup 到 `2e-4`，之后沿用原 cosine 公式，min LR 为 `1e-5`；scheduler 总步数为 3,081。强制 FP32 加载、参数和前反向，关闭 BF16 autocast 及 CUDA/cuDNN TF32。其余设置保持：context 1024、原 AdamW 分组/betas/weight decay/eps、全局有效 token 加权梯度、梯度裁剪 1.0、persistent Parquet 直接读取、每 500 步及最终步保存、保留最近三份。
+
+将代码经 GitHub 同步到远端后，在远端 `code/RSmol/` 目录分别提交：
+
+```bash
+RSMOL_5_10X2_5_MESH_STAGE4_GATE=FORMAL \
+RSMOL_5_10X2_5_MESH_MODEL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244 \
+RSMOL_5_10X2_5_MESH_RESUME_FROM= \
+RSMOL_5_10X2_5_MESH_MAX_LR=2e-4 \
+RSMOL_5_10X2_5_MESH_MIN_LR=1e-5 \
+bash run_stage4_5_10x2_5_mesh_3090.sh
+
+bash run_stage4_5_10x4_5_mesh_formal_3090.sh
+```
+
+两个正式入口均提交到 `pdgpu-3090`。x2 默认输出为 `formal_continue_3081steps_fp32_from009244_<timestamp>`，x4 为 `formal_continue_3081steps_fp32_from018488_<timestamp>_3090_v1`，分别位于各自原输出根目录；本段最终 checkpoint 为 `checkpoint-003081`。x4 的历史 4090 wrapper 也使用相同训练配置，仅队列和输出后缀不同。
+
+`MODEL_DIR` 是本次加载历史权重的入口，`RESUME_FROM` 仅用于恢复本次新训练段被中断后的完整训练状态；不要将上述历史 checkpoint 填入 `RESUME_FROM`。启动日志和 gate report 的 `initialization` 会记录加载路径、`weights_only_new_training_state` 和起始步数 0。此处记录本地实现，尚未启动远程训练；显存、吞吐及训练结果须以远程日志和 checkpoint 为准。下方单轮和两轮配置均为历史快照。
+
+## 2026-10-15：历史快照：原 7-slot 文本 x4 MeSH 改为 FP32 单轮训练
 
 当前 x4 文本入口为 `code/RSmol/run_stage4_5_10x4_5_mesh_formal_3090.sh`；历史 `run_stage4_5_10x4_5_mesh_formal_4090.sh` 调用相同 trainer，仅队列不同。两个正式入口现均为 1 epoch、9,244 optimizer steps、463-step warmup（ceil(5% × 9244)）、max LR `8e-4`、min LR `2e-5`，随后沿用原 cosine 公式。强制 FP32 参数与前反向，关闭 BF16 autocast 和 TF32，并在启动日志、诊断及 checkpoint 中记录。
 
@@ -14,7 +58,7 @@ bash run_stage4_5_10x4_5_mesh_formal_3090.sh
 
 正式 wrapper 显式指定 LR 并清空 resume，默认输出名为 `formal_1epoch_9244steps_fp32_<timestamp>_3090_v1`；4090 入口对应后缀为 `_4090_v1`。此次仅完成本地代码和检查，远程 FP32 显存、吞吐及训练结果尚待验证。下方 x4 两轮描述均为历史快照，当前设置以本节及路线 README 为准。
 
-## 2026-10-15：原 5-slot 文本 x2 MeSH 改为 FP32 单轮训练
+## 2026-10-15：历史快照：原 5-slot 文本 x2 MeSH 改为 FP32 单轮训练
 
 直接更新原入口 `code/RSmol/run_stage4_5_10x2_5_mesh_3090.sh` 及其 Stage 4 trainer，没有新建训练路线。按最新确认，`FORMAL` 只训练 1 epoch，共 9,244 个 optimizer steps；固定使用 FP32 参数和前反向，关闭 BF16 autocast 和 TF32。全局前 463 steps（ceil(5% × 9244)）warmup，之后沿用原 cosine 公式，max LR `8e-4`、min LR `2e-5`，scheduler 总步数同为 9,244。保留原 rank 分片分配、首轮分片顺序和分片内行顺序，第 9,244 步结束后停止，不进入第二轮。
 

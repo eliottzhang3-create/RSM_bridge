@@ -151,24 +151,26 @@ class TextMeshX4TrainingContractTest(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             return self.trainer._parse_args(["--gate", "FORMAL", *args])
 
-    def test_one_epoch_schedule_and_formal_rejections(self):
+    def test_third_epoch_schedule_and_formal_rejections(self):
         config = self.formal_config()
-        self.assertEqual((config.precision, config.epochs, config.steps_per_epoch, config.max_optimizer_steps, config.scheduler_total_steps, config.warmup_steps), ("fp32", 1, 9244, 9244, 9244, 463))
+        self.assertEqual((config.precision, config.epochs, config.steps_per_epoch, config.max_optimizer_steps, config.scheduler_total_steps, config.warmup_steps), ("fp32", 1 / 3, 9244, 3081, 3081, 155))
+        self.assertEqual(config.model_path, Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/formal_2epochs_18488steps_20261007_004959_3090_v1/checkpoint-018488"))
+        self.assertIsNone(config.resume_from)
         self.assertEqual((config.world_size, config.micro_batch_size, config.gradient_accumulation_steps), (8, 4, 32))
         self.assertEqual(config.warmup_steps, math.ceil(0.05 * config.scheduler_total_steps))
-        self.assertEqual((config.max_lr, config.min_lr), (8e-4, 2e-5))
+        self.assertEqual((config.max_lr, config.min_lr), (2e-4, 1e-5))
         lr = [self.trainer._cosine_lr(step, config) for step in range(config.max_optimizer_steps)]
-        self.assertAlmostEqual(lr[0], 8e-4 / 463)
-        self.assertEqual(lr[462], 8e-4)
-        self.assertTrue(all(left >= right for left, right in zip(lr[463:], lr[464:])))
-        self.assertAlmostEqual(lr[-1], 2e-5, delta=1e-10)
-        for invalid in (["--epochs", "2"], ["--max-optimizer-steps", "18488"], ["--scheduler-total-steps", "18488"], ["--warmup-steps", "925"], ["--max-lr", "1e-3"], ["--min-lr", "5e-5"]):
+        self.assertAlmostEqual(lr[0], 2e-4 / 155)
+        self.assertEqual(lr[154], 2e-4)
+        self.assertTrue(all(left >= right for left, right in zip(lr[155:], lr[156:])))
+        self.assertAlmostEqual(lr[-1], 1e-5, delta=1e-10)
+        for invalid in (["--epochs", "1"], ["--max-optimizer-steps", "9244"], ["--scheduler-total-steps", "9244"], ["--warmup-steps", "463"], ["--max-lr", "8e-4"], ["--min-lr", "2e-5"]):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.formal_config(*invalid)
 
     def test_resume_rejects_old_precision_and_two_epoch_scheduler(self):
         config = self.formal_config()
-        state = {"configuration": asdict(config), "optimizer_step": 9000, "scheduler": {"type": "cosine_warmup", "step": 9000, "total_steps": 9244, "warmup_steps": 463, "max_lr": 8e-4, "min_lr": 2e-5}}
+        state = {"configuration": asdict(config), "optimizer_step": 3000, "scheduler": {"type": "cosine_warmup", "step": 3000, "total_steps": 3081, "warmup_steps": 155, "max_lr": 2e-4, "min_lr": 1e-5}}
         self.trainer._validate_resume_contract(state, config)
         for key, value in (("precision", "bf16"), ("epochs", 2), ("scheduler_total_steps", 18488), ("warmup_steps", 925), ("max_lr", 1e-3), ("seed", 8)):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "contract mismatch"):
@@ -204,11 +206,11 @@ class TextMeshX4TrainingContractTest(unittest.TestCase):
         transition = compile(ast.fix_missing_locations(ast.Module(body=[loop.body[0]], type_ignores=[])), str(TRAINER), "exec")
         stream = types.SimpleNamespace(epoch=0, reset_epoch=lambda epoch: self.fail("single-epoch run must not reset the stream"))
         scope = {"config": self.formal_config(), "stream_obj": stream}
-        for step in (0, 5000, 9243):
+        for step in (0, 1500, 3080):
             scope["optimizer_step"] = step
             self.assertTrue(eval(condition, scope))
             exec(transition, scope)
-        scope["optimizer_step"] = 9244
+        scope["optimizer_step"] = 3081
         self.assertFalse(eval(condition, scope))
 
 

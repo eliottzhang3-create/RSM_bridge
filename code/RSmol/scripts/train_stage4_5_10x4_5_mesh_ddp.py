@@ -4,7 +4,8 @@
 This is the direct persistent-parquet training path for the isolated x4 model.
 Its data streaming and DDP execution intentionally follow the previously
 validated x2 text trainer; only the x4 model contract and training target differ.
-Formal training uses FP32 for one 9244-step epoch with 463 warmup steps.
+Formal training initializes from a trained checkpoint in FP32 for 3081 new
+steps (one third of a 9244-step epoch), with a fresh optimizer and 155 warmup steps.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from recursive_model_5_10x4_5_mesh import (  # noqa: E402
 )
 
 PRECISION_CONTRACT = "fp32"
+DEFAULT_MODEL_PATH = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/formal_2epochs_18488steps_20261007_004959_3090_v1/checkpoint-018488")
 DATA_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data")
 OUTPUT_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh")
 DEFAULT_WORLD_SIZE = 8
@@ -48,11 +50,11 @@ DEFAULT_MICRO_BATCH_SIZE = 4
 DEFAULT_GRADIENT_ACCUMULATION_STEPS = 32
 DEFAULT_CONTEXT_LENGTH = 1024
 DEFAULT_STEPS_PER_EPOCH = 9_244
-DEFAULT_FORMAL_EPOCHS = 1
-DEFAULT_FORMAL_OPTIMIZER_STEPS = 9_244
-DEFAULT_FORMAL_WARMUP_STEPS = 463
-DEFAULT_MAX_LR = 8e-4
-DEFAULT_MIN_LR = 2e-5
+DEFAULT_FORMAL_EPOCHS = 1.0 / 3.0
+DEFAULT_FORMAL_OPTIMIZER_STEPS = DEFAULT_STEPS_PER_EPOCH // 3
+DEFAULT_FORMAL_WARMUP_STEPS = 155
+DEFAULT_MAX_LR = 2e-4
+DEFAULT_MIN_LR = 1e-5
 DEFAULT_SAVE_EVERY = 500
 DEFAULT_CHECKPOINT_RETENTION = 3
 DEFAULT_LOG_INTERVAL_STEPS = 10
@@ -67,7 +69,7 @@ DEFAULT_ADAMW_AMSGRAD = False
 class Stage4Config:
     gate: str = "D"
     precision: str = PRECISION_CONTRACT
-    model_path: Path | None = None
+    model_path: Path | None = DEFAULT_MODEL_PATH
     tokenizer_path: Path | None = None
     data_dir: Path = DATA_ROOT_DEFAULT
     output_dir: Path = OUTPUT_ROOT_DEFAULT
@@ -88,7 +90,7 @@ class Stage4Config:
     num_workers: int = 0
     max_microbatches: int | None = None
     steps_per_epoch: int = DEFAULT_STEPS_PER_EPOCH
-    epochs: int = DEFAULT_FORMAL_EPOCHS
+    epochs: float = DEFAULT_FORMAL_EPOCHS
 
 
 def _env(name: str, default: Any) -> Any:
@@ -99,7 +101,7 @@ def _env(name: str, default: Any) -> Any:
 def _parse_args(argv: list[str] | None = None) -> Stage4Config:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gate", choices=("A", "D", "E", "FORMAL"), default=_env("RSMOL_5_10X4_5_MESH_STAGE4_GATE", "D"))
-    parser.add_argument("--model-path", type=Path, default=Path(_env("RSMOL_5_10X4_5_MESH_MODEL_DIR", "")) if _env("RSMOL_5_10X4_5_MESH_MODEL_DIR", "") else None)
+    parser.add_argument("--model-path", type=Path, default=Path(_env("RSMOL_5_10X4_5_MESH_MODEL_DIR", str(DEFAULT_MODEL_PATH))))
     parser.add_argument("--tokenizer-path", type=Path, default=Path(_env("RSMOL_5_10X4_5_MESH_TOKENIZER_PATH", "")) if _env("RSMOL_5_10X4_5_MESH_TOKENIZER_PATH", "") else None)
     parser.add_argument("--data-dir", type=Path, default=Path(_env("RSMOL_5_10X4_5_MESH_DATA_DIR", str(DATA_ROOT_DEFAULT))))
     parser.add_argument("--output-dir", type=Path, default=Path(_env("RSMOL_5_10X4_5_MESH_OUTPUT_DIR", str(OUTPUT_ROOT_DEFAULT))))
@@ -118,19 +120,19 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
     parser.add_argument("--seed", type=int, default=int(_env("RSMOL_5_10X4_5_MESH_SEED", 0)))
     parser.add_argument("--max-microbatches", type=int, default=None)
     parser.add_argument("--steps-per-epoch", type=int, default=int(_env("RSMOL_5_10X4_5_MESH_STEPS_PER_EPOCH", DEFAULT_STEPS_PER_EPOCH)))
-    parser.add_argument("--epochs", type=int, default=int(_env("RSMOL_5_10X4_5_MESH_EPOCHS", DEFAULT_FORMAL_EPOCHS)))
+    parser.add_argument("--epochs", type=float, default=float(_env("RSMOL_5_10X4_5_MESH_EPOCHS", DEFAULT_FORMAL_EPOCHS)))
     args = parser.parse_args(argv)
     gate = str(args.gate).upper()
     max_steps = args.max_optimizer_steps if args.max_optimizer_steps is not None else (DEFAULT_FORMAL_OPTIMIZER_STEPS if gate == "FORMAL" else (2 if gate == "E" else (10 if gate == "D" else 2)))
     if gate == "FORMAL":
         if (args.world_size, args.micro_batch_size, args.gradient_accumulation_steps, max_steps, args.scheduler_total_steps, args.warmup_steps) != (8, 4, 32, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_OPTIMIZER_STEPS, DEFAULT_FORMAL_WARMUP_STEPS):
-            raise ValueError("FORMAL requires 8 ranks, microbatch=4, GA=32, 9244 steps, scheduler_total_steps=9244, warmup=463")
+            raise ValueError("FORMAL requires 8 ranks, microbatch=4, GA=32, 3081 new steps, scheduler_total_steps=3081, warmup=155")
         if (args.steps_per_epoch, args.epochs) != (DEFAULT_STEPS_PER_EPOCH, DEFAULT_FORMAL_EPOCHS):
-            raise ValueError("FORMAL requires steps_per_epoch=9244 and epochs=1")
+            raise ValueError("FORMAL requires steps_per_epoch=9244 and epochs=1/3")
         if not math.isfinite(args.max_lr) or not math.isfinite(args.min_lr) or args.max_lr <= 0.0 or args.min_lr <= 0.0 or args.min_lr >= args.max_lr:
             raise ValueError("FORMAL requires finite positive learning rates with 0 < min_lr < max_lr")
         if not math.isclose(args.max_lr, DEFAULT_MAX_LR) or not math.isclose(args.min_lr, DEFAULT_MIN_LR):
-            raise ValueError("FORMAL requires max_lr=8e-4 and min_lr=2e-5")
+            raise ValueError("FORMAL requires max_lr=2e-4 and min_lr=1e-5")
         if args.save_every != 500:
             raise ValueError("FORMAL requires save_every=500")
     if gate == "E" and args.resume_from is None:
@@ -597,7 +599,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
             _validate_checkpoint_complete(config.resume_from)
         register_auto_class()
         from transformers import AutoTokenizer
-        model = RecursiveLlamaForCausalLM.from_pretrained(model_path, local_files_only=True)
+        model = RecursiveLlamaForCausalLM.from_pretrained(model_path, local_files_only=True, torch_dtype=torch.float32)
         tokenizer_path = config.tokenizer_path or model_path
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
         if tokenizer.pad_token_id is None:
@@ -611,6 +613,9 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         optimizer, optimizer_group_audit = _optimizer(model, config)
         resume_state = _load_checkpoint_state(config.resume_from) if config.resume_from else None
         optimizer_step = int(resume_state.get("optimizer_step", 0)) if resume_state else 0
+        report["initialization"] = {"mode": "full_state_resume" if resume_state is not None else "weights_only_new_training_state", "loaded_model_path": str(model_path), "source_model_path": str(config.model_path), "starting_optimizer_step": optimizer_step, "precision": PRECISION_CONTRACT}
+        if rank == 0:
+            print(f"[initialization] {json.dumps(report['initialization'])}", flush=True)
         if resume_state is not None:
             _validate_resume_contract(resume_state, config)
         if config.gate == "E":

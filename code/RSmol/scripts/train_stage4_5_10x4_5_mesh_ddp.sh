@@ -20,9 +20,9 @@ export NCCL_DEBUG_SUBSYS="${NCCL_DEBUG_SUBSYS:-INIT,GRAPH,NET}"
 
 GATE="${RSMOL_5_10X4_5_MESH_STAGE4_GATE:-D}"
 WORLD_SIZE="${RSMOL_5_10X4_5_MESH_WORLD_SIZE:-8}"
-MODEL="${RSMOL_5_10X4_5_MESH_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-5-10x4-5-mesh}"
+MODEL="${RSMOL_5_10X4_5_MESH_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/formal_2epochs_18488steps_20261007_004959_3090_v1/checkpoint-018488}"
 DATA="${RSMOL_5_10X4_5_MESH_DATA_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data}"
-OUTPUT="${RSMOL_5_10X4_5_MESH_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/${GATE,,}_1epoch_fp32_$(date +%Y%m%d_%H%M%S)}"
+OUTPUT="${RSMOL_5_10X4_5_MESH_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x4_5_mesh/${GATE,,}_continue_3081steps_fp32_from018488_$(date +%Y%m%d_%H%M%S)}"
 
 if [[ "$GATE" == "FORMAL" ]]; then
   if [[ "$WORLD_SIZE" != "8" ]]; then
@@ -31,13 +31,13 @@ if [[ "$GATE" == "FORMAL" ]]; then
   fi
   MICRO=4
   GA=32
-  MAX_STEPS=9244
-  SCHEDULER=9244
-  WARMUP=463
+  MAX_STEPS=3081
+  SCHEDULER=3081
+  WARMUP=155
   STEPS_PER_EPOCH=9244
-  EPOCHS=1
-  MAX_LR="${RSMOL_5_10X4_5_MESH_MAX_LR:-8e-4}"
-  MIN_LR="${RSMOL_5_10X4_5_MESH_MIN_LR:-2e-5}"
+  EPOCHS=0.3333333333333333
+  MAX_LR="${RSMOL_5_10X4_5_MESH_MAX_LR:-2e-4}"
+  MIN_LR="${RSMOL_5_10X4_5_MESH_MIN_LR:-1e-5}"
   export RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS="${RSMOL_5_10X4_5_MESH_LOG_INTERVAL_STEPS:-10}"
 else
   MICRO="${RSMOL_5_10X4_5_MESH_MICRO_BATCH_SIZE:-4}"
