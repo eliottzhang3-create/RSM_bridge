@@ -28,8 +28,19 @@ def valid_config():
     config = comparison.reference_runtime(config)
     config["model"]["decoder"]["text_decoder"] = str(MESH_TEXT.resolve())
     config.update(route_contract=ROUTE_CONTRACT, text_model_contract=TEXT_CONTRACT,
-                  comparison_identity={"source": "test fixture"})
+                  comparison_identity=valid_identity())
     return config
+
+
+def valid_identity():
+    return dict(identity_schema_version=comparison.IDENTITY_VERSION,
+                route_contract=ROUTE_CONTRACT, text_checkpoint=str(MESH_TEXT),
+                baseline_text=str(BASELINE_TEXT), training_code_ast_sha256={"trainer.py": "ast"},
+                code_sha256_lf={"wrapper.sh": "original"}, text_artifacts={"model": "weights"},
+                baseline_text_artifacts={"model": "baseline weights"},
+                tokenizer={"vocab": "canonical"}, environment={"torch": "same version"},
+                htsat_sha256="htsat weights",
+                initialization="text_weights_only_fresh_audio_bridge_optimizer_scheduler")
 
 
 def mesh_config():
@@ -107,7 +118,7 @@ class EquivalenceTests(unittest.TestCase):
         checkpoint = {field: copy.deepcopy(config[field]) for field in
                       ("route_contract", "text_model_contract", "comparison_identity")}
         comparison.validate_resume_identity(checkpoint, config)
-        checkpoint["comparison_identity"]["source"] = "another checkpoint"
+        checkpoint["comparison_identity"]["text_artifacts"]["model"] = "another checkpoint"
         with self.assertRaises(ValueError):
             comparison.validate_resume_identity(checkpoint, config)
 
@@ -130,6 +141,125 @@ class EquivalenceTests(unittest.TestCase):
             return value.replace("max_norm=max_grad_norm", "max_norm=1.0") if path == trainer else value
         with patch.object(Path, "read_text", altered), self.assertRaisesRegex(ValueError, "trainer differs"):
             comparison.audit_source_equivalence()
+
+    def test_wrapper_drift_is_provenance_only(self):
+        wrapper = comparison.RSMOL / "run_mellow_official_reasonaqa_gbs256_formal30_5090.sh"
+        original = comparison.source_hash
+        with patch.object(comparison, "source_hash",
+                          side_effect=lambda p: "remote-wrapper-hash" if p == wrapper else original(p)):
+            report = comparison.audit_source_equivalence()
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["provenance_only_changes"][wrapper.name]["actual_sha256_lf"],
+                         "remote-wrapper-hash")
+        self.assertNotIn(wrapper.name, report["protected_python_files"])
+
+    def test_python_formatting_allowed_but_prompt_and_training_changes_rejected(self):
+        path = comparison.BASE / "data/template.py"
+        original = Path.read_text
+        def commented(p, *args, **kwargs):
+            value = original(p, *args, **kwargs)
+            return value + "\n# harmless checkout formatting\n" if p == path else value
+        with patch.object(Path, "read_text", commented):
+            report = comparison.audit_source_equivalence()
+        self.assertEqual(report["status"], "PASS")
+        self.assertIn(path.relative_to(comparison.RSMOL).as_posix(),
+                      report["provenance_only_changes"])
+        def changed(p, *args, **kwargs):
+            value = original(p, *args, **kwargs)
+            return value + "\nDETAIL = 'different prompt'\n" if p == path else value
+        with patch.object(Path, "read_text", changed), \
+             self.assertRaisesRegex(ValueError, "protected training Python changed"):
+            comparison.audit_source_equivalence()
+
+    def test_ast_hash_portable_across_bom_newlines_comments_and_type_params(self):
+        with tempfile.TemporaryDirectory() as temp:
+            left, right = Path(temp) / "left.py", Path(temp) / "right.py"
+            left.write_bytes(b"def f(x):\n    return x + 1\n")
+            right.write_bytes(b"\xef\xbb\xbf# remote checkout\r\ndef f(x):\r\n    return (x+1) # same code\r\n")
+            expected = comparison.python_source_hash(left)
+            self.assertEqual(expected, comparison.python_source_hash(right))
+            parse = ast.parse
+            def newer_ast(*args, **kwargs):
+                tree = parse(*args, **kwargs)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.FunctionDef) and "type_params" not in node._fields:
+                        node._fields = (*node._fields, "type_params")
+                        node.type_params = []
+                return tree
+            with patch.object(ast, "parse", newer_ast):
+                self.assertEqual(expected, comparison.python_source_hash(right))
+            right.write_text("def f(x):\n    return x + 2\n", encoding="utf-8")
+            self.assertNotEqual(expected, comparison.python_source_hash(right))
+
+    def test_new_node_and_rebuilt_stage_paths_do_not_bind_resume(self):
+        saved, current = valid_config(), valid_config()
+        checkpoint = {field: copy.deepcopy(saved[field]) for field in
+                      ("route_contract", "text_model_contract", "comparison_identity")}
+        with tempfile.TemporaryDirectory() as temp:
+            old = Path(temp) / "old_stage"
+            old.mkdir()
+            saved["data"]["datapath"] = str(old)
+            saved["data"]["datafiles"] = [str(old / "metadata.json")]
+            old.rmdir()
+            current["data"]["datapath"] = str(Path(temp) / "new_stage")
+            current["data"]["datafiles"] = [str(Path(temp) / "new_stage/metadata.json")]
+            current["save_dir"] = str(Path(temp) / "new_output")
+            current["comparison_identity"]["code_sha256_lf"] = {"wrapper.sh": "remote edits"}
+            checkpoint["comparison_identity"]["hostname"] = "node-old"
+            checkpoint["comparison_identity"]["staging_report"] = {"stage_root": str(old), "pid": 12}
+            current["comparison_identity"]["hostname"] = "node-new"
+            current["comparison_identity"]["staging_report"] = {"pid": 34, "started_unix": 987}
+            self.assertEqual(comparison.audit_runtime_config(current)["status"], "PASS")
+            comparison.validate_resume_identity(checkpoint, current)
+
+    def test_stable_identity_drift_still_rejected(self):
+        for field in ("training_code_ast_sha256", "text_artifacts", "baseline_text_artifacts",
+                      "tokenizer", "environment", "htsat_sha256", "text_checkpoint"):
+            saved, current = valid_identity(), valid_identity()
+            current[field] = "changed"
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
+                comparison.validate_comparison_identity(saved, current)
+        identity = valid_identity()
+        del identity["tokenizer"]
+        with self.assertRaisesRegex(ValueError, "missing required fields"):
+            comparison.validate_comparison_identity(identity, valid_identity())
+
+    def test_final_checkpoint_audit_needs_no_surviving_stage(self):
+        path = ROUTE / "scripts/rsmol/audit_comparison.py"
+        spec = importlib.util.spec_from_file_location("_mesh_final_audit", path)
+        audit = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(audit)
+        config = valid_config()
+        checkpoint = {field: copy.deepcopy(config[field]) for field in
+                      ("route_contract", "text_model_contract", "comparison_identity")}
+        tensor = types.SimpleNamespace(is_floating_point=lambda: True, dtype="float32")
+        checkpoint.update(epoch_completed=30, num_epochs=30, total_step=300,
+                          initialization_audit={"reference_audio_and_cpu_rng": "exact_match"},
+                          state_dict={f"caption_decoder.lm.model.layers.{i}.weight": tensor for i in range(20)})
+        checkpoint["state_dict"]["caption_decoder.lm.model.write_routers.0.weight"] = tensor
+        checkpoint["state_dict"]["caption_decoder.lm.model.read_routers.0.weight"] = tensor
+        torch = types.ModuleType("torch")
+        torch.float32 = "float32"
+        torch.load = lambda *args, **kwargs: checkpoint
+        yaml = types.ModuleType("yaml")
+        yaml.safe_load = lambda *args: config
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage = root / "deleted_stage"
+            stage.mkdir()
+            (stage / "metadata.json").write_text("[]", encoding="utf-8")
+            config["data"]["datapath"] = str(stage)
+            config["data"]["datafiles"] = [str(stage / "metadata.json")]
+            (stage / "metadata.json").unlink()
+            stage.rmdir()
+            runtime, report = root / "runtime.yaml", root / "report.json"
+            runtime.write_text("fixture", encoding="utf-8")
+            argv = ["audit", "--runtime-config", str(runtime), "--output-report", str(report),
+                    "--checkpoint", str(root / "model.ckpt")]
+            with patch.object(sys, "argv", argv), patch.dict(sys.modules, torch=torch, yaml=yaml), \
+                 patch.object(audit, "make_identity", side_effect=AssertionError("must not recheck stage")):
+                audit.main()
+            self.assertEqual(json.loads(report.read_text())["status"], "PASS")
 
     def test_overlay_import_resolution(self):
         # models/data are namespace packages; training is explicitly copied.

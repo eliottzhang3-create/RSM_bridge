@@ -46,6 +46,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+echo "[mellow-formal] checking protected training Python before staging" >&2
+python "$SCRIPT_DIR/audit_comparison.py" --sources-only \
+  --output-report "$OUTPUT_DIR/source_comparison_audit.json"
+
 echo "[mellow-formal] staging raw audio into $STAGE_ROOT" >&2
 python "$BASE_ROUTE_ROOT/scripts/rsmol/stage_reasonaqa_raw_audio.py" \
   --audit-report "$AUDIT_REPORT" \

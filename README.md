@@ -12,6 +12,8 @@ bash run_mellow_official_reasonaqa_gbs256_formal30_5_10x2_5_mesh_5090.sh
 
 同一 `pdgpu-5090` 资源/容器与 `mellow_c8204d8` 环境，独立输出根目录 `outputs/RSmol/mellow_official_reasonaqa_gbs256_formal30_5_10x2_5_mesh_5090/`。启动校验源码/配置等价、tokenizer 兼容、完整 FP32 文本加载和音频初值/CPU RNG 精确对齐，记录权重/代码/数据/环境身份并拒绝跨路线 resume。cache/attention 使用基准实际设置，不直接沿用旧 adapter。详细提交、输出与恢复限制见新路线 README。
 
+首次远端提交 staging 已 PASS，随后因原 SmolLM2 wrapper 的固化字节哈希不符而在生成配置前退出，尚未训练。已把该检查收窄：核心训练 Python、配置生成和 staging 实现用 AST 校验；wrapper、注释/格式及未使用模块的字节差异仅记录到 `provenance_only_changes`。源码检查提前到 staging 前。身份比较保留实际训练代码、权重、tokenizer 和软件/精度设置，排除节点名、PID、时间戳、输出目录和 staging 路径；换节点重新 staging、旧 staging 被退出清理后均可重新提交/恢复，最终 checkpoint 审计也不依赖旧 staging。训练循环与超参未改；本地 20 项测试通过，修复后的远端执行仍待确认。
+
 此处记录本地实现，不代表远端加载或训练完成。递归实现目标 Transformers 4.54.1，旧环境快照为 4.47.1；实际环境兼容性和训练须以远端正式日志为准，不自动升级或改超参。该 checkpoint 有额外文本训练历史，因此属于文本骨干替换对比，不能把结果单独归因于架构。新路线 evaluator 尚未实现。
 
 ## 2026-10-15：x4 checkpoint-018488 的一致单卡 Stage 3 文本评测

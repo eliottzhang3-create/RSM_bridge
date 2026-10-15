@@ -8,19 +8,30 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from comparison import (audit_runtime_config, audit_source_equivalence, make_identity,
-                        validate_resume_identity, write_json)
+                        validate_comparison_identity, validate_resume_identity, write_json)
 from route_contract import sha256_file
 
 
 def main():
-    import yaml
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runtime-config", type=Path, required=True)
-    parser.add_argument("--output-report", type=Path, required=True)
+    parser.add_argument("--sources-only", action="store_true")
+    parser.add_argument("--runtime-config", type=Path)
+    parser.add_argument("--output-report", type=Path)
     parser.add_argument("--audit-report", type=Path)
     parser.add_argument("--mapping-jsonl", type=Path)
     parser.add_argument("--checkpoint", type=Path)
     args = parser.parse_args()
+    if args.sources_only:
+        # Run before copying audio. No ML imports, runtime config or stage tree.
+        report = audit_source_equivalence()
+        if args.output_report:
+            write_json(args.output_report, report)
+        print(json.dumps({"status": "PASS", "scope": "protected_training_python",
+                          "provenance_only_changes": report["provenance_only_changes"]}), flush=True)
+        return
+    if not args.runtime_config or not args.output_report:
+        parser.error("--runtime-config and --output-report are required unless --sources-only")
+    import yaml
     config = yaml.safe_load(args.runtime_config.read_text(encoding="utf-8"))
     report = {"status": "PASS", "runtime": audit_runtime_config(config),
               "source_equivalence": audit_source_equivalence(),
@@ -45,8 +56,7 @@ def main():
         report.update(checkpoint=str(args.checkpoint), total_step=checkpoint["total_step"],
                       initialization=checkpoint["initialization_audit"])
     else:
-        if make_identity() != config["comparison_identity"]:
-            raise ValueError("text artifacts/environment/code changed during startup")
+        validate_comparison_identity(config["comparison_identity"], make_identity())
         if not args.audit_report or not args.mapping_jsonl:
             raise ValueError("startup audit requires the baseline data audit and mapping")
         report["data_inputs"] = {str(p): sha256_file(p) for p in

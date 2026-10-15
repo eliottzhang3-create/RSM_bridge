@@ -16,10 +16,63 @@ ROOT = Path(__file__).resolve().parent
 FORMAL = ROOT.parent / "reasonaqa_global_batch256_formal_30epochs"
 BASE = ROOT.parent / "reasonaqa_global_batch256_lr_ablation_5epochs"
 RSMOL = ROOT.parents[1]
+FORMAL_TRAINING_FILES = (
+    "train.py", "training/__init__.py", "training/log.py", "training/trainer.py",
+    "data/audiotext_dataset.py", "models/mellow.py", "models/decoder.py",
+)
+SHARED_TRAINING_FILES = (
+    "data/sampler.py", "data/template.py", "distributed/__init__.py",
+    "distributed/torch.py", "models/audio.py", "models/config.py",
+    "models/htsat.py", "models/model.py", "utils/audio_io.py",
+    "utils/launch_utils.py", "utils/utils.py",
+)
+IDENTITY_VERSION = 2
 
 
 def source_hash(path):
     return hashlib.sha256(Path(path).read_text(encoding="utf-8").replace("\r\n", "\n").encode()).hexdigest()
+
+
+def python_source_hash(path):
+    # Ignore comments, formatting, BOM and newline style. Keep every executable
+    # AST field, including prompt strings and training constants. Python 3.12
+    # added empty type_params fields; omit those for older cluster Python.
+    def canonical(value):
+        if isinstance(value, ast.AST):
+            return [type(value).__name__, {key: canonical(item)
+                    for key, item in ast.iter_fields(value)
+                    if not (key == "type_params" and not item)}]
+        if isinstance(value, list):
+            return [canonical(item) for item in value]
+        if isinstance(value, bytes):
+            return {"bytes_hex": value.hex()}
+        if isinstance(value, complex):
+            return {"complex": [value.real, value.imag]}
+        if value is Ellipsis:
+            return {"ellipsis": True}
+        return value
+    tree = ast.parse(Path(path).read_text(encoding="utf-8-sig"))
+    payload = json.dumps(canonical(tree), sort_keys=True, ensure_ascii=True)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def protected_source_paths():
+    # Only baseline training dependencies, runtime-config semantics, staging
+    # implementation and the recursive model are pinned. Shell launchers and
+    # unused/shadowed modules are provenance, not a training compatibility gate.
+    return ([FORMAL / relative for relative in FORMAL_TRAINING_FILES]
+            + [FORMAL / "scripts/rsmol/write_reasonaqa_runtime_config.py"]
+            + [BASE / relative for relative in SHARED_TRAINING_FILES]
+            + [BASE / "scripts/rsmol/stage_reasonaqa_raw_audio.py",
+               RSMOL / "recursive_model_5_10x2_5_mesh.py"])
+
+
+def training_source_identity():
+    paths = ([ROOT / relative for relative in FORMAL_TRAINING_FILES]
+             + [ROOT / "models/recursive_text.py", ROOT / "route_contract.py"]
+             + [BASE / relative for relative in SHARED_TRAINING_FILES]
+             + [RSMOL / "recursive_model_5_10x2_5_mesh.py"])
+    return {p.relative_to(RSMOL).as_posix(): python_source_hash(p) for p in paths}
 
 
 def write_json(path, value):
@@ -69,14 +122,14 @@ def audit_source_equivalence():
     unchanged = ["train.py", "training/__init__.py", "training/log.py",
                  "data/audiotext_dataset.py", "models/mellow.py"]
     for relative in unchanged:
-        if source_hash(ROOT / relative) != source_hash(FORMAL / relative):
+        if python_source_hash(ROOT / relative) != python_source_hash(FORMAL / relative):
             raise ValueError(f"non-text source differs from formal30: {relative}")
-    original = ast.parse((FORMAL / "training/trainer.py").read_text(encoding="utf-8"))
-    adapted = ast.parse((ROOT / "training/trainer.py").read_text(encoding="utf-8"))
+    original = ast.parse((FORMAL / "training/trainer.py").read_text(encoding="utf-8-sig"))
+    adapted = ast.parse((ROOT / "training/trainer.py").read_text(encoding="utf-8-sig"))
     if ast.dump(original) != ast.dump(_StripTextAdaptation().visit(adapted)):
         raise ValueError("trainer differs beyond text loading and identity/audit hooks")
-    original = ast.parse((FORMAL / "models/decoder.py").read_text(encoding="utf-8"))
-    adapted = ast.parse((ROOT / "models/decoder.py").read_text(encoding="utf-8"))
+    original = ast.parse((FORMAL / "models/decoder.py").read_text(encoding="utf-8-sig"))
+    adapted = ast.parse((ROOT / "models/decoder.py").read_text(encoding="utf-8-sig"))
     # The only constructor changes are the LM loader and branch-selection label.
     adapted = _StripTextAdaptation().visit(adapted)
     for cls in adapted.body:
@@ -91,19 +144,34 @@ def audit_source_equivalence():
     if ast.dump(original) != ast.dump(adapted):
         raise ValueError("decoder differs beyond its text model constructor")
     pinned = json.loads((ROOT / "baseline_sources.json").read_text(encoding="utf-8"))
+    protected = {p.relative_to(RSMOL).as_posix(): p for p in protected_source_paths()}
+    if set(pinned.get("python_ast_sha256", {})) != set(protected):
+        raise ValueError("baseline_sources.json has an outdated protected Python source list")
+    for relative, path in protected.items():
+        actual = python_source_hash(path)
+        expected = pinned["python_ast_sha256"][relative]
+        if actual != expected:
+            raise ValueError(f"protected training Python changed: {relative}; "
+                             f"expected_ast={expected}, actual_ast={actual}")
+    provenance_changes = {}
     for relative, expected in pinned["sha256_lf"].items():
-        if source_hash(RSMOL / relative) != expected:
-            raise ValueError(f"pinned baseline/shared source changed: {relative}")
+        path = RSMOL / relative
+        actual = source_hash(path) if path.is_file() else None
+        if actual != expected:
+            provenance_changes[relative] = {"expected_sha256_lf": expected,
+                                            "actual_sha256_lf": actual}
     return {"status": "PASS", "unchanged_files": unchanged,
             "trainer": "AST equal after removing allowed hooks",
             "decoder": "AST equal after restoring text constructor",
+            "protected_python_files": sorted(protected),
+            "provenance_only_changes": provenance_changes,
             "baseline_snapshot": pinned}
 
 
 def reference_runtime(config):
     # Evaluate the baseline's actual config dictionary, rather than maintaining
     # a hand-copied list of defaults which could miss a later change.
-    tree = ast.parse((FORMAL / "scripts/rsmol/write_reasonaqa_runtime_config.py").read_text(encoding="utf-8"))
+    tree = ast.parse((FORMAL / "scripts/rsmol/write_reasonaqa_runtime_config.py").read_text(encoding="utf-8-sig"))
     main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
     definition = next(n for n in main.body if isinstance(n, ast.AnnAssign) and n.target.id == "config")
     args = SimpleNamespace(
@@ -195,14 +263,34 @@ def make_identity():
                for root in (ROOT, FORMAL, BASE) for p in sorted(root.rglob("*"))
                if p.suffix in {".py", ".sh"}}
     sources["recursive_model_5_10x2_5_mesh.py"] = source_hash(RSMOL / "recursive_model_5_10x2_5_mesh.py")
-    return {"route_contract": ROUTE_CONTRACT, "text_checkpoint": str(MESH_TEXT),
+    return {"identity_schema_version": IDENTITY_VERSION,
+            "route_contract": ROUTE_CONTRACT, "text_checkpoint": str(MESH_TEXT),
             "baseline_text": str(BASELINE_TEXT), "code_sha256_lf": sources,
+            "training_code_ast_sha256": training_source_identity(),
             "text_artifacts": _artifact_inventory(MESH_TEXT),
             "baseline_text_artifacts": _artifact_inventory(BASELINE_TEXT),
             "tokenizer": tokenizer_identity(), "environment": environment_identity(),
             "htsat_sha256": sha256_file(
                 Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT/HTSAT_AudioSet_Saved_1.ckpt")),
             "initialization": "text_weights_only_fresh_audio_bridge_optimizer_scheduler"}
+
+
+def validate_comparison_identity(expected, actual):
+    # Raw source hashes are provenance only. Never bind a checkpoint to host,
+    # PID, timestamp, output path, staging report, or a former /dev/shm tree.
+    fields = ("identity_schema_version", "route_contract", "text_checkpoint",
+              "baseline_text", "training_code_ast_sha256", "text_artifacts",
+              "baseline_text_artifacts", "tokenizer", "environment",
+              "htsat_sha256", "initialization")
+    for identity in (expected, actual):
+        if not isinstance(identity, dict) or identity.get("identity_schema_version") != IDENTITY_VERSION:
+            raise ValueError("unsupported comparison identity; use this route's current full checkpoint")
+        missing = [field for field in fields if field not in identity]
+        if missing:
+            raise ValueError(f"comparison identity is missing required fields: {missing}")
+    for field in fields:
+        if expected[field] != actual[field]:
+            raise ValueError(f"comparison identity mismatch: {field}")
 
 
 def validate_job(config, world_size):
@@ -283,6 +371,7 @@ def audit_model_initialization(model, config, rank, initialization_rng):
 
 
 def validate_resume_identity(checkpoint, config):
-    for field in ("route_contract", "text_model_contract", "comparison_identity"):
+    for field in ("route_contract", "text_model_contract"):
         if not isinstance(checkpoint, dict) or checkpoint.get(field) != config[field]:
             raise ValueError(f"resume {field} mismatch; use this route's own full checkpoint")
+    validate_comparison_identity(checkpoint.get("comparison_identity"), config["comparison_identity"])
