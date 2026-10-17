@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full MMAU/MMAR evaluation of any of the three completed formal30 checkpoints."""
+"""Full MMAU/MMAR evaluation of supported Mellow audio checkpoints."""
 from __future__ import annotations
 
 import argparse
@@ -41,10 +41,19 @@ def parse_args(argv: Sequence[str] | None = None):
     }.get(args.requested_alias, args.requested_alias)
     args.checkpoint_file = Path(aliases.get(args.checkpoint_file, args.checkpoint_file)).expanduser().resolve(strict=True)
     run_root = args.checkpoint_file.parent.parent.parent
-    args.runtime_config = (args.runtime_config or run_root / "runtime_30epochs.yaml").resolve(strict=True)
+    if args.runtime_config is None:
+        candidates = [run_root / name for name in ("runtime_30epochs.yaml", "runtime_10epochs.yaml")
+                      if (run_root / name).is_file()]
+        if len(candidates) != 1:
+            parser.error("could not uniquely infer runtime config; pass --runtime-config from the checkpoint run root")
+        args.runtime_config = candidates[0]
+    try:
+        args.runtime_config = args.runtime_config.resolve(strict=True)
+    except FileNotFoundError as exc:
+        parser.error(f"runtime config does not exist: {exc.filename}")
     if args.runtime_config.parent != run_root:
         parser.error("runtime config must belong to the checkpoint run root")
-    args.output_dir = (args.output_dir or run_root / "eval_formal30_unified_v3" / args.task /
+    args.output_dir = (args.output_dir or run_root / "eval_mellow_unified_v4" / args.task /
                        args.checkpoint_file.parent.name / args.checkpoint_file.stem / "full").resolve()
     args.dataset_dir = (args.dataset_dir or Path("/hpc_stor03/sjtu_home/jinwei.zhang/data") /
                         ("MMAU_test_mini" if args.task == "mmau_test_mini" else "MMAR")).resolve(strict=True)
@@ -75,7 +84,8 @@ def prepare(args: Any) -> None:
         raise ValueError("checkpoint alias does not match the embedded architecture contract")
     args.runtime_config_data = config
     args.loaded_checkpoint = checkpoint
-    args.route_root = C.ROUTE_PARENT / C.ARCHITECTURES[args.architecture]["route"]
+    args.route_root = C.ROUTE_PARENT / C.route_for_architecture(
+        args.architecture, args.model_contract["training_route_variant"])
     args.mellow_root = args.route_root
     args.htsat_checkpoint = Path(config["model"]["encoder"]["pretrained_audioencoder_path"]) / "HTSAT_AudioSet_Saved_1.ckpt"
     args.loaded_model_audit = {}
@@ -85,6 +95,9 @@ def prepare(args: Any) -> None:
         "batch_geometry": checkpoint["batch_geometry"], "loss_reduction": checkpoint["loss_reduction"],
         "route_contract": checkpoint.get("route_contract"),
         "text_model_contract": checkpoint.get("text_model_contract"),
+        "route_variant": checkpoint.get("route_variant"),
+        "max_lr": checkpoint.get("scheduler", {}).get("max_lr"),
+        "min_lr": checkpoint.get("scheduler", {}).get("min_lr"),
     }
 
 
@@ -149,7 +162,8 @@ def build_identity(args: Any, dataset_identity: dict) -> dict:
     evaluation_files = [ROOT / name for name in ("contracts.py", "runtime.py", "evaluate.py", "audio.py")]
     evaluation_files.extend([Path(mmau.__file__), Path(mmar.__file__)])
     evaluation_sources = C.source_fingerprints(evaluation_files)
-    model_sources = C.source_fingerprints(runtime.model_source_files(args.architecture))
+    model_sources = C.source_fingerprints(runtime.model_source_files(
+        args.architecture, args.model_contract["training_route_variant"]))
     # Paths, hostname, PID, timestamps, output dir and training /dev/shm paths
     # are provenance, not scientific identity. Same bytes/semantics can resume.
     model_contract = copy.deepcopy(args.model_contract)
@@ -183,7 +197,7 @@ def build_identity(args: Any, dataset_identity: dict) -> dict:
 
 
 def claim_output(output_dir: Path, identity: dict) -> None:
-    marker = output_dir.parent / f".{output_dir.name}.formal30_eval_identity.json"
+    marker = output_dir.parent / f".{output_dir.name}.mellow_eval_identity.json"
     marker.parent.mkdir(parents=True, exist_ok=True)
     if marker.exists():
         previous = json.loads(marker.read_text(encoding="utf-8"))
@@ -192,7 +206,7 @@ def claim_output(output_dir: Path, identity: dict) -> None:
             raise ValueError(f"existing evaluation belongs to different model/data/protocol: {changed}; use a new output directory")
     else:
         if output_dir.exists() and any(output_dir.iterdir()):
-            raise ValueError("refusing nonempty evaluation directory without formal30 identity")
+            raise ValueError("refusing nonempty evaluation directory without Mellow evaluation identity")
         with marker.open("x", encoding="utf-8") as handle:
             json.dump(identity, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
@@ -203,7 +217,7 @@ def output_lock(output_dir: Path):
     import fcntl
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = output_dir.parent / f".{output_dir.name}.formal30_eval.lock"
+    lock_path = output_dir.parent / f".{output_dir.name}.mellow_eval.lock"
     with lock_path.open("a") as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -273,11 +287,12 @@ def run(args: Any) -> dict:
             prepare_prediction=C.prepare_official_prediction,
             prediction_format="raw_generation_strip_leading_a_to_j_only_v2",
             audio_prefix_tokens=C.AUDIO_PREFIX_TOKENS,
-            record_static_fields={"architecture": args.architecture, "audio2_reused": False,
-                                  "audio2_waveform_materialized": True,
+            record_static_fields={"architecture": args.architecture, "audio2_reused": True,
+                                  "audio2_equals_audio1": True,
+                                  "audio2_waveform_materialized": False,
                                   "audio_encoder_invocations": 2, "single_audio_slot": False,
-                                  "audio2_policy": "zero_waveform_encoded_independently"},
-            stage="formal30_unified_" + args.task,
+                                  "audio2_policy": "reuse_audio1_waveform_encoded_independently"},
+            stage="mellow_unified_" + args.task,
         )
         if args.task == "mmau_test_mini":
             report = mmau.run(
@@ -318,6 +333,12 @@ def run(args: Any) -> dict:
         # This is the same for all three models on one benchmark. Model code,
         # checkpoint and architecture are separately identified above.
         shared = {key: identity[key] for key in ("protocol", "dataset", "evaluation_sources", "software", "tokenizer_files")}
+        shared["checkpoint_training_family"] = {
+            "route_variant": args.checkpoint_audit["route_variant"],
+            "num_epochs": args.checkpoint_audit["num_epochs"],
+            "batch_geometry": args.checkpoint_audit["batch_geometry"],
+            "loss_reduction": args.checkpoint_audit["loss_reduction"],
+        }
         model_audit = args.loaded_model_audit
         shared["loaded_model_shared_settings"] = {key: model_audit.get(key) for key in (
             "shared_lm_config", "attention_implementation", "tokenizer_vocab_sha256", "eos_token_id", "pad_token_id")}

@@ -1,5 +1,19 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-17：统一 Mellow 评测支持 10-epoch LR 消融 checkpoint
+
+更新 `code/RSmol/mellow_formal30_eval/` 与 `submit_mellow_formal30_eval_5090.sh`：除既有 formal30 checkpoint 外，可显式传入 `run_mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090.sh` 产出的任意 1–10 epoch SmolLM2 checkpoint。评测器按 `route_variant` 选择隔离模型实现，验证 GBS256、训练策略、checkpoint 与 `runtime_10epochs.yaml` 的任意 max LR 和 `min_lr=0.1*max_lr` 一致；staging 和节点信息不作为评测门槛。统一评测输入现将第一音频 waveform 同时传入两个音频槽，各槽仍独立执行模型编码；协议和输出目录升为 v4，旧静音槽评测结果不会被续写。
+
+远端同步代码后，在 `code/RSmol/` 提交 MMAU test-mini：
+
+```bash
+bash submit_mellow_formal30_eval_5090.sh mmau_test_mini \
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090/<run-root>/checkpoints/<job-dir>/model--epo-10.ckpt \
+  --runtime-config /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090/<run-root>/runtime_10epochs.yaml
+```
+
+将 checkpoint 文件名替换为任意已保存 epoch。评测 README 见 `code/RSmol/mellow_formal30_eval/README.md`；本地合同回归测试通过后，远端权重加载和实际评分仍以正式作业为准。
+
 ## 2026-10-17：formal30 基础上的 10-epoch 学习率消融
 
 新增独立路线 `code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_lr_ablation_10epochs/` 和入口 `code/RSmol/run_mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090.sh`。母本是 `run_mellow_official_reasonaqa_gbs256_formal30_5090.sh` 对应的 formal30 实现；保留其 GBS256、FP32、AdamW、5% warmup/cosine、全局裁剪 0.5、compact 文本/EOS/padding/mask/loss、HTSAT 冻结和资源配置，仅改为 10 epochs、显式 `--max-lr`（`min_lr=0.1*max_lr`），以及单音频样本按历史 LR 消融路线随机填充第二音频槽。原 formal30 与 5-epoch 路线未修改。

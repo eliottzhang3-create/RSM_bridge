@@ -1,4 +1,4 @@
-"""Dependency-light contracts for the isolated, three-backbone formal30 evaluator."""
+"""Dependency-light contracts for the unified Mellow audio evaluator."""
 from __future__ import annotations
 
 import ast
@@ -15,7 +15,9 @@ RSMOL = ROOT.parent
 ROUTE_PARENT = RSMOL / "mellow_official_training_c8204d8_adamw_cosine"
 SHARED_ROUTE = ROUTE_PARENT / "reasonaqa_global_batch256_lr_ablation_5epochs"
 BASELINE_ROUTE = "reasonaqa_global_batch256_formal_30epochs"
-PROTOCOL_VERSION = "formal30_compact_eos_silent_audio2_fp32_dual_score_v3_10choice"
+LR_ABLATION_ROUTE = "reasonaqa_global_batch256_lr_ablation_10epochs"
+LR_ABLATION_ROUTE_VARIANT = "formal_10epochs_lr_ablation_random_audio2"
+PROTOCOL_VERSION = "compact_eos_reused_audio2_fp32_dual_score_v4_10choice"
 MAX_PROMPT_TOKENS = 129
 MAX_NEW_TOKENS = 300
 AUDIO_PREFIX_TOKENS = 260
@@ -29,6 +31,11 @@ POLICIES = {
     "audio_slot_policy": "zero_if_missing_audio2",
     "gradient_clip_policy": "global_l2_hard_clip",
     "max_grad_norm": 0.5,
+}
+LR_ABLATION_POLICIES = {
+    **POLICIES,
+    "route_variant": LR_ABLATION_ROUTE_VARIANT,
+    "audio_slot_policy": "random_fill_if_missing_audio2",
 }
 ARCHITECTURES = {
     "smollm2": {
@@ -87,17 +94,36 @@ def _require(actual: Any, expected: Any, field: str) -> None:
         raise ValueError(f"{field}: expected {expected!r}, got {actual!r}")
 
 
+def route_for_architecture(architecture: str, route_variant: str | None = None) -> str:
+    if architecture not in ARCHITECTURES:
+        raise ValueError(f"unknown architecture: {architecture}")
+    if route_variant == LR_ABLATION_ROUTE_VARIANT:
+        if architecture != "smollm2":
+            raise ValueError("the 10-epoch LR-ablation route only produces ordinary SmolLM2 checkpoints")
+        return LR_ABLATION_ROUTE
+    if route_variant not in (None, POLICIES["route_variant"]):
+        raise ValueError(f"unsupported training route variant: {route_variant!r}")
+    return ARCHITECTURES[architecture]["route"]
+
+
 def validate_contract(checkpoint: Mapping[str, Any], config: Mapping[str, Any]) -> tuple[str, dict]:
     """No staging, hostname, PID, RNG, optimizer restoration or source-init re-audit."""
-    for field, expected in {"schema_version": 2, "num_epochs": 30,
-                            "loss_reduction": "global_token_mean", **POLICIES}.items():
+    route_variant = checkpoint.get("route_variant")
+    if route_variant == LR_ABLATION_ROUTE_VARIANT:
+        policies, expected_epochs, flexible_lr = LR_ABLATION_POLICIES, 10, True
+    elif route_variant == POLICIES["route_variant"]:
+        policies, expected_epochs, flexible_lr = POLICIES, 30, False
+    else:
+        raise ValueError(f"unsupported Mellow training route: {route_variant!r}")
+    for field, expected in {"schema_version": 2, "num_epochs": expected_epochs,
+                            "loss_reduction": "global_token_mean", **policies}.items():
         _require(checkpoint.get(field), expected, f"checkpoint.{field}")
     epoch_completed = int(checkpoint.get("epoch_completed", 0))
-    if not 1 <= epoch_completed <= 30:
-        raise ValueError(f"checkpoint.epoch_completed must be in [1, 30], got {epoch_completed}")
-    for field in POLICIES:
+    if not 1 <= epoch_completed <= expected_epochs:
+        raise ValueError(f"checkpoint.epoch_completed must be in [1, {expected_epochs}], got {epoch_completed}")
+    for field in policies:
         if field not in {"gradient_clip_policy", "max_grad_norm"}:
-            _require(config.get(field), POLICIES[field], f"runtime.{field}")
+            _require(config.get(field), policies[field], f"runtime.{field}")
     if not isinstance(checkpoint.get("state_dict"), Mapping) or not checkpoint["state_dict"]:
         raise ValueError("checkpoint.state_dict must be a nonempty mapping")
     _require(checkpoint.get("batch_geometry"), {
@@ -107,8 +133,10 @@ def validate_contract(checkpoint: Mapping[str, Any], config: Mapping[str, Any]) 
     matches = [name for name, spec in ARCHITECTURES.items()
                if identity == (spec["route_contract"], spec["text_model_contract"])]
     if len(matches) != 1:
-        raise ValueError(f"unrecognized formal30 text-backbone contract: {identity!r}")
+        raise ValueError(f"unrecognized Mellow text-backbone contract: {identity!r}")
     architecture = matches[0]
+    if flexible_lr and architecture != "smollm2":
+        raise ValueError("the 10-epoch LR-ablation checkpoint must contain ordinary SmolLM2 weights")
     spec = ARCHITECTURES[architecture]
     for field in ("route_contract", "text_model_contract"):
         _require(config.get(field), spec[field], f"runtime.{field}")
@@ -128,27 +156,54 @@ def validate_contract(checkpoint: Mapping[str, Any], config: Mapping[str, Any]) 
     _require(list(optimizer.get("betas", ())), [0.9, 0.95], "checkpoint optimizer betas")
     _require(optimizer.get("weight_decay"), 1e-4, "checkpoint optimizer weight decay")
     scheduler = checkpoint.get("scheduler") or {}
-    for field, expected in {"scheduler_type": "step_cosine_warmup", "max_lr": 4e-5, "min_lr": 4e-6}.items():
-        _require(scheduler.get(field), expected, f"checkpoint.scheduler.{field}")
+    _require(scheduler.get("scheduler_type"), "step_cosine_warmup", "checkpoint.scheduler.scheduler_type")
+    try:
+        max_lr, min_lr = float(scheduler["max_lr"]), float(scheduler["min_lr"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("checkpoint scheduler must contain numeric max_lr and min_lr") from exc
+    if not math.isfinite(max_lr) or not math.isfinite(min_lr) or max_lr <= 0.0 or min_lr <= 0.0:
+        raise ValueError("checkpoint scheduler learning rates must be positive and finite")
+    if flexible_lr:
+        if not math.isclose(min_lr, 0.1 * max_lr, rel_tol=1e-12, abs_tol=0.0):
+            raise ValueError(f"10-epoch checkpoint min_lr must equal 0.1 * max_lr, got {max_lr}, {min_lr}")
+    else:
+        _require(max_lr, 4e-5, "checkpoint.scheduler.max_lr")
+        _require(min_lr, 4e-6, "checkpoint.scheduler.min_lr")
     total = int(scheduler.get("total_steps", 0))
     current_step = int(checkpoint.get("total_step", -1))
-    if (total <= 0 or total % 30 or not 0 <= current_step <= total
+    if (total <= 0 or total % expected_epochs or not 1 <= current_step <= total
             or scheduler.get("last_step") != current_step
             or scheduler.get("warmup_steps") != math.ceil(total * 0.05)):
-        raise ValueError(f"incomplete formal30 scheduler: {scheduler!r}")
+        raise ValueError(f"incomplete {expected_epochs}-epoch scheduler: {scheduler!r}")
     train = config.get("train") or {}
     for field, expected in {"batch_size": 8, "gradient_accumulation_steps": 4,
-                            "num_epochs": 30, "gradient_clip_policy": POLICIES["gradient_clip_policy"],
+                            "num_epochs": expected_epochs, "gradient_clip_policy": policies["gradient_clip_policy"],
                             "max_grad_norm": 0.5}.items():
         _require(train.get(field), expected, f"runtime.train.{field}")
     _require((train.get("mixed_precision") or {}).get("use_mixed_precision"), False,
              "runtime mixed precision")
     opt = train.get("optimizer") or {}
     for field, expected in {"optimizer_type": "AdamW", "betas": [0.9, 0.95],
-                            "max_lr": 4e-5, "learning_rate": 4e-5, "min_lr": 4e-6,
                             "weight_decay": 1e-4, "warmup_ratio": 0.05,
                             "scheduler": "step_cosine_warmup"}.items():
         _require(opt.get(field), expected, f"runtime.optimizer.{field}")
+    runtime_max_lr = opt.get("max_lr")
+    runtime_min_lr = opt.get("min_lr")
+    runtime_learning_rate = opt.get("learning_rate")
+    for field, value in (("max_lr", runtime_max_lr), ("min_lr", runtime_min_lr),
+                         ("learning_rate", runtime_learning_rate)):
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"runtime.optimizer.{field} must be numeric") from exc
+        if not math.isfinite(numeric):
+            raise ValueError(f"runtime.optimizer.{field} must be finite")
+    if not (math.isclose(float(runtime_max_lr), max_lr, rel_tol=1e-12, abs_tol=0.0)
+            and math.isclose(float(runtime_learning_rate), max_lr, rel_tol=1e-12, abs_tol=0.0)
+            and math.isclose(float(runtime_min_lr), min_lr, rel_tol=1e-12, abs_tol=0.0)):
+        raise ValueError("runtime and checkpoint learning-rate bounds differ")
+    if not flexible_lr and (runtime_max_lr != 4e-5 or runtime_min_lr != 4e-6):
+        raise ValueError("formal30 runtime learning-rate bounds changed")
     data = config.get("data") or {}
     for field, expected in {"sampling_rate": 32000, "segment_seconds": 10,
                             "ip_text_len": 129, "op_text_len": 250}.items():
@@ -167,7 +222,9 @@ def validate_contract(checkpoint: Mapping[str, Any], config: Mapping[str, Any]) 
     # Training datapath/datafiles point at deleted per-job /dev/shm staging.
     model_contract = {"architecture": architecture, "encoder": dict(encoder),
                       "decoder": dict(decoder), "tokenizer": data.get("tokenizer_type"),
-                      "training_steps": total, "policies": POLICIES}
+                      "training_steps": total, "training_epochs": expected_epochs,
+                      "training_route_variant": route_variant,
+                      "max_lr": max_lr, "min_lr": min_lr, "policies": dict(policies)}
     return architecture, model_contract
 
 
@@ -192,12 +249,12 @@ def protocol(task: str) -> dict[str, Any]:
         "version": PROTOCOL_VERSION, "task": task, "seed": SEED,
         "dtype": "float32", "tf32": False, "batch_size": 1,
         "sample_rate": 32000, "audio_seconds": 10, "audio_prefix_tokens": 260,
-        "audio2": "zero_waveform_encoded_independently",
+        "audio2": "reuse_audio1_waveform_encoded_independently",
         "audio1": ("official_id_wav_preferred_else_parquet_embedded; training_first_two_channel_mean; mellow_repeat_or_per_id_seeded_random_crop" if task == "mmau_test_mini"
                    else "mono_first10s_right_zero_pad"),
         "prompt_case": "preserve_question_and_choice_bodies",
         "choice_labels": "fixed_order_lowercase_a_to_j_close_paren",
-        "prompt": "formal30_tokenize_text_padding_false_force_final_eos",
+        "prompt": "route_tokenize_text_padding_false_force_final_eos",
         "max_prompt_tokens_including_eos": MAX_PROMPT_TOKENS,
         "prompt_padding": False, "attention_mask": "all_real_prefix_and_prompt_tokens_valid",
         "max_new_tokens": MAX_NEW_TOKENS, "top_p": 0.8, "temperature": 1.0,

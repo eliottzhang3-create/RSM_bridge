@@ -1,4 +1,4 @@
-"""One FP32 prefix/decoding implementation for all three formal30 backbones."""
+"""One FP32 prefix/decoding implementation for supported Mellow checkpoints."""
 from __future__ import annotations
 
 import gc
@@ -14,8 +14,8 @@ from typing import Any
 import contracts as C
 
 
-def import_route(architecture: str):
-    route = C.ROUTE_PARENT / C.ARCHITECTURES[architecture]["route"]
+def import_route(architecture: str, route_variant: str | None = None):
+    route = C.ROUTE_PARENT / C.route_for_architecture(architecture, route_variant)
     # Same overlay order as the formal30 trainers; no global AutoModel registration.
     for name in list(sys.modules):
         if name.split(".")[0] in {"models", "data", "utils", "route_contract", "comparison"}:
@@ -28,8 +28,8 @@ def import_route(architecture: str):
     return importlib.import_module("models.model").get_model_class("Mellow")
 
 
-def model_source_files(architecture: str) -> list[Path]:
-    route = C.ROUTE_PARENT / C.ARCHITECTURES[architecture]["route"]
+def model_source_files(architecture: str, route_variant: str | None = None) -> list[Path]:
+    route = C.ROUTE_PARENT / C.route_for_architecture(architecture, route_variant)
     paths = [route / "models/mellow.py", route / "models/decoder.py",
              route / "data/audiotext_dataset.py", C.SHARED_ROUTE / "data/template.py",
              C.SHARED_ROUTE / "utils/audio_io.py"]
@@ -69,7 +69,8 @@ def load_model(args: Any):
     if not torch.cuda.is_available():
         raise RuntimeError("formal30 evaluation requires one CUDA GPU")
     seed_runtime()
-    cls = import_route(args.architecture)
+    route_variant = args.model_contract["training_route_variant"]
+    cls = import_route(args.architecture, route_variant)
     config = args.runtime_config_data
     encoder = config["model"]["encoder"]
     decoder = config["model"]["decoder"]
@@ -184,25 +185,25 @@ def make_prefix(model: Any, audio1: Any, text_input: dict, device: Any):
     audio1 = audio1.to(device=device, dtype=torch.float32).contiguous()
     if tuple(audio1.shape) != (1, 320000) or not bool(torch.isfinite(audio1).all()):
         raise ValueError("audio1 must be a finite FP32 [1,320000] waveform")
-    # Keep the original formal30 single-audio convention: materialize a
-    # silent second waveform and let the native model encode both slots
-    # independently.
-    audio2 = torch.zeros_like(audio1)
-    if bool(torch.count_nonzero(audio2)):
-        raise ValueError("audio2 must be silent at waveform input")
+    # Both native slots receive the exact same waveform tensor. The model still
+    # encodes each slot through its normal audio-prefix path.
+    audio2 = audio1
     prefix, _, _ = model.generate_prefix_inference({
         "audio1": audio1, "audio2": audio2, "input": text_input,
     })
     expected = (1, C.AUDIO_PREFIX_TOKENS + text_input["input_ids"].shape[1], C.HIDDEN_SIZE)
     if tuple(prefix.shape) != expected or prefix.dtype != torch.float32 or not bool(torch.isfinite(prefix).all()):
         raise ValueError(f"invalid formal30 multimodal prefix: {tuple(prefix.shape)}, expected {expected}")
+    waveform_sha256 = hashlib.sha256(audio1.cpu().numpy().tobytes()).hexdigest()
     return prefix, {
-        "audio2_policy": "zero_waveform_encoded_independently", "audio2_max_abs": 0.0,
-        "audio2_reused": False, "audio2_waveform_materialized": True,
+        "audio2_policy": "reuse_audio1_waveform_encoded_independently",
+        "audio2_equals_audio1": True,
+        "audio2_reused": True, "audio2_waveform_materialized": False,
         "audio_encoder_invocations": 2, "single_audio_slot": False, "audio_prefix_tokens": 260,
         "prefix_token_count": prefix.shape[1], "combined_prefix_shape": list(prefix.shape),
         "prefix_layout": "audio1_129_sep_audio2_129_sep_variable_prompt_eos",
-        "audio1_waveform_sha256": hashlib.sha256(audio1.cpu().numpy().tobytes()).hexdigest(),
+        "audio1_waveform_sha256": waveform_sha256,
+        "audio2_waveform_sha256": waveform_sha256,
     }
 
 
@@ -250,7 +251,7 @@ def run_generation(args: Any, common: Any, model: Any, tokenizer: Any, device: A
     import torch
 
     if (max_prompt_tokens, max_new_tokens) != (C.MAX_PROMPT_TOKENS, C.MAX_NEW_TOKENS):
-        raise ValueError("formal30 generation limits cannot vary between models/tasks")
+        raise ValueError("common Mellow generation limits cannot vary between models/tasks")
     # Rebuild here too: MMAR's legacy traversal uses its own prompt helper.
     prompt = C.build_prompt(sample["question"], sample["choices"])
     if prompt != sample["prompt"]:
