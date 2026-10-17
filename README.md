@@ -1,5 +1,23 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-17：三条 formal30 训练线的统一 MMAU / MMAR 评测
+
+新增隔离目录 `code/RSmol/mellow_formal30_eval/` 与入口 `code/RSmol/submit_mellow_formal30_eval_5090.sh`，仅用于本次 SmolLM2、5-10×2-5 MeSH、5-10×4-5 MeSH 的完整 30-epoch 音频 checkpoint。用户确认 SmolLM2 已完成并提供其最终路径；x2/x4 路径是用户指定的预期最终产物，提交前仍需实际存在。三种 checkpoint 别名和路径记录在新目录 `checkpoints.tsv`。
+
+统一合同：FP32、关闭 autocast/TF32、单 GPU / batch 1、第二音频槽为零 waveform 且独立编码、260-token 双槽音频 prefix、问题和选项正文保持原始大小写、按原顺序添加小写 `a)` 至 `f)`。直接调用 formal30 的 prompt 分词方法，最多 129 tokens、强制保留最终 EOS、不补齐 prompt，EOS 后立即生成答案。MMAU 和 MMAR **均最多生成 300 tokens**，固定 top-p 0.8 过滤后 argmax、temperature 1、use_cache=False。MMAU 裁剪按样本 ID 固定种子，MMAR 沿用首 10 秒/短音频补零。
+
+每个任务完整 1000 条，并同时输出首个 `)` 前标签分数和官方 scorer 分数；前者使用原始生成，不额外 trim，后者只去掉开头 `a)` 至 `f)` 标签再运行官方脚本。记录原始生成、prompt token IDs、输入音频片段 hash、完整分母、checkpoint 和评测身份。训练 staging 路径、节点/PID 不参加启动检查。三种架构仅切换加载 route，训练实现及旧 evaluator 未改动。
+
+在远端 `code/RSmol/` 同步代码后直接提交正式评测，不要求 smoke；每条命令各提交 MMAU、MMAR 两个单卡作业，资源固定 `pdgpu-5090 -c 8 -m 32G -g 1 -n 1`：
+
+```bash
+bash submit_mellow_formal30_eval_5090.sh both smollm2
+bash submit_mellow_formal30_eval_5090.sh both mesh_x2
+bash submit_mellow_formal30_eval_5090.sh both mesh_x4
+```
+
+默认输出为各训练 run root 下 `eval_formal30_unified_v1/<task>/<checkpoint-job>/model--epo-30/full/`。详情和结果核对命令见 `code/RSmol/mellow_formal30_eval/README.md`。`compare.py` 会拒绝协议、实际 prompt token/音频片段、环境、非架构 LM 配置不一致的三模型结果。本地仅验证 dependency-light 测试、语法和 mock 提交，远端权重、FP32 CUDA 推理、完整 scorer 执行仍待实际作业验证；不能把实现已存在当作评测成功。下方历史 evaluator 和“formal30 尚未实现评测”描述为当时状态。
+
 ## 2026-10-15：formal30 的 5-10×2-5 MeSH 文本骨干对比线
 
 新增隔离路线 `code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_formal_30epochs_5_10x2_5_mesh/`，母本是当前 `run_mellow_official_reasonaqa_gbs256_formal30_5090.sh` 对应的 formal30。仅把文本骨干换成 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244` 的文本权重；音频模型、canonical SmolLM2 tokenizer、260 位前缀、文本拼接/mask/answer-EOS loss、GBS256、30 epochs、FP32、AdamW、`4e-5 → 4e-6`、5% warmup/cosine 和全局硬裁剪 0.5 保持基准合同。旧路线和共享递归实现未改动。
