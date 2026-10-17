@@ -44,7 +44,7 @@ def parse_args(argv: Sequence[str] | None = None):
     args.runtime_config = (args.runtime_config or run_root / "runtime_30epochs.yaml").resolve(strict=True)
     if args.runtime_config.parent != run_root:
         parser.error("runtime config must belong to the checkpoint run root")
-    args.output_dir = (args.output_dir or run_root / "eval_formal30_unified_v2" / args.task /
+    args.output_dir = (args.output_dir or run_root / "eval_formal30_unified_v3" / args.task /
                        args.checkpoint_file.parent.name / args.checkpoint_file.stem / "full").resolve()
     args.dataset_dir = (args.dataset_dir or Path("/hpc_stor03/sjtu_home/jinwei.zhang/data") /
                         ("MMAU_test_mini" if args.task == "mmau_test_mini" else "MMAR")).resolve(strict=True)
@@ -273,10 +273,10 @@ def run(args: Any) -> dict:
             prepare_prediction=C.prepare_official_prediction,
             prediction_format="raw_generation_strip_leading_a_to_j_only_v2",
             audio_prefix_tokens=C.AUDIO_PREFIX_TOKENS,
-            record_static_fields={"architecture": args.architecture, "audio2_reused": True,
-                                  "audio2_waveform_materialized": False,
-                                  "audio_encoder_invocations": 1, "single_audio_slot": False,
-                                  "audio2_policy": "reuse_audio1_encoded_output"},
+            record_static_fields={"architecture": args.architecture, "audio2_reused": False,
+                                  "audio2_waveform_materialized": True,
+                                  "audio_encoder_invocations": 2, "single_audio_slot": False,
+                                  "audio2_policy": "zero_waveform_encoded_independently"},
             stage="formal30_unified_" + args.task,
         )
         if args.task == "mmau_test_mini":

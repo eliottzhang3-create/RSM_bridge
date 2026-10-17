@@ -24,12 +24,12 @@ bash submit_mellow_formal30_eval_5090.sh mmau_test_mini smollm2_epo15
 `smollm2_epo25` and `smollm2_epo15` evaluate the intermediate checkpoints from
 the same 30-epoch run. The wrapper prints the checkpoint argument and the
 resolved absolute path; the report stores both values. The unified MMAU audio
-adapter averages channels 0 and 1 as the training dataset does, and reuses the
-first audio encoder output for the second decoder slot.
+adapter averages channels 0 and 1 as the training dataset does, and sends a
+zero waveform through the native second audio slot.
 
 These changes use the fresh default output namespace
-`eval_formal30_unified_v2`, so a previous v1 report cannot be resumed under a
-different audio-slot protocol.
+`eval_formal30_unified_v3`, so reports from the previous audio-slot protocols
+cannot be resumed under this protocol.
 bash submit_mellow_formal30_eval_5090.sh mmar mesh_x4
 bash submit_mellow_formal30_eval_5090.sh mmar /absolute/path/to/model--epo-30.ckpt \
   --runtime-config /same/run/root/runtime_30epochs.yaml \
@@ -77,7 +77,7 @@ bash submit_mellow_formal30_eval_5090.sh mmar /absolute/path/to/model--epo-30.ck
 默认输出：
 
 ```text
-<checkpoint run root>/eval_formal30_unified_v2/<mmau_test_mini|mmar>/<checkpoint job dir>/model--epo-{15,25,30}/full/
+<checkpoint run root>/eval_formal30_unified_v3/<mmau_test_mini|mmar>/<checkpoint job dir>/model--epo-{15,25,30}/full/
 ```
 
 同级 `.full.formal30_eval_identity.json` 防止不同 checkpoint、数据或协议混写；Linux advisory lock 防止同一个输出并发写入。中断后重复原提交命令，会恢复已经完成的样本。若产生模型生成异常，该行按既有遍历规则保留为 terminal skip，修复后应指定新的输出目录重跑。完整分母、artifact 审计、官方 scorer 和生成无异常均通过后，报告才写 `comparable: true`。

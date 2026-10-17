@@ -377,30 +377,24 @@ class InferenceBoundaryTests(unittest.TestCase):
                                                dtype=values[0].dtype)
         return module
 
-    def test_prefix_reuses_first_encoded_audio_output(self):
+    def test_prefix_sends_zero_waveform_to_second_encoder(self):
         Array = self.Array
         seen = {}
 
-        def encode(audio):
-            seen["encoder_input"] = audio
-            return Array((1, 129, 768), [0.7]), None, None
+        def prefix(inputs):
+            seen.update(inputs)
+            return Array((1, 265, 576)), None, None
 
-        def prefix(audio1, audio2, text_input):
-            seen.update({"audio1": audio1, "audio2": audio2, "text_input": text_input})
-            return Array((1, 265, 576))
-
-        model = types.SimpleNamespace(
-            audio_encoder=encode,
-            caption_decoder=types.SimpleNamespace(generate_prefix_inference=prefix),
-        )
+        model = types.SimpleNamespace(generate_prefix_inference=prefix)
         with mock.patch.dict(sys.modules, {"torch": self.fake_torch(0)}):
             result, audit = runtime.make_prefix(model, Array((1, 320000), [0.4]),
                                                 {"input_ids": Array((1, 5))}, "cuda:0")
-        self.assertEqual(seen["encoder_input"].values, [0.4])
-        self.assertIs(seen["audio1"], seen["audio2"])
+        self.assertIsNot(seen["audio1"], seen["audio2"])
+        self.assertEqual(seen["audio2"].values, [])
         self.assertEqual(result.shape, (1, 265, 576))
-        self.assertTrue(audit["audio2_reused"])
-        self.assertFalse(audit["audio2_waveform_materialized"])
+        self.assertFalse(audit["audio2_reused"])
+        self.assertTrue(audit["audio2_waveform_materialized"])
+        self.assertEqual(audit["audio2_max_abs"], 0.0)
 
     def test_generation_stops_at_new_eos_or_exactly_300(self):
         Array = self.Array

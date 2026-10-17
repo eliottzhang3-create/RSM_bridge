@@ -65,7 +65,7 @@ RUNTIME_CONFIG="${RUNTIME_CONFIG:-$RUN_ROOT/runtime_30epochs.yaml}"
 RUNTIME_CONFIG=$(readlink -f -- "$RUNTIME_CONFIG")
 CHECKPOINT_JOB_NAME=$(basename "$CHECKPOINT_JOB_DIR")
 CHECKPOINT_NAME=$(basename "$CHECKPOINT" .ckpt)
-OUTPUT_DIR="${OUTPUT_DIR:-$RUN_ROOT/eval_formal30_unified_v2/$TASK/$CHECKPOINT_JOB_NAME/$CHECKPOINT_NAME/full}"
+OUTPUT_DIR="${OUTPUT_DIR:-$RUN_ROOT/eval_formal30_unified_v3/$TASK/$CHECKPOINT_JOB_NAME/$CHECKPOINT_NAME/full}"
 OUTPUT_DIR=$(readlink -m -- "$OUTPUT_DIR")
 if [[ -z "$DATASET_DIR" ]]; then
   if [[ "$TASK" == mmau_test_mini ]]; then
@@ -84,7 +84,7 @@ JOB_NAME="f30-${ALIAS}-${TASK}-${RUN_TAG}"
 mkdir -p "$SCRIPT_DIR/log"
 JOB_LOG="$SCRIPT_DIR/log/${JOB_NAME}.JOB.log"
 echo "[formal30-submit] task=$TASK checkpoint_argument=$CHECKPOINT_ARGUMENT checkpoint=$CHECKPOINT" >&2
-echo "[formal30-submit] FP32, audio2=reuse_audio1_encoded_output, prompt EOS, max_new_tokens=300" >&2
+echo "[formal30-submit] FP32, audio2=zero_waveform_encoded_independently, prompt EOS, max_new_tokens=300" >&2
 echo "[formal30-submit] output_dir=$OUTPUT_DIR" >&2
 echo "[formal30-submit] job_log=$JOB_LOG" >&2
 vc submit \

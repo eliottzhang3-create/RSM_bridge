@@ -15,7 +15,7 @@ RSMOL = ROOT.parent
 ROUTE_PARENT = RSMOL / "mellow_official_training_c8204d8_adamw_cosine"
 SHARED_ROUTE = ROUTE_PARENT / "reasonaqa_global_batch256_lr_ablation_5epochs"
 BASELINE_ROUTE = "reasonaqa_global_batch256_formal_30epochs"
-PROTOCOL_VERSION = "formal30_compact_eos_reused_audio1_embedding_fp32_dual_score_v3_10choice"
+PROTOCOL_VERSION = "formal30_compact_eos_silent_audio2_fp32_dual_score_v3_10choice"
 MAX_PROMPT_TOKENS = 129
 MAX_NEW_TOKENS = 300
 AUDIO_PREFIX_TOKENS = 260
@@ -192,7 +192,7 @@ def protocol(task: str) -> dict[str, Any]:
         "version": PROTOCOL_VERSION, "task": task, "seed": SEED,
         "dtype": "float32", "tf32": False, "batch_size": 1,
         "sample_rate": 32000, "audio_seconds": 10, "audio_prefix_tokens": 260,
-        "audio2": "reuse_audio1_encoded_output",
+        "audio2": "zero_waveform_encoded_independently",
         "audio1": ("official_id_wav_preferred_else_parquet_embedded; training_first_two_channel_mean; mellow_repeat_or_per_id_seeded_random_crop" if task == "mmau_test_mini"
                    else "mono_first10s_right_zero_pad"),
         "prompt_case": "preserve_question_and_choice_bodies",
