@@ -3,13 +3,14 @@ set -euo pipefail
 
 die() { echo "[formal30-submit] ERROR: $*" >&2; exit 2; }
 if [[ $# -lt 2 ]]; then
-  echo "usage: $0 <mmau_test_mini|mmar|both> <smollm2|mesh_x2|mesh_x4|checkpoint-file> [--runtime-config PATH] [--output-dir PATH] [--dataset-dir PATH]" >&2
+  echo "usage: $0 <mmau_test_mini|mmar|both> <smollm2|smollm2_epo25|smollm2_epo15|mesh_x2|mesh_x4|checkpoint-file> [--runtime-config PATH] [--output-dir PATH] [--dataset-dir PATH]" >&2
   echo "For both, output-dir is a parent directory containing mmau_test_mini/ and mmar/." >&2
   exit 2
 fi
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TASK=$1
 CHECKPOINT=$2
+CHECKPOINT_ARGUMENT=$2
 shift 2
 [[ "$TASK" == mmau_test_mini || "$TASK" == mmar || "$TASK" == both ]] || die "unsupported task: $TASK"
 RUNTIME_CONFIG=""
@@ -64,7 +65,7 @@ RUNTIME_CONFIG="${RUNTIME_CONFIG:-$RUN_ROOT/runtime_30epochs.yaml}"
 RUNTIME_CONFIG=$(readlink -f -- "$RUNTIME_CONFIG")
 CHECKPOINT_JOB_NAME=$(basename "$CHECKPOINT_JOB_DIR")
 CHECKPOINT_NAME=$(basename "$CHECKPOINT" .ckpt)
-OUTPUT_DIR="${OUTPUT_DIR:-$RUN_ROOT/eval_formal30_unified_v1/$TASK/$CHECKPOINT_JOB_NAME/$CHECKPOINT_NAME/full}"
+OUTPUT_DIR="${OUTPUT_DIR:-$RUN_ROOT/eval_formal30_unified_v2/$TASK/$CHECKPOINT_JOB_NAME/$CHECKPOINT_NAME/full}"
 OUTPUT_DIR=$(readlink -m -- "$OUTPUT_DIR")
 if [[ -z "$DATASET_DIR" ]]; then
   if [[ "$TASK" == mmau_test_mini ]]; then
@@ -82,8 +83,8 @@ JOB_NAME="f30-${ALIAS}-${TASK}-${RUN_TAG}"
 ((${#JOB_NAME} <= 60)) || die "job name exceeds 60 characters: $JOB_NAME"
 mkdir -p "$SCRIPT_DIR/log"
 JOB_LOG="$SCRIPT_DIR/log/${JOB_NAME}.JOB.log"
-echo "[formal30-submit] task=$TASK checkpoint=$CHECKPOINT" >&2
-echo "[formal30-submit] FP32, silent audio2, prompt EOS, max_new_tokens=300" >&2
+echo "[formal30-submit] task=$TASK checkpoint_argument=$CHECKPOINT_ARGUMENT checkpoint=$CHECKPOINT" >&2
+echo "[formal30-submit] FP32, audio2=reuse_audio1_encoded_output, prompt EOS, max_new_tokens=300" >&2
 echo "[formal30-submit] output_dir=$OUTPUT_DIR" >&2
 echo "[formal30-submit] job_log=$JOB_LOG" >&2
 vc submit \

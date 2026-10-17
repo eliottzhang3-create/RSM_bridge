@@ -184,18 +184,20 @@ def make_prefix(model: Any, audio1: Any, text_input: dict, device: Any):
     audio1 = audio1.to(device=device, dtype=torch.float32).contiguous()
     if tuple(audio1.shape) != (1, 320000) or not bool(torch.isfinite(audio1).all()):
         raise ValueError("audio1 must be a finite FP32 [1,320000] waveform")
-    audio2 = torch.zeros_like(audio1)
-    if bool(torch.count_nonzero(audio2)):
-        raise ValueError("audio2 must be silent at waveform input")
-    prefix, _, _ = model.generate_prefix_inference({
-        "audio1": audio1, "audio2": audio2, "input": text_input,
-    })
+    # The MMAU single-audio contract has two decoder slots, but the second
+    # slot reuses the first slot's *encoded* output.  This avoids both a
+    # silent waveform and a second, numerically independent HTSAT pass.
+    audio_embed1, _, _ = model.audio_encoder(audio1)
+    prefix = model.caption_decoder.generate_prefix_inference(
+        audio_embed1, audio_embed1, text_input
+    )
     expected = (1, C.AUDIO_PREFIX_TOKENS + text_input["input_ids"].shape[1], C.HIDDEN_SIZE)
     if tuple(prefix.shape) != expected or prefix.dtype != torch.float32 or not bool(torch.isfinite(prefix).all()):
         raise ValueError(f"invalid formal30 multimodal prefix: {tuple(prefix.shape)}, expected {expected}")
     return prefix, {
-        "audio2_policy": "zero_waveform_encoded_independently", "audio2_max_abs": 0.0,
-        "audio2_reused": False, "single_audio_slot": False, "audio_prefix_tokens": 260,
+        "audio2_policy": "reuse_audio1_encoded_output", "audio2_reused": True,
+        "audio2_waveform_materialized": False, "audio_encoder_invocations": 1,
+        "single_audio_slot": False, "audio_prefix_tokens": 260,
         "prefix_token_count": prefix.shape[1], "combined_prefix_shape": list(prefix.shape),
         "prefix_layout": "audio1_129_sep_audio2_129_sep_variable_prompt_eos",
         "audio1_waveform_sha256": hashlib.sha256(audio1.cpu().numpy().tobytes()).hexdigest(),

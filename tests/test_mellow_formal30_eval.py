@@ -76,7 +76,7 @@ class ContractTests(unittest.TestCase):
             C.validate_contract(checkpoint, config)
 
     def test_reject_old_incomplete_and_nonmatching_training_contracts(self):
-        for field, value in (("epoch_completed", 29), ("route_variant", "old"),
+        for field, value in (("epoch_completed", 31), ("route_variant", "old"),
                              ("audio_slot_policy", "reuse_audio1"), ("loss_reduction", "microbatch_mean")):
             checkpoint, config = fixture()
             checkpoint[field] = value
@@ -107,6 +107,13 @@ class ContractTests(unittest.TestCase):
             C.build_prompt("Too Many", choices + ["K"])
         self.assertEqual(C.prepare_official_prediction("F. Scott Fitzgerald"), "F. Scott Fitzgerald")
         self.assertEqual(C.prepare_official_prediction("answer: f) Voice F"), "answer: f) Voice F")
+
+    def test_accept_intermediate_checkpoint_from_same_formal30_run(self):
+        checkpoint, config = fixture()
+        checkpoint["epoch_completed"] = 15
+        checkpoint["total_step"] = 150
+        checkpoint["scheduler"]["last_step"] = 150
+        self.assertEqual(C.validate_contract(checkpoint, config)[0], "smollm2")
 
     def test_task_generation_contracts_are_equal(self):
         left, right = C.protocol("mmau_test_mini"), C.protocol("mmar")
@@ -370,22 +377,30 @@ class InferenceBoundaryTests(unittest.TestCase):
                                                dtype=values[0].dtype)
         return module
 
-    def test_prefix_sends_zero_waveform_to_second_encoder(self):
+    def test_prefix_reuses_first_encoded_audio_output(self):
         Array = self.Array
         seen = {}
 
-        def prefix(inputs):
-            seen.update(inputs)
-            return Array((1, 265, 576)), None, None
+        def encode(audio):
+            seen["encoder_input"] = audio
+            return Array((1, 129, 768), [0.7]), None, None
 
-        model = types.SimpleNamespace(generate_prefix_inference=prefix)
+        def prefix(audio1, audio2, text_input):
+            seen.update({"audio1": audio1, "audio2": audio2, "text_input": text_input})
+            return Array((1, 265, 576))
+
+        model = types.SimpleNamespace(
+            audio_encoder=encode,
+            caption_decoder=types.SimpleNamespace(generate_prefix_inference=prefix),
+        )
         with mock.patch.dict(sys.modules, {"torch": self.fake_torch(0)}):
             result, audit = runtime.make_prefix(model, Array((1, 320000), [0.4]),
                                                 {"input_ids": Array((1, 5))}, "cuda:0")
-        self.assertIsNot(seen["audio1"], seen["audio2"])
-        self.assertEqual(seen["audio2"].values, [])
+        self.assertEqual(seen["encoder_input"].values, [0.4])
+        self.assertIs(seen["audio1"], seen["audio2"])
         self.assertEqual(result.shape, (1, 265, 576))
-        self.assertEqual(audit["audio2_max_abs"], 0.0)
+        self.assertTrue(audit["audio2_reused"])
+        self.assertFalse(audit["audio2_waveform_materialized"])
 
     def test_generation_stops_at_new_eos_or_exactly_300(self):
         Array = self.Array
@@ -464,7 +479,7 @@ class TraversalIntegrationTests(unittest.TestCase):
                 def generation(*pos, **kwargs):
                     self.assertEqual(kwargs, {"max_prompt_tokens": 129, "max_new_tokens": 300})
                     return {"generated_text": "b) Yes", "generated_text_raw": "b) Yes<eos>",
-                            "audio2_reused": False, "audio2_max_abs": 0.0, "prompt_token_ids": [1, 99],
+                            "audio2_reused": True, "prompt_token_ids": [1, 99],
                             "audio1_waveform_sha256": "same", "requested_max_new_tokens": 300}
 
                 def official_score(*pos):

@@ -17,6 +17,7 @@ for path in (ROOT, ROOT.parent / "scripts", ROOT.parent):
         sys.path.append(str(path))
 
 import contracts as C
+import audio as eval_audio
 import runtime
 import evaluate_mmau_test_mini_5_10x2_5_mesh_mellow as mmau
 import evaluate_mmar_5_10x2_5_mesh_mellow as mmar
@@ -32,13 +33,18 @@ def parse_args(argv: Sequence[str] | None = None):
     parser.add_argument("--dataset-dir", type=Path)
     args = parser.parse_args(argv)
     aliases = C.checkpoint_aliases()
+    args.checkpoint_argument = args.checkpoint_file
     args.requested_alias = args.checkpoint_file if args.checkpoint_file in aliases else None
+    args.requested_alias_architecture = {
+        "smollm2_epo15": "smollm2",
+        "smollm2_epo25": "smollm2",
+    }.get(args.requested_alias, args.requested_alias)
     args.checkpoint_file = Path(aliases.get(args.checkpoint_file, args.checkpoint_file)).expanduser().resolve(strict=True)
     run_root = args.checkpoint_file.parent.parent.parent
     args.runtime_config = (args.runtime_config or run_root / "runtime_30epochs.yaml").resolve(strict=True)
     if args.runtime_config.parent != run_root:
         parser.error("runtime config must belong to the checkpoint run root")
-    args.output_dir = (args.output_dir or run_root / "eval_formal30_unified_v1" / args.task /
+    args.output_dir = (args.output_dir or run_root / "eval_formal30_unified_v2" / args.task /
                        args.checkpoint_file.parent.name / args.checkpoint_file.stem / "full").resolve()
     args.dataset_dir = (args.dataset_dir or Path("/hpc_stor03/sjtu_home/jinwei.zhang/data") /
                         ("MMAU_test_mini" if args.task == "mmau_test_mini" else "MMAR")).resolve(strict=True)
@@ -58,13 +64,14 @@ def prepare(args: Any) -> None:
     import torch
     import yaml
 
+    print(f"[formal30-eval] checkpoint argument: {args.checkpoint_argument}", flush=True)
     print(f"[formal30-eval] validating checkpoint: {args.checkpoint_file}", flush=True)
     config = yaml.safe_load(args.runtime_config.read_text(encoding="utf-8"))
     checkpoint = torch.load(args.checkpoint_file, map_location="cpu", weights_only=False)
     if not isinstance(config, dict) or not isinstance(checkpoint, dict):
         raise ValueError("runtime and checkpoint must both be mappings")
     args.architecture, args.model_contract = C.validate_contract(checkpoint, config)
-    if args.requested_alias and args.architecture != args.requested_alias:
+    if args.requested_alias_architecture and args.architecture != args.requested_alias_architecture:
         raise ValueError("checkpoint alias does not match the embedded architecture contract")
     args.runtime_config_data = config
     args.loaded_checkpoint = checkpoint
@@ -139,7 +146,7 @@ def audit_dataset(args: Any) -> tuple[list[dict], dict, dict]:
 
 
 def build_identity(args: Any, dataset_identity: dict) -> dict:
-    evaluation_files = [ROOT / name for name in ("contracts.py", "runtime.py", "evaluate.py")]
+    evaluation_files = [ROOT / name for name in ("contracts.py", "runtime.py", "evaluate.py", "audio.py")]
     evaluation_files.extend([Path(mmau.__file__), Path(mmar.__file__)])
     evaluation_sources = C.source_fingerprints(evaluation_files)
     model_sources = C.source_fingerprints(runtime.model_source_files(args.architecture))
@@ -266,17 +273,19 @@ def run(args: Any) -> dict:
             prepare_prediction=C.prepare_official_prediction,
             prediction_format="raw_generation_strip_leading_a_to_j_only_v2",
             audio_prefix_tokens=C.AUDIO_PREFIX_TOKENS,
-            record_static_fields={"architecture": args.architecture, "audio2_reused": False,
-                                  "single_audio_slot": False, "audio2_policy": "zero_waveform_encoded_independently"},
+            record_static_fields={"architecture": args.architecture, "audio2_reused": True,
+                                  "audio2_waveform_materialized": False,
+                                  "audio_encoder_invocations": 1, "single_audio_slot": False,
+                                  "audio2_policy": "reuse_audio1_encoded_output"},
             stage="formal30_unified_" + args.task,
         )
         if args.task == "mmau_test_mini":
             report = mmau.run(
                 args, **common_kwargs, prompt_builder=C.build_prompt,
-                audio_decoder=mmau.decode_mellow_author_reply_audio,
+                audio_decoder=eval_audio.decode_training_audio,
                 audio_root=args.audio_root, prefer_official_audio_file=True,
                 prompt_format="preserve_body_case_fixed_order_a_to_j",
-                audio_format="mellow_repeat_or_per_id_seeded_random_crop",
+                audio_format="training_first_two_channel_mean_mellow_repeat_or_per_id_seeded_random_crop",
                 protocol_contract=C.PROTOCOL_VERSION,
                 generation_protocol=C.protocol(args.task),
                 logical_trace=args.architecture,
@@ -291,6 +300,7 @@ def run(args: Any) -> dict:
         report["protocol"].pop("max_prompt_tokens_without_truncation", None)
         report["dtype"], report["device"] = "float32", "cuda:0"
         report["checkpoint_file"] = str(args.checkpoint_file)
+        report["checkpoint_argument"] = str(getattr(args, "checkpoint_argument", args.checkpoint_file))
         report["runtime_config"] = str(args.runtime_config)
         report["architecture"] = args.architecture
         report["checkpoint_contract"] = args.checkpoint_audit
