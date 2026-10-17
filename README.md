@@ -1,5 +1,17 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-17：formal30 基础上的 10-epoch 学习率消融
+
+新增独立路线 `code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_lr_ablation_10epochs/` 和入口 `code/RSmol/run_mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090.sh`。母本是 `run_mellow_official_reasonaqa_gbs256_formal30_5090.sh` 对应的 formal30 实现；保留其 GBS256、FP32、AdamW、5% warmup/cosine、全局裁剪 0.5、compact 文本/EOS/padding/mask/loss、HTSAT 冻结和资源配置，仅改为 10 epochs、显式 `--max-lr`（`min_lr=0.1*max_lr`），以及单音频样本按历史 LR 消融路线随机填充第二音频槽。原 formal30 与 5-epoch 路线未修改。
+
+代码经 GitHub 同步到远端 `code/RSmol/` 后提交：
+
+```bash
+bash run_mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090.sh --max-lr 1e-3
+```
+
+不同学习率使用独立输出根目录和 job；本地已加入静态合同测试，远程权重、staging 和正式训练结果仍需以作业日志与 `model--epo-10.ckpt` 审计为准。
+
 ## 2026-10-17：三条 formal30 训练线的统一 MMAU / MMAR 评测
 
 新增隔离目录 `code/RSmol/mellow_formal30_eval/` 与入口 `code/RSmol/submit_mellow_formal30_eval_5090.sh`，仅用于本次 SmolLM2、5-10×2-5 MeSH、5-10×4-5 MeSH 的完整 30-epoch 音频 checkpoint。用户确认 SmolLM2 已完成并提供其最终路径；x2/x4 路径是用户指定的预期最终产物，提交前仍需实际存在。三种 checkpoint 别名和路径记录在新目录 `checkpoints.tsv`。
