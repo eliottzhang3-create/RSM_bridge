@@ -92,6 +92,8 @@ def audit_dataset(args: Any) -> tuple[list[dict], dict, dict]:
     if audit["status"] != "PASS":
         raise ValueError(f"official artifact audit failed: {audit['failures']}")
     audio_hashes = []
+    official_audio_rows = 0
+    fallback_audio_rows = 0
     for record in records:
         choices = mmau._coerce_choices(record.get("choices"))
         C.build_prompt(mmau.extract_record_question(record), choices)
@@ -99,17 +101,40 @@ def audit_dataset(args: Any) -> tuple[list[dict], dict, dict]:
             path = args.audio_root / f"{mmau._official_id(record)}.wav"
         else:
             path = mmar.resolve_mmar_audio_path(args.audio_root, record["audio_path"])
-        # Never silently switch audio source between models; require the official WAVs.
-        if not path.is_file():
+        if path.is_file():
+            official_audio_rows += 1
+            audio_hashes.append([str(record["id"]), "official_wav", C.sha256_file(path)])
+        elif args.task == "mmau_test_mini":
+            # The historical MMAU evaluator deliberately preferred the
+            # official ``<id>.wav`` file, but fell back to the embedded
+            # parquet ``context.audio`` payload when that file was absent.
+            # Keep that compatibility rule: many remote dataset mirrors do
+            # not materialize all 1,000 convenience WAVs, while the parquet
+            # benchmark remains complete.  The row-level decoder will still
+            # record a skip if the embedded payload is absent or undecodable.
+            fallback_audio_rows += 1
+            audio_hashes.append([str(record["id"]), "parquet_embedded_audio_fallback"])
+        else:
             raise FileNotFoundError(f"official benchmark audio is missing: {path}")
-        audio_hashes.append([str(record["id"]), C.sha256_file(path)])
     identity = {
         "metadata_sha256": C.sha256_file(args.metadata_json),
         "evaluation_script_sha256": C.sha256_file(args.evaluation_script),
-        "audio_files_sha256": C.fingerprint(audio_hashes), "audio_files": len(audio_hashes),
+        "audio_files_sha256": C.fingerprint(audio_hashes),
+        "audio_files": official_audio_rows if args.task == "mmau_test_mini" else len(audio_hashes),
+        "audio_source_policy": ("prefer_official_id_wav_else_parquet_embedded"
+                                 if args.task == "mmau_test_mini" else "official_audio_path_required"),
     }
     if args.task == "mmau_test_mini":
         identity["parquet_sha256"] = C.sha256_file(args.parquet)
+        identity["official_audio_files"] = official_audio_rows
+        identity["parquet_fallback_audio_rows"] = fallback_audio_rows
+        identity["official_audio_missing_rows"] = fallback_audio_rows
+    args.dataset_audio_audit = {
+        "policy": identity["audio_source_policy"],
+        "official_audio_files": official_audio_rows,
+        "parquet_fallback_audio_rows": fallback_audio_rows,
+        "metadata_rows": len(records),
+    }
     return records, audit, identity
 
 
@@ -226,7 +251,7 @@ def score_both(args: Any, records: list[dict], report: dict) -> dict:
 
 def run(args: Any) -> dict:
     prepare(args)
-    print("[formal30-eval] auditing metadata/scorer and hashing benchmark WAVs", flush=True)
+    print("[formal30-eval] auditing metadata/scorer and benchmark audio (MMAU parquet fallback enabled)", flush=True)
     records, artifact_audit, dataset_identity = audit_dataset(args)
     identity = build_identity(args, dataset_identity)
     with output_lock(args.output_dir):
@@ -270,6 +295,10 @@ def run(args: Any) -> dict:
         report["architecture"] = args.architecture
         report["checkpoint_contract"] = args.checkpoint_audit
         report["loaded_model_audit"] = args.loaded_model_audit
+        report["dataset_audio_audit"] = getattr(args, "dataset_audio_audit", {})
+        if args.task == "mmau_test_mini":
+            observed_sources = report.get("records", {}).get("audio", {}).get("payload_sources", {})
+            report["dataset_audio_audit"]["observed_payload_sources"] = observed_sources
         report["evaluation_identity"] = identity
         report["provenance"] = {
             "runtime_config_sha256": C.sha256_file(args.runtime_config),

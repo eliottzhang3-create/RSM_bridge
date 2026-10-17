@@ -502,5 +502,38 @@ class TraversalIntegrationTests(unittest.TestCase):
                 self.assertFalse(report["comparable"])
 
 
+class DatasetAuditTests(unittest.TestCase):
+    def test_mmau_missing_convenience_wav_uses_parquet_fallback_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            metadata = folder / "mmau-test-mini.json"
+            scorer = folder / "evaluation.py"
+            parquet = folder / "test_mini.parquet"
+            metadata.write_text("{}", encoding="utf-8")
+            scorer.write_text("# scorer", encoding="utf-8")
+            parquet.write_bytes(b"parquet-placeholder")
+            record = {"id": "missing-wav", "question": "Who?", "choices": ["No", "Yes"]}
+            args = types.SimpleNamespace(
+                task="mmau_test_mini", metadata_json=metadata, evaluation_script=scorer,
+                audio_root=folder / "test-mini-audios", parquet=parquet,
+            )
+            audit = {"status": "PASS", "failures": [], "evaluation_semantic_audit": {}}
+            with mock.patch.object(evaluator.mmau, "load_official_records", return_value=[record]), \
+                 mock.patch.object(evaluator.mmau, "audit_mmau_v051525", return_value=audit):
+                records, _, identity = evaluator.audit_dataset(args)
+            self.assertEqual(records, [record])
+            self.assertEqual(identity["official_audio_files"], 0)
+            self.assertEqual(identity["parquet_fallback_audio_rows"], 1)
+            self.assertEqual(identity["audio_source_policy"], "prefer_official_id_wav_else_parquet_embedded")
+            self.assertEqual(args.dataset_audio_audit["metadata_rows"], 1)
+            (args.audio_root).mkdir()
+            (args.audio_root / "missing-wav.wav").write_bytes(b"wav")
+            with mock.patch.object(evaluator.mmau, "load_official_records", return_value=[record]), \
+                 mock.patch.object(evaluator.mmau, "audit_mmau_v051525", return_value=audit):
+                _, _, identity = evaluator.audit_dataset(args)
+            self.assertEqual(identity["official_audio_files"], 1)
+            self.assertEqual(identity["parquet_fallback_audio_rows"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

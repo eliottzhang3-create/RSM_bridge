@@ -4,7 +4,7 @@
 
 新增隔离目录 `code/RSmol/mellow_formal30_eval/` 与入口 `code/RSmol/submit_mellow_formal30_eval_5090.sh`，仅用于本次 SmolLM2、5-10×2-5 MeSH、5-10×4-5 MeSH 的完整 30-epoch 音频 checkpoint。用户确认 SmolLM2 已完成并提供其最终路径；x2/x4 路径是用户指定的预期最终产物，提交前仍需实际存在。三种 checkpoint 别名和路径记录在新目录 `checkpoints.tsv`。
 
-统一合同：FP32、关闭 autocast/TF32、单 GPU / batch 1、第二音频槽为零 waveform 且独立编码、260-token 双槽音频 prefix、问题和选项正文保持原始大小写、按原顺序添加小写 `a)` 至 `f)`。直接调用 formal30 的 prompt 分词方法，最多 129 tokens、强制保留最终 EOS、不补齐 prompt，EOS 后立即生成答案。MMAU 和 MMAR **均最多生成 300 tokens**，固定 top-p 0.8 过滤后 argmax、temperature 1、use_cache=False。MMAU 裁剪按样本 ID 固定种子，MMAR 沿用首 10 秒/短音频补零。
+统一合同：FP32、关闭 autocast/TF32、单 GPU / batch 1、第二音频槽为零 waveform 且独立编码、260-token 双槽音频 prefix、问题和选项正文保持原始大小写、按原顺序添加小写 `a)` 至 `f)`。直接调用 formal30 的 prompt 分词方法，最多 129 tokens、强制保留最终 EOS、不补齐 prompt，EOS 后立即生成答案。MMAU 和 MMAR **均最多生成 300 tokens**，固定 top-p 0.8 过滤后 argmax、temperature 1、use_cache=False。MMAU 优先使用 `<id>.wav`，缺失时按既有 evaluator 规则回退 parquet 内嵌音频，并按样本 ID 固定种子裁剪；MMAR 沿用首 10 秒/短音频补零。
 
 每个任务完整 1000 条，并同时输出首个 `)` 前标签分数和官方 scorer 分数；前者使用原始生成，不额外 trim，后者只去掉开头 `a)` 至 `f)` 标签再运行官方脚本。记录原始生成、prompt token IDs、输入音频片段 hash、完整分母、checkpoint 和评测身份。训练 staging 路径、节点/PID 不参加启动检查。三种架构仅切换加载 route，训练实现及旧 evaluator 未改动。
 

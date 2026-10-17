@@ -188,7 +188,7 @@ def protocol(task: str) -> dict[str, Any]:
         "dtype": "float32", "tf32": False, "batch_size": 1,
         "sample_rate": 32000, "audio_seconds": 10, "audio_prefix_tokens": 260,
         "audio2": "zero_waveform_encoded_independently",
-        "audio1": ("mellow_repeat_or_per_id_seeded_random_crop" if task == "mmau_test_mini"
+        "audio1": ("official_id_wav_preferred_else_parquet_embedded; mellow_repeat_or_per_id_seeded_random_crop" if task == "mmau_test_mini"
                    else "mono_first10s_right_zero_pad"),
         "prompt_case": "preserve_question_and_choice_bodies",
         "choice_labels": "fixed_order_lowercase_a_to_f_close_paren",

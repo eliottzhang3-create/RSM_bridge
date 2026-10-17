@@ -34,7 +34,7 @@ bash submit_mellow_formal30_eval_5090.sh mmar /absolute/path/to/model--epo-30.ck
 | 精度、设备 | 全部浮点参数/buffer、音频、prefix、logits 均 FP32；CUDA 0；关闭 autocast 和 TF32 |
 | 模式 | 全模块 eval / inference mode；每次一条样本 |
 | 音频 | 32 kHz、10 秒；两个原生槽分别编码；第二槽 waveform 为全零静音，静音特征仍正常通过 HTSAT/c2l/投影 |
-| MMAU audio1 | 优先且要求官方 `<id>.wav`；沿用 Mellow 解码/通道 reshape 和短音频重复、长音频随机裁剪；随机种子由固定 seed 0 + 样本 ID 决定，断点继续不会换片段 |
+| MMAU audio1 | 优先使用官方 `<id>.wav`；若镜像没有该 convenience WAV，则沿用旧 evaluator 回退到 parquet 内嵌 `context.audio`；随后使用 Mellow 解码/通道 reshape 和短音频重复、长音频随机裁剪；随机种子由固定 seed 0 + 样本 ID 决定，断点继续不会换片段 |
 | MMAR audio1 | 原有 mono / resample / 首 10 秒 / 短音频右补零 |
 | 音频 prefix | 129 + 分隔符 token 0 + 129 + 分隔符 token 0 = 260 个有效位置 |
 | 文本 | 保留 question 和选项正文大小写及问题标点；固定原始选项顺序；`a) ... b) ...`，支持 `e)`、`f)`；不加 `Choices:` |
