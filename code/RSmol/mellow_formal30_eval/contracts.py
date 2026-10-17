@@ -15,10 +15,11 @@ RSMOL = ROOT.parent
 ROUTE_PARENT = RSMOL / "mellow_official_training_c8204d8_adamw_cosine"
 SHARED_ROUTE = ROUTE_PARENT / "reasonaqa_global_batch256_lr_ablation_5epochs"
 BASELINE_ROUTE = "reasonaqa_global_batch256_formal_30epochs"
-PROTOCOL_VERSION = "formal30_compact_eos_silent_audio2_fp32_dual_score_v1"
+PROTOCOL_VERSION = "formal30_compact_eos_silent_audio2_fp32_dual_score_v2_10choice"
 MAX_PROMPT_TOKENS = 129
 MAX_NEW_TOKENS = 300
 AUDIO_PREFIX_TOKENS = 260
+MAX_CHOICES = 10
 HIDDEN_SIZE = 576
 SEED = 0
 POLICIES = {
@@ -167,8 +168,8 @@ def validate_contract(checkpoint: Mapping[str, Any], config: Mapping[str, Any]) 
 
 
 def build_prompt(question: str, choices: Sequence[Any]) -> str:
-    if not 2 <= len(choices) <= 6:
-        raise ValueError(f"expected 2..6 choices, got {len(choices)}")
+    if not 2 <= len(choices) <= MAX_CHOICES:
+        raise ValueError(f"expected 2..{MAX_CHOICES} choices, got {len(choices)}")
     # Preserve body case and punctuation; only add ordered, lowercase labels.
     return str(question).strip() + " " + " ".join(
         f"{chr(97 + index)}) {str(choice).strip()}" for index, choice in enumerate(choices))
@@ -177,7 +178,7 @@ def build_prompt(question: str, choices: Sequence[Any]) -> str:
 def prepare_official_prediction(value: Any) -> str:
     import re
 
-    return re.sub(r"^\s*[a-f]\)\s*", "", str(value), count=1, flags=re.IGNORECASE)
+    return re.sub(r"^\s*[a-j]\)\s*", "", str(value), count=1, flags=re.IGNORECASE)
 
 
 def protocol(task: str) -> dict[str, Any]:
@@ -191,7 +192,7 @@ def protocol(task: str) -> dict[str, Any]:
         "audio1": ("official_id_wav_preferred_else_parquet_embedded; mellow_repeat_or_per_id_seeded_random_crop" if task == "mmau_test_mini"
                    else "mono_first10s_right_zero_pad"),
         "prompt_case": "preserve_question_and_choice_bodies",
-        "choice_labels": "fixed_order_lowercase_a_to_f_close_paren",
+        "choice_labels": "fixed_order_lowercase_a_to_j_close_paren",
         "prompt": "formal30_tokenize_text_padding_false_force_final_eos",
         "max_prompt_tokens_including_eos": MAX_PROMPT_TOKENS,
         "prompt_padding": False, "attention_mask": "all_real_prefix_and_prompt_tokens_valid",
@@ -199,6 +200,6 @@ def protocol(task: str) -> dict[str, Any]:
         "do_sample": False, "use_cache": False,
         "decoder": "top_p_filter_then_argmax_full_recompute_stop_on_generated_eos",
         "choice_label_score": "raw_prediction.split(')')[0].lower_exact_no_trim",
-        "official_score": "strip_only_leading_a_to_f_label_then_official_evaluation_py",
+        "official_score": "strip_only_leading_a_to_j_label_then_official_evaluation_py",
         "expected_rows": 1000,
     }

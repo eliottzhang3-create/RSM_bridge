@@ -96,11 +96,15 @@ class ContractTests(unittest.TestCase):
         config["comparison_identity"] = {"hostname": "another_node", "pid": 999}
         self.assertEqual(C.validate_contract(checkpoint, config), original)
 
-    def test_case_punctuation_and_six_choice_labels(self):
-        prompt = C.build_prompt("Who Is Singing!", ["A Person", "B:maj/1", "F. Scott", "DOG", "E-Guitar", "Voice F"])
-        self.assertEqual(prompt, "Who Is Singing! a) A Person b) B:maj/1 c) F. Scott d) DOG e) E-Guitar f) Voice F")
-        for label in "abcdefABCDEF":
+    def test_case_punctuation_and_ten_choice_labels(self):
+        choices = ["A Person", "B:maj/1", "F. Scott", "DOG", "E-Guitar", "Voice F",
+                   "Guitar", "Harp", "I.D.", "J.D. Salinger"]
+        prompt = C.build_prompt("Who Is Singing!", choices)
+        self.assertEqual(prompt, "Who Is Singing! a) A Person b) B:maj/1 c) F. Scott d) DOG e) E-Guitar f) Voice F g) Guitar h) Harp i) I.D. j) J.D. Salinger")
+        for label in "abcdefghijABCDEFGHIJ":
             self.assertEqual(C.prepare_official_prediction(f"  {label}) E-Guitar."), "E-Guitar.")
+        with self.assertRaisesRegex(ValueError, "expected 2..10 choices"):
+            C.build_prompt("Too Many", choices + ["K"])
         self.assertEqual(C.prepare_official_prediction("F. Scott Fitzgerald"), "F. Scott Fitzgerald")
         self.assertEqual(C.prepare_official_prediction("answer: f) Voice F"), "answer: f) Voice F")
 
@@ -498,7 +502,7 @@ class TraversalIntegrationTests(unittest.TestCase):
                 self.assertEqual(report["official_evaluation"]["status"], "PASS")
                 self.assertEqual(report["choice_label_prefix_evaluation"]["total"]["correct"], 1)
                 self.assertEqual(report["protocol"]["max_new_tokens"], 300)
-                self.assertEqual(report["protocol"]["prompt_format"], "preserve_body_case_fixed_order_a_to_f")
+                self.assertEqual(report["protocol"]["prompt_format"], "preserve_body_case_fixed_order_a_to_j")
                 self.assertFalse(report["comparable"])
 
 

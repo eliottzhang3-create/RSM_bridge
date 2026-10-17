@@ -264,7 +264,7 @@ def run(args: Any) -> dict:
         common_kwargs = dict(
             load_runtime_model=runtime.load_model, run_model_generation=generation,
             prepare_prediction=C.prepare_official_prediction,
-            prediction_format="raw_generation_strip_leading_a_to_f_only_v1",
+            prediction_format="raw_generation_strip_leading_a_to_j_only_v2",
             audio_prefix_tokens=C.AUDIO_PREFIX_TOKENS,
             record_static_fields={"architecture": args.architecture, "audio2_reused": False,
                                   "single_audio_slot": False, "audio2_policy": "zero_waveform_encoded_independently"},
@@ -275,7 +275,7 @@ def run(args: Any) -> dict:
                 args, **common_kwargs, prompt_builder=C.build_prompt,
                 audio_decoder=mmau.decode_mellow_author_reply_audio,
                 audio_root=args.audio_root, prefer_official_audio_file=True,
-                prompt_format="preserve_body_case_fixed_order_a_to_f",
+                prompt_format="preserve_body_case_fixed_order_a_to_j",
                 audio_format="mellow_repeat_or_per_id_seeded_random_crop",
                 protocol_contract=C.PROTOCOL_VERSION,
                 generation_protocol=C.protocol(args.task),
@@ -287,7 +287,7 @@ def run(args: Any) -> dict:
             report = mmar.run(args, **common_kwargs,
                               protocol_description=C.PROTOCOL_VERSION + ": " + json.dumps(C.protocol(args.task), sort_keys=True))
         report["protocol"] = {**report.get("protocol", {}), **C.protocol(args.task)}
-        report["protocol"]["prompt_format"] = "preserve_body_case_fixed_order_a_to_f"
+        report["protocol"]["prompt_format"] = "preserve_body_case_fixed_order_a_to_j"
         report["protocol"].pop("max_prompt_tokens_without_truncation", None)
         report["dtype"], report["device"] = "float32", "cuda:0"
         report["checkpoint_file"] = str(args.checkpoint_file)
@@ -334,7 +334,7 @@ def run(args: Any) -> dict:
             "official": report.get("official_evaluation", {}).get("status"),
             "choice_label_prefix": prefix.get("status"),
             "raw_generation_shared": True,
-            "official_input_policy": "strip_only_leading_a_to_f_label_keep_body_unchanged",
+            "official_input_policy": "strip_only_leading_a_to_j_label_keep_body_unchanged",
             "prefix_input_policy": "raw_generated_text_no_label_strip_no_trim",
             "denominator": 1000,
         }

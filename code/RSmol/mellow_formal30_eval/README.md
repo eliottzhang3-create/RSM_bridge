@@ -37,7 +37,7 @@ bash submit_mellow_formal30_eval_5090.sh mmar /absolute/path/to/model--epo-30.ck
 | MMAU audio1 | 优先使用官方 `<id>.wav`；若镜像没有该 convenience WAV，则沿用旧 evaluator 回退到 parquet 内嵌 `context.audio`；随后使用 Mellow 解码/通道 reshape 和短音频重复、长音频随机裁剪；随机种子由固定 seed 0 + 样本 ID 决定，断点继续不会换片段 |
 | MMAR audio1 | 原有 mono / resample / 首 10 秒 / 短音频右补零 |
 | 音频 prefix | 129 + 分隔符 token 0 + 129 + 分隔符 token 0 = 260 个有效位置 |
-| 文本 | 保留 question 和选项正文大小写及问题标点；固定原始选项顺序；`a) ... b) ...`，支持 `e)`、`f)`；不加 `Choices:` |
+| 文本 | 保留 question 和选项正文大小写及问题标点；固定原始选项顺序；按选项数使用小写 `a)` 至 `j)`；不加 `Choices:` |
 | prompt 分词 | 直接调用对应 formal30 dataset 的 `_tokenize_text(..., max_len=129, padding=False)`；附加 EOS；截断后最后有效 token 强制为 EOS；不在 prompt EOS 与答案间补齐 |
 | 注意力 | prefix + 实际 prompt 全有效；首个答案 token 由 prompt EOS 的最后位置预测 |
 | 生成 | 两个 benchmark 均最多 300 tokens；temperature 1.0、top-p 0.8 过滤后 argmax；不随机采样；每步全量重算，显式 use_cache=False；遇到新生成的 EOS 停止 |
@@ -58,7 +58,7 @@ bash submit_mellow_formal30_eval_5090.sh mmar /absolute/path/to/model--epo-30.ck
 每条样本只生成一次：
 
 - `choice_label_prefix_evaluation.{json,txt}`：使用原始 `generated_text.split(')')[0].lower()` 与带正确标签的答案比较；不额外 trim，不猜测句子里的选项。标签大小写不敏感，` b)`、`answer is b)` 不会被宽松纠正。answer 无法映射到选项时保留分母、计错并记录 `record_errors`。
-- `official_evaluation.txt`：运行数据目录中原本的官方 `evaluation.py --input ...`。仅移除生成开头的 `a)` 到 `f)` 标签，剩余正文保持原样。MMAR 的 `answer_prediction` / `model_prediction` 字段由官方 scorer 自动探测。官方 scorer 的原始日志完整保留。
+- `official_evaluation.txt`：运行数据目录中原本的官方 `evaluation.py --input ...`。仅移除生成开头的 `a)` 到 `j)` 标签，剩余正文保持原样。MMAR 的 `answer_prediction` / `model_prediction` 字段由官方 scorer 自动探测。官方 scorer 的原始日志完整保留。
 
 共同文件包括 `summary.json`、`evaluation_report.json`、`run_config.json`、`progress.jsonl`、`raw_generations.jsonl`、`skipped.jsonl`、`predictions_choice_label_prefix.json`。MMAU 官方输入为 `predictions_fixed_order.json`，MMAR 为 `predictions_official.json`。原始 token IDs、prompt IDs、音频片段 hash、静音断言、停止原因都保留在 JSONL 中。不会用官方去标签后的文本计算字母分数。
 
