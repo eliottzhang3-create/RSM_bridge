@@ -14,7 +14,9 @@ bash run_mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090.sh --max-lr 
 
 新的路线标识为 `lr_ablation_10epochs_htsat_frozen_global_clip`，默认 run 目录前缀为 `formal_10epochs_lr5_frozen_clip_maxlr_`。每次独立 staging 并在退出时清理，不比较旧节点或已删除的 staging 路径；resume 只接受本新路线同 LR、同 10-epoch schedule 的完整 checkpoint。上一轮额外评测改动已撤回，当前统一 evaluator 仍是旧 compact 路线合同，尚未适配此次重建的 checkpoint。具体实现与模板见新路线 README；本地验证与远程实际训练分开记录。
 
-本地 7 项复制/合同检查、Python 与两份 Bash 脚本语法检查、提交参数模拟及 checkpoint 审计样例检查通过；数据集和 decoder 为保留原文件字节一致性，未清理其母本自带行尾空格。未执行 smoke 或远程训练，本机没有 PyTorch、权重和数据。
+远端首次启动在 staging 路径检查时退出，尚未复制音频或开始训练：启动脚本使用了 `...gbs256_lr10_...`，而完整复制的 staging 工具要求 `...gbs256_lr_` 前缀。已将启动路径修正为 `/dev/shm/mellow_adamw_cosine_reasonaqa_gbs256_lr_10epochs_frozen_clip_<run-id>`，工具本身及训练配置未改。同步后用原 max LR 和新输出目录重新提交，无需 resume。
+
+本地现为 8 项复制/合同检查通过，新增用实际 staging 路径校验函数验证 runner 目录名，覆盖不同 run ID 并复现旧前缀拒绝；Python 与两份 Bash 脚本语法检查、提交参数模拟及 checkpoint 审计样例检查通过。数据集和 decoder 为保留原文件字节一致性，未清理其母本自带行尾空格。未执行 smoke 或远程训练，本机没有 PyTorch、权重和数据。
 
 ## 2026-10-18：两套音频评分均使用完整模型输出
 

@@ -1,10 +1,13 @@
 """Dependency-light replication checks for the LR5-based LR10 route."""
 import ast
 import copy
+import importlib.util
+import re
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Optional
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +38,46 @@ def function_node(path, name, class_name=None):
 
 
 class MellowReasonAqaLr10StaticTests(unittest.TestCase):
+    def test_runner_stage_name_passes_actual_staging_resolver(self):
+        stage_script = ROUTE / "scripts/rsmol/stage_reasonaqa_raw_audio.py"
+        spec = importlib.util.spec_from_file_location("lr10_staging_test", stage_script)
+        staging = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(staging)
+        runner = read(ROUTE / "scripts/rsmol/run_reasonaqa_8gpu_formal.sh")
+        stage_template = re.search(r'^STAGE_ROOT="([^"]+)"$', runner, re.MULTILINE).group(1)
+
+        # Exercise the actual Linux path checks on Windows without creating
+        # /dev/shm or requiring remote audio. Only the parent directory exists.
+        class VirtualPosixPath(PurePosixPath):
+            def resolve(self, strict=False):
+                if strict and self != PurePosixPath("/dev/shm"):
+                    raise FileNotFoundError(str(self))
+                return self
+
+            def expanduser(self):
+                return self
+
+            def is_dir(self):
+                return self == PurePosixPath("/dev/shm")
+
+            def exists(self):
+                return self == PurePosixPath("/dev/shm")
+
+            def is_symlink(self):
+                return False
+
+        with patch.object(staging, "Path", VirtualPosixPath):
+            for run_id in ("20_20261018_100246029693787", "91_20261019_120000000000001"):
+                candidate = VirtualPosixPath(stage_template.replace("$RUN_ID", run_id))
+                with self.subTest(run_id=run_id):
+                    shm, resolved = staging.resolve_stage_root(candidate)
+                    self.assertEqual(shm, PurePosixPath("/dev/shm"))
+                    self.assertEqual(resolved, candidate)
+            broken = VirtualPosixPath(
+                "/dev/shm/mellow_adamw_cosine_reasonaqa_gbs256_lr10_frozen_clip_20")
+            with self.assertRaisesRegex(ValueError, "basename must start"):
+                staging.resolve_stage_root(broken)
+
     def test_copied_baseline_files_are_identical(self):
         exceptions = {"README.md", "models/mellow.py",
                       "training/trainer.py", "scripts/rsmol/run_reasonaqa_8gpu_formal.sh",

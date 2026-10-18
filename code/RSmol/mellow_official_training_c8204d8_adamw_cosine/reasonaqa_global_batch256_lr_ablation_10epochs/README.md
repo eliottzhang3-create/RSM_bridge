@@ -59,14 +59,25 @@ earlier masked-prompt attempts. The job stages audio in its own `/dev/shm`
 directory and cleans that directory on exit. Validation does not pin a compute
 node or require the previous job's staging directory to exist.
 
+The first remote launch stopped before audio copying because the runner's
+stage basename did not match the copied staging tool's required
+`mellow_adamw_cosine_reasonaqa_gbs256_lr_` prefix. The runner now uses
+`/dev/shm/mellow_adamw_cosine_reasonaqa_gbs256_lr_10epochs_frozen_clip_<run-id>`.
+The staging tool and training configuration are unchanged. Sync the fix and
+resubmit with the same max LR and a fresh output directory; no checkpoint
+resume is needed for that failed launch.
+
 This rebuild changes training only. The unified evaluator remains at its
 previous compact-route contract and needs separate adaptation for these new
 checkpoints.
 
-Local validation: all 7 replication/contract checks passed, including the
+Local validation: all 8 replication/contract checks passed, including the
 complete file list, byte equality of unchanged LR5 files, exact frozen HTSAT
 reference, global-clip trainer equivalence and the LM receiving no padding
-mask. All 21 Python sources (including the test file), 3 embedded Python
+mask. The new regression check passes the runner-generated stage names to
+the actual staging resolver with a virtual Linux filesystem, accepts distinct
+run IDs and reproduces rejection of the previous incorrect prefix.
+All 21 Python sources (including the test file), 3 embedded Python
 blocks and both Bash entry scripts passed syntax checks. A mocked submission
 verified the route/resources/arguments without submitting a job; the final
 checkpoint audit accepted a valid fixture and rejected incorrect route,
