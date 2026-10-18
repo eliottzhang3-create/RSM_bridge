@@ -8,6 +8,7 @@ import copy
 import json
 import platform
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -49,7 +50,7 @@ def parse_args(argv: Sequence[str] | None = None):
         parser.error(f"runtime config does not exist: {exc.filename}")
     if args.runtime_config.parent != run_root:
         parser.error("runtime config must belong to the checkpoint run root")
-    args.output_dir = (args.output_dir or run_root / "eval_formal30_ep16_silent_audio2_v1" / args.task /
+    args.output_dir = (args.output_dir or run_root / "eval_formal30_ep16_silent_audio2_v2" / args.task /
                        args.checkpoint_file.parent.name / args.checkpoint_file.stem / "full").resolve()
     args.dataset_dir = (args.dataset_dir or Path("/hpc_stor03/sjtu_home/jinwei.zhang/data") /
                         ("MMAU_test_mini" if args.task == "mmau_test_mini" else "MMAR")).resolve(strict=True)
@@ -101,60 +102,136 @@ def prepare(args: Any) -> None:
 
 
 def audit_dataset(args: Any) -> tuple[list[dict], dict, dict]:
-    """Validate benchmark artifacts before opening a resumable generation store."""
+    """Load scoring metadata without walking or hashing benchmark audio."""
     if args.task == "mmau_test_mini":
         records = mmau.load_official_records(args.metadata_json)
-        audit = mmau.audit_mmau_v051525(args.metadata_json, args.evaluation_script, records)
+        audio_source_policy = "prefer_official_id_wav_else_parquet_embedded"
     else:
         records = mmar.load_mmar_records(args.metadata_json)
-        audit = mmar.audit_mmar_artifacts(args.metadata_json, args.audio_root, args.evaluation_script, records)
-    if audit["status"] != "PASS":
-        raise ValueError(f"official artifact audit failed: {audit['failures']}")
-    audio_hashes = []
-    official_audio_rows = 0
-    fallback_audio_rows = 0
-    for record in records:
-        choices = mmau._coerce_choices(record.get("choices"))
-        C.build_prompt(mmau.extract_record_question(record), choices)
-        if args.task == "mmau_test_mini":
-            path = args.audio_root / f"{mmau._official_id(record)}.wav"
-        else:
-            path = mmar.resolve_mmar_audio_path(args.audio_root, record["audio_path"])
-        if path.is_file():
-            official_audio_rows += 1
-            audio_hashes.append([str(record["id"]), "official_wav", C.sha256_file(path)])
-        elif args.task == "mmau_test_mini":
-            # The historical MMAU evaluator deliberately preferred the
-            # official ``<id>.wav`` file, but fell back to the embedded
-            # parquet ``context.audio`` payload when that file was absent.
-            # Keep that compatibility rule: many remote dataset mirrors do
-            # not materialize all 1,000 convenience WAVs, while the parquet
-            # benchmark remains complete.  The row-level decoder will still
-            # record a skip if the embedded payload is absent or undecodable.
-            fallback_audio_rows += 1
-            audio_hashes.append([str(record["id"]), "parquet_embedded_audio_fallback"])
-        else:
-            raise FileNotFoundError(f"official benchmark audio is missing: {path}")
+        audio_source_policy = "official_audio_path_required"
+    # The task evaluator performs metadata/scorer checks once, then resolves,
+    # decodes, and hashes each waveform only when that sample is processed.
+    # Avoid opening every WAV or the complete MMAU parquet during startup.
     identity = {
         "metadata_sha256": C.sha256_file(args.metadata_json),
         "evaluation_script_sha256": C.sha256_file(args.evaluation_script),
-        "audio_files_sha256": C.fingerprint(audio_hashes),
-        "audio_files": official_audio_rows if args.task == "mmau_test_mini" else len(audio_hashes),
-        "audio_source_policy": ("prefer_official_id_wav_else_parquet_embedded"
-                                 if args.task == "mmau_test_mini" else "official_audio_path_required"),
+        "audio_source_policy": audio_source_policy,
+        "audio_integrity_policy": "per_sample_decode_and_waveform_sha256",
+        "audio_preflight": "deferred_until_sample_processing",
     }
-    if args.task == "mmau_test_mini":
-        identity["parquet_sha256"] = C.sha256_file(args.parquet)
-        identity["official_audio_files"] = official_audio_rows
-        identity["parquet_fallback_audio_rows"] = fallback_audio_rows
-        identity["official_audio_missing_rows"] = fallback_audio_rows
     args.dataset_audio_audit = {
-        "policy": identity["audio_source_policy"],
-        "official_audio_files": official_audio_rows,
-        "parquet_fallback_audio_rows": fallback_audio_rows,
+        "policy": audio_source_policy,
+        "preflight": "deferred_until_sample_processing",
+        "full_audio_file_hashing": False,
+        "full_parquet_hashing": False,
         "metadata_rows": len(records),
     }
-    return records, audit, identity
+    return records, {"status": "DEFERRED_TO_TASK_EVALUATOR"}, identity
+
+
+def audit_mmar_artifacts_without_audio_scan(
+    metadata_path: Path,
+    audio_root: Path,
+    evaluation_script: Path,
+    records: Sequence[dict],
+) -> dict:
+    """Keep MMAR metadata/scorer checks while deferring audio paths to traversal."""
+    ids = [mmar._record_id(record) for record in records]
+    modality_counts = Counter(str(record.get("modality", "")) for record in records)
+    category_counts = Counter(str(record.get("category", "")) for record in records)
+    core = [{key: record.get(key) for key in mmar.MMAR_CORE_KEYS} for record in records]
+    core_sha256 = mmar.common._canonical_sha256(core)
+    core_by_id = [{key: record.get(key) for key in mmar.MMAR_CORE_KEYS}
+                  for record in sorted(records, key=mmar._record_id)]
+    core_by_id_sha256 = mmar.common._canonical_sha256(core_by_id)
+    id_set_sha256 = mmar.common._canonical_sha256(sorted(ids))
+    invalid_records = []
+    empty_choice_records = []
+    answers_not_exact_choices = []
+    for index, record in enumerate(records):
+        choices = record.get("choices")
+        answer = record.get("answer")
+        if (not ids[index] or not str(record.get("question", "")).strip()
+                or not isinstance(choices, list) or not 2 <= len(choices) <= 6
+                or any(not isinstance(choice, str) for choice in choices or [])
+                or not isinstance(answer, str) or not answer.strip()):
+            invalid_records.append({"row_index": index, "id": ids[index],
+                                    "error": "record is incompatible with the official string scorer"})
+        elif any(not choice.strip() for choice in choices):
+            empty_choice_records.append({"row_index": index, "id": ids[index]})
+        if isinstance(choices, list) and isinstance(answer, str) and answer not in choices:
+            answers_not_exact_choices.append({"row_index": index, "id": ids[index]})
+
+    scorer_sha256 = mmar.common._sha256(evaluation_script)
+    scorer_semantics = mmar._audit_mmar_scorer_semantics(evaluation_script)
+    failures = []
+    warnings = []
+    unique_nonempty_ids = {value for value in ids if value}
+    if len(records) != mmar.EXPECTED_FULL_ROWS or len(unique_nonempty_ids) != mmar.EXPECTED_FULL_ROWS:
+        failures.append(f"metadata ID coverage differs: rows={len(records)} unique_nonempty={len(unique_nonempty_ids)}")
+    if id_set_sha256 != mmar.MMAR_ID_SET_SHA256:
+        failures.append("MMAR ID set differs from the official 1000-question release: "
+                        f"expected={mmar.MMAR_ID_SET_SHA256} actual={id_set_sha256}")
+    if core_sha256 != mmar.MMAR_CORE_CANONICAL_SHA256:
+        warnings.append("metadata row order/fields differ from the GitHub JSONL publication; "
+                        f"ordered_core_sha256={core_sha256}")
+    if core_by_id_sha256 != mmar.MMAR_CORE_BY_ID_CANONICAL_SHA256:
+        warnings.append("metadata core content differs from the GitHub publication after ID sorting; "
+                        f"core_by_id_sha256={core_by_id_sha256}")
+    if dict(sorted(modality_counts.items())) != mmar.EXPECTED_MODALITIES:
+        failures.append(f"modality distribution differs: {dict(sorted(modality_counts.items()))}")
+    if dict(sorted(category_counts.items())) != mmar.EXPECTED_CATEGORIES:
+        failures.append(f"category distribution differs: {dict(sorted(category_counts.items()))}")
+    if invalid_records:
+        failures.append(f"invalid records: {invalid_records[:10]}")
+    if scorer_semantics["status"] != "PASS":
+        failures.extend(scorer_semantics["failures"])
+    if scorer_sha256 not in {mmar.MMAR_EVALUATION_SHA256, mmar.MMAR_HF_EVALUATION_SHA256}:
+        warnings.append("evaluation.py byte SHA256 is an unregistered packaging variant; "
+                        f"semantic audit passed with sha256={scorer_sha256}")
+    elif scorer_sha256 == mmar.MMAR_HF_EVALUATION_SHA256:
+        warnings.append("using the official Hugging Face evaluation.py packaging variant")
+    if empty_choice_records:
+        warnings.append(f"official metadata contains {len(empty_choice_records)} records with empty distractor choices")
+    if answers_not_exact_choices:
+        warnings.append(f"official metadata contains {len(answers_not_exact_choices)} answers not byte-equal to a choice")
+    return {
+        "status": "PASS" if not failures else "FAIL",
+        "official_commit": mmar.MMAR_OFFICIAL_COMMIT,
+        "official_github_metadata_sha256": mmar.MMAR_GITHUB_METADATA_SHA256,
+        "metadata_path": str(metadata_path),
+        "metadata_sha256": mmar.common._sha256(metadata_path),
+        "core_canonical_sha256": core_sha256,
+        "core_by_id_canonical_sha256": core_by_id_sha256,
+        "id_set_sha256": id_set_sha256,
+        "audio_root": str(audio_root),
+        "audio_files_resolved": 0,
+        "unique_audio_files": 0,
+        "missing_audio_count": None,
+        "audio_preflight": "deferred_to_sample_processing",
+        "evaluation_script": str(evaluation_script),
+        "evaluation_sha256": scorer_sha256,
+        "evaluation_semantic_audit": scorer_semantics,
+        "rows": len(records),
+        "unique_ids": len(set(ids)),
+        "modality_counts": dict(sorted(modality_counts.items())),
+        "category_counts": dict(sorted(category_counts.items())),
+        "empty_choice_records": empty_choice_records,
+        "answers_not_exact_choices": answers_not_exact_choices,
+        "warnings": warnings,
+        "failures": failures,
+    }
+
+
+@contextlib.contextmanager
+def deferred_mmar_audio_preflight():
+    """Scope the lightweight MMAR audit to this isolated evaluator invocation."""
+    original_audit = mmar.audit_mmar_artifacts
+    mmar.audit_mmar_artifacts = audit_mmar_artifacts_without_audio_scan
+    try:
+        yield
+    finally:
+        mmar.audit_mmar_artifacts = original_audit
 
 
 def build_identity(args: Any, dataset_identity: dict) -> dict:
@@ -183,7 +260,7 @@ def build_identity(args: Any, dataset_identity: dict) -> dict:
                 "pyarrow": pyarrow.__version__, "torchlibrosa": torchlibrosa.__version__,
                 "cuda": torch.version.cuda}
     return {
-        "protocol": C.protocol(args.task), "checkpoint_sha256": C.sha256_file(args.checkpoint_file),
+        "protocol": C.protocol(args.task), "checkpoint_file_identity": file_stat_identity(args.checkpoint_file),
         "checkpoint_epoch_completed": args.checkpoint_audit["epoch_completed"],
         "training_num_epochs": args.checkpoint_audit["num_epochs"],
         "model_contract": model_contract, "model_sources": model_sources,
@@ -211,6 +288,11 @@ def claim_output(output_dir: Path, identity: dict) -> None:
         with marker.open("x", encoding="utf-8") as handle:
             json.dump(identity, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
+
+
+def file_stat_identity(path: Path) -> dict[str, int]:
+    stat = path.stat()
+    return {"size_bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
 @contextlib.contextmanager
@@ -274,8 +356,7 @@ def score_both(args: Any, records: list[dict], report: dict) -> dict:
 
 def run(args: Any) -> dict:
     prepare(args)
-    print("[ep16-silent-eval] auditing metadata/scorer and benchmark audio (MMAU parquet fallback enabled)", flush=True)
-    records, artifact_audit, dataset_identity = audit_dataset(args)
+    records, _, dataset_identity = audit_dataset(args)
     identity = build_identity(args, dataset_identity)
     with output_lock(args.output_dir):
         claim_output(args.output_dir, identity)
@@ -309,8 +390,11 @@ def run(args: Any) -> dict:
         else:
             # MMAR's fixed-order prompt helper preserves case and has identical
             # formatting; generation asserts exact equality to C.build_prompt.
-            report = mmar.run(args, **common_kwargs,
-                              protocol_description=C.PROTOCOL_VERSION + ": " + json.dumps(C.protocol(args.task), sort_keys=True))
+            with deferred_mmar_audio_preflight():
+                report = mmar.run(
+                    args, **common_kwargs,
+                    protocol_description=C.PROTOCOL_VERSION + ": " + json.dumps(C.protocol(args.task), sort_keys=True),
+                )
         report["protocol"] = {**report.get("protocol", {}), **C.protocol(args.task)}
         report["protocol"]["prompt_format"] = "preserve_body_case_fixed_order_a_to_j"
         report["protocol"].pop("max_prompt_tokens_without_truncation", None)
@@ -358,7 +442,7 @@ def run(args: Any) -> dict:
         failures = int(report.get("records", {}).get("skip_reasons", {}).get("sample_exception", 0))
         prefix = report.get("choice_label_prefix_evaluation") or {}
         comparable = bool(coverage and failures == 0 and report.get("status") == "PASS"
-                          and artifact_audit["status"] == "PASS"
+                          and report.get("official_artifact_audit", {}).get("status") == "PASS"
                           and report.get("official_evaluation", {}).get("status") == "PASS"
                           and prefix.get("total", {}).get("total") == 1000)
         report["comparable"] = comparable

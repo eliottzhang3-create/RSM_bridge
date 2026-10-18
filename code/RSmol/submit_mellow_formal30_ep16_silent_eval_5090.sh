@@ -68,7 +68,7 @@ fi
 RUNTIME_CONFIG=$(readlink -f -- "$RUNTIME_CONFIG")
 CHECKPOINT_JOB_NAME=$(basename "$CHECKPOINT_JOB_DIR")
 CHECKPOINT_NAME=$(basename "$CHECKPOINT" .ckpt)
-OUTPUT_DIR="${OUTPUT_DIR:-$RUN_ROOT/eval_formal30_ep16_silent_audio2_v1/$TASK/$CHECKPOINT_JOB_NAME/$CHECKPOINT_NAME/full}"
+OUTPUT_DIR="${OUTPUT_DIR:-$RUN_ROOT/eval_formal30_ep16_silent_audio2_v2/$TASK/$CHECKPOINT_JOB_NAME/$CHECKPOINT_NAME/full}"
 OUTPUT_DIR=$(readlink -m -- "$OUTPUT_DIR")
 if [[ -z "$DATASET_DIR" ]]; then
   if [[ "$TASK" == mmau_test_mini ]]; then

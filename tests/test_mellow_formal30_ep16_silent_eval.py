@@ -11,6 +11,7 @@ import sys
 import tempfile
 import types
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
@@ -105,7 +106,7 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(args.checkpoint_file, checkpoint)
                 self.assertEqual(args.checkpoint_argument, str(checkpoint))
                 self.assertEqual(args.runtime_config, config)
-                self.assertIn("eval_formal30_ep16_silent_audio2_v1", args.output_dir.parts)
+                self.assertIn("eval_formal30_ep16_silent_audio2_v2", args.output_dir.parts)
 
     def test_detect_all_architectures_without_filename_guessing(self):
         for architecture in C.ARCHITECTURES:
@@ -649,24 +650,30 @@ class TraversalIntegrationTests(unittest.TestCase):
 
                 fake_torch = types.ModuleType("torch")
                 fake_torch.cuda = types.SimpleNamespace(empty_cache=lambda: None)
-                with mock.patch.object(evaluator, "prepare", side_effect=prepare), \
-                     mock.patch.object(evaluator, "audit_dataset", return_value=([record], dataset_audit, {})), \
-                     mock.patch.object(evaluator, "build_identity", return_value={key: {} for key in ("protocol", "dataset", "evaluation_sources", "software", "tokenizer_files")}), \
-                     mock.patch.object(evaluator, "output_lock", side_effect=lambda path: nullcontext()), \
-                     mock.patch.object(runtime, "load_model", return_value=(object(), object(), "cuda:0", {})), \
-                     mock.patch.object(runtime, "run_generation", side_effect=generation), \
-                     mock.patch.object(evaluator.mmau, "load_official_records", return_value=[record]), \
-                     mock.patch.object(evaluator.mmau, "audit_mmau_v051525", return_value=dataset_audit), \
-                     mock.patch.object(evaluator.mmau, "iter_parquet_rows", return_value=iter([(0, record)])), \
-                     mock.patch.object(evaluator.mmau, "_prepare_metadata_row", return_value=sample), \
-                     mock.patch.object(evaluator.mmau, "EXPECTED_FULL_ROWS", 1), \
-                     mock.patch.object(evaluator.mmau, "_run_official_evaluation", side_effect=official_score), \
-                     mock.patch.object(evaluator.mmar, "load_mmar_records", return_value=[record]), \
-                     mock.patch.object(evaluator.mmar, "audit_mmar_artifacts", return_value=dataset_audit), \
-                     mock.patch.object(evaluator.mmar, "_prepare_sample", return_value=sample), \
-                     mock.patch.object(evaluator.mmar, "EXPECTED_FULL_ROWS", 1), \
-                     mock.patch.object(evaluator.mmar, "_run_official_evaluation", side_effect=official_score), \
-                     mock.patch.dict(sys.modules, {"torch": fake_torch}):
+                with ExitStack() as stack:
+                    fast_mmar_audit_mock = stack.enter_context(mock.patch.object(
+                        evaluator, "audit_mmar_artifacts_without_audio_scan", return_value=dataset_audit))
+                    for patcher in (
+                        mock.patch.object(evaluator, "prepare", side_effect=prepare),
+                        mock.patch.object(evaluator, "audit_dataset", return_value=([record], dataset_audit, {})),
+                        mock.patch.object(evaluator, "build_identity", return_value={key: {} for key in (
+                            "protocol", "dataset", "evaluation_sources", "software", "tokenizer_files")}),
+                        mock.patch.object(evaluator, "output_lock", side_effect=lambda path: nullcontext()),
+                        mock.patch.object(runtime, "load_model", return_value=(object(), object(), "cuda:0", {})),
+                        mock.patch.object(runtime, "run_generation", side_effect=generation),
+                        mock.patch.object(evaluator.mmau, "load_official_records", return_value=[record]),
+                        mock.patch.object(evaluator.mmau, "audit_mmau_v051525", return_value=dataset_audit),
+                        mock.patch.object(evaluator.mmau, "iter_parquet_rows", return_value=iter([(0, record)])),
+                        mock.patch.object(evaluator.mmau, "_prepare_metadata_row", return_value=sample),
+                        mock.patch.object(evaluator.mmau, "EXPECTED_FULL_ROWS", 1),
+                        mock.patch.object(evaluator.mmau, "_run_official_evaluation", side_effect=official_score),
+                        mock.patch.object(evaluator.mmar, "load_mmar_records", return_value=[record]),
+                        mock.patch.object(evaluator.mmar, "_prepare_sample", return_value=sample),
+                        mock.patch.object(evaluator.mmar, "EXPECTED_FULL_ROWS", 1),
+                        mock.patch.object(evaluator.mmar, "_run_official_evaluation", side_effect=official_score),
+                        mock.patch.dict(sys.modules, {"torch": fake_torch}),
+                    ):
+                        stack.enter_context(patcher)
                     report = evaluator.run(args)
                 # The mock has one row, so it intentionally cannot get the
                 # production 1000-row comparable flag. All traversal/scoring
@@ -677,10 +684,69 @@ class TraversalIntegrationTests(unittest.TestCase):
                 self.assertEqual(report["protocol"]["max_new_tokens"], 300)
                 self.assertEqual(report["protocol"]["prompt_format"], "preserve_body_case_fixed_order_a_to_j")
                 self.assertFalse(report["comparable"])
+                if task == "mmar":
+                    fast_mmar_audit_mock.assert_called_once()
 
 
 class DatasetAuditTests(unittest.TestCase):
-    def test_mmau_missing_convenience_wav_uses_parquet_fallback_policy(self):
+    def test_checkpoint_identity_uses_stat_without_reading_checkpoint_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = Path(tmp) / "model.ckpt"
+            checkpoint.write_bytes(b"checkpoint fixture")
+            expected = {"size_bytes": checkpoint.stat().st_size,
+                        "mtime_ns": checkpoint.stat().st_mtime_ns}
+            with mock.patch.object(evaluator.C, "sha256_file",
+                                   side_effect=AssertionError("checkpoint must not be re-read for hashing")):
+                self.assertEqual(evaluator.file_stat_identity(checkpoint), expected)
+
+    def test_fast_mmar_audit_keeps_metadata_scorer_checks_without_audio_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            metadata = folder / "MMAR-meta.json"
+            scorer = folder / "evaluation.py"
+            metadata.write_text("[]", encoding="utf-8")
+            scorer.write_text(
+                "import re\n"
+                "def string_match(answer, prediction, choices):\n"
+                "    answer_tokens = set()\n"
+                "    prediction_tokens = set()\n"
+                "    incorrect_tokens = set()\n"
+                "    cond1 = answer_tokens.issubset(prediction_tokens)\n"
+                "    cond2 = prediction_tokens.isdisjoint(incorrect_tokens)\n"
+                "    return cond1 and cond2\n"
+                "output_key = 'answer_prediction'\n"
+                "modality_metrics = {}\n"
+                "category_metrics = {}\n"
+                "print('Total Accuracy:')\n",
+                encoding="utf-8",
+            )
+            record = {"id": "0", "audio_path": "missing.wav", "question": "Q?",
+                      "choices": ["no", "yes"], "answer": "yes", "modality": "audio",
+                      "category": "test"}
+            core = [{key: record.get(key) for key in evaluator.mmar.MMAR_CORE_KEYS}]
+            expected = {
+                "EXPECTED_FULL_ROWS": 1,
+                "MMAR_ID_SET_SHA256": evaluator.mmar.common._canonical_sha256(["0"]),
+                "MMAR_CORE_CANONICAL_SHA256": evaluator.mmar.common._canonical_sha256(core),
+                "MMAR_CORE_BY_ID_CANONICAL_SHA256": evaluator.mmar.common._canonical_sha256(core),
+                "EXPECTED_MODALITIES": {"audio": 1},
+                "EXPECTED_CATEGORIES": {"test": 1},
+            }
+            with ExitStack() as stack:
+                for name, value in expected.items():
+                    stack.enter_context(mock.patch.object(evaluator.mmar, name, value))
+                stack.enter_context(mock.patch.object(
+                    evaluator.mmar, "resolve_mmar_audio_path",
+                    side_effect=AssertionError("fast audit must not inspect audio paths")))
+                audit = evaluator.audit_mmar_artifacts_without_audio_scan(
+                    metadata, folder / "audio", scorer, [record])
+            self.assertEqual(audit["status"], "PASS")
+            self.assertEqual(audit["audio_preflight"], "deferred_to_sample_processing")
+            self.assertEqual(audit["audio_files_resolved"], 0)
+            self.assertEqual(audit["missing_audio_count"], None)
+            self.assertEqual(audit["evaluation_semantic_audit"]["output_key"], "answer_prediction")
+
+    def test_startup_dataset_identity_does_not_scan_or_hash_audio(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
             metadata = folder / "mmau-test-mini.json"
@@ -694,22 +760,40 @@ class DatasetAuditTests(unittest.TestCase):
                 task="mmau_test_mini", metadata_json=metadata, evaluation_script=scorer,
                 audio_root=folder / "test-mini-audios", parquet=parquet,
             )
-            audit = {"status": "PASS", "failures": [], "evaluation_semantic_audit": {}}
             with mock.patch.object(evaluator.mmau, "load_official_records", return_value=[record]), \
-                 mock.patch.object(evaluator.mmau, "audit_mmau_v051525", return_value=audit):
-                records, _, identity = evaluator.audit_dataset(args)
+                 mock.patch.object(evaluator.C, "sha256_file", wraps=C.sha256_file) as hash_file, \
+                 mock.patch.object(Path, "is_file", side_effect=AssertionError("startup must not inspect audio files")):
+                records, audit, identity = evaluator.audit_dataset(args)
             self.assertEqual(records, [record])
-            self.assertEqual(identity["official_audio_files"], 0)
-            self.assertEqual(identity["parquet_fallback_audio_rows"], 1)
+            self.assertEqual(audit["status"], "DEFERRED_TO_TASK_EVALUATOR")
             self.assertEqual(identity["audio_source_policy"], "prefer_official_id_wav_else_parquet_embedded")
+            self.assertEqual(identity["audio_preflight"], "deferred_until_sample_processing")
+            self.assertEqual(hash_file.call_count, 2)
+            self.assertEqual(args.dataset_audio_audit["full_audio_file_hashing"], False)
+            self.assertEqual(args.dataset_audio_audit["full_parquet_hashing"], False)
             self.assertEqual(args.dataset_audio_audit["metadata_rows"], 1)
-            (args.audio_root).mkdir()
-            (args.audio_root / "missing-wav.wav").write_bytes(b"wav")
-            with mock.patch.object(evaluator.mmau, "load_official_records", return_value=[record]), \
-                 mock.patch.object(evaluator.mmau, "audit_mmau_v051525", return_value=audit):
-                _, _, identity = evaluator.audit_dataset(args)
-            self.assertEqual(identity["official_audio_files"], 1)
-            self.assertEqual(identity["parquet_fallback_audio_rows"], 0)
+
+    def test_mmar_startup_does_not_resolve_or_inspect_audio_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            metadata = folder / "MMAR-meta.json"
+            scorer = folder / "evaluation.py"
+            metadata.write_text("[]", encoding="utf-8")
+            scorer.write_text("# scorer", encoding="utf-8")
+            record = {"id": "mmar-1", "audio_path": "missing.wav", "question": "Who?",
+                      "choices": ["No", "Yes"], "answer": "Yes"}
+            args = types.SimpleNamespace(task="mmar", metadata_json=metadata,
+                                         evaluation_script=scorer, audio_root=folder / "audio")
+            with mock.patch.object(evaluator.mmar, "load_mmar_records", return_value=[record]), \
+                 mock.patch.object(evaluator.mmar, "resolve_mmar_audio_path",
+                                   side_effect=AssertionError("startup must not resolve audio paths")), \
+                 mock.patch.object(evaluator.C, "sha256_file", wraps=C.sha256_file) as hash_file:
+                records, audit, identity = evaluator.audit_dataset(args)
+            self.assertEqual(records, [record])
+            self.assertEqual(audit["status"], "DEFERRED_TO_TASK_EVALUATOR")
+            self.assertEqual(identity["audio_source_policy"], "official_audio_path_required")
+            self.assertEqual(hash_file.call_count, 2)
+            self.assertEqual(args.dataset_audio_audit["full_audio_file_hashing"], False)
 
 
 if __name__ == "__main__":

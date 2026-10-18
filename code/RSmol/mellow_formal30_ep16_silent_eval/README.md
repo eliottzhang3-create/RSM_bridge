@@ -1,5 +1,7 @@
 # 三模型 epoch-16、静音第二槽统一评测
 
+启动时不再遍历 1,000 个音频文件、不再读取并哈希完整 MMAU parquet，也不再在 checkpoint 完整加载后额外顺序读取它计算 SHA-256。metadata/scorer 仍做原有校验；各音频在其样本进入推理时按需读取并计算 waveform hash。MMAR 使用本隔离入口内的轻量 artifact audit 跳过全量音频路径预检，共享 evaluator 文件保持原样。
+
 本路线完整复制当前 v5 `mellow_formal30_eval/` 后隔离修改，只接收三条 formal30 训练路线的 epoch-16 音频 checkpoint。相对母本，实验变化仅为 epoch-16 权重和第二槽输入静音波形；原 `submit_mellow_formal30_eval_5090.sh`、原评测目录、训练代码及共享数据/评分辅助代码均未修改。
 
 ## 正式提交
@@ -62,7 +64,7 @@ bash submit_mellow_formal30_ep16_silent_eval_5090.sh mmar /absolute/path/to/mode
 默认输出：
 
 ```text
-<训练 run>/eval_formal30_ep16_silent_audio2_v1/<task>/<checkpoint-job>/model--epo-16/full/
+<训练 run>/eval_formal30_ep16_silent_audio2_v2/<task>/<checkpoint-job>/model--epo-16/full/
 ```
 
 独立协议标识、`.full.ep16_silent_eval_identity.json`、lock 文件和 `e16s-` 作业前缀防止与 v5 混写。同一路线同协议中断后重复命令可恢复；修复 terminal skip 后请用新输出目录重跑。
