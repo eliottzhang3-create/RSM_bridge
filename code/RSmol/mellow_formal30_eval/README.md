@@ -40,7 +40,7 @@ bash submit_mellow_formal30_eval_5090.sh mmau_test_mini \
 | 生成 | 两个 benchmark 均最多 300 tokens；temperature 1.0、top-p 0.8 过滤后 argmax；不随机采样；每步全量重算，显式 use_cache=False；遇到新生成的 EOS 停止 |
 | 分母 | 每个任务官方 1000 条；单条 skip/空输出保留且计错；模型生成异常使报告不可用于正式比较 |
 
-第二槽复用会改变旧版“静音第二槽”评测的输入，因此新报告统一使用 v4 协议和独立输出目录；旧协议报告不可与新报告直接比较。
+当前使用 v5 评分协议：两个评分器接收同一份完整 `generated_text`，保留选项字母、`)`、大小写及前后空白。旧版静音槽或官方输入去标签协议的报告不可与新报告直接比较；默认独立输出目录避免续写旧结果。
 
 ## 模型加载与隔离
 
@@ -55,14 +55,14 @@ bash submit_mellow_formal30_eval_5090.sh mmau_test_mini \
 每条样本只生成一次：
 
 - `choice_label_prefix_evaluation.{json,txt}`：使用原始 `generated_text.split(')')[0].lower()` 与带正确标签的答案比较；不额外 trim，不猜测句子里的选项。标签大小写不敏感，` b)`、`answer is b)` 不会被宽松纠正。answer 无法映射到选项时保留分母、计错并记录 `record_errors`。
-- `official_evaluation.txt`：运行数据目录中原本的官方 `evaluation.py --input ...`。仅移除生成开头的 `a)` 到 `j)` 标签，剩余正文保持原样。MMAR 的 `answer_prediction` / `model_prediction` 字段由官方 scorer 自动探测。官方 scorer 的原始日志完整保留。
+- `official_evaluation.txt`：将完整模型输出直接传入数据目录中原本的官方 `evaluation.py --input ...`；不移除开头的 `a)` 到 `j)`，不截取正文、不 trim，也不额外改变大小写。官方 scorer 自身的评分逻辑保持原样。MMAR 的 `answer_prediction` / `model_prediction` 字段由官方 scorer 自动探测。官方 scorer 的原始日志完整保留。
 
-共同文件包括 `summary.json`、`evaluation_report.json`、`run_config.json`、`progress.jsonl`、`raw_generations.jsonl`、`skipped.jsonl`、`predictions_choice_label_prefix.json`。MMAU 官方输入为 `predictions_fixed_order.json`，MMAR 为 `predictions_official.json`。原始 token IDs、prompt IDs、audio1 waveform hash、第二槽复用断言和停止原因都保留在 JSONL 中。不会用官方去标签后的文本计算字母分数。
+共同文件包括 `summary.json`、`evaluation_report.json`、`run_config.json`、`progress.jsonl`、`raw_generations.jsonl`、`skipped.jsonl`、`predictions_choice_label_prefix.json`。MMAU 官方输入为 `predictions_fixed_order.json`，MMAR 为 `predictions_official.json`；官方与前缀评分输入中的预测文本完全一致，并逐行与原始 `generated_text` 核对。原始 token IDs、prompt IDs、audio1 waveform hash、第二槽复用断言和停止原因都保留在 JSONL 中。
 
 默认输出：
 
 ```text
-<checkpoint run root>/eval_mellow_unified_v4/<mmau_test_mini|mmar>/<checkpoint job dir>/model--epo-<n>/full/
+<checkpoint run root>/eval_mellow_unified_v5/<mmau_test_mini|mmar>/<checkpoint job dir>/model--epo-<n>/full/
 ```
 
 同级 `.full.mellow_eval_identity.json` 防止不同 checkpoint、数据或协议混写；Linux advisory lock 防止同一个输出并发写入。中断后重复原提交命令，会恢复已经完成的样本。若产生模型生成异常，该行按既有遍历规则保留为 terminal skip，修复后应指定新的输出目录重跑。完整分母、artifact 审计、官方 scorer 和生成无异常均通过后，报告才写 `comparable: true`。

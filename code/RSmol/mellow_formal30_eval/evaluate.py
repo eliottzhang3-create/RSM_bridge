@@ -53,7 +53,7 @@ def parse_args(argv: Sequence[str] | None = None):
         parser.error(f"runtime config does not exist: {exc.filename}")
     if args.runtime_config.parent != run_root:
         parser.error("runtime config must belong to the checkpoint run root")
-    args.output_dir = (args.output_dir or run_root / "eval_mellow_unified_v4" / args.task /
+    args.output_dir = (args.output_dir or run_root / "eval_mellow_unified_v5" / args.task /
                        args.checkpoint_file.parent.name / args.checkpoint_file.stem / "full").resolve()
     args.dataset_dir = (args.dataset_dir or Path("/hpc_stor03/sjtu_home/jinwei.zhang/data") /
                         ("MMAU_test_mini" if args.task == "mmau_test_mini" else "MMAR")).resolve(strict=True)
@@ -246,16 +246,17 @@ def score_both(args: Any, records: list[dict], report: dict) -> dict:
     for record in records:
         text = raw.get(str(record["id"]), "")
         item = copy.deepcopy(record)
-        item[key] = C.prepare_official_prediction(text)
+        item[key] = text
         official_predictions.append(item)
         item = copy.deepcopy(record)
         item[key] = text
         prefix_predictions.append(item)
     filename = "predictions_fixed_order.json" if args.task == "mmau_test_mini" else "predictions_official.json"
-    # Verify that the existing official traversal fed the exact agreed text.
+    # The official traversal and prefix scorer must receive the same complete
+    # generated text, including choice labels, parentheses and whitespace.
     actual = json.loads((args.output_dir / filename).read_text(encoding="utf-8"))
     if actual != official_predictions:
-        raise ValueError("official scorer predictions differ from the common raw-generation adapter")
+        raise ValueError("official scorer predictions differ from the unchanged raw generated text")
     mmau._write_json(args.output_dir / "predictions_choice_label_prefix.json", prefix_predictions)
     if args.task == "mmau_test_mini":
         score = mmau.evaluate_mellow_author_reply_predictions(prefix_predictions)
@@ -285,7 +286,7 @@ def run(args: Any) -> dict:
         common_kwargs = dict(
             load_runtime_model=runtime.load_model, run_model_generation=generation,
             prepare_prediction=C.prepare_official_prediction,
-            prediction_format="raw_generation_strip_leading_a_to_j_only_v2",
+            prediction_format="raw_generated_text_unchanged_v3",
             audio_prefix_tokens=C.AUDIO_PREFIX_TOKENS,
             record_static_fields={"architecture": args.architecture, "audio2_reused": True,
                                   "audio2_equals_audio1": True,
@@ -365,7 +366,7 @@ def run(args: Any) -> dict:
             "official": report.get("official_evaluation", {}).get("status"),
             "choice_label_prefix": prefix.get("status"),
             "raw_generation_shared": True,
-            "official_input_policy": "strip_only_leading_a_to_j_label_keep_body_unchanged",
+            "official_input_policy": "raw_generated_text_no_label_strip_no_trim",
             "prefix_input_policy": "raw_generated_text_no_label_strip_no_trim",
             "denominator": 1000,
         }

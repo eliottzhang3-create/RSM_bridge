@@ -17,7 +17,7 @@ SHARED_ROUTE = ROUTE_PARENT / "reasonaqa_global_batch256_lr_ablation_5epochs"
 BASELINE_ROUTE = "reasonaqa_global_batch256_formal_30epochs"
 LR_ABLATION_ROUTE = "reasonaqa_global_batch256_lr_ablation_10epochs"
 LR_ABLATION_ROUTE_VARIANT = "formal_10epochs_lr_ablation_random_audio2"
-PROTOCOL_VERSION = "compact_eos_reused_audio2_fp32_dual_score_v4_10choice"
+PROTOCOL_VERSION = "compact_eos_reused_audio2_fp32_raw_dual_score_v5_10choice"
 MAX_PROMPT_TOKENS = 129
 MAX_NEW_TOKENS = 300
 AUDIO_PREFIX_TOKENS = 260
@@ -237,9 +237,8 @@ def build_prompt(question: str, choices: Sequence[Any]) -> str:
 
 
 def prepare_official_prediction(value: Any) -> str:
-    import re
-
-    return re.sub(r"^\s*[a-j]\)\s*", "", str(value), count=1, flags=re.IGNORECASE)
+    """Pass model text through without stripping labels, punctuation or whitespace."""
+    return str(value)
 
 
 def protocol(task: str) -> dict[str, Any]:
@@ -261,6 +260,7 @@ def protocol(task: str) -> dict[str, Any]:
         "do_sample": False, "use_cache": False,
         "decoder": "top_p_filter_then_argmax_full_recompute_stop_on_generated_eos",
         "choice_label_score": "raw_prediction.split(')')[0].lower_exact_no_trim",
-        "official_score": "strip_only_leading_a_to_j_label_then_official_evaluation_py",
+        "prediction_preprocessing": "none",
+        "official_score": "raw_generated_text_unchanged_to_official_evaluation_py",
         "expected_rows": 1000,
     }

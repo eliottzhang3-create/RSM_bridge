@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import math
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import contracts as C
+import evaluate as evaluator
 import runtime
 
 
@@ -207,6 +211,51 @@ class MellowCheckpointContractTests(unittest.TestCase):
         self.assertIs(model.inputs["audio2"], audio)
         self.assertTrue(audit["audio2_equals_audio1"])
         self.assertEqual(audit["audio1_waveform_sha256"], audit["audio2_waveform_sha256"])
+
+
+class MellowRawScoringTests(unittest.TestCase):
+    def test_official_adapter_preserves_labels_punctuation_case_and_whitespace(self):
+        for text in ("a) A dog barking", " \nB) Rain falling \t",
+                     "j) a) Nested labels)", "a）Fullwidth punctuation", ""):
+            with self.subTest(text=text):
+                self.assertEqual(C.prepare_official_prediction(text), text)
+        protocol = C.protocol("mmau_test_mini")
+        self.assertEqual(protocol["prediction_preprocessing"], "none")
+        self.assertEqual(protocol["official_score"],
+                         "raw_generated_text_unchanged_to_official_evaluation_py")
+
+    def test_both_scorers_use_the_same_complete_model_text(self):
+        texts = ["a) A dog barking", "A) A dog barking\n",
+                 " a) A dog barking", "answer is a) A dog barking",
+                 "a) A dog barking) tail", "b) Rain falling"]
+        with TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            records = [{"id": str(index), "task": "sound", "difficulty": "easy",
+                        "choices": ["A dog barking", "Rain falling"],
+                        "answer": "A dog barking"} for index in range(len(texts))]
+            official_predictions = [dict(record, model_output=C.prepare_official_prediction(text))
+                                    for record, text in zip(records, texts)]
+            evaluator.mmau._write_json(output_dir / "predictions_fixed_order.json", official_predictions)
+            entries = [{"status": "generated", "id": record["id"], "generated_text": text}
+                       for record, text in zip(records, texts)]
+            (output_dir / "raw_generations.jsonl").write_text(
+                "".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
+            args = SimpleNamespace(output_dir=output_dir, task="mmau_test_mini")
+            score = evaluator.score_both(args, records, {})
+            prefix_predictions = json.loads(
+                (output_dir / "predictions_choice_label_prefix.json").read_text(encoding="utf-8"))
+            self.assertEqual(prefix_predictions, official_predictions)
+            self.assertEqual([item["model_output"] for item in prefix_predictions], texts)
+            self.assertEqual([row["prediction"] for row in score["rows"]], texts)
+            self.assertEqual([row["correct"] for row in score["rows"]],
+                             [True, True, False, False, True, False])
+            self.assertEqual(score["total"]["total"], len(texts))
+
+            # The audit must reject predictions saved with the old label stripping.
+            official_predictions[0]["model_output"] = "A dog barking"
+            evaluator.mmau._write_json(output_dir / "predictions_fixed_order.json", official_predictions)
+            with self.assertRaisesRegex(ValueError, "unchanged raw generated text"):
+                evaluator.score_both(args, records, {})
 
 
 if __name__ == "__main__":

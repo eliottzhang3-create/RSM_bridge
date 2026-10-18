@@ -71,7 +71,7 @@ fi
 RUNTIME_CONFIG=$(readlink -f -- "$RUNTIME_CONFIG")
 CHECKPOINT_JOB_NAME=$(basename "$CHECKPOINT_JOB_DIR")
 CHECKPOINT_NAME=$(basename "$CHECKPOINT" .ckpt)
-OUTPUT_DIR="${OUTPUT_DIR:-$RUN_ROOT/eval_mellow_unified_v4/$TASK/$CHECKPOINT_JOB_NAME/$CHECKPOINT_NAME/full}"
+OUTPUT_DIR="${OUTPUT_DIR:-$RUN_ROOT/eval_mellow_unified_v5/$TASK/$CHECKPOINT_JOB_NAME/$CHECKPOINT_NAME/full}"
 OUTPUT_DIR=$(readlink -m -- "$OUTPUT_DIR")
 if [[ -z "$DATASET_DIR" ]]; then
   if [[ "$TASK" == mmau_test_mini ]]; then
@@ -92,6 +92,7 @@ JOB_LOG="$SCRIPT_DIR/log/${JOB_NAME}.JOB.log"
 echo "[mellow-eval-submit] task=$TASK checkpoint_argument=$CHECKPOINT_ARGUMENT checkpoint=$CHECKPOINT" >&2
 echo "[mellow-eval-submit] runtime_config=$RUNTIME_CONFIG" >&2
 echo "[mellow-eval-submit] FP32, audio2=reuse_audio1_waveform_encoded_independently, prompt EOS, max_new_tokens=300" >&2
+echo "[mellow-eval-submit] both scorers receive unchanged generated text; no label/parenthesis stripping or whitespace trimming" >&2
 echo "[mellow-eval-submit] output_dir=$OUTPUT_DIR" >&2
 echo "[mellow-eval-submit] job_log=$JOB_LOG" >&2
 vc submit \
