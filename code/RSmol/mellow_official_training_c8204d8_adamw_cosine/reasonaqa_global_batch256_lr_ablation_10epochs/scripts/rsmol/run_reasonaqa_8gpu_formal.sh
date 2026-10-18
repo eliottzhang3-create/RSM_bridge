@@ -8,7 +8,6 @@ fi
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROUTE_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
-BASE_ROUTE_ROOT=$(cd "$ROUTE_ROOT/../reasonaqa_global_batch256_lr_ablation_5epochs" && pwd)
 AUDIT_REPORT=$(readlink -f "$1")
 MAPPING_JSONL=$(readlink -f "$2")
 OUTPUT_DIR=$(readlink -m "$3")
@@ -32,7 +31,7 @@ USER_CONDA_BASE="${MELLOW_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/min
 source "$USER_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate mellow_c8204d8
 
-MIN_LR=$(python - "$MAX_LR" <<'PY'
+python - "$MAX_LR" <<'PY'
 import math
 import sys
 
@@ -40,15 +39,12 @@ try:
     max_lr = float(sys.argv[1])
 except ValueError as exc:
     raise SystemExit(f"invalid max LR: {sys.argv[1]!r}") from exc
-min_lr = 0.1 * max_lr
-if not math.isfinite(max_lr) or max_lr <= 0.0 or not math.isfinite(min_lr) or min_lr <= 0.0:
-    raise SystemExit("max LR must be positive, finite, and produce a positive finite min LR")
-print(f"{min_lr:.12g}")
+if not math.isfinite(max_lr) or max_lr <= 0 or max_lr * 0.1 <= 0:
+    raise SystemExit("max LR must be positive, finite, and produce a positive min LR")
 PY
-)
 
 RUN_ID="${MELLOW_RUN_ID:-${SLURM_JOB_ID:-$$}_$(date +%Y%m%d_%H%M%S%N)}"
-STAGE_ROOT="/dev/shm/mellow_adamw_cosine_reasonaqa_gbs256_lr_10epochs_$RUN_ID"
+STAGE_ROOT="/dev/shm/mellow_adamw_cosine_reasonaqa_gbs256_lr10_frozen_clip_$RUN_ID"
 STAGING_REPORT="$OUTPUT_DIR/staging_report.json"
 RUNTIME_CONFIG="$OUTPUT_DIR/runtime_10epochs.yaml"
 CHECKPOINT_ROOT="$OUTPUT_DIR/checkpoints"
@@ -61,7 +57,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[mellow-formal] staging raw audio into $STAGE_ROOT" >&2
-python "$BASE_ROUTE_ROOT/scripts/rsmol/stage_reasonaqa_raw_audio.py" \
+python "$SCRIPT_DIR/stage_reasonaqa_raw_audio.py" \
   --audit-report "$AUDIT_REPORT" \
   --mapping-jsonl "$MAPPING_JSONL" \
   --stage-root "$STAGE_ROOT" \
@@ -91,10 +87,9 @@ python "$SCRIPT_DIR/write_reasonaqa_runtime_config.py" \
   --num-workers 4 \
   "${RESUME_ARGS[@]}"
 
-export MELLOW_JOB_ID="mellow_adamw_cosine_reasonaqa_gbs256_lr10_$RUN_ID"
+export MELLOW_JOB_ID="mellow_adamw_cosine_reasonaqa_gbs256_lr10_frozen_clip_$RUN_ID"
 cd "$ROUTE_ROOT"
-export PYTHONPATH="$ROUTE_ROOT:$BASE_ROUTE_ROOT:${PYTHONPATH:-}"
-echo "[mellow-formal] launching 10-epoch torchrun world_size=8, batch=8, accumulation=4, max_lr=$MAX_LR, min_lr=$MIN_LR" >&2
+echo "[mellow-formal] launching 10-epoch torchrun world_size=8, batch=8, accumulation=4, HTSAT=eval/no_grad, global_clip=0.5, max_lr=$MAX_LR" >&2
 torchrun --standalone --nnodes=1 --nproc_per_node=8 train.py \
   --config "$RUNTIME_CONFIG" \
   --distributed-backend nccl \
@@ -111,12 +106,13 @@ FINAL_CHECKPOINT="$CHECKPOINT_ROOT/$MELLOW_JOB_ID/model--epo-${NUM_EPOCHS}.ckpt"
   echo "[mellow-formal] final checkpoint not found: $FINAL_CHECKPOINT" >&2
   exit 1
 }
-python - "$FINAL_CHECKPOINT" "$NUM_EPOCHS" "$MAX_LR" "$MIN_LR" <<'PY'
+python - "$FINAL_CHECKPOINT" "$NUM_EPOCHS" "$MAX_LR" <<'PY'
 import math
 import sys
 import torch
 
-checkpoint_path, expected_epochs, expected_max_lr, expected_min_lr = sys.argv[1], int(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
+checkpoint_path, expected_epochs, expected_max_lr = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+expected_min_lr = 0.1 * expected_max_lr
 checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 required = {
     "schema_version", "state_dict", "optimizer", "optimizer_contract", "scheduler", "grad_scaler",
@@ -138,21 +134,18 @@ if checkpoint["batch_geometry"] != {
     raise SystemExit(f"unexpected batch geometry: {checkpoint['batch_geometry']!r}")
 if checkpoint["loss_reduction"] != "global_token_mean":
     raise SystemExit(f"unexpected loss reduction: {checkpoint['loss_reduction']!r}")
-if checkpoint.get("route_variant") != "formal_10epochs_lr_ablation_random_audio2":
-    raise SystemExit(f"unexpected route variant: {checkpoint.get('route_variant')!r}")
-if checkpoint.get("gradient_clip_policy") != "global_l2_hard_clip":
-    raise SystemExit(f"unexpected gradient clipping policy: {checkpoint.get('gradient_clip_policy')!r}")
-if checkpoint.get("grad_norm_tracker") is not None:
-    raise SystemExit("hard global clip checkpoint unexpectedly contains GradNormTracker state")
 for field, expected in (
-    ("attention_mask_policy", "compact_text_right_pad_after_answer_eos"),
-    ("htsat_freeze_policy", "eval_no_grad_base_only"),
-    ("audio_slot_policy", "random_fill_if_missing_audio2"),
+    ("route_variant", "lr_ablation_10epochs_htsat_frozen_global_clip"),
+    ("attention_mask_policy", "prefix_only"),
+    ("htsat_freeze_policy", "fully_frozen_eval_no_grad"),
+    ("audio_slot_policy", "upstream_random_fallback"),
+    ("gradient_clip_policy", "global_l2_hard_clip"),
+    ("max_grad_norm", 0.5),
 ):
     if checkpoint.get(field) != expected:
         raise SystemExit(f"unexpected {field}: {checkpoint.get(field)!r}")
-if float(checkpoint.get("max_grad_norm", -1)) != 0.5:
-    raise SystemExit("unexpected global gradient clip threshold")
+if checkpoint.get("grad_norm_tracker") is not None:
+    raise SystemExit("global clip checkpoint unexpectedly contains GradNormTracker state")
 contract = checkpoint["optimizer_contract"]
 if contract.get("type") != "AdamW" or tuple(contract.get("betas", ())) != (0.9, 0.95):
     raise SystemExit(f"unexpected optimizer contract: {contract!r}")

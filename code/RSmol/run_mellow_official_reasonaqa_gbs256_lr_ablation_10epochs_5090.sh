@@ -53,7 +53,7 @@ try:
     max_lr = float(sys.argv[1])
 except ValueError as exc:
     raise SystemExit(f"invalid max LR: {sys.argv[1]!r}") from exc
-if not math.isfinite(max_lr) or max_lr <= 0.0 or 0.1 * max_lr <= 0.0:
+if not math.isfinite(max_lr) or max_lr <= 0 or max_lr * 0.1 <= 0:
     raise SystemExit("max LR must be positive, finite, and produce a positive min LR")
 mantissa, exponent = f"{max_lr:.12e}".split("e")
 print(f"{mantissa.rstrip('0').rstrip('.')}e{int(exponent)}")
@@ -61,7 +61,7 @@ PY
 )
 
 RUN_TAG="$(date +%Y%m%d_%H%M%S%N)"
-OUTPUT_DIR="${OUTPUT_DIR:-${MELLOW_REASONAQA_LR10_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090/formal_10epochs_maxlr_${LR_TAG}_${RUN_TAG}}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${MELLOW_REASONAQA_LR10_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090/formal_10epochs_lr5_frozen_clip_maxlr_${LR_TAG}_${RUN_TAG}}}"
 [[ -f "$AUDIT_REPORT" && -f "$MAPPING_JSONL" ]] || {
   echo "audit report or mapping is missing" >&2
   exit 2
@@ -89,9 +89,9 @@ vc submit \
   -p pdgpu-5090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 32 -m 256G -g 8 -n 1 \
-  -j "mellow-lr10-${LR_TAG}-${RUN_TAG}" \
+  -j "mellow-lr10-frozen-clip-${LR_TAG}-${RUN_TAG}" \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$SCRIPT_DIR/log/mellow_official_reasonaqa_lr10_${LR_TAG}.${RUN_TAG}.JOB.log" \
   --cmd "bash mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_lr_ablation_10epochs/scripts/rsmol/run_reasonaqa_8gpu_formal.sh $CMD_ARGS"
 
-echo "Submitted 8-GPU full ReasonAQA AdamW/cosine 10-epoch LR ablation: batch=256, max_lr=$MAX_LR, min_lr=0.1*max_lr; output directory: $OUTPUT_DIR"
+echo "Submitted 8-GPU full ReasonAQA LR5-based training: batch=256, epochs=10, original fixed padding/causal attention, HTSAT=eval/no_grad, global_clip=0.5, max_lr=$MAX_LR, min_lr=0.1*max_lr; output directory: $OUTPUT_DIR"

@@ -44,24 +44,17 @@ class AudioTextDataset(Dataset):
         tokenizer.add_special_tokens({'pad_token': '!'})
         return tokenizer
 
-    def _tokenize_text(self, sentence, max_len, padding='max_length'):
+    def _tokenize_text(self, sentence, max_len):
         # if 'gpt' in self.tokenizer_type:
         sentence = sentence + ' <|endoftext|>'
-        tokens = self.tokenizer.encode_plus(
+        return self.tokenizer.encode_plus(
             text=sentence, 
             add_special_tokens=True,
             max_length=max_len, 
-            padding=padding,
+            padding='max_length',  # Use padding instead of deprecated pad_to_max_length
             truncation=True,  # Explicitly enable truncation
             return_tensors="pt"
         )
-        if self.tokenizer.eos_token_id is None:
-            raise ValueError('tokenizer must provide an EOS token')
-        last_valid = int(tokens['attention_mask'][0].sum()) - 1
-        if last_valid < 0:
-            raise ValueError('tokenized text is empty')
-        tokens['input_ids'][0, last_valid] = self.tokenizer.eos_token_id
-        return tokens
 
     def collect_data_jsons(self, data_path, datafiles):
         # collect per class data json
@@ -105,10 +98,8 @@ class AudioTextDataset(Dataset):
         file_path1, file_path2 = self.all_data_json[index]["filepath1"], self.all_data_json[index]["filepath2"]
         if self.all_data_json[index]["filepath1"] == '':
             file_path1 = random.choice(self.exists_filepaths1)
-
-        # Match the historical LR-ablation data contract: a missing second
-        # slot is filled with a randomly selected existing first-slot audio.
-        if file_path2 == '':
+        
+        if self.all_data_json[index]["filepath2"] == '':
             file_path2 = random.choice(self.exists_filepaths1)
         
         file_path1 = os.path.join(self.data_path, file_path1)
@@ -170,10 +161,8 @@ class AudioTextDataset(Dataset):
     def _read_text(self, index):
         answer, input = self._create_answer_input(index)
 
-        # Keep prompt length variable.  The answer remains capped/padded so the
-        # batch can expose a stable answer target tensor and mask.
-        tok_answer = self._tokenize_text(answer, self.op_text_len, padding='max_length')
-        tok_input = self._tokenize_text(input, self.ip_text_len, padding=False)
+        tok_answer = self._tokenize_text(answer, self.op_text_len)
+        tok_input = self._tokenize_text(input, self.ip_text_len)
         return tok_answer, tok_input, answer
 
     def __getitem__(self, index):
@@ -202,48 +191,44 @@ class AudioTextDataset(Dataset):
             'input': tok_input,
             'file_path1': file_path1,
             'file_path2': file_path2,
-            'pad_token_id': self.tokenizer.pad_token_id,
         }
 
         return data_dict
     
 
 def collate_fn(list_data_dict):
-    pad_id = list_data_dict[0]['pad_token_id']
-    if any(entry['pad_token_id'] != pad_id for entry in list_data_dict):
-        raise ValueError('mixed tokenizer pad IDs in one batch')
+    r"""Collate mini-batch data to inputs and targets for training.
 
-    texts, starts = [], []
-    for entry in list_data_dict:
-        prompt = entry['input']
-        answer = entry['answer']
-        prompt_ids = prompt['input_ids'][0, prompt['attention_mask'][0].bool()]
-        answer_ids = answer['input_ids'][0, answer['attention_mask'][0].bool()]
-        if prompt_ids.numel() == 0 or answer_ids.numel() == 0:
-            raise ValueError('prompt and answer must contain EOS')
-        starts.append(prompt_ids.numel())
-        texts.append(torch.cat((prompt_ids, answer_ids)))
-
-    max_length = max(text.numel() for text in texts)
-    ids = torch.full((len(texts), max_length), pad_id, dtype=torch.long)
-    mask = torch.zeros((len(texts), max_length), dtype=torch.long)
-    for row, text in enumerate(texts):
-        ids[row, :text.numel()] = text
-        mask[row, :text.numel()] = 1
-
-    return {
-        'waveform1': torch.stack([entry['waveform1'] for entry in list_data_dict]).squeeze(1),
-        'waveform2': torch.stack([entry['waveform2'] for entry in list_data_dict]).squeeze(1),
-        'input': {
-            'input_ids': ids,
-            'attention_mask': mask,
-            'answer_start': torch.tensor(starts, dtype=torch.long),
-        },
-        'answer': {
-            'input_ids': torch.stack([entry['answer']['input_ids'][0] for entry in list_data_dict]),
-            'attention_mask': torch.stack([entry['answer']['attention_mask'][0] for entry in list_data_dict]),
-        },
-        'file_path1': [entry['file_path1'] for entry in list_data_dict],
-        'file_path2': [entry['file_path2'] for entry in list_data_dict],
-        'answer_text': [entry['answer_text'] for entry in list_data_dict],
-    }
+    Args:
+        list_data_dict: e.g., [
+            {
+                'text': 'a sound of dog',
+                'waveform': (1, samples),
+                'modality': 'audio_text'
+            }
+            ...
+            ]
+    Returns:
+        data_dict: e.g. 
+            'audio_text': {
+                'text': ['a sound of dog', ...]
+                'waveform': (batch_size, 1, samples)
+        }
+    """
+    at_data_dict = {}
+    
+    if len(list_data_dict) > 0:
+        for key in list_data_dict[0].keys():
+            at_data_dict[key] = [at_data_dict[key] for at_data_dict in list_data_dict]
+            if key == 'waveform1' or key == "waveform2":
+                at_data_dict[key] = torch.stack(at_data_dict[key]).squeeze(1)
+            elif key == 'answer' or key == "input":
+                stack = {k:[] for k in at_data_dict[key][0].keys()}
+                for entry in at_data_dict[key]:
+                    for k in entry.keys():
+                        stack[k].append(entry[k])
+                at_data_dict[key] = {k:torch.stack(stack[k]).squeeze(1) for k in stack.keys()}                       
+            elif key == 'file_path1' or key == "file_path2" or key == "answer_text":
+                at_data_dict[key] = [text for text in at_data_dict[key]]
+    
+    return at_data_dict

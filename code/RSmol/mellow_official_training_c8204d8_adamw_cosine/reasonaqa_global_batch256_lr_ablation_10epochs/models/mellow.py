@@ -146,10 +146,11 @@ class Mellow(nn.Module):
         audio1 = input_dict['audio1']
         audio2 = input_dict['audio2']
         texts_enc = input_dict['input']
+        texts_dec = input_dict['answer']
 
         audio_embed1, _, _ = self.audio_encoder(audio1)
         audio_embed2, _, _ = self.audio_encoder(audio2)
-        out = self.caption_decoder(audio_embed1, audio_embed2, texts_enc)
+        out = self.caption_decoder(audio_embed1, audio_embed2, texts_enc, texts_dec)
         return out
     
     def generate_prefix_inference(self, input_dict):

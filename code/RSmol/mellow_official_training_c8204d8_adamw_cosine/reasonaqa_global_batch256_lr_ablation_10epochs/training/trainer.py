@@ -427,29 +427,21 @@ class Trainer:
         if logits.shape[:2] != target.shape or target.shape != attention_mask.shape:
             raise ValueError("answer loss shape mismatch")
         valid = attention_mask.to(dtype=torch.bool) & target.ne(ignore_index)
-        masked_target = target.masked_fill(~valid, ignore_index)
-        token_loss = F.cross_entropy(logits.transpose(1, 2), masked_target, reduction="none", ignore_index=ignore_index)
+        token_loss = F.cross_entropy(logits.transpose(1, 2), target, reduction="none", ignore_index=ignore_index)
         count = valid.sum().to(dtype=torch.float32)
         if count.item() <= 0:
             raise ValueError("answer batch contains no valid target tokens")
         return (token_loss * valid).sum(), count
 
     def train(self):
-        if self.config.get("route_variant") != "formal_10epochs_lr_ablation_random_audio2":
-            raise ValueError("unexpected route_variant for the 10-epoch LR-ablation training")
+        if self.config.get("route_variant") != "lr_ablation_10epochs_htsat_frozen_global_clip":
+            raise ValueError("unexpected route_variant for the rebuilt 10-epoch LR ablation")
+        if self.config.get("htsat_freeze_policy") != "fully_frozen_eval_no_grad":
+            raise ValueError("htsat_frozen route requires fully_frozen_eval_no_grad")
         if self.config["train"].get("gradient_clip_policy") != "global_l2_hard_clip":
-            raise ValueError("the 10-epoch LR-ablation route requires global_l2_hard_clip")
+            raise ValueError("global_clip route requires global_l2_hard_clip")
         if float(self.config["train"]["max_grad_norm"]) != 0.5:
-            raise ValueError("the 10-epoch LR-ablation route requires max_grad_norm=0.5")
-        if self.config.get("attention_mask_policy") != "compact_text_right_pad_after_answer_eos":
-            raise ValueError("unexpected attention mask policy")
-        if self.config.get("htsat_freeze_policy") != "eval_no_grad_base_only":
-            raise ValueError("unexpected HTSAT freeze policy")
-        if self.config.get("audio_slot_policy") != "random_fill_if_missing_audio2":
-            raise ValueError("unexpected audio slot policy")
-        audio_prefix_length = int(self.config["model"]["decoder"]["total_prefix_length"])
-        if audio_prefix_length != 260:
-            raise ValueError("the LR-ablation route requires a 260-position audio prefix")
+            raise ValueError("global_clip route requires max_grad_norm=0.5")
         self.logger.info("Training Mellow with data: %s", self.config["data"]["datafiles"])
         self.config["model"]["decoder"]["prefix_dim"] = self.config["model"]["encoder"]["d_proj"]
 
@@ -470,6 +462,15 @@ class Trainer:
         model = model.to(self.device)
         model = self.distributed.create_distributed_model(model)
         model.train()
+        audio_encoder = (model.module if hasattr(model, "module") else model).audio_encoder
+        if audio_encoder.base.htsat.training or any(
+            parameter.requires_grad for parameter in audio_encoder.base.htsat.parameters()
+        ):
+            raise ValueError("HTSAT must remain frozen and in eval mode during training")
+        if not any(parameter.requires_grad for parameter in audio_encoder.base.c2l.parameters()):
+            raise ValueError("HTSAT c2l must remain trainable")
+        if not any(parameter.requires_grad for parameter in audio_encoder.projection.parameters()):
+            raise ValueError("audio projection must remain trainable")
 
         if self.distributed.rank() == 0:
             self.logger.info("Mellow has %d parameters of which %d are trainable" % numparams(model))
@@ -626,12 +627,6 @@ class Trainer:
                         f"resume route mismatch: checkpoint={checkpoint['route_variant']!r}, "
                         f"current={self.config.get('route_variant')!r}"
                     )
-                for policy in ("attention_mask_policy", "htsat_freeze_policy", "audio_slot_policy"):
-                    if checkpoint.get(policy) != self.config.get(policy):
-                        raise ValueError(
-                            f"resume {policy} mismatch: checkpoint={checkpoint.get(policy)!r}, "
-                            f"current={self.config.get(policy)!r}"
-                        )
                 if checkpoint["gradient_clip_policy"] != "global_l2_hard_clip":
                     raise ValueError(
                         "resume gradient clipping policy mismatch: "
@@ -710,6 +705,7 @@ class Trainer:
     
         os.makedirs(self.config["save_dir"], exist_ok=True)
 
+        ignore_index = dataset.tokenizer.encode(dataset.tokenizer.pad_token)[0]
         configured_epochs = int(self.config["train"]["num_epochs"])
         epochs_this_run = int(self.config["train"].get("max_epochs_this_run", 0))
         max_optimizer_steps = int(self.config["train"].get("max_optimizer_steps", 0))
@@ -751,6 +747,21 @@ class Trainer:
                     batch_input = batch_data_dict['input']
                     batch_answer = batch_data_dict['answer']
                     answer_attention_mask = batch_answer['attention_mask']
+                    batch_answer['attention_mask'] = torch.stack(
+                        [
+                            torch.cat(
+                                (
+                                    torch.ones(
+                                        self.config["model"]["decoder"]["total_prefix_length"],
+                                        dtype=text.dtype,
+                                    ),
+                                    text,
+                                ),
+                                dim=0,
+                            )
+                            for text in answer_attention_mask
+                        ]
+                    )
 
                     input_dict = {
                         "audio1": batch_audio1,
@@ -768,17 +779,12 @@ class Trainer:
                     )
                     with sync_context:
                         model_outputs = model(input_dict)
+                        prefix_length = self.config["model"]["decoder"]["total_prefix_length"]
+                        logits = model_outputs.logits[:, prefix_length - 1: -1]
                         target = input_dict["answer"]["input_ids"]
-                        answer_mask = answer_attention_mask.to(self.device, dtype=torch.bool)
-                        answer_start = input_dict["input"]["answer_start"]
-                        answer_offsets = torch.arange(target.shape[1], device=self.device)
-                        source_positions = audio_prefix_length + answer_start[:, None] + answer_offsets[None, :] - 1
-                        if (source_positions[answer_mask] >= model_outputs.logits.shape[1]).any():
-                            raise ValueError("answer target extends beyond model logits")
-                        rows = torch.arange(target.shape[0], device=self.device)[:, None].expand_as(target)
-                        valid_logits = model_outputs.logits[rows[answer_mask], source_positions[answer_mask]]
-                        token_loss_sum = F.cross_entropy(
-                            valid_logits, target[answer_mask], reduction="sum"
+                        answer_mask = answer_attention_mask.to(self.device)
+                        token_loss_sum, _ = self._answer_token_loss_sum(
+                            logits, target, answer_mask, ignore_index
                         )
                         accumulated_token_loss = accumulated_token_loss + token_loss_sum.detach().float()
                         grad_scaler.scale(token_loss_sum / global_token_count).backward()

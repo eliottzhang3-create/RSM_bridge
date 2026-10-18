@@ -103,17 +103,32 @@ class DecoderModel(nn.Module):
         prefix = torch.cat((audio_projections1, sep_embed, audio_projections2, sep_embed, dtext), dim=1)
         return prefix
 
-    def forward(self, daudio1: torch.Tensor, daudio2: torch.Tensor, texts_enc: dict):
+    def forward(self, daudio1: torch.Tensor, daudio2: torch.Tensor, texts_enc: torch.Tensor, tokens: torch.Tensor, mask: Optional[torch.Tensor] = None,
+                labels: Optional[torch.Tensor] = None):
+
         if "gpt2" in self.text_decoder:
+            # input prompt
             dtext = self.lm.transformer.wte(texts_enc['input_ids'])
-            sep_token = torch.tensor([50256], device=dtext.device)
+            dtext = dtext.contiguous()
+            # output labels
+            embedding_text = self.lm.transformer.wte(tokens['input_ids'])
+            # separator
+            sep_token = torch.tensor([50256]).to(dtext.device)
             sep_embed = self.lm.transformer.wte(sep_token).unsqueeze(0).repeat(dtext.shape[0],1,1)
         elif "smollm2" in self.text_decoder:
+            # input prompt
             if self.lora:
                 dtext = self.lm.base_model.model.model.embed_tokens(texts_enc["input_ids"])
             else:
                 dtext = self.lm.model.embed_tokens(texts_enc['input_ids'])
-            sep_token = torch.tensor([0], device=dtext.device)
+            dtext = dtext.contiguous()
+            # output labels
+            if self.lora:
+                embedding_text = self.lm.base_model.model.model.embed_tokens(tokens["input_ids"])
+            else:
+                embedding_text = self.lm.model.embed_tokens(tokens['input_ids'])
+            # separator
+            sep_token = torch.tensor([0]).to(dtext.device)
             if self.lora:
                 sep_embed = self.lm.base_model.model.model.embed_tokens(sep_token).unsqueeze(0).repeat(dtext.shape[0],1,1)
             else:
@@ -123,15 +138,11 @@ class DecoderModel(nn.Module):
         
         audio_projections1 = downsample(daudio1).contiguous()
         audio_projections2 = downsample(daudio2).contiguous()
-
-        audio_prefix = torch.cat((audio_projections1, sep_embed, audio_projections2, sep_embed), dim=1)
-        if audio_prefix.shape[1] != 260:
-            raise ValueError(f"expected 260 audio prefix positions, got {audio_prefix.shape[1]}")
-        attention_mask = torch.cat((
-            torch.ones((dtext.shape[0], audio_prefix.shape[1]), dtype=texts_enc['attention_mask'].dtype, device=dtext.device),
-            texts_enc['attention_mask'],
-        ), dim=1)
-        return self.lm(
-            inputs_embeds=torch.cat((audio_prefix, dtext.contiguous()), dim=1),
-            attention_mask=attention_mask,
-        )
+        
+        prefix = torch.cat((audio_projections1, sep_embed, audio_projections2, sep_embed, dtext), dim=1)
+        embedding_cat = torch.cat((prefix, embedding_text), dim=1)
+        if labels is not None:
+            dummy_token = self.get_dummy_token(tokens['input_ids'].shape[0], tokens['input_ids'].device)
+            labels = torch.cat((dummy_token, tokens), dim=1)
+        out = self.lm(inputs_embeds=embedding_cat, labels=labels, attention_mask=mask)
+        return out

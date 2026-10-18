@@ -1,5 +1,21 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-18：10-epoch LR 消融重新以完整 LR5 代码为母本
+
+按用户最新确认，重新完整复制 `reasonaqa_global_batch256_lr_ablation_5epochs` 到 `reasonaqa_global_batch256_lr_ablation_10epochs`。本节覆盖下方 2026-10-17 关于此入口仍基于 formal30 compact 文本的描述。训练差异仅三项：10 epochs；采用 `htsat_frozen_5epochs` 的 HTSAT eval/no_grad 实现（c2l、projection 可训练）；采用 `global_clip_5epochs` 的全局 L2 硬裁剪 0.5 及配套保存/恢复处理。目录、job、输出路径和路线标识作相应隔离。
+
+数据集、collate、decoder 保留 LR5 原文件：260 audio + 129 prompt + 250 answer 固定布局，分词前追加 EOS，保留原截断和 padding；传给 LM 的 `attention_mask=None`，保留因果掩码，prompt PAD 与 answer PAD 不额外做 attention 屏蔽，answer PAD 不计 loss。单音频空槽仍随机填充。GBS256、FP32、seed 1234、AdamW、global-token loss、5% warmup/cosine、显式 max LR 和 `min_lr=0.1*max_lr` 均保持母本。
+
+经 GitHub 同步后，在远端 `code/RSmol/` 提交正式训练：
+
+```bash
+bash run_mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090.sh --max-lr 1e-3
+```
+
+新的路线标识为 `lr_ablation_10epochs_htsat_frozen_global_clip`，默认 run 目录前缀为 `formal_10epochs_lr5_frozen_clip_maxlr_`。每次独立 staging 并在退出时清理，不比较旧节点或已删除的 staging 路径；resume 只接受本新路线同 LR、同 10-epoch schedule 的完整 checkpoint。上一轮额外评测改动已撤回，当前统一 evaluator 仍是旧 compact 路线合同，尚未适配此次重建的 checkpoint。具体实现与模板见新路线 README；本地验证与远程实际训练分开记录。
+
+本地 7 项复制/合同检查、Python 与两份 Bash 脚本语法检查、提交参数模拟及 checkpoint 审计样例检查通过；数据集和 decoder 为保留原文件字节一致性，未清理其母本自带行尾空格。未执行 smoke 或远程训练，本机没有 PyTorch、权重和数据。
+
 ## 2026-10-18：两套音频评分均使用完整模型输出
 
 更新统一评测入口 `code/RSmol/submit_mellow_formal30_eval_5090.sh` 对应实现：去掉官方 scorer 输入前删除 `a)` 至 `j)` 的预处理，官方 scorer 与选项前缀评分现在均直接接收同一份完整 `generated_text`，保留标签、括号、大小写和前后空白。前缀评分仍执行 `prediction.split(')')[0].lower()`，不额外 trim；官方脚本自身逻辑保持原样。checkpoint 审计、生成与第二音频槽复用合同保持不变。协议与默认输出目录升为 `eval_mellow_unified_v5`，避免与旧去标签评分结果混写；原提交命令继续适用，显式 `--output-dir` 应选择新目录。

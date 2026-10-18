@@ -10,12 +10,11 @@ from typing import Any
 
 import yaml
 
-ROUTE_VARIANT = "formal_10epochs_lr_ablation_random_audio2"
+ROUTE_VARIANT = "lr_ablation_10epochs_htsat_frozen_global_clip"
 GRADIENT_CLIP_POLICY = "global_l2_hard_clip"
-ATTENTION_MASK_POLICY = "compact_text_right_pad_after_answer_eos"
-HTSAT_FREEZE_POLICY = "eval_no_grad_base_only"
-AUDIO_SLOT_POLICY = "random_fill_if_missing_audio2"
-
+ATTENTION_MASK_POLICY = "prefix_only"
+HTSAT_FREEZE_POLICY = "fully_frozen_eval_no_grad"
+AUDIO_SLOT_POLICY = "upstream_random_fallback"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -49,13 +48,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.num_epochs != 10:
-        raise ValueError("the LR-ablation route requires exactly 10 epochs")
+        raise ValueError("the isolated route requires exactly 10 epochs")
     if args.max_epochs_this_run != 0 or args.max_optimizer_steps != 0:
-        raise ValueError("the LR-ablation route requires a complete 10-epoch horizon")
+        raise ValueError("the isolated route requires a complete 10-epoch run")
     if not math.isfinite(args.max_lr) or args.max_lr <= 0.0:
         raise ValueError("--max-lr must be positive and finite")
     min_lr = 0.1 * args.max_lr
-    if not math.isfinite(min_lr) or min_lr <= 0.0:
+    if min_lr <= 0.0:
         raise ValueError("--max-lr is too small to produce a positive min LR")
     resolved_stage_root = args.stage_root.resolve()
     shm_root = Path("/dev/shm").resolve()
@@ -81,8 +80,6 @@ def main() -> int:
         raise FileNotFoundError(f"initialization checkpoint does not exist: {init_model_checkpoint}")
     if resume_checkpoint and init_model_checkpoint:
         raise ValueError("--resume-checkpoint and --init-model-checkpoint are mutually exclusive")
-    if init_model_checkpoint:
-        raise ValueError("the formal route starts from the HTSAT and SmolLM2 pretrained components")
     if not math.isclose(args.warmup_ratio, 0.05, rel_tol=0.0, abs_tol=1e-12):
         raise ValueError("the isolated route requires a 5% warmup ratio")
 
@@ -117,7 +114,7 @@ def main() -> int:
             "decoder": {
                 "text_decoder": str(args.text_model_dir.resolve()),
                 "prefix_length": 40,
-                "total_prefix_length": 260,
+                "total_prefix_length": 389,
                 "freeze_gpt_weights": False,
             },
             "model_type": "Mellow",
