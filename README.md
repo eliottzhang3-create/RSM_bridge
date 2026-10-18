@@ -22,6 +22,8 @@ bash run_mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090.sh --max-lr 
 
 更新统一评测入口 `code/RSmol/submit_mellow_formal30_eval_5090.sh` 对应实现：去掉官方 scorer 输入前删除 `a)` 至 `j)` 的预处理，官方 scorer 与选项前缀评分现在均直接接收同一份完整 `generated_text`，保留标签、括号、大小写和前后空白。前缀评分仍执行 `prediction.split(')')[0].lower()`，不额外 trim；官方脚本自身逻辑保持原样。checkpoint 审计、生成与第二音频槽复用合同保持不变。协议与默认输出目录升为 `eval_mellow_unified_v5`，避免与旧去标签评分结果混写；原提交命令继续适用，显式 `--output-dir` 应选择新目录。
 
+Epoch-16 静音第二槽提交 wrapper 从 CRLF 的 `checkpoints.tsv` 读取别名路径时，Bash 会把行末 `\r` 保留进路径，导致存在的 checkpoint 被报告为不存在。wrapper 现清理该行尾字符，模拟测试改为 CRLF 别名表并验证三个别名均能提交 MMAU/MMAR；旧 v5 wrapper 和别名表不受影响。同步此修复后重提三模型命令。
+
 ## 2026-10-17：统一 Mellow 评测支持 10-epoch LR 消融 checkpoint
 
 更新 `code/RSmol/mellow_formal30_eval/` 与 `submit_mellow_formal30_eval_5090.sh`：除既有 formal30 checkpoint 外，可显式传入 `run_mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090.sh` 产出的任意 1–10 epoch SmolLM2 checkpoint。评测器按 `route_variant` 选择隔离模型实现，验证 GBS256、训练策略、checkpoint 与 `runtime_10epochs.yaml` 的任意 max LR 和 `min_lr=0.1*max_lr` 一致；staging 和节点信息不作为评测门槛。统一评测输入现将第一音频 waveform 同时传入两个音频槽，各槽仍独立执行模型编码；协议和输出目录升为 v4，旧静音槽评测结果不会被续写。

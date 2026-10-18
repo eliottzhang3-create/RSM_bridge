@@ -50,6 +50,7 @@ command -v vc >/dev/null 2>&1 || die "vc command is unavailable"
 command -v readlink >/dev/null 2>&1 || die "readlink is required"
 ALIAS="custom"
 while IFS=$'\t' read -r name path; do
+  path=${path%$'\r'}
   if [[ "$CHECKPOINT" == "$name" ]]; then
     ALIAS=$name
     CHECKPOINT=$path

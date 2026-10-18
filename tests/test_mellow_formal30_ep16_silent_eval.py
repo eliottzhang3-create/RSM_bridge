@@ -331,7 +331,7 @@ class SubmissionTests(unittest.TestCase):
                 checkpoint.touch()
                 (run / "runtime_30epochs.yaml").touch()
                 aliases[architecture] = checkpoint.as_posix()
-            (package / "checkpoints.tsv").write_text("".join(f"{key}\t{value}\n" for key, value in aliases.items()), newline="\n")
+            (package / "checkpoints.tsv").write_text("".join(f"{key}\t{value}\n" for key, value in aliases.items()), newline="\r\n")
             mock_bin = folder / "bin"
             mock_bin.mkdir()
             (mock_bin / "vc").write_text('#!/usr/bin/env bash\nprintf "arg=<%s>\\n" "$@"\n', newline="\n")
