@@ -1,5 +1,17 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-20：LR10 路线复制出的 30-epoch、max_lr=4e-5 训练线
+
+新增隔离路线 `code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_lr_ablation_30epochs/`，完整复制自 `reasonaqa_global_batch256_lr_ablation_10epochs/`。保留其数据/固定 padding/因果注意力、随机第二音频槽、HTSAT eval/no_grad、global clip 0.5、GBS256、AdamW、FP32 与其他实现；训练 horizon 改为 30 epochs，提交 max_lr=4e-5，min_lr 自动为 4e-6。新 route、runtime、checkpoint、job 和输出目录均与 LR10 隔离。
+
+远端 GitHub 同步后，在 `code/RSmol/` 正式提交（不需要 smoke）：
+
+```bash
+bash run_mellow_official_reasonaqa_gbs256_lr_ablation_30epochs_5090.sh --max-lr 4e-5
+```
+
+数据仍为 968,059 条时预期约 3,781 updates/epoch、113,430 total updates 和 5,672 warmup updates；训练器会按实际数据重新计算。新路线 route_variant 为 `lr_ablation_30epochs_htsat_frozen_global_clip`，runtime 为 `runtime_30epochs.yaml`，最终 checkpoint 为 `model--epo-30.ckpt`。只允许从本路线、相同 LR 和 30-epoch horizon 的 checkpoint resume。当前专用训练评测链路尚未登记这个 30-epoch route；训练线交付不包含评测适配。实际训练仍需检查远端 job log 和 checkpoint 审计结果。
+
 ## 2026-10-18：10-epoch LR 消融重新以完整 LR5 代码为母本
 
 按用户最新确认，重新完整复制 `reasonaqa_global_batch256_lr_ablation_5epochs` 到 `reasonaqa_global_batch256_lr_ablation_10epochs`。本节覆盖下方 2026-10-17 关于此入口仍基于 formal30 compact 文本的描述。训练差异仅三项：10 epochs；采用 `htsat_frozen_5epochs` 的 HTSAT eval/no_grad 实现（c2l、projection 可训练）；采用 `global_clip_5epochs` 的全局 L2 硬裁剪 0.5 及配套保存/恢复处理。目录、job、输出路径和路线标识作相应隔离。
