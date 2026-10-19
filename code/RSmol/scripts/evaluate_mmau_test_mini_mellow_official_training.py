@@ -19,7 +19,9 @@ import evaluate_mmau_test_mini_5_10x2_5_mesh_mellow as official  # noqa: E402
 import evaluate_mellow_official_training_common as adapter  # noqa: E402
 
 PROTOCOL_CONTRACT = "official_mellow_training_mmau_author_reply_eos_pad_native_dual_v1"
+RAW_PROTOCOL_CONTRACT = "official_mellow_training_mmau_author_reply_eos_pad_native_dual_raw_v2"
 PREDICTION_FORMAT = "official_mellow_training_author_reply_raw_choice_label_scoring_eos_pad_v1"
+RAW_PREDICTION_FORMAT = "official_mellow_training_raw_generation_choice_label_scoring_eos_pad_v2"
 DEFAULT_DATASET_DIR = Path(official.DEFAULT_DATASET_DIR)
 
 
@@ -47,6 +49,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=300)
     parser.add_argument("--dtype", choices=("fp32",), default="fp32")
     parser.add_argument("--run-official-evaluation", action="store_true")
+    parser.add_argument("--preserve-raw-generation", action="store_true")
     args = parser.parse_args(argv)
     spec = _route_defaults(args.route)
     args.training_branch = spec["training_branch"]
@@ -93,6 +96,7 @@ def _raw_generation_by_id(output_dir: Path) -> dict[str, str]:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     loaded_runtime: dict[str, Any] = {}
     attention_mask_generation = bool(getattr(args, "attention_mask_generation", False))
+    preserve_raw_generation = bool(getattr(args, "preserve_raw_generation", False))
 
     def load_model(current_args: argparse.Namespace):
         result = adapter.load_runtime_model(current_args)
@@ -109,19 +113,27 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             use_padding_attention_mask=attention_mask_generation,
         )
 
+    prediction_format = str(
+        getattr(args, "prediction_format", RAW_PREDICTION_FORMAT if preserve_raw_generation else PREDICTION_FORMAT)
+    )
+    protocol_contract = RAW_PROTOCOL_CONTRACT if preserve_raw_generation else PROTOCOL_CONTRACT
+    prediction_preparer = (
+        (lambda value: str(value)) if preserve_raw_generation else prepare_prediction
+    )
+
     report = official.run(
         args,
         load_runtime_model=load_model,
         run_model_generation=run_generation,
-        prepare_prediction=prepare_prediction,
-        prediction_format=PREDICTION_FORMAT,
+        prepare_prediction=prediction_preparer,
+        prediction_format=prediction_format,
         prompt_builder=official.build_mellow_author_reply_prompt,
         audio_decoder=official.decode_mellow_author_reply_audio,
         audio_root=args.audio_root,
         prefer_official_audio_file=True,
         prompt_format=official.MELLOW_AUTHOR_REPLY_PROMPT_FORMAT,
         audio_format=official.MELLOW_AUTHOR_REPLY_AUDIO_FORMAT,
-        protocol_contract=PROTOCOL_CONTRACT,
+        protocol_contract=protocol_contract,
         generation_protocol={
             "decoder": "official_mellow_top_p_filter_then_argmax_full_recompute",
             "top_p": 0.8,
@@ -131,6 +143,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "inference_dtype": "float32",
             "prompt_contract": "training_eos_then_right_pad_bang_v1",
             "audio2_policy": "same_waveform_native_dual_encoding",
+            "choice_label_policy": "sequential_lowercase_labels_in_official_choice_order",
+            "prediction_preprocessing": (
+                "none_preserve_raw_generation"
+                if preserve_raw_generation
+                else "strip_leading_abcd_label_for_official_scorer"
+            ),
             **(
                 {"padding_attention_mask": "training_aligned_full_multimodal_prefix_mask"}
                 if attention_mask_generation else {}
@@ -185,8 +203,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         report["dual_scoring"] = {
             "official_mmau": report.get("official_evaluation", {}).get("status"),
             "mellow_author_reply": author_score.get("status"),
-            "prediction_text_shared_without_preparse": False,
-            "official_scorer_prediction_source": "predictions_fixed_order.json:model_output_stripped_leading_label",
+            "prediction_text_shared_without_preparse": bool(preserve_raw_generation),
+            "official_scorer_prediction_source": (
+                "predictions_fixed_order.json:model_output_raw_generation"
+                if preserve_raw_generation
+                else "predictions_fixed_order.json:model_output_stripped_leading_label"
+            ),
             "choice_label_prefix_prediction_source": "raw_generations.jsonl:generated_text",
         }
         report["mellow_author_reply_protocol_audit"] = {

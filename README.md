@@ -230,7 +230,7 @@ bash run_stage4_5_10x2_5_mesh_3090.sh
 
 ### 两种 gbs256 checkpoint 共用的 MMAU test-mini evaluator
 
-以下三个文件已经落地，专用于完成的标准 Mellow gbs256、五 epoch checkpoint：
+以下四个文件已经落地，服务于标准 Mellow gbs256 的五 epoch 旧路线和 LR5-based 10 epoch 学习率消融路线：
 
 ~~~text
 code/RSmol/scripts/evaluate_mmau_test_mini_mellow_gbs256.py
@@ -239,39 +239,39 @@ code/RSmol/submit_mmau_test_mini_mellow_gbs256_3090.sh
 code/RSmol/submit_mmau_test_mini_mellow_gbs256_ablation_3090.sh
 ~~~
 
-- evaluator 只接受 schema-v2 完成态的五 epoch checkpoint，并核对 batch geometry 为 8 × 8 × 4 = 256、AdamW betas、5% warmup、step cosine、min_lr = 0.1 × max_lr 和同一 run root 下的 runtime YAML。
+- evaluator 对旧路线保留五 epoch 合同；对 `lr_ablation_10epochs_htsat_frozen_global_clip` 接受 `1 <= epoch_completed <= 10` 的 schema-v2 checkpoint，并核对 batch geometry 为 8 × 8 × 4 = 256、AdamW betas、5% warmup、step cosine、min_lr = 0.1 × max_lr、global clip 0.5、冻结 HTSAT 和同一 run root 下的 `runtime_10epochs.yaml`。
 - 它根据 checkpoint 的 loss_reduction 自动选择训练代码根：global_token_mean 对应学习率消融路线，equal_microbatch_token_mean 对应旧 microbatch 均值路线。手工传入不匹配的 route-root 会失败，避免错误加载模型代码。
-- 生成和评分委托给既有标准 Mellow MMAU 实现，保留 Mellow author-reply prompt／音频协议、FP32、129-token prompt、300 个新 token 与官方 MMAU scorer。它不适用于 Mellow-v0 两阶段 checkpoint；后者必须使用已有专用 evaluator。
+- 生成和评分委托给既有标准 Mellow MMAU 实现，保留 Mellow author-reply prompt／音频协议、按实际选项数量顺序生成 `a)`、`b)`…标签、FP32、129-token prompt、300 个新 token 与官方 MMAU scorer；官方 scorer 和 author-reply scorer 都接收未经标签截断的 raw generation。它不适用于 Mellow-v0 两阶段 checkpoint；后者必须使用已有专用 evaluator。
 - 提交 wrapper 使用 pdgpu-3090、1 GPU、16 CPU、64G。checkpoint、runtime YAML 与其 SHA256 的 identity 写在 output directory 同级的 `.<output-dir-name>.gbs256_eval_identity.json` sidecar 中，避免抢占底层 official evaluator 在 output directory 内的 `run_config.json` 所有权记录。旧版目录内 `gbs256_eval_identity.json` 会在内容匹配时自动迁移为 sidecar；非空但没有有效 identity 的目录，或 identity 与本次输入不一致时会拒绝继续，防止不同 checkpoint 的生成混写。
 
-对上面的 max_lr=1e-3 checkpoint 做完整评测，从远程 code/RSmol 目录运行：
+对 LR10 checkpoint 做完整 1000 条评测，从远程 code/RSmol 目录运行：
 
 ~~~bash
 bash submit_mmau_test_mini_mellow_gbs256_3090.sh \
-  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_lr_ablation_5090/formal_5epochs_maxlr_1e-3_20261009_151832898359917/checkpoints/mellow_adamw_cosine_reasonaqa_gbs256_lr_formal_20_20261009_074133259050800/model--epo-5.ckpt
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090/formal_10epochs_lr5_frozen_clip_maxlr_2e-5_20261018_181826682119766/checkpoints/mellow_adamw_cosine_reasonaqa_gbs256_lr10_frozen_clip_20_20261018_101831978638346/model--epo-10.ckpt
 ~~~
 
-full 是默认模式。wrapper 默认从 checkpoint 所属 run root 读取 runtime_5epochs.yaml，并将该例输出到：
+full 是默认模式。wrapper 优先从 checkpoint 所属 run root 读取 `runtime_10epochs.yaml`，旧五 epoch run 才回退到 `runtime_5epochs.yaml`，并将该例输出到：
 
 ~~~text
-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_adamw_cosine_gbs256_lr_ablation_5090/formal_5epochs_maxlr_1e-3_20261009_151832898359917/eval_mmau_test_mini/mellow_adamw_cosine_reasonaqa_gbs256_lr_formal_20_20261009_074133259050800/model--epo-5/full
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mellow_official_reasonaqa_gbs256_lr_ablation_10epochs_5090/formal_10epochs_lr5_frozen_clip_maxlr_2e-5_20261018_181826682119766/eval_mmau_test_mini/mellow_adamw_cosine_reasonaqa_gbs256_lr10_frozen_clip_20_20261018_101831978638346/model--epo-10/full
 ~~~
 
-复用命令只需替换第一个位置参数为另一个完整 model--epo-5.ckpt 路径：
+复用命令只需替换第一个位置参数为另一个 LR10 `model--epo-<n>.ckpt` 路径：
 
 ~~~bash
-bash submit_mmau_test_mini_mellow_gbs256_3090.sh /complete/path/to/model--epo-5.ckpt
+bash submit_mmau_test_mini_mellow_gbs256_3090.sh /complete/path/to/model--epo-10.ckpt
 ~~~
 
 可选位置参数依次为 runtime-config、output-dir、full|smoke、dataset-dir、route-root；通常不要手传 route-root，让 evaluator 从 checkpoint 合同自动选择。正式结果必须以输出目录的 evaluation_report.json、官方 scorer 输出和 job log 为准。
 
-用户在 2026-10-11 提供的六个完成态 checkpoint（old-microbatch-mean 的 1e-3，以及 global-token 的 2e-3、1e-3、8e-4、4e-4、2e-4）已固化在批量入口中。它逐个调用上述单 checkpoint wrapper，因此每个模型仍使用自己 run root 的 `runtime_5epochs.yaml` 和独立输出目录；单个提交失败会报告失败但不会阻止其余五个提交：
+当前两个 LR10 checkpoint 已固化在批量入口中。它逐个调用上述单 checkpoint wrapper，因此每个模型使用自己 run root 的 `runtime_10epochs.yaml` 和独立输出目录；单个提交失败会报告失败但不会阻止另一个提交：
 
 ~~~bash
 bash submit_mmau_test_mini_mellow_gbs256_ablation_3090.sh
 ~~~
 
-默认是 full；仅需检查提交链路时可传入 `smoke`。该批量脚本只提交六个独立的 1-GPU pdgpu-3090 作业，不等待它们完成。
+默认是 full；该批量脚本提交两个独立的 1-GPU pdgpu-3090 作业，不等待它们完成。需要临时检查提交链路时才传入 `smoke`。
 
 ### 当前可证实状态与下一位 agent 的起点
 

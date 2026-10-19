@@ -218,8 +218,95 @@ class GBS256NewRouteTest(unittest.TestCase):
                     "reasonaqa_global_batch256_bridge_lm_lr_5epochs",
                 )
 
+    def test_lr10_checkpoint_accepts_intermediate_epochs_and_strict_route_contract(self) -> None:
+        max_lr = 3e-5
+        runtime_config = {
+            "route_variant": self.module.LR10_ROUTE_VARIANT,
+            "attention_mask_policy": "prefix_only",
+            "htsat_freeze_policy": "fully_frozen_eval_no_grad",
+            "audio_slot_policy": "upstream_random_fallback",
+            "data": {"ip_text_len": 129},
+            "model": {
+                "model_type": "Mellow",
+                "encoder": {
+                    "audioenc_name": "HTSAT",
+                    "d_proj": 576,
+                    "pretrained_audioencoder_path": "/models/HTSAT",
+                },
+                "decoder": {
+                    "prefix_length": 40,
+                    "total_prefix_length": 389,
+                    "text_decoder": "/models/SmolLM2",
+                },
+            },
+            "train": {
+                "batch_size": 8,
+                "gradient_accumulation_steps": 4,
+                "num_epochs": 10,
+                "gradient_clip_policy": "global_l2_hard_clip",
+                "max_grad_norm": 0.5,
+                "optimizer": {
+                    "optimizer_type": "AdamW",
+                    "betas": [0.9, 0.95],
+                    "learning_rate": max_lr,
+                    "max_lr": max_lr,
+                    "min_lr": max_lr * 0.1,
+                    "warmup_ratio": 0.05,
+                    "weight_decay": 1e-4,
+                },
+            },
+        }
+        for epoch in (1, 5, 10):
+            checkpoint = {
+                "schema_version": 2,
+                "state_dict": {"weight": object()},
+                "epoch_completed": epoch,
+                "num_epochs": 10,
+                "batch_geometry": {
+                    "per_rank_batch_size": 8,
+                    "world_size": 8,
+                    "gradient_accumulation_steps": 4,
+                },
+                "loss_reduction": "global_token_mean",
+                "optimizer_contract": {"type": "AdamW", "betas": [0.9, 0.95]},
+                "scheduler": {
+                    "scheduler_type": "step_cosine_warmup",
+                    "max_lr": max_lr,
+                    "min_lr": max_lr * 0.1,
+                    "total_steps": 100,
+                    "warmup_steps": 5,
+                    "last_step": epoch * 10,
+                },
+                "total_step": epoch * 10,
+                "route_variant": self.module.LR10_ROUTE_VARIANT,
+                "gradient_clip_policy": "global_l2_hard_clip",
+                "max_grad_norm": 0.5,
+                "attention_mask_policy": "prefix_only",
+                "htsat_freeze_policy": "fully_frozen_eval_no_grad",
+                "audio_slot_policy": "upstream_random_fallback",
+            }
+            torch_stub = types.ModuleType("torch")
+            torch_stub.load = lambda *_args, **_kwargs: checkpoint
+            with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(sys.modules, {"torch": torch_stub}):
+                contract = self.module._load_checkpoint(Path(temporary) / f"model--epo-{epoch}.ckpt")
+                runtime_path = Path(temporary) / "runtime_10epochs.yaml"
+                runtime_path.write_text(json.dumps(runtime_config), encoding="utf-8")
+                with mock.patch.object(self.module.yaml, "safe_load", side_effect=json.loads):
+                    runtime_contract = self.module._validate_runtime(runtime_path, contract)
+            self.assertEqual(contract["epoch_completed"], epoch)
+            self.assertEqual(contract["num_epochs"], 10)
+            self.assertEqual(runtime_contract["route_variant"], self.module.LR10_ROUTE_VARIANT)
+            self.assertEqual(
+                self.module._resolve_route(
+                    contract["loss_reduction"], contract["route_variant"], runtime_contract["route_variant"]
+                )[0],
+                self.module.LR10_ROUTE_ROOT,
+            )
+
     def test_attention_mask_flag_is_route_specific(self) -> None:
-        for route_variant in ("attention_mask", "global_clip", "bridge_lm_lr", None):
+        for route_variant in (
+            "attention_mask", "global_clip", "bridge_lm_lr", self.module.LR10_ROUTE_VARIANT, None
+        ):
             with self.subTest(route_variant=route_variant):
                 args = types.SimpleNamespace(
                     route_variant=route_variant,
@@ -240,6 +327,8 @@ class GBS256NewRouteTest(unittest.TestCase):
                 )
                 delegated = self.module._delegate_args(args)
                 self.assertEqual(delegated.attention_mask_generation, route_variant == "attention_mask")
+                self.assertTrue(delegated.preserve_raw_generation)
+                self.assertEqual(delegated.prediction_format, self.module.official_training.RAW_PREDICTION_FORMAT)
                 with mock.patch.object(self.module.adapter, "sha256_file", return_value="digest"):
                     identity = self.module._evaluation_identity(args)
                 self.assertEqual(

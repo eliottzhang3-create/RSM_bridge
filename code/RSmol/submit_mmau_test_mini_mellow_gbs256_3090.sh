@@ -26,7 +26,13 @@ CHECKPOINT=$(readlink -f -- "$1") || die "cannot canonicalize checkpoint path: $
 CHECKPOINT_JOB_DIR=$(dirname "$CHECKPOINT")
 CHECKPOINT_DIR=$(dirname "$CHECKPOINT_JOB_DIR")
 RUN_ROOT=$(dirname "$CHECKPOINT_DIR")
-RUNTIME_CONFIG="${2:-$RUN_ROOT/runtime_5epochs.yaml}"
+if [[ -n "${2:-}" ]]; then
+  RUNTIME_CONFIG="$2"
+elif [[ -f "$RUN_ROOT/runtime_10epochs.yaml" ]]; then
+  RUNTIME_CONFIG="$RUN_ROOT/runtime_10epochs.yaml"
+else
+  RUNTIME_CONFIG="$RUN_ROOT/runtime_5epochs.yaml"
+fi
 MODE="${4:-full}"
 CHECKPOINT_JOB_NAME=$(basename "$CHECKPOINT_JOB_DIR")
 CHECKPOINT_NAME=$(basename "$CHECKPOINT" .ckpt)

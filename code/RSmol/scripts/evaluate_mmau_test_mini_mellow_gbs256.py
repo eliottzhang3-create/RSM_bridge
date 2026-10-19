@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate any completed gbs256 official-Mellow checkpoint on MMAU test-mini."""
+"""Evaluate a gbs256 official-Mellow checkpoint on the full MMAU test-mini set."""
 
 from __future__ import annotations
 
@@ -27,13 +27,21 @@ ABLATION_ROUTE_ROOTS = {
     "zero_audio2": "reasonaqa_global_batch256_zero_audio2_5epochs",
 }
 GROUPED_LR_ROUTE = "bridge_lm_lr"
+LR10_ROUTE_VARIANT = "lr_ablation_10epochs_htsat_frozen_global_clip"
+LR10_ROUTE_ROOT = "reasonaqa_global_batch256_lr_ablation_10epochs"
 VARIANT_ROUTE_ROOTS = {
     **ABLATION_ROUTE_ROOTS,
     GROUPED_LR_ROUTE: "reasonaqa_global_batch256_bridge_lm_lr_5epochs",
+    LR10_ROUTE_VARIANT: LR10_ROUTE_ROOT,
 }
 ROUTE_PARENT = Path(__file__).resolve().parent.parent / "mellow_official_training_c8204d8_adamw_cosine"
 LEGACY_IDENTITY_FILENAME = "gbs256_eval_identity.json"
 IDENTITY_SIDECAR_SUFFIX = ".gbs256_eval_identity.json"
+
+
+def _route_num_epochs(route_variant: str | None) -> int:
+    """Return the training horizon enforced by a checkpoint route."""
+    return 10 if route_variant == LR10_ROUTE_VARIANT else 5
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -90,8 +98,6 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
         )
     if not isinstance(checkpoint["state_dict"], dict) or not checkpoint["state_dict"]:
         raise RuntimeError("checkpoint state_dict must be a non-empty mapping")
-    if int(checkpoint["epoch_completed"]) != 5 or int(checkpoint["num_epochs"]) != 5:
-        raise RuntimeError("gbs256 MMAU evaluator requires a completed five-epoch checkpoint")
     expected_geometry = {
         "per_rank_batch_size": 8,
         "world_size": 8,
@@ -131,11 +137,47 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
         if route_variant is not None:
             raise RuntimeError("grouped-LR checkpoint must not declare an isolated ablation route_variant")
         route_variant = GROUPED_LR_ROUTE
-    elif route_variant is not None and route_variant not in ABLATION_ROUTE_ROOTS:
+    elif route_variant is not None and route_variant not in VARIANT_ROUTE_ROOTS:
         raise RuntimeError(f"unsupported gbs256 route variant: {route_variant!r}")
     if route_variant is not None and loss_reduction != "global_token_mean":
         raise RuntimeError(
             "isolated gbs256 route variants must use global_token_mean loss reduction"
+        )
+    expected_epochs = _route_num_epochs(route_variant)
+    checkpoint_epochs = int(checkpoint["num_epochs"])
+    epoch_completed = int(checkpoint["epoch_completed"])
+    if checkpoint_epochs != expected_epochs:
+        raise RuntimeError(
+            f"gbs256 route {route_variant or loss_reduction!r} requires "
+            f"num_epochs={expected_epochs}, got {checkpoint_epochs}"
+        )
+    if route_variant == LR10_ROUTE_VARIANT:
+        if not 1 <= epoch_completed <= expected_epochs:
+            raise RuntimeError(
+                "LR10 gbs256 evaluator accepts epoch_completed in the range 1..10, "
+                f"got {epoch_completed}"
+            )
+        expected_checkpoint_contract = {
+            "gradient_clip_policy": "global_l2_hard_clip",
+            "attention_mask_policy": "prefix_only",
+            "htsat_freeze_policy": "fully_frozen_eval_no_grad",
+            "audio_slot_policy": "upstream_random_fallback",
+        }
+        for field, expected in expected_checkpoint_contract.items():
+            actual = checkpoint.get(field)
+            if actual != expected:
+                raise RuntimeError(
+                    f"LR10 checkpoint {field} mismatch: expected={expected!r}, actual={actual!r}"
+                )
+        max_grad_norm = float(checkpoint.get("max_grad_norm", float("nan")))
+        if not math.isclose(max_grad_norm, 0.5, rel_tol=0.0, abs_tol=1e-12):
+            raise RuntimeError(
+                f"LR10 checkpoint max_grad_norm must be 0.5, got {checkpoint.get('max_grad_norm')!r}"
+            )
+    elif epoch_completed != expected_epochs:
+        raise RuntimeError(
+            "legacy gbs256 evaluator requires a completed five-epoch checkpoint; "
+            f"got epoch_completed={epoch_completed}"
         )
     optimizer = checkpoint["optimizer_contract"]
     if optimizer.get("type") != "AdamW" or tuple(optimizer.get("betas", ())) != (0.9, 0.95):
@@ -156,17 +198,24 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
             raise RuntimeError("checkpoint scheduler min_lr must be 0.1 * max_lr")
     total_steps = int(scheduler.get("total_steps", -1))
     warmup_steps = int(scheduler.get("warmup_steps", -1))
+    current_step = int(checkpoint["total_step"])
+    scheduler_last_step = int(scheduler.get("last_step", -1))
     if (
-        total_steps <= 0 or total_steps % 5 != 0
-        or total_steps != int(checkpoint["total_step"])
-        or int(scheduler.get("last_step", -1)) != total_steps
+        total_steps <= 0 or total_steps % expected_epochs != 0
+        or current_step <= 0 or current_step > total_steps
+        or scheduler_last_step != current_step
         or warmup_steps != math.ceil(total_steps * 0.05)
     ):
         raise RuntimeError(f"checkpoint scheduler step contract mismatch: {scheduler!r}")
+    if route_variant != LR10_ROUTE_VARIANT and current_step != total_steps:
+        raise RuntimeError(
+            "legacy gbs256 evaluator requires the final scheduler step, "
+            f"got {current_step}/{total_steps}"
+        )
     return {
         "schema_version": 2,
-        "epoch_completed": 5,
-        "num_epochs": 5,
+        "epoch_completed": epoch_completed,
+        "num_epochs": checkpoint_epochs,
         "batch_geometry": expected_geometry,
         "effective_global_batch": 256,
         "loss_reduction": loss_reduction,
@@ -184,9 +233,21 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
             ),
             "total_steps": total_steps,
             "warmup_steps": warmup_steps,
+            "last_step": scheduler_last_step,
         },
         "lr_grouped": grouped_scheduler,
         "state_tensor_count": len(checkpoint["state_dict"]),
+        **(
+            {
+                "gradient_clip_policy": checkpoint.get("gradient_clip_policy"),
+                "max_grad_norm": float(checkpoint.get("max_grad_norm")),
+                "attention_mask_policy": checkpoint.get("attention_mask_policy"),
+                "htsat_freeze_policy": checkpoint.get("htsat_freeze_policy"),
+                "audio_slot_policy": checkpoint.get("audio_slot_policy"),
+            }
+            if route_variant == LR10_ROUTE_VARIANT
+            else {}
+        ),
     }
 
 
@@ -262,10 +323,12 @@ def _validate_runtime(path: Path, checkpoint_contract: dict[str, Any]) -> dict[s
     encoder = model.get("encoder") or {}
     decoder = model.get("decoder") or {}
     train = config.get("train") or {}
+    effective_route_variant = checkpoint_route_variant or runtime_route_variant
+    expected_epochs = _route_num_epochs(effective_route_variant)
     expected = {
         "model_type": "Mellow", "audioenc_name": "HTSAT", "d_proj": 576,
         "prefix_length": 40, "total_prefix_length": 389, "ip_text_len": 129,
-        "batch_size": 8, "gradient_accumulation_steps": 4, "num_epochs": 5,
+        "batch_size": 8, "gradient_accumulation_steps": 4, "num_epochs": expected_epochs,
     }
     actual = {
         "model_type": model.get("model_type"), "audioenc_name": encoder.get("audioenc_name"),
@@ -307,6 +370,33 @@ def _validate_runtime(path: Path, checkpoint_contract: dict[str, Any]) -> dict[s
         raise RuntimeError("runtime config warmup ratio must be 0.05")
     if not math.isclose(float(optimizer.get("weight_decay", float("nan"))), 1e-4, rel_tol=0.0, abs_tol=1e-12):
         raise RuntimeError("runtime config weight decay must be 1e-4")
+    if effective_route_variant == LR10_ROUTE_VARIANT:
+        expected_policy = {
+            "attention_mask_policy": "prefix_only",
+            "htsat_freeze_policy": "fully_frozen_eval_no_grad",
+            "audio_slot_policy": "upstream_random_fallback",
+        }
+        for field, expected_value in expected_policy.items():
+            actual_value = config.get(field)
+            if actual_value != expected_value:
+                raise RuntimeError(
+                    f"LR10 runtime {field} mismatch: "
+                    f"expected={expected_value!r}, actual={actual_value!r}"
+                )
+        if train.get("gradient_clip_policy") != "global_l2_hard_clip":
+            raise RuntimeError("LR10 runtime gradient_clip_policy must be global_l2_hard_clip")
+        if not math.isclose(float(train.get("max_grad_norm", float("nan"))), 0.5, rel_tol=0.0, abs_tol=1e-12):
+            raise RuntimeError("LR10 runtime max_grad_norm must be 0.5")
+        for field, expected_value in expected_policy.items():
+            if checkpoint_contract.get(field) != expected_value:
+                raise RuntimeError(
+                    f"LR10 checkpoint/runtime {field} contract mismatch: "
+                    f"expected={expected_value!r}, checkpoint={checkpoint_contract.get(field)!r}"
+                )
+        if checkpoint_contract.get("gradient_clip_policy") != "global_l2_hard_clip" or not math.isclose(
+            float(checkpoint_contract.get("max_grad_norm", float("nan"))), 0.5, rel_tol=0.0, abs_tol=1e-12
+        ):
+            raise RuntimeError("LR10 checkpoint/runtime global clip contract mismatch")
     expected_learning_rate = (
         scheduler["max_lr_by_group"]["bridge"]
         if checkpoint_contract.get("lr_grouped")
@@ -328,10 +418,21 @@ def _validate_runtime(path: Path, checkpoint_contract: dict[str, Any]) -> dict[s
         "text_decoder": str(decoder.get("text_decoder")),
         "htsat_root": str(encoder.get("pretrained_audioencoder_path")),
         "batch_geometry": {"per_rank_batch_size": 8, "world_size": 8, "gradient_accumulation_steps": 4},
-        "num_epochs": 5,
-        "route_variant": checkpoint_route_variant or runtime_route_variant,
+        "num_epochs": expected_epochs,
+        "route_variant": effective_route_variant,
         "lr_grouped": bool(checkpoint_contract.get("lr_grouped")),
         "optimizer": train.get("optimizer") or {},
+        **(
+            {
+                "attention_mask_policy": config.get("attention_mask_policy"),
+                "htsat_freeze_policy": config.get("htsat_freeze_policy"),
+                "audio_slot_policy": config.get("audio_slot_policy"),
+                "gradient_clip_policy": train.get("gradient_clip_policy"),
+                "max_grad_norm": float(train.get("max_grad_norm")),
+            }
+            if effective_route_variant == LR10_ROUTE_VARIANT
+            else {}
+        ),
     }
 
 
@@ -342,13 +443,15 @@ def _delegate_args(args: argparse.Namespace) -> argparse.Namespace:
         "--route-root", str(args.route_root), "--dataset-dir", str(args.dataset_dir),
         "--output-dir", str(args.output_dir), "--parquet-batch-size", str(args.parquet_batch_size),
         "--max-prompt-tokens", str(args.max_prompt_tokens), "--max-new-tokens", str(args.max_new_tokens),
-        "--dtype", args.dtype, "--run-official-evaluation",
+        "--dtype", args.dtype, "--run-official-evaluation", "--preserve-raw-generation",
     ]
     for option, value in (("--parquet", args.parquet), ("--metadata-json", args.metadata_json), ("--evaluation-script", args.evaluation_script), ("--audio-root", args.audio_root)):
         if value is not None:
             delegate_argv.extend([option, str(value)])
     delegated = official_training.parse_args(delegate_argv)
     delegated.attention_mask_generation = args.route_variant == "attention_mask"
+    delegated.preserve_raw_generation = True
+    delegated.prediction_format = official_training.RAW_PREDICTION_FORMAT
     delegated.training_branch = str(args.route_root.name)
     delegated.route_fallback_root = getattr(args, "route_fallback_root", None)
     return delegated
@@ -362,6 +465,9 @@ def _evaluation_identity(args: argparse.Namespace) -> dict[str, str]:
         "runtime_config_sha256": adapter.sha256_file(args.runtime_config),
         "route_root": str(args.route_root),
         "dataset_dir": str(args.dataset_dir),
+        "protocol_contract": official_training.RAW_PROTOCOL_CONTRACT,
+        "prediction_format": official_training.RAW_PREDICTION_FORMAT,
+        "prediction_preprocessing": "none_preserve_raw_generation",
     }
     if getattr(args, "route_variant", None) == "attention_mask":
         identity["generation_attention_mask"] = "training_aligned_full_multimodal_prefix_mask"
@@ -446,7 +552,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.route_variant = route_variant
     args.route_fallback_root = (
         (ROUTE_PARENT / ROUTE_ROOTS["global_token_mean"]).resolve(strict=True)
-        if route_variant is not None
+        if route_variant is not None and route_variant != LR10_ROUTE_VARIANT
         else None
     )
     run_root = args.checkpoint_file.parent.parent.parent

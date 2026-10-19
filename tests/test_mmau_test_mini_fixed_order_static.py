@@ -67,6 +67,12 @@ class MMAUEvaluatorStaticTest(unittest.TestCase):
         self.assertFalse(self.module.mellow_author_reply_choice_is_correct(" b) anything", labeled))
         self.assertFalse(self.module.mellow_author_reply_choice_is_correct("cat", labeled))
 
+        ten_choice_prompt = self.module.build_mellow_author_reply_prompt(
+            "Pick one!", [f"choice-{index}" for index in range(10)]
+        )
+        self.assertIn("a) choice-0 b) choice-1 c) choice-2", ten_choice_prompt)
+        self.assertTrue(ten_choice_prompt.endswith("j) choice-9"))
+
     def test_mellow_author_reply_scorer_keeps_complete_denominator(self) -> None:
         score = self.module.evaluate_mellow_author_reply_predictions([
             {
