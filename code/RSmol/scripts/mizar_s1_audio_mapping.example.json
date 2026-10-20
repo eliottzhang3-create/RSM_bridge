@@ -9,9 +9,28 @@
       ]
     },
     {
+      "name": "reasonaqa_clotho_v21",
+      "field": "filepath1_original",
+      "prefix": "ClothoV21/",
+      "match": "basename",
+      "roots": [
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1"
+      ]
+    },
+    {
+      "name": "reasonaqa_clotho_aqa",
+      "field": "filepath1_original",
+      "prefix": "ClothoAQA/audio_files/",
+      "match": "normalized_stem",
+      "roots": [
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_aqa_audio/audio_files"
+      ]
+    },
+    {
       "name": "audiomcq_audiocaps",
       "field": "audio_path",
       "prefix": "audiocaps_audios/",
+      "match": "basename",
       "roots": [
         "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2",
         "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2/train",
@@ -23,6 +42,7 @@
       "name": "clotho",
       "field": "audio_path",
       "prefix": "clotho_audios/",
+      "match": "basename",
       "roots": [
         "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_aqa_audio/audio_files",
         "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1"

@@ -24,8 +24,10 @@ Mapping JSON format::
 
 ``prefix`` is removed before joining each candidate root.  The first existing
 candidate wins.  Keeping several roots in one rule is useful when a dataset
-has separate train/validation directories.  Original manifest text is never
-rewritten.
+has separate train/validation directories.  A rule may set ``match`` to
+``basename`` or ``normalized_stem`` to search recursively below its roots
+after the exact candidates fail; only a unique match is accepted.  Original
+manifest text is never rewritten.
 """
 
 from __future__ import annotations
@@ -35,9 +37,11 @@ import gzip
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 import wave
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -217,13 +221,56 @@ def load_rules(path: Path) -> list[dict[str, Any]]:
         roots = raw.get("roots", raw.get("root"))
         if isinstance(roots, (str, Path)):
             roots = [str(roots)]
+        match = text(raw.get("match") or "exact").lower()
+        if match not in {"exact", "basename", "normalized_stem"}:
+            raise ValueError(
+                f"mapping rule {name!r} has unsupported match {match!r}; "
+                "use exact, basename, or normalized_stem"
+            )
         if not field or not isinstance(roots, list) or not roots:
             raise ValueError(f"mapping rule {name!r} requires field and roots")
         normalised_roots = [Path(str(root)).expanduser() for root in roots if text(root)]
         if not normalised_roots:
             raise ValueError(f"mapping rule {name!r} has no non-empty roots")
-        rules.append({"name": name, "field": field, "prefix": prefix, "roots": normalised_roots})
+        rules.append({
+            "name": name,
+            "field": field,
+            "prefix": prefix,
+            "roots": normalised_roots,
+            "match": match,
+        })
     return rules
+
+
+def normalized_stem_key(value: str) -> str:
+    stem = Path(slash(value)).stem
+    ascii_stem = unicodedata.normalize("NFKD", stem).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "", ascii_stem.casefold())
+
+
+def build_recursive_indexes(rules: list[dict[str, Any]]) -> None:
+    """Build small basename/stem indexes only for rules that request fallback matching."""
+
+    for rule in rules:
+        if rule["match"] == "exact":
+            continue
+        basename: defaultdict[str, list[str]] = defaultdict(list)
+        normalized_stem: defaultdict[str, list[str]] = defaultdict(list)
+        seen: set[str] = set()
+        for root in rule["roots"]:
+            if not root.is_dir():
+                continue
+            for candidate in root.rglob("*"):
+                if not candidate.is_file():
+                    continue
+                resolved = str(candidate.resolve())
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                basename[candidate.name.casefold()].append(resolved)
+                normalized_stem[normalized_stem_key(candidate.name)].append(resolved)
+        rule["_basename_index"] = dict(basename)
+        rule["_normalized_stem_index"] = dict(normalized_stem)
 
 
 def resolve(raw_path: str, field: str, rules: list[dict[str, Any]]) -> dict[str, Any]:
@@ -238,9 +285,11 @@ def resolve(raw_path: str, field: str, rules: list[dict[str, Any]]) -> dict[str,
         candidate_rules.append(rule)
     # Longest prefix wins, matching Mizar's path-map convention.
     candidate_rules.sort(key=lambda item: len(item["prefix"]), reverse=True)
+    first_missing: dict[str, Any] | None = None
     for rule in candidate_rules:
         prefix = rule["prefix"]
         tail = normalized[len(prefix):] if prefix else normalized
+        candidate_paths = [str(root / Path(tail)) for root in rule["roots"]]
         for root in rule["roots"]:
             candidate = root / Path(tail)
             if candidate.is_file():
@@ -248,14 +297,42 @@ def resolve(raw_path: str, field: str, rules: list[dict[str, Any]]) -> dict[str,
                     "status": "exists",
                     "rule": rule["name"],
                     "path": str(candidate),
-                    "candidate_paths": [str(root / Path(tail)) for root in rule["roots"]],
+                    "candidate_paths": candidate_paths,
+                    "method": "exact",
                 }
-        return {
-            "status": "missing",
-            "rule": rule["name"],
-            "path": str(rule["roots"][0] / Path(tail)),
-            "candidate_paths": [str(root / Path(tail)) for root in rule["roots"]],
-        }
+        if rule["match"] != "exact":
+            if rule["match"] == "basename":
+                key = Path(tail).name.casefold()
+                matches = list(rule.get("_basename_index", {}).get(key, []))
+            else:
+                key = normalized_stem_key(tail)
+                matches = list(rule.get("_normalized_stem_index", {}).get(key, []))
+            if len(matches) == 1:
+                return {
+                    "status": "exists",
+                    "rule": rule["name"],
+                    "path": matches[0],
+                    "candidate_paths": candidate_paths + matches,
+                    "method": rule["match"],
+                }
+            if len(matches) > 1:
+                return {
+                    "status": "ambiguous",
+                    "rule": rule["name"],
+                    "path": "",
+                    "candidate_paths": candidate_paths + sorted(matches),
+                    "method": rule["match"],
+                }
+        if first_missing is None:
+            first_missing = {
+                "status": "missing",
+                "rule": rule["name"],
+                "path": candidate_paths[0],
+                "candidate_paths": candidate_paths,
+                "method": "exact",
+            }
+    if first_missing is not None:
+        return first_missing
     # Permit an absolute raw path as a final explicit fallback.
     absolute = Path(normalized)
     if absolute.is_absolute() and absolute.is_file():
@@ -368,6 +445,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.decode_limit < 0:
         parser.error("--decode-limit must be non-negative")
     rules = load_rules(args.mapping_json)
+    build_recursive_indexes(rules)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     ffprobe = args.ffprobe or shutil.which("ffprobe")
 
@@ -474,7 +552,13 @@ def main(argv: list[str] | None = None) -> int:
         "mapping_json": str(args.mapping_json),
         "output_dir": str(args.output_dir),
         "rules": [
-            {"name": rule["name"], "field": rule["field"], "prefix": rule["prefix"], "roots": [str(root) for root in rule["roots"]]}
+            {
+                "name": rule["name"],
+                "field": rule["field"],
+                "prefix": rule["prefix"],
+                "match": rule["match"],
+                "roots": [str(root) for root in rule["roots"]],
+            }
             for rule in rules
         ],
         "decoder": {"requested": bool(args.decode), "ffprobe": ffprobe, "unique_attempts": decode_attempts},
