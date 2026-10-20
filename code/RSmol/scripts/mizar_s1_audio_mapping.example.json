@@ -44,7 +44,6 @@
       "prefix": "clotho_audios/",
       "match": "basename",
       "roots": [
-        "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_aqa_audio/audio_files",
         "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1"
       ]
     },
