@@ -1,0 +1,64 @@
+{
+  "rules": [
+    {
+      "name": "reasonaqa_audiocaps",
+      "field": "filepath1_original",
+      "prefix": "AudioCapsLarger/",
+      "roots": [
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2"
+      ]
+    },
+    {
+      "name": "audiomcq_audiocaps",
+      "field": "audio_path",
+      "prefix": "audiocaps_audios/",
+      "roots": [
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2",
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2/train",
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2/val",
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2/test"
+      ]
+    },
+    {
+      "name": "clotho",
+      "field": "audio_path",
+      "prefix": "clotho_audios/",
+      "roots": [
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_aqa_audio/audio_files",
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1"
+      ]
+    },
+    {
+      "name": "compa_r",
+      "field": "audio_path",
+      "prefix": "compa_r_audios/",
+      "roots": [
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/compa_r_train_audios/compa_r_train_audios"
+      ]
+    },
+    {
+      "name": "tacos",
+      "field": "audio_path",
+      "prefix": "tacos_audios/",
+      "roots": [
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/TACOS"
+      ]
+    },
+    {
+      "name": "lp_musiccaps_mtt",
+      "field": "audio_path",
+      "prefix": "magnatagatune_audios/",
+      "roots": [
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/LP-MusicCaps/MP3"
+      ]
+    },
+    {
+      "name": "speechcraft_libritts_r",
+      "field": "audio_path",
+      "prefix": "libritts_r_audios/",
+      "roots": [
+        "/hpc_stor03/public/shared/data/tts/LibriTTS"
+      ]
+    }
+  ]
+}
