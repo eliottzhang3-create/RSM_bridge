@@ -1,5 +1,22 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-21：HTSAT 架构采用 Mizar Stage 1，8×4×1，3 epochs
+
+当前新增隔离路线 [mizar_stage1_fixed20_3epochs](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_3epochs/README.md)，从用户指定的 `reasonaqa_global_batch256_lr_ablation_5epochs` 保留 HTSAT + c2l + residual projection + 完整 SmolLM2 架构，移植官方 Mizar S1 的文本、分词、answer-only rank-local CE、AdamW 分组、5% warmup/cosine 和 GradNormTracker。既有 ReasonAQA 路线不改动。
+
+固定使用远程 `/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_filtered.json` 的 **1,311,334** 行，通过已有审计 TSV 的原始字段/路径映射；保留计算节点 staging 原始音频后在线解码。单文件 fixed20 中心裁剪/右补零后拆成两个 10 秒；HTSAT 各输出 129 tokens，两段之间去掉 SEP，最终 `audio[258] → SEP[1] → prompt[256] → answer[300]`，prefix 515、全序列 815。MusicCaps、SpeechCraft train-other-500 已过滤；SpeechCraft 使用原始 LibriTTS clean100/360。
+
+用户最新确定为 **8 GPUs × microbatch 4 × accumulation 1 = GBS32**；3 epochs 共 **122,937** 次更新，warmup **6,147** 次。先运行 8 次真实 optimizer update 的 smoke（沿用完整 horizon），配置/梯度/冻结状态/完整 checkpoint 检查通过后，formal 从原始预训练权重开始。远程同步代码后，在 `code/RSmol/` 执行：
+
+```bash
+bash run_mizar_s1_5090.sh --mode smoke \
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/smoke_v1
+```
+
+也可用 `--mode smoke-then-formal` 自动在 smoke PASS 后进入正式 3 epochs。分开提交 formal、checkpoint 恢复、输出文件和详细配方见新路线 README。官方 CED 的 126 个音频 tokens、缓存特征与这里的 HTSAT/在线解码有明确差异；8×4 和官方 4×8 保持 GBS32，但不保证相同参数轨迹。
+
+本地标准库单元验证共 **22 项通过**；已按官方源码比较文本/随机状态 1,344 次、tokenizer 参数 8 次、完整 LR 曲线 122,938 个位置与 GradNorm 标量策略 10,000 次。真实张量测试、8 卡 smoke、正式训练尚待远程执行：本地没有 PyTorch、权重、数据或 CUDA，不能将上述检查当作 GPU 训练通过。现有统一 evaluator 尚未接入该路线。
+
 ## 2026-10-20：LR10 路线复制出的 30-epoch、max_lr=4e-5 训练线
 
 新增隔离路线 `code/RSmol/mellow_official_training_c8204d8_adamw_cosine/reasonaqa_global_batch256_lr_ablation_30epochs/`，完整复制自 `reasonaqa_global_batch256_lr_ablation_10epochs/`。保留其数据/固定 padding/因果注意力、随机第二音频槽、HTSAT eval/no_grad、global clip 0.5、GBS256、AdamW、FP32 与其他实现；训练 horizon 改为 30 epochs，提交 max_lr=4e-5，min_lr 自动为 4e-6。新 route、runtime、checkpoint、job 和输出目录均与 LR10 隔离。

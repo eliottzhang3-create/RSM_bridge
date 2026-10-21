@@ -1,0 +1,17 @@
+HTSAT / SmolLM2 Mizar Stage 1 adaptation
+
+The model architecture is derived from Mellow, Copyright (c) 2024 Soham,
+under the MIT License retained in LICENSE.
+
+The Stage 1 text templates, text construction/tokenization semantics,
+distributed sampler, optimizer/scheduler and adaptive gradient clipping
+are derived from kaiyangli-ml/Mizar_159M. The fixed20 online audio policy
+is adapted from its pipeline/build_ced_cache.py.
+
+Mizar: Copyright (c) 2026 NEC Laboratories America, Inc.
+All rights reserved. The Clear BSD License is retained in
+licenses/Mizar-ClearBSD.txt.
+
+This route adds HTSAT online audio decoding/staging, explicit training
+audits, eight-GPU microbatch-four execution and complete-state checkpoints.
+Reference source file identities are recorded in reference_audit.json.
