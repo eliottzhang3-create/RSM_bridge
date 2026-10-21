@@ -6,7 +6,7 @@ import json
 import platform
 from pathlib import Path
 
-from contract import ROUTE, digest, rank_seed, semantic_contract, write_json
+from contract import ROUTE, digest, semantic_contract, write_json
 from data.staging import StagingGate
 
 
@@ -32,37 +32,6 @@ def asset_identity(text_root, htsat_root):
             "htsat": {"name": htsat.name, "bytes": htsat.stat().st_size, "sha256": file_sha256(htsat)}}
 
 
-def validate_smoke(report, contract_sha):
-    if (report.get("status") != "PASS" or report.get("mode") != "smoke"
-            or report.get("optimizer_steps") != 8 or report.get("contract_sha256") != contract_sha
-            or len(report.get("rank_checks", [])) != 8):
-        raise ValueError("formal run requires a PASS eight-update smoke report matching current code/data/assets/recipe")
-    checks = report["rank_checks"]
-    if {check.get("rank") for check in checks} != set(range(8)):
-        raise ValueError("smoke report does not cover all eight distinct ranks")
-    for check in checks:
-        changes = check.get("trainable_weight_changes", {})
-        if (check.get("optimizer_steps") != 8 or check.get("seed") != rank_seed(check["rank"])
-                or check.get("frozen_htsat_equal") is not True
-                or check.get("parameters_finite") is not True or check.get("htsat_all_eval") is not True
-                or check.get("staging_complete") is not True
-                or len(check.get("first8_rows", [])) != 32
-                or set(check.get("gradients", {})) != {"1", "8"}
-                or set(changes) != {"c2l", "projection", "lm"}
-                or not all(value.get("changed") is True for value in changes.values())):
-            raise ValueError(f"smoke rank {check.get('rank')} did not pass the complete update/freeze checks")
-        for gradients in check["gradients"].values():
-            if set(gradients) != {"c2l", "projection", "lm"} or not all(
-                    x.get("finite") is True and x.get("nonzero_parameters", 0) > 0 for x in gradients.values()):
-                raise ValueError("smoke report is missing finite nonzero component gradients")
-    checkpoint = report.get("checkpoint", {})
-    if (checkpoint.get("status") != "PASS" or checkpoint.get("optimizer_steps") != 8
-            or checkpoint.get("model_tensors_equal") is not True or checkpoint.get("rng_ranks") != 8):
-        raise ValueError("smoke checkpoint did not pass its full-state reload audit")
-    if report.get("layout", {}).get("total") != 815 or report["layout"].get("prefix") != 515:
-        raise ValueError("smoke layout differs from HTSAT Mizar S1")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepared", required=True, type=Path)
@@ -71,7 +40,6 @@ def main():
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--text-model-dir", required=True, type=Path)
     parser.add_argument("--htsat-root", required=True, type=Path)
-    parser.add_argument("--smoke-report", type=Path)
     parser.add_argument("--resume-checkpoint", type=Path)
     args = parser.parse_args()
     prepared = json.loads(args.prepared.read_text(encoding="utf-8"))
@@ -86,17 +54,12 @@ def main():
                             ("torch", "torchaudio", "transformers", "numpy", "soundfile", "torchlibrosa")}
     contract["python"] = platform.python_version()
     contract_sha = digest(contract)
-    if args.mode == "formal":
-        if not args.smoke_report:
-            parser.error("formal requires --smoke-report from this recipe's completed eight-update smoke")
-        validate_smoke(json.loads(args.smoke_report.read_text(encoding="utf-8")), contract_sha)
     if args.resume_checkpoint and args.mode != "formal":
         parser.error("smoke is always a fresh eight-update run; resume is only for this formal route")
     config = {"route": ROUTE, "mode": args.mode, "contract": contract, "contract_sha256": contract_sha,
               "prepared_report": str(args.prepared.resolve()), "run_dir": str(args.run_dir.resolve()),
               "max_optimizer_steps": 8 if args.mode == "smoke" else contract["geometry"]["total_steps"],
               "resume_checkpoint": str(args.resume_checkpoint.resolve()) if args.resume_checkpoint else "",
-              "smoke_report": str(args.smoke_report.resolve()) if args.smoke_report else "",
               "staging": {key: prepared[key] for key in
                           ("initial_steps", "startup_budgets", "planned_files", "planned_bytes", "copy_workers")
                           if key in prepared},

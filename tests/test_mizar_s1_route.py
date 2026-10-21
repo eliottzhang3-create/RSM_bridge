@@ -1,34 +1,22 @@
 """CPU/stdlib checks for the isolated Mizar S1 route; no local datasets/weights."""
 import ast
-import copy
+import contextlib
+import io
 import json
 import random
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUTE = ROOT / "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_3epochs"
 sys.path.insert(0, str(ROUTE))
 import contract
 import stage_data
+import write_config
 from data.indexed_jsonl import IndexedRows
-from write_config import validate_smoke
-
-
-def passed_smoke():
-    gradients = {role: {"finite": True, "nonzero_parameters": 2} for role in ("c2l", "projection", "lm")}
-    return {"status": "PASS", "mode": "smoke", "optimizer_steps": 8, "contract_sha256": "recipe-a",
-            "rank_checks": [{"rank": rank, "seed": 1234 + rank, "optimizer_steps": 8,
-                             "first8_rows": list(range(rank * 32, (rank + 1) * 32)),
-                             "frozen_htsat_equal": True, "parameters_finite": True, "htsat_all_eval": True,
-                             "staging_complete": True,
-                             "gradients": {"1": copy.deepcopy(gradients), "8": copy.deepcopy(gradients)},
-                             "trainable_weight_changes": {role: {"changed": True} for role in gradients}}
-                            for rank in range(8)],
-            "checkpoint": {"status": "PASS", "optimizer_steps": 8, "model_tensors_equal": True, "rng_ranks": 8},
-            "layout": {"prefix": 515, "total": 815}}
 
 
 class MizarS1RouteTests(unittest.TestCase):
@@ -186,21 +174,34 @@ class MizarS1RouteTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "source counts changed"):
                 stage_data.prepare(manifest, {("audio_path", "one.wav"): str(original)}, root / "rows.jsonl")
 
-    def test_smoke_gate_checks_all_ranks_not_just_a_pass_label(self):
-        report = passed_smoke()
-        validate_smoke(report, "recipe-a")
-        with self.assertRaises(ValueError):
-            validate_smoke(report, "recipe-b")
-        for key, value in (("optimizer_steps", 7), ("seed", 1234), ("frozen_htsat_equal", False),
-                           ("parameters_finite", False), ("first8_rows", []), ("staging_complete", False)):
-            broken = copy.deepcopy(report)
-            broken["rank_checks"][7][key] = value
-            with self.subTest(key=key), self.assertRaises(ValueError):
-                validate_smoke(broken, "recipe-a")
-        broken = copy.deepcopy(report)
-        broken["checkpoint"]["model_tensors_equal"] = False
-        with self.assertRaises(ValueError):
-            validate_smoke(broken, "recipe-a")
+    def test_formal_config_needs_no_smoke_report_and_keeps_the_full_recipe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            text, htsat = root / "text", root / "htsat"
+            text.mkdir()
+            htsat.mkdir()
+            (text / "model.safetensors").write_bytes(b"weight fixture")
+            (htsat / "HTSAT_AudioSet_Saved_1.ckpt").write_bytes(b"htsat fixture")
+            prepared = {"status": "PASS", "mode": "formal", "rows": 1311334,
+                        "rows_canonical_sha256": "rows", "mapping_sha256": "mapping",
+                        "source_rows": contract.SOURCE_COUNTS}
+            report, output = root / "staging_report.json", root / "runtime.json"
+            contract.write_json(report, prepared)
+            argv = ["write_config.py", "--mode", "formal", "--prepared", str(report),
+                    "--output", str(output), "--run-dir", str(root / "formal"),
+                    "--text-model-dir", str(text), "--htsat-root", str(htsat)]
+            with patch.object(sys, "argv", argv), patch.object(
+                    write_config.importlib.metadata, "version", return_value="fixture"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                write_config.main()
+            config = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(config["mode"], "formal")
+            self.assertEqual(config["max_optimizer_steps"], 122937)
+            self.assertEqual(config["checkpoint_steps"][-1], 122937)
+            self.assertEqual(config["contract"]["geometry"]["warmup_steps"], 6147)
+            self.assertEqual(config["contract_sha256"], contract.digest(config["contract"]))
+            self.assertNotIn("smoke_report", config)
+            self.assertEqual(config["resume_checkpoint"], "")
 
     def test_gradnorm_scalar_policy_matches_reference_behavior(self):
         tree = ast.parse((ROUTE / "optim.py").read_text(encoding="utf-8"))
@@ -224,6 +225,10 @@ class MizarS1RouteTests(unittest.TestCase):
         self.assertIn("--nproc_per_node=8", inner)
         self.assertIn("s1_stage1_filtered.json", inner)
         self.assertIn("trap cleanup EXIT", inner)
+        self.assertIn("MODE=formal", outer)
+        for script in (outer, inner):
+            self.assertNotIn("--smoke-report", script)
+            self.assertNotIn("smoke-then-formal", script)
 
 
 if __name__ == "__main__":

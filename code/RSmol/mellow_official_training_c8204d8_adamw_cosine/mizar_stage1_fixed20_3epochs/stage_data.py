@@ -346,7 +346,7 @@ def main():
     parser.add_argument("--stage-root", required=True, type=Path)
     parser.add_argument("--token", required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--mode", choices=("smoke", "formal"), default="smoke")
+    parser.add_argument("--mode", choices=("smoke", "formal"), default="formal")
     parser.add_argument("--background", action="store_true")
     parser.add_argument("--start-steps", type=int, default=512)
     parser.add_argument("--workers", type=int, default=16)

@@ -6,23 +6,23 @@
 
 固定使用远程 `/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_filtered.json` 的 **1,311,334** 行，通过已有审计 TSV 的原始字段/路径映射；保留计算节点 staging 原始音频后在线解码。单文件 fixed20 中心裁剪/右补零后拆成两个 10 秒；HTSAT 各输出 129 tokens，两段之间去掉 SEP，最终 `audio[258] → SEP[1] → prompt[256] → answer[300]`，prefix 515、全序列 815。MusicCaps、SpeechCraft train-other-500 已过滤；SpeechCraft 使用原始 LibriTTS clean100/360。
 
-用户最新确定为 **8 GPUs × microbatch 4 × accumulation 1 = GBS32**；3 epochs 共 **122,937** 次更新，warmup **6,147** 次。先运行 8 次真实 optimizer update 的 smoke（沿用完整 horizon），配置/梯度/冻结状态/完整 checkpoint 检查通过后，formal 从原始预训练权重开始。远程同步代码后，在 `code/RSmol/` 执行：
+用户最新确定为 **8 GPUs × microbatch 4 × accumulation 1 = GBS32**；3 epochs 共 **122,937** 次更新，warmup **6,147** 次。按用户要求直接 formal，不要求 smoke PASS 报告，也不自动先跑 smoke；默认模式已改为 formal。远程同步代码后，在 `code/RSmol/` 执行：
 
 ```bash
-bash run_mizar_s1_5090.sh --mode smoke-then-formal \
+bash run_mizar_s1_5090.sh --mode formal \
   --stage-start-steps 512 --stage-workers 16 \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/async_s1_v1
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/formal_async_v1
 ```
 
-也可用 `--mode smoke-then-formal` 自动在 smoke PASS 后进入正式 3 epochs。分开提交 formal、checkpoint 恢复、输出文件和详细配方见新路线 README。官方 CED 的 126 个音频 tokens、缓存特征与这里的 HTSAT/在线解码有明确差异；8×4 和官方 4×8 保持 GBS32，但不保证相同参数轨迹。
+启动仍核对本次配置、数据映射、权重身份和 staging 就绪状态；不读取或比较历史 smoke 报告。checkpoint 恢复、输出文件和详细配方见新路线 README。官方 CED 的 126 个音频 tokens、缓存特征与这里的 HTSAT/在线解码有明确差异；8×4 和官方 4×8 保持 GBS32，但不保证相同参数轨迹。
 
-远程 8 项小型张量检查已由用户确认通过（PyTorch 2.11.0+cu128 / CUDA 12.8，8 卡可见），按用户要求注释掉自动执行入口，保留手动诊断脚本；8 次真实 optimizer update 的端到端 smoke 仍保留。staging 只映射、检查容量/文件大小、复制原始音频字节，不解码或预处理。每来源 1 行前向探针和训练批次都在 trainer 启动后在线解码；smoke 只需前 8 批及探针的去重音频，formal 最终仍复制全部保留行引用的文件。
+远程 8 项小型张量检查已由用户确认通过（PyTorch 2.11.0+cu128 / CUDA 12.8，8 卡可见），按用户要求注释掉自动执行入口，保留手动诊断脚本；8 次真实 optimizer update 的端到端 smoke 仅在显式指定 `--mode smoke` 时运行。staging 只映射、检查容量/文件大小、复制原始音频字节，不解码或预处理。每来源 1 行前向探针和训练批次都在 trainer 启动后在线解码；formal 最终复制全部保留行引用的文件。
 
 目前改为按实际训练顺序后台 staging：第 1 epoch 的私有 shuffle、八个连续 rank 分片决定文件首次使用的 batch，先准备前 **512 个 global steps** 与来源探针的音频，再启动真实训练，同时后台继续复制全量文件。用 `--stage-start-steps N` / `--stage-workers N` 调整启动门槛和线程数，日志给出 128/256/512/1024/2048 等档位的实际去重文件数/字节数。文件先写 `.partial`，检查大小后原子发布；训练在取下一批前检查八卡共同就绪状态，追上后台时等待，复制失败/进程退出/心跳或等待超时则报错。全量完成后后续 epoch 直接复用；resume 则按 checkpoint 的 epoch/batch 游标安排复制优先级。启动前仍需建立完整 metadata 索引，全量音频仍约 **333,510 文件 / 173.48 GiB**，没有额外完整归档副本。
 
-远程 `smoke_v2` 曾被错误的 PAD=0 预检阻断，修正 PAD=17 / EOS=SEP=0 后用户确认 `smoke_v3` 的 8 次真实更新已 PASS。formal 随后在全量复制至约 215,040/333,510 文件时无 traceback 中止，GPU 空闲回收是用户的经验判断，尚无平台退出原因证明。本次后台 staging 已改变代码身份，需使用上方 `smoke-then-formal` 自动通过新 8 步 smoke 后开始正式训练；原有 8 项小型张量测试仍不会自动执行。新 smoke 只预拷贝前 2 步，其余文件走后台流程。
+远程 `smoke_v2` 曾被错误的 PAD=0 预检阻断，修正 PAD=17 / EOS=SEP=0 后用户确认 `smoke_v3` 的 8 次真实更新已 PASS。formal 随后在全量复制至约 215,040/333,510 文件时无 traceback 中止，GPU 空闲回收是用户的经验判断，尚无平台退出原因证明。本次采用后台 staging 后直接开始正式训练，无需重跑 smoke；原有 8 项小型张量测试仍不会自动执行。
 
-本地标准库单元验证共 **33 项通过**，包括主动阻塞复制以验证跨预拷贝边界等待、后续 epoch 等待全量、复制故障、死进程、心跳/等待超时、原子发布、八卡分片与 resume 优先级，以及实际 Bash 入口在正常/失败时停止复制并清理的模拟；已按官方源码比较文本/随机状态 1,344 次、tokenizer 参数 8 次、完整 LR 曲线 122,938 个位置与 GradNorm 标量策略 10,000 次。后台 staging 版本的真实 8 卡训练尚待远程执行：本地没有 PyTorch、权重、数据或 CUDA，不能将上述检查当作 GPU 训练通过。现有统一 evaluator 尚未接入该路线。
+后台 staging 实现时本地标准库单元验证共 **33 项通过**；本次移除 smoke 门槛后重新通过路线与后台 staging 的 **22 项测试**，验证不提供 smoke 报告即可生成完整 formal 配置，以及 formal 启动/失败清理流程。其他覆盖包括跨预拷贝边界等待、后续 epoch 等待全量、复制故障、死进程、心跳/等待超时、原子发布、八卡分片与 resume 优先级；此前已按官方源码比较文本/随机状态 1,344 次、tokenizer 参数 8 次、完整 LR 曲线 122,938 个位置与 GradNorm 标量策略 10,000 次。后台 staging 版本的真实 8 卡训练尚待远程执行：本地没有 PyTorch、权重、数据或 CUDA，不能将上述检查当作 GPU 训练通过。现有统一 evaluator 尚未接入该路线。
 
 ## 2026-10-20：LR10 路线复制出的 30-epoch、max_lr=4e-5 训练线
 

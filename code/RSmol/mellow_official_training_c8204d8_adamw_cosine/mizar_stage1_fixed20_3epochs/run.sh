@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
-[[ $# == 7 || $# == 9 ]] || { echo "run via code/RSmol/run_mizar_s1_5090.sh" >&2; exit 2; }
+[[ $# == 6 || $# == 8 ]] || { echo "run via code/RSmol/run_mizar_s1_5090.sh" >&2; exit 2; }
 MODE=$1
 RESOLVED_PATHS=$(readlink -f "$2")
 OUTPUT_ROOT=$(readlink -m "$3")
-SMOKE_REPORT=$4
-RESUME_CHECKPOINT=$5
-TEXT_MODEL_DIR=$(readlink -f "$6")
-HTSAT_ROOT=$(readlink -f "$7")
-STAGE_START_STEPS=${8:-512}
-STAGE_WORKERS=${9:-16}
+RESUME_CHECKPOINT=$4
+TEXT_MODEL_DIR=$(readlink -f "$5")
+HTSAT_ROOT=$(readlink -f "$6")
+STAGE_START_STEPS=${7:-512}
+STAGE_WORKERS=${8:-16}
 ROUTE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 MANIFEST=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_filtered.json
-[[ "$MODE" == smoke || "$MODE" == formal || "$MODE" == smoke-then-formal ]] || exit 2
+[[ "$MODE" == smoke || "$MODE" == formal ]] || exit 2
 CONDA_BASE=${MELLOW_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3}
 source "$CONDA_BASE/etc/profile.d/conda.sh"
 conda activate mellow_c8204d8
@@ -53,19 +52,6 @@ run_one() {
     echo "fresh $run_mode directory is not empty: $run_dir" >&2
     return 2
   fi
-  if [[ "$run_mode" == formal ]]; then
-    python - "$SMOKE_REPORT" <<'PY'
-import json
-import sys
-from pathlib import Path
-from contract import code_digest
-from write_config import validate_smoke
-report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-validate_smoke(report, report["contract_sha256"])
-if report.get("code_sha256") != code_digest():
-    raise SystemExit("code changed since smoke; rerun the eight-update smoke on this code")
-PY
-  fi
   STAGE_TOKEN="${run_mode}_${RUN_ID}"
   STAGE_ROOT="/dev/shm/mizar_s1_${STAGE_TOKEN}"
   local stage_args=(--manifest "$MANIFEST" --resolved-paths "$RESOLVED_PATHS" \
@@ -79,9 +65,6 @@ PY
   python -m data.staging --report "$run_dir/staging_report.json" --stage-root "$STAGE_ROOT" --producer-pid "$STAGE_PID"
   local config_args=(--prepared "$run_dir/staging_report.json" --output "$run_dir/runtime.json" \
     --run-dir "$run_dir" --mode "$run_mode" --text-model-dir "$TEXT_MODEL_DIR" --htsat-root "$HTSAT_ROOT")
-  if [[ "$run_mode" == formal ]]; then
-    config_args+=(--smoke-report "$SMOKE_REPORT")
-  fi
   if [[ -n "$RESUME_CHECKPOINT" ]]; then
     config_args+=(--resume-checkpoint "$RESUME_CHECKPOINT")
   fi
@@ -104,11 +87,4 @@ PY
   STAGE_TOKEN=""
 }
 
-if [[ "$MODE" == smoke-then-formal ]]; then
-  [[ -z "$RESUME_CHECKPOINT" ]] || { echo "pipeline always starts fresh" >&2; exit 2; }
-  run_one smoke
-  SMOKE_REPORT="$OUTPUT_ROOT/smoke/training_report.json"
-  run_one formal
-else
-  run_one "$MODE"
-fi
+run_one "$MODE"

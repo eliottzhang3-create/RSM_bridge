@@ -111,33 +111,19 @@ prompt 和 answer 各自在分词前追加 `" <|endoftext|>"`，然后分别截�
 
 如实际目录不同，用 `--text-model-dir` 和 `--htsat-root` 指定。manifest 路径固定，不提供替换入口。
 
-先提交独立 8 步 smoke：
-
-```bash
-bash run_mizar_s1_5090.sh --mode smoke \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/smoke_v4_async
-```
-
-成功报告位于 `smoke_v4_async/smoke/training_report.json`。确认后，在新目录提交 3 epochs：
+直接提交 3 epochs 正式训练；默认模式为 formal，无需 smoke 报告，也不自动执行 smoke：
 
 ```bash
 bash run_mizar_s1_5090.sh --mode formal \
-  --smoke-report /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/smoke_v4_async/smoke/training_report.json \
   --stage-start-steps 512 --stage-workers 16 \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/formal_v2_async
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/formal_async_v1
 ```
 
-也可以提交一个任务，先通过 smoke 门禁，再自动从原始预训练权重开始 3 epochs：
+提交入口、节点启动脚本和配置生成程序均已移除 smoke PASS 硬门槛及 `--smoke-report` 参数；不读取或比较历史 smoke 的代码/数据/资产身份。仍记录本次配置、权重 SHA256 和软件版本，核对数据映射、tokenizer、参数组、精度、HTSAT 冻结和 staging 就绪状态。预拷贝步数/复制线程数只控制 I/O，不进入训练语义合同。
 
-```bash
-bash run_mizar_s1_5090.sh --mode smoke-then-formal \
-  --stage-start-steps 512 --stage-workers 16 \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/async_s1_v1
-```
+如需手动诊断，仍可显式用 `--mode smoke` 单独执行 8 次真实更新，但该模式不参与 formal 的启动流程。
 
-正式训练不接着 smoke 权重继续更新。门禁核对全部 8 ranks 的 8 次更新、梯度、权重变化、HTSAT 冻结、序列长度、完整 checkpoint、staging 完成，以及同一代码、数据、预训练权重与软件版本。代码或训练配方发生变化后，需要重跑 smoke；预拷贝步数/复制线程数只控制 I/O，不进入训练语义合同。
-
-只有本路线同一完整配方的 formal checkpoint 可以用 `--mode formal --smoke-report ... --resume-checkpoint ...` 恢复。保存 optimizer、scheduler、scaler、GradNorm、每个 rank RNG 和 epoch/batch 游标；smoke checkpoint 不接受用于 formal resume。
+只有本路线同一完整配方的 formal checkpoint 可以用 `--mode formal --resume-checkpoint ...` 恢复。保存 optimizer、scheduler、scaler、GradNorm、每个 rank RNG 和 epoch/batch 游标；smoke checkpoint 不接受用于 formal resume。
 
 ## 审计产物与验收
 
@@ -153,9 +139,9 @@ bash run_mizar_s1_5090.sh --mode smoke-then-formal \
 
 上一版 8 项小型张量测试已由用户在远程通过（2026-10-21，PyTorch 2.11.0+cu128 / CUDA 12.8，8 张卡可见），按用户要求注释掉 `run.sh` 中的自动执行入口。文件仍保留，如需手动诊断，可在本路线目录执行 `python runtime_checks.py`。本次修正其中的 PAD/EOS 用例，加入 PAD=17 的忽略检查与 EOS=0 的监督检查；修正后的张量用例尚未远程执行。这 8 项单元检查与下面的 8 次真实训练更新是两个步骤。
 
-远程 `smoke_v2` 曾被错误的 `pad_id == 0` 预检阻断，修正 PAD=17 / EOS=SEP=0 后，用户确认 `smoke_v3` 的 8 次真实 optimizer updates 已 PASS。随后 formal 在全量 staging 到约 215,040/333,510 文件时无 traceback 中止；GPU 空闲回收是用户基于平台经验的判断，尚无平台退出原因证明。本次后台 staging 改动后代码身份已变化，旧 `smoke_v3` 不能通过新门禁；建议用上面的 `smoke-then-formal` 一次任务重新验证并开始正式训练。
+远程 `smoke_v2` 曾被错误的 `pad_id == 0` 预检阻断，修正 PAD=17 / EOS=SEP=0 后，用户确认 `smoke_v3` 的 8 次真实 optimizer updates 已 PASS。随后 formal 在全量 staging 到约 215,040/333,510 文件时无 traceback 中止；GPU 空闲回收是用户基于平台经验的判断，尚无平台退出原因证明。当前按用户要求采用后台 staging 并直接 formal，不要求重跑 smoke。
 
-staging 完成并启动 trainer 后，每来源 1 行通过训练数据加载器在线解码并经过真实 HTSAT→mapper→LM→CE。smoke 再让每卡实际训练 8 批，共 256 次样本使用，并检查第 1/8 步三个可训练组件的非零有限梯度、权重变化及 HTSAT 完全不变。该端到端 smoke 和正式训练门禁保留。
+预拷贝就绪并启动 trainer 后，每来源 1 行通过训练数据加载器在线解码并经过真实 HTSAT→mapper→LM→CE。仅当显式选择 smoke 时，每卡实际训练 8 批，共 256 次样本使用，并检查第 1/8 步三个可训练组件的非零有限梯度、权重变化及 HTSAT 完全不变。正式训练直接按完整 3 epochs 配方更新。
 
 用户日志中 8 项测试的主体耗时为 0.034 秒，跳过它们对长时间 GPU 空闲的改善有限。索引完整 manifest 和复制原始音频仍需要准备时间；日志与 `staging_report.json.phase_seconds` 分别记录加载映射、建立索引/选择文件及复制耗时。
 
@@ -163,7 +149,7 @@ smoke checkpoint 为 `checkpoints/model--step-8.ckpt`，保存后重新读取并
 
 这不是全量音频解码审计；未抽到的坏文件仍可能在正式训练中暴露。训练期间解码失败会带原始行、来源和路径中止，不会默默跳过。
 
-本地验证记录：路线标准库测试 13 项、后台 staging 并发/故障测试 9 项、已有过滤/映射测试 11 项通过；涵盖八卡连续分片与 resume 索引、跨预拷贝边界等待、后续 epoch 等待全量、原子复制、后台失败/进程消失/心跳超时、PAD/EOS 合同，以及实际 Bash 入口在正常/配置失败时的并行执行和进程清理模拟。Python 与两份 Bash 启动脚本语法检查通过。官方函数对照覆盖 1,344 次文本与随机状态比较、8 次 tokenizer 参数比较、122,938 个 LR 位置、10,000 次 GradNorm 标量比较。本地没有 PyTorch、数据、预训练权重或 CUDA；后台 staging 版本的真实 8 卡训练尚待远程报告。现有统一 evaluator 尚未适配此路线的新序列合同与 checkpoint。
+本地验证记录：本次移除 smoke 门槛后，路线标准库测试 13 项、后台 staging 并发/故障测试 9 项通过；已有过滤/映射测试 11 项在此前通过。当前测试验证无 smoke 报告的完整 formal 配置生成、八卡连续分片与 resume 索引、跨预拷贝边界等待、后续 epoch 等待全量、原子复制、后台失败/进程消失/心跳超时、PAD/EOS 合同，以及实际 Bash formal 入口在正常/配置失败时的并行执行和进程清理模拟。Python 与两份 Bash 启动脚本语法检查通过。此前官方函数对照覆盖 1,344 次文本与随机状态比较、8 次 tokenizer 参数比较、122,938 个 LR 位置、10,000 次 GradNorm 标量比较。本地没有 PyTorch、数据、预训练权重或 CUDA；后台 staging 版本的真实 8 卡训练尚待远程报告。现有统一 evaluator 尚未适配此路线的新序列合同与 checkpoint。
 
 ## 许可证
 

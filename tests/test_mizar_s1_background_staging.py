@@ -272,8 +272,15 @@ case "$1" in
     done
     exit 9
     ;;
-  write_config.py) [[ "$RSM_TEST_FAIL" != 1 ]] || exit 7 ;;
-  -) cat > /dev/null ;;
+  write_config.py)
+    [[ " $* " == *" --mode formal "* ]]
+    [[ " $* " != *" --smoke-report "* ]]
+    [[ "$RSM_TEST_FAIL" != 1 ]] || exit 7
+    ;;
+  -)
+    [[ "$3" == formal && -f "$RSM_TEST_DIR/training_done" ]]
+    cat > /dev/null
+    ;;
   *) exit 9 ;;
 esac
 '''
@@ -306,8 +313,8 @@ exit 9
                 resolution.write_text("fixture\n", encoding="utf-8")
                 env = dict(os.environ, MELLOW_CONDA_BASE=bash_path(root), RSM_TEST_DIR=bash_path(root),
                            RSM_TEST_FAIL=str(int(fail)), PATH=f"{bash_path(root / 'bin')}:/usr/bin:/bin")
-                result = subprocess.run([bash, bash_path(script), "smoke", bash_path(resolution),
-                                         bash_path(root / "output"), "", "", bash_path(root), bash_path(root), "512", "2"],
+                result = subprocess.run([bash, bash_path(script), "formal", bash_path(resolution),
+                                         bash_path(root / "output"), "", bash_path(root), bash_path(root), "512", "2"],
                                         env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
                 self.assertEqual(result.returncode, 7 if fail else 0, result.stdout + result.stderr)
                 self.assertTrue((root / "cleaned").exists(), result.stdout + result.stderr)
