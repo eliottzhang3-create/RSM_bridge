@@ -269,6 +269,7 @@ def build_recursive_indexes(rules: list[dict[str, Any]]) -> None:
             metadata_root: Path = rule["metadata_root"]
             keys_to_splits: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
             starts_by_split_id: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
+            metadata_audit: dict[str, Any] = {}
             for split in ("train", "val", "test"):
                 csv_path = metadata_root / f"{split}.csv"
                 if not csv_path.is_file():
@@ -280,24 +281,52 @@ def build_recursive_indexes(rules: list[dict[str, Any]]) -> None:
                         raise ValueError(
                             f"{csv_path} must contain columns youtube_id and start_time"
                         )
-                    for line_number, row in enumerate(reader, start=2):
+                    records = 0
+                    indexed_records = 0
+                    skipped_reasons: Counter[str] = Counter()
+                    skipped_examples: list[dict[str, Any]] = []
+                    for record_number, row in enumerate(reader, start=2):
+                        records += 1
                         youtube_id = text(row.get("youtube_id"))
                         start_raw = text(row.get("start_time"))
+                        reason = ""
+                        start_time = ""
                         try:
+                            if not start_raw:
+                                raise ValueError("empty_start_time")
                             start_number = float(start_raw)
                             if not start_number.is_integer() or start_number < 0:
-                                raise ValueError
+                                raise ValueError("invalid_start_time")
                             start_time = str(int(start_number))
                         except (TypeError, ValueError, OverflowError) as exc:
-                            raise ValueError(
-                                f"{csv_path}:{line_number}: invalid start_time {start_raw!r}"
-                            ) from exc
+                            reason = str(exc) or "invalid_start_time"
+                            if reason not in {"empty_start_time", "invalid_start_time"}:
+                                reason = "invalid_start_time"
                         if not youtube_id:
-                            raise ValueError(f"{csv_path}:{line_number}: empty youtube_id")
+                            reason = reason or "empty_youtube_id"
+                        if reason:
+                            skipped_reasons[reason] += 1
+                            if len(skipped_examples) < 20:
+                                skipped_examples.append({
+                                    "record": record_number,
+                                    "youtube_id": youtube_id,
+                                    "start_time": start_raw,
+                                    "reason": reason,
+                                })
+                            continue
                         keys_to_splits[(youtube_id, start_time)].add(split)
                         starts_by_split_id[(split, youtube_id)].add(start_time)
+                        indexed_records += 1
+                    metadata_audit[split] = {
+                        "records": records,
+                        "indexed_records": indexed_records,
+                        "skipped_records": sum(skipped_reasons.values()),
+                        "skipped_by_reason": dict(skipped_reasons),
+                        "skipped_examples_first_20": skipped_examples,
+                    }
             rule["_audiocaps_keys_to_splits"] = dict(keys_to_splits)
             rule["_audiocaps_starts_by_split_id"] = dict(starts_by_split_id)
+            rule["_audiocaps_metadata_audit"] = metadata_audit
             continue
         basename: defaultdict[str, list[str]] = defaultdict(list)
         normalized_stem: defaultdict[str, list[str]] = defaultdict(list)
@@ -738,6 +767,11 @@ def main(argv: list[str] | None = None) -> int:
             }
             for rule in rules
         ],
+        "metadata_audit": {
+            rule["name"]: rule["_audiocaps_metadata_audit"]
+            for rule in rules
+            if "_audiocaps_metadata_audit" in rule
+        },
         "decoder": {"requested": bool(args.decode), "ffprobe": ffprobe, "unique_attempts": decode_attempts},
         "counts": dict(counters),
         "source_rows": dict(source_counts),

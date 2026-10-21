@@ -143,6 +143,35 @@ class AudioCapsV2MappingTest(unittest.TestCase):
             self.assertEqual(issues[0]["method"], "audiocaps_v2_legacy_name_loses_start_time")
             self.assertEqual((output / "retained_missing.jsonl").read_text(), "")
 
+    def test_empty_csv_start_time_is_skipped_and_reported(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            audio = root / "train" / "YpgLXVFvo5GI.wav"
+            audio.parent.mkdir()
+            audio.touch()
+            self.make_rules(root, [("pgLXVFvo5GI", 27)])
+            with (root / "train.csv").open("a", encoding="utf-8") as handle:
+                handle.write("anotherVideoId,,bad metadata row\n")
+            manifest = root / "s1.json"
+            manifest.write_text(json.dumps([{
+                "source_dataset": "AudioMCQ",
+                "audio_path": "audiocaps_audios/pgLXVFvo5GI_27.wav",
+            }]), encoding="utf-8")
+            output = root / "audit"
+            with redirect_stdout(io.StringIO()):
+                code = audit.main([
+                    "--manifest", str(manifest),
+                    "--mapping-json", str(root / "mapping.json"),
+                    "--output-dir", str(output),
+                    "--progress-every", "0",
+                ])
+            report = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+            train_audit = report["metadata_audit"]["audiomcq_audiocaps"]["train"]
+            self.assertEqual(code, 0)
+            self.assertEqual(train_audit["skipped_records"], 1)
+            self.assertEqual(train_audit["skipped_by_reason"], {"empty_start_time": 1})
+            self.assertEqual(train_audit["skipped_examples_first_20"][0]["record"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()
