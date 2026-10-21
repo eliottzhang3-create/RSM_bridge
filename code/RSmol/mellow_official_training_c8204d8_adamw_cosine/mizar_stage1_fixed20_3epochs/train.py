@@ -24,7 +24,8 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
 from contract import (ANSWER_TOKENS, BATCH_SIZE, EPOCHS, PREFIX_TOKENS, ROUTE, SEED,
-                      WORLD_SIZE, code_digest, digest, lr_factor, rank_seed, write_json)
+                      WORLD_SIZE, code_digest, digest, lr_factor, rank_seed,
+                      validate_tokenizer_contract, write_json)
 from data.audiotext_dataset import AudioTextDataset, collate_fn
 from data.sampler import CustomDistributedSampler
 from models.mellow import Mellow
@@ -125,14 +126,13 @@ def gradient_audit(model):
 
 def inspect_tokenizer(dataset, model):
     tokenizer = dataset.tokenizer
-    if dataset.pad_id != 0 or len(tokenizer) != model.caption_decoder.lm.get_input_embeddings().num_embeddings:
-        raise ValueError("expected original SmolLM2 tokenizer: !/SEP=0, unchanged vocabulary")
+    audit = validate_tokenizer_contract(
+        tokenizer, dataset.pad_id, model.caption_decoder.lm.get_input_embeddings().num_embeddings)
     if model.caption_decoder.lm_embedding_size != 576:
         raise ValueError("this route preserves the existing 576-dimensional SmolLM2 architecture")
     short = dataset.tokenize("hello", 256)
     long = dataset.tokenize("hello " * 2000, 256)
-    return {"pad_token": tokenizer.pad_token, "ignore_index": dataset.pad_id,
-            "sep_id": 0, "eos_id": tokenizer.eos_token_id,
+    return {**audit, "ignore_index": dataset.pad_id,
             "eos_suffix_token_ids": tokenizer.encode(" <|endoftext|>", add_special_tokens=False),
             "short_prompt_attention_tokens": int(short["attention_mask"].sum()),
             "short_prompt_pad_tokens": int(short["attention_mask"].eq(0).sum()),
@@ -290,6 +290,9 @@ def train(config, rank, device):
             f"{name}\t{p.numel()}\t{list(p.shape)}" for name, p in model.named_parameters() if p.requires_grad) + "\n", encoding="utf-8")
         print(json.dumps({"event": "PREFLIGHT_PASS", "geometry": geometry,
                           "layout": "audio[129+129] -> SEP[1] -> prompt[256] -> answer[300]",
+                          "tokenizer": {key: tokenizer_audit[key] for key in
+                                        ("pad_id", "sep_id", "eos_id", "ignore_index",
+                                         "tokenizer_vocab_rows", "embedding_rows")},
                           "optimizer_lrs": audit["initial_optimizer_lrs"]}), flush=True)
     sampler = CustomDistributedSampler(dataset, WORLD_SIZE, rank, shuffle=True, seed=SEED, drop_last=True)
     max_steps = config["max_optimizer_steps"]

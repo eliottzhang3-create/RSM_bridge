@@ -56,6 +56,29 @@ class MizarS1RouteTests(unittest.TestCase):
         self.assertAlmostEqual(contract.lr_factor(total, total), .1)
         self.assertGreater(contract.lr_factor(total - 1, total), .1)
 
+    def test_tokenizer_contract_keeps_pad_distinct_from_eos_and_separator(self):
+        case = self
+
+        class Tokenizer:
+            pad_token, pad_token_id, eos_token_id = "!", 17, 0
+
+            def __len__(self):
+                return 49152
+
+            def encode(self, text, add_special_tokens=False):
+                case.assertEqual(text, "!")
+                case.assertFalse(add_special_tokens)
+                return [17]
+
+        tokenizer = Tokenizer()
+        audit = contract.validate_tokenizer_contract(tokenizer, 17, 49152)
+        self.assertEqual(audit["pad_id"], 17)
+        self.assertEqual((audit["sep_id"], audit["eos_id"]), (0, 0))
+        with self.assertRaisesRegex(ValueError, "aliases SEP/EOS"):
+            contract.validate_tokenizer_contract(tokenizer, 0, 49152)
+        with self.assertRaisesRegex(ValueError, "embedding rows"):
+            contract.validate_tokenizer_contract(tokenizer, 17, 49151)
+
     def test_original_recording_not_historical_chunk2(self):
         row = {"source_dataset": "reasonaqa_oneaudio", "filepath1_original": "raw.wav",
                "filepath1": "processed_chunk1.wav", "filepath2": "processed_chunk2.wav"}

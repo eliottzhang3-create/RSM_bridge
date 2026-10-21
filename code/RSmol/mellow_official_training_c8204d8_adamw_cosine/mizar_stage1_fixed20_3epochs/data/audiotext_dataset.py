@@ -63,8 +63,12 @@ class AudioTextDataset(Dataset):
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
         self.tokenizer.add_special_tokens({"pad_token": "!"})
         self.pad_id = self.tokenizer.encode(self.tokenizer.pad_token)[0]
-        if self.pad_id != self.tokenizer.pad_token_id:
-            raise ValueError("pad token ID differs from the official CE ignore_index")
+        if (self.tokenizer.pad_token != "!" or self.pad_id != self.tokenizer.pad_token_id
+                or self.pad_id == self.tokenizer.eos_token_id):
+            raise ValueError(
+                "invalid Mizar pad token: expected a non-EOS ! token; "
+                f"pad_token={self.tokenizer.pad_token!r} pad_id={self.pad_id} "
+                f"tokenizer_pad_id={self.tokenizer.pad_token_id} eos_id={self.tokenizer.eos_token_id}")
 
     def __len__(self):
         return len(self.rows)

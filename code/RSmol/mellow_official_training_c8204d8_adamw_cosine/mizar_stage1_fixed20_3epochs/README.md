@@ -64,9 +64,9 @@ HTSAT(10s)[129] + HTSAT(10s)[129] + SEP[1] + prompt[256] + answer[300]
 
 HTSAT 主干固定 `eval()`、`no_grad()`；原有 c2l（527→768）、残差 projection（768→576，dropout 0.5）和完整 SmolLM2 参与训练。没有新增循环模块或 LoRA。
 
-prompt 和 answer 各自在分词前追加 `" <|endoftext|>"`，然后分别截断/补齐到 256 / 300；若 EOS 被截断，不强制插回。PAD 为已有词表的 `!`（ID 0），SEP 同为 ID 0。LM 接收 `attention_mask=None`、`labels=None`、`use_cache=False`，固定 padding 位置参与因果注意力。
+prompt 和 answer 各自在分词前追加 `" <|endoftext|>"`，然后分别截断/补齐到 256 / 300；若 EOS 被截断，不强制插回。PAD 为已有词表的 `!`（当前 SmolLM2 为 ID 17）；SEP 与 EOS 都是 ID 0。LM 接收 `attention_mask=None`、`labels=None`、`use_cache=False`，固定 padding 位置参与因果注意力。
 
-外部 next-token CE 只预测 answer，忽略 ID 0 的目标；prompt / audio 不计 loss。先求每个 rank 有效 answer token 的均值，再由 DDP 平均梯度，与旧路线的全局 token 加权均值不同。
+外部 next-token CE 只预测 answer，忽略从 `tokenizer.pad_token_id` 解析出的 PAD 目标（当前为 ID 17）；EOS（ID 0）是正常监督目标。prompt / audio 不计 loss。先求每个 rank 有效 answer token 的均值，再由 DDP 平均梯度，与旧路线的全局 token 加权均值不同。
 
 ## 优化与采样
 
@@ -136,7 +136,9 @@ bash run_mizar_s1_5090.sh --mode smoke-then-formal \
 - `training_report.json`：最终成功报告；失败则尽可能写入 `failure_rank<N>.json` 并使任务失败。
 - `checkpoints/`：完整状态 checkpoint。
 
-8 项小型张量测试已由用户在远程通过（2026-10-21，PyTorch 2.11.0+cu128 / CUDA 12.8，8 张卡可见），按用户要求注释掉 `run.sh` 中的自动执行入口。文件仍保留，如需手动诊断，可在本路线目录执行 `python runtime_checks.py`。这 8 项单元检查与下面的 8 次真实训练更新是两个步骤。
+上一版 8 项小型张量测试已由用户在远程通过（2026-10-21，PyTorch 2.11.0+cu128 / CUDA 12.8，8 张卡可见），按用户要求注释掉 `run.sh` 中的自动执行入口。文件仍保留，如需手动诊断，可在本路线目录执行 `python runtime_checks.py`。本次修正其中的 PAD/EOS 用例，加入 PAD=17 的忽略检查与 EOS=0 的监督检查；修正后的张量用例尚未远程执行。这 8 项单元检查与下面的 8 次真实训练更新是两个步骤。
+
+远程 `smoke_v2` 已完成 staging（277 个去重原始文件），随后被错误的 `pad_id == 0` 预检阻断，尚未进入训练。本次修正按实际 tokenizer 验证 `!` 的 PAD ID，不再将 PAD 与 SEP 混同，并在错误与 `config_audit.json` 中记录具体 ID、词表长度和 embedding 行数。同步后用新输出目录（例如 `smoke_v3`）重新运行 8 步 smoke；`PREFLIGHT_PASS` 日志应显示 `pad_id=17, sep_id=0, eos_id=0, ignore_index=17`。
 
 staging 完成并启动 trainer 后，每来源 1 行通过训练数据加载器在线解码并经过真实 HTSAT→mapper→LM→CE。smoke 再让每卡实际训练 8 批，共 256 次样本使用，并检查第 1/8 步三个可训练组件的非零有限梯度、权重变化及 HTSAT 完全不变。该端到端 smoke 和正式训练门禁保留。
 
@@ -146,7 +148,7 @@ smoke checkpoint 为 `checkpoints/model--step-8.ckpt`，保存后重新读取并
 
 这不是全量音频解码审计；未抽到的坏文件仍可能在正式训练中暴露。训练期间解码失败会带原始行、来源和路径中止，不会默默跳过。
 
-本地验证记录：新路线标准库测试 12 项、已有过滤/映射测试 11 项通过；包含 staging 文件选择、去重和原始字节复制检查。Python 语法及两份 Bash 启动脚本语法检查通过。官方函数对照覆盖 1,344 次文本与随机状态比较、8 次 tokenizer 参数比较、122,938 个 LR 位置、10,000 次 GradNorm 标量比较。本地没有 PyTorch、数据、预训练权重或 CUDA；远程 8 项小型张量检查已通过，8 卡真实训练 smoke 和正式训练尚待远程报告。现有统一 evaluator 尚未适配此路线的新序列合同与 checkpoint。
+本地验证记录：新路线标准库测试 13 项、已有过滤/映射测试 11 项通过；包含 PAD/EOS 合同、staging 文件选择、去重和原始字节复制检查。Python 语法及两份 Bash 启动脚本语法检查通过。官方函数对照覆盖 1,344 次文本与随机状态比较、8 次 tokenizer 参数比较、122,938 个 LR 位置、10,000 次 GradNorm 标量比较。本地没有 PyTorch、数据、预训练权重或 CUDA；上一版远程 8 项小型张量检查已通过，修正后的 8 卡真实训练 smoke 和正式训练尚待远程报告。现有统一 evaluator 尚未适配此路线的新序列合同与 checkpoint。
 
 ## 许可证
 

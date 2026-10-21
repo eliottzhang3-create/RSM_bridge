@@ -86,11 +86,11 @@ class RuntimeChecks(unittest.TestCase):
             def __init__(self):
                 super().__init__()
                 self.model = nn.Module()
-                self.model.embed_tokens = nn.Embedding(17, 6)
+                self.model.embed_tokens = nn.Embedding(32, 6)
 
             def forward(self, **kwargs):
                 self.seen = kwargs
-                return SimpleNamespace(logits=torch.zeros(2, 815, 17))
+                return SimpleNamespace(logits=torch.zeros(2, 815, 32))
 
         decoder = DecoderModel.__new__(DecoderModel)
         nn.Module.__init__(decoder)
@@ -98,8 +98,10 @@ class RuntimeChecks(unittest.TestCase):
         a, b = torch.randn(2, 1025, 6), torch.randn(2, 1025, 6)
         prompt = {"input_ids": torch.ones(2, 256, dtype=torch.long),
                   "attention_mask": torch.zeros(2, 256, dtype=torch.long)}
+        pad_id, eos_id = 17, 0
         targets = (torch.arange(300).repeat(2, 1) % 15 + 1).long()
-        targets[:, 200:] = 0
+        targets[:, 199] = eos_id
+        targets[:, 200:] = pad_id
         answer = {"input_ids": targets}
         decoder(a, b, prompt, answer)
         seen = decoder.lm.seen
@@ -112,14 +114,21 @@ class RuntimeChecks(unittest.TestCase):
         self.assertTrue(torch.equal(embedding[:, 258], decoder.lm.model.embed_tokens.weight[0].expand(2, -1)))
         # Only positions 514..813 predict the 300 answer targets. This detects
         # a one-position shift and including PAD targets in the loss.
-        logits = torch.zeros(2, 815, 17)
+        logits = torch.zeros(2, 815, 32)
         for batch in range(2):
             for index in range(200):
                 logits[batch, 514 + index, targets[batch, index]] = 30.
-        loss = answer_loss(SimpleNamespace(logits=logits), {"answer": answer}, 0)
+        loss = answer_loss(SimpleNamespace(logits=logits), {"answer": answer}, pad_id)
         self.assertLess(loss.item(), 1e-6)
-        logits[:, 513:713] = 0
-        self.assertGreater(answer_loss(SimpleNamespace(logits=logits), {"answer": answer}, 0).item(), 2.)
+        eos_wrong = logits.clone()
+        eos_wrong[:, 514 + 199] = 0
+        eos_wrong[:, 514 + 199, 1] = 30.
+        self.assertGreater(answer_loss(SimpleNamespace(logits=eos_wrong), {"answer": answer}, pad_id).item(), .1)
+        pad_noise = logits.clone()
+        pad_noise[:, 514 + 200:514 + 300, 1] = 30.
+        self.assertLess(answer_loss(SimpleNamespace(logits=pad_noise), {"answer": answer}, pad_id).item(), 1e-6)
+        logits[:, 514:714] = 0
+        self.assertGreater(answer_loss(SimpleNamespace(logits=logits), {"answer": answer}, pad_id).item(), 2.)
 
     def test_gradnorm_ema_common_scale_and_restore(self):
         a, b = nn.Parameter(torch.zeros(2)), nn.Parameter(torch.zeros(1))

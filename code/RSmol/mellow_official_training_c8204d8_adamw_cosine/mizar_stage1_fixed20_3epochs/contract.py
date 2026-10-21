@@ -12,11 +12,56 @@ ROUTE = "htsat_mizar_s1_fixed20_v1"
 WORLD_SIZE, BATCH_SIZE, EPOCHS, SEED = 8, 4, 3, 1234
 PROMPT_TOKENS, ANSWER_TOKENS, AUDIO_TOKENS = 256, 300, 258
 PREFIX_TOKENS = AUDIO_TOKENS + 1 + PROMPT_TOKENS
+PAD_TOKEN, SEPARATOR_TOKEN_ID, EOS_TOKEN_ID = "!", 0, 0
 SOURCE_COUNTS = {
     "reasonaqa_oneaudio": 756968, "AudioCaps": 113844, "Clotho": 4798,
     "CompA-R": 249161, "LP-MusicCaps-MTT": 19632,
     "SpeechCraft": 124790, "TACOS": 42141,
 }
+
+
+def validate_tokenizer_contract(tokenizer, pad_id, embedding_rows):
+    """Validate the Mizar text-token contract without assuming PAD aliases EOS.
+
+    Mizar registers the existing token ``!`` as padding.  In the checked
+    SmolLM2 vocabulary that token is ID 17; ID 0 remains both EOS and the
+    single audio/text separator.  Derive the padding ID from the tokenizer so
+    this remains valid for an unchanged compatible tokenizer, while requiring
+    it to be distinct from the separator/EOS token.
+    """
+    tokenizer_rows = len(tokenizer)
+    tokenizer_pad_id = getattr(tokenizer, "pad_token_id", None)
+    eos_id = getattr(tokenizer, "eos_token_id", None)
+    encoded_pad = tokenizer.encode(PAD_TOKEN, add_special_tokens=False)
+    audit = {
+        "pad_token": getattr(tokenizer, "pad_token", None),
+        "pad_id": int(pad_id),
+        "tokenizer_pad_id": tokenizer_pad_id,
+        "sep_id": SEPARATOR_TOKEN_ID,
+        "eos_id": eos_id,
+        "encoded_pad_ids": encoded_pad,
+        "tokenizer_vocab_rows": tokenizer_rows,
+        "embedding_rows": int(embedding_rows),
+    }
+    problems = []
+    if audit["pad_token"] != PAD_TOKEN:
+        problems.append(f"pad_token={audit['pad_token']!r}, expected {PAD_TOKEN!r}")
+    if audit["pad_id"] != tokenizer_pad_id:
+        problems.append(f"dataset pad_id={audit['pad_id']}, tokenizer.pad_token_id={tokenizer_pad_id}")
+    if encoded_pad != [audit["pad_id"]]:
+        problems.append(f"encode({PAD_TOKEN!r})={encoded_pad}, expected [{audit['pad_id']}]")
+    if audit["pad_id"] in {SEPARATOR_TOKEN_ID, EOS_TOKEN_ID}:
+        problems.append(f"pad_id={audit['pad_id']} aliases SEP/EOS={SEPARATOR_TOKEN_ID}")
+    if eos_id != EOS_TOKEN_ID:
+        problems.append(f"eos_token_id={eos_id}, expected {EOS_TOKEN_ID}")
+    if tokenizer_rows != embedding_rows:
+        problems.append(f"tokenizer rows={tokenizer_rows}, embedding rows={embedding_rows}")
+    if not 0 <= audit["pad_id"] < embedding_rows:
+        problems.append(f"pad_id={audit['pad_id']} is outside embedding rows={embedding_rows}")
+    if problems:
+        details = ", ".join(f"{key}={value!r}" for key, value in audit.items())
+        raise ValueError("invalid SmolLM2 tokenizer contract: " + "; ".join(problems) + "; " + details)
+    return audit
 
 
 def write_json(path, value):
