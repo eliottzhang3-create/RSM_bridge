@@ -30,13 +30,11 @@
       "name": "audiomcq_audiocaps",
       "field": "audio_path",
       "prefix": "audiocaps_audios/",
-      "match": "basename",
+      "match": "audiocaps_v2",
       "roots": [
-        "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2",
-        "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2/train",
-        "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2/val",
-        "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2/test"
-      ]
+        "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2"
+      ],
+      "metadata_root": "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2"
     },
     {
       "name": "clotho",

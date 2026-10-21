@@ -27,12 +27,17 @@ candidate wins.  Keeping several roots in one rule is useful when a dataset
 has separate train/validation directories.  A rule may set ``match`` to
 ``basename`` or ``normalized_stem`` to search recursively below its roots
 after the exact candidates fail; only a unique match is accepted.  Original
-manifest text is never rewritten.
+manifest text is never rewritten.  ``match: "audiocaps_v2"`` instead reads
+train/val/test CSVs from ``metadata_root``, validates the YouTube ID and start
+time, then checks the corresponding split below each audio root.  Legacy
+``Y<id>.wav`` names are accepted only when the CSV has one distinct start
+time for that ID in the split; repeated captions for the same clip are fine.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import gzip
 import json
 import math
@@ -222,23 +227,29 @@ def load_rules(path: Path) -> list[dict[str, Any]]:
         if isinstance(roots, (str, Path)):
             roots = [str(roots)]
         match = text(raw.get("match") or "exact").lower()
-        if match not in {"exact", "basename", "normalized_stem"}:
+        if match not in {"exact", "basename", "normalized_stem", "audiocaps_v2"}:
             raise ValueError(
                 f"mapping rule {name!r} has unsupported match {match!r}; "
-                "use exact, basename, or normalized_stem"
+                "use exact, basename, normalized_stem, or audiocaps_v2"
             )
         if not field or not isinstance(roots, list) or not roots:
             raise ValueError(f"mapping rule {name!r} requires field and roots")
         normalised_roots = [Path(str(root)).expanduser() for root in roots if text(root)]
         if not normalised_roots:
             raise ValueError(f"mapping rule {name!r} has no non-empty roots")
-        rules.append({
+        rule = {
             "name": name,
             "field": field,
             "prefix": prefix,
             "roots": normalised_roots,
             "match": match,
-        })
+        }
+        if match == "audiocaps_v2":
+            metadata_root = text(raw.get("metadata_root"))
+            if not metadata_root:
+                raise ValueError(f"mapping rule {name!r} requires metadata_root for audiocaps_v2")
+            rule["metadata_root"] = Path(metadata_root).expanduser()
+        rules.append(rule)
     return rules
 
 
@@ -249,10 +260,44 @@ def normalized_stem_key(value: str) -> str:
 
 
 def build_recursive_indexes(rules: list[dict[str, Any]]) -> None:
-    """Build small basename/stem indexes only for rules that request fallback matching."""
+    """Build requested basename/stem indexes or the AudioCaps CSV lookup."""
 
     for rule in rules:
         if rule["match"] == "exact":
+            continue
+        if rule["match"] == "audiocaps_v2":
+            metadata_root: Path = rule["metadata_root"]
+            keys_to_splits: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
+            starts_by_split_id: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
+            for split in ("train", "val", "test"):
+                csv_path = metadata_root / f"{split}.csv"
+                if not csv_path.is_file():
+                    raise ValueError(f"AudioCaps v2 metadata file does not exist: {csv_path}")
+                with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                    reader = csv.DictReader(handle)
+                    required = {"youtube_id", "start_time"}
+                    if not reader.fieldnames or not required.issubset(reader.fieldnames):
+                        raise ValueError(
+                            f"{csv_path} must contain columns youtube_id and start_time"
+                        )
+                    for line_number, row in enumerate(reader, start=2):
+                        youtube_id = text(row.get("youtube_id"))
+                        start_raw = text(row.get("start_time"))
+                        try:
+                            start_number = float(start_raw)
+                            if not start_number.is_integer() or start_number < 0:
+                                raise ValueError
+                            start_time = str(int(start_number))
+                        except (TypeError, ValueError, OverflowError) as exc:
+                            raise ValueError(
+                                f"{csv_path}:{line_number}: invalid start_time {start_raw!r}"
+                            ) from exc
+                        if not youtube_id:
+                            raise ValueError(f"{csv_path}:{line_number}: empty youtube_id")
+                        keys_to_splits[(youtube_id, start_time)].add(split)
+                        starts_by_split_id[(split, youtube_id)].add(start_time)
+            rule["_audiocaps_keys_to_splits"] = dict(keys_to_splits)
+            rule["_audiocaps_starts_by_split_id"] = dict(starts_by_split_id)
             continue
         basename: defaultdict[str, list[str]] = defaultdict(list)
         normalized_stem: defaultdict[str, list[str]] = defaultdict(list)
@@ -290,6 +335,14 @@ def resolve(raw_path: str, field: str, rules: list[dict[str, Any]]) -> dict[str,
         prefix = rule["prefix"]
         tail = normalized[len(prefix):] if prefix else normalized
         candidate_paths = [str(root / Path(tail)) for root in rule["roots"]]
+        if rule["match"] == "audiocaps_v2":
+            result = resolve_audiocaps_v2(tail, rule)
+            result["rule"] = rule["name"]
+            if result["status"] in {"exists", "ambiguous"}:
+                return result
+            if first_missing is None:
+                first_missing = result
+            continue
         for root in rule["roots"]:
             candidate = root / Path(tail)
             if candidate.is_file():
@@ -338,6 +391,117 @@ def resolve(raw_path: str, field: str, rules: list[dict[str, Any]]) -> dict[str,
     if absolute.is_absolute() and absolute.is_file():
         return {"status": "exists", "rule": "absolute", "path": str(absolute), "candidate_paths": [str(absolute)]}
     return {"status": "unmapped", "rule": "", "path": "", "candidate_paths": []}
+
+
+def resolve_audiocaps_v2(tail: str, rule: dict[str, Any]) -> dict[str, Any]:
+    """Resolve AudioMCQ's ``youtube_id_start.wav`` using AudioCaps v2 CSVs."""
+
+    filename = Path(tail).name
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    try:
+        youtube_id, start_raw = stem.rsplit("_", 1)
+        if not youtube_id or not start_raw.isdigit():
+            raise ValueError
+        start_time = str(int(start_raw))
+    except ValueError:
+        return {
+            "status": "unmapped",
+            "rule": rule["name"],
+            "path": "",
+            "candidate_paths": [],
+            "method": "invalid_audiocaps_reference",
+        }
+
+    keys_to_splits = rule.get("_audiocaps_keys_to_splits", {})
+    splits = sorted(keys_to_splits.get((youtube_id, start_time), set()))
+    if not splits:
+        return {
+            "status": "unmapped",
+            "rule": rule["name"],
+            "path": "",
+            "candidate_paths": [],
+            "method": "audiocaps_metadata_key_not_found",
+        }
+
+    candidates: list[Path] = []
+    canonical: list[Path] = []
+    aliases: list[Path] = []
+    ambiguous_aliases: list[Path] = []
+    starts_by_split_id = rule.get("_audiocaps_starts_by_split_id", {})
+    for split in splits:
+        starts = starts_by_split_id.get((split, youtube_id), set())
+        for root in rule["roots"]:
+            split_root = root / split
+            canonical_path = split_root / f"{youtube_id}_{start_time}{suffix}"
+            legacy_y_path = split_root / f"Y{youtube_id}{suffix}"
+            legacy_path = split_root / f"{youtube_id}{suffix}"
+            candidates.extend((canonical_path, legacy_y_path, legacy_path))
+            if canonical_path.is_file():
+                canonical.append(canonical_path)
+            if legacy_y_path.is_file():
+                if starts == {start_time}:
+                    aliases.append(legacy_y_path)
+                else:
+                    ambiguous_aliases.append(legacy_y_path)
+            if legacy_path.is_file():
+                if starts == {start_time}:
+                    aliases.append(legacy_path)
+                else:
+                    ambiguous_aliases.append(legacy_path)
+
+    # The canonical name retains the start time, so it is authoritative even
+    # when multiple clips from the same YouTube video occur in one split.
+    exact_matches = sorted({str(path.resolve()) for path in canonical})
+    if len(exact_matches) == 1:
+        return {
+            "status": "exists",
+            "rule": rule["name"],
+            "path": exact_matches[0],
+            "candidate_paths": [str(path) for path in candidates],
+            "method": "audiocaps_v2_csv_canonical",
+        }
+    if len(exact_matches) > 1:
+        return {
+            "status": "ambiguous",
+            "rule": rule["name"],
+            "path": "",
+            "candidate_paths": exact_matches,
+            "method": "audiocaps_v2_multiple_canonical_files",
+        }
+
+    if ambiguous_aliases:
+        return {
+            "status": "ambiguous",
+            "rule": rule["name"],
+            "path": "",
+            "candidate_paths": sorted({str(path.resolve()) for path in ambiguous_aliases}),
+            "method": "audiocaps_v2_legacy_name_loses_start_time",
+        }
+    alias_matches = sorted({str(path.resolve()) for path in aliases})
+    if len(alias_matches) == 1:
+        return {
+            "status": "exists",
+            "rule": rule["name"],
+            "path": alias_matches[0],
+            "candidate_paths": [str(path) for path in candidates],
+            "method": "audiocaps_v2_csv_legacy_youtube_id",
+        }
+    if len(alias_matches) > 1:
+        return {
+            "status": "ambiguous",
+            "rule": rule["name"],
+            "path": "",
+            "candidate_paths": alias_matches,
+            "method": "audiocaps_v2_multiple_legacy_files",
+        }
+    return {
+        "status": "missing",
+        "rule": rule["name"],
+        "path": str(candidates[0]) if candidates else "",
+        "candidate_paths": [str(path) for path in candidates],
+        "method": "audiocaps_v2_csv_key_file_missing",
+    }
 
 
 def tsv_value(value: Any) -> str:
@@ -451,13 +615,15 @@ def main(argv: list[str] | None = None) -> int:
 
     allowed_missing = (args.output_dir / "allowed_missing.jsonl").open("w", encoding="utf-8")
     retained_missing = (args.output_dir / "retained_missing.jsonl").open("w", encoding="utf-8")
+    ambiguous = (args.output_dir / "ambiguous.jsonl").open("w", encoding="utf-8")
     unmapped = (args.output_dir / "unmapped.jsonl").open("w", encoding="utf-8")
     decode_failures = (args.output_dir / "decode_failures.jsonl").open("w", encoding="utf-8")
-    issue_handles = (allowed_missing, retained_missing, unmapped, decode_failures)
+    issue_handles = (allowed_missing, retained_missing, ambiguous, unmapped, decode_failures)
     counters: Counter[str] = Counter()
     source_counts: Counter[str] = Counter()
     source_status: Counter[tuple[str, str]] = Counter()
     rule_counts: Counter[tuple[str, str]] = Counter()
+    method_counts: Counter[str] = Counter()
     reference_counts: Counter[str] = Counter()
     resolutions: dict[tuple[str, str], dict[str, Any]] = {}
     decode_results: dict[str, dict[str, Any]] = {}
@@ -494,7 +660,15 @@ def main(argv: list[str] | None = None) -> int:
             counters[status] += 1
             source_status[(source, status)] += 1
             rule_counts[(str(result.get("rule") or ""), status)] += 1
-            base.update({"status": status, "rule": result.get("rule", ""), "resolved_path": result.get("path", "")})
+            method_counts[str(result.get("method") or "unspecified")] += 1
+            base.update({
+                "status": status,
+                "rule": result.get("rule", ""),
+                "resolved_path": result.get("path", ""),
+                "method": result.get("method", ""),
+            })
+            if args.progress_every > 0 and (row_index + 1) % args.progress_every == 0:
+                print(f"audited {row_index + 1} rows", flush=True)
 
             if status == "exists":
                 counters["existing_rows"] += 1
@@ -525,26 +699,28 @@ def main(argv: list[str] | None = None) -> int:
                 counters["allowed_missing_rows"] += 1
                 counters[f"allowed_{allowed_kind}_rows"] += 1
                 write_jsonl(allowed_missing, issue)
+            elif status == "ambiguous":
+                counters["retained_ambiguous_rows"] += 1
+                write_jsonl(ambiguous, issue)
             elif status == "unmapped":
                 counters["retained_unmapped_rows"] += 1
                 write_jsonl(unmapped, issue)
             else:
                 counters["retained_missing_rows"] += 1
                 write_jsonl(retained_missing, issue)
-            if args.progress_every > 0 and (row_index + 1) % args.progress_every == 0:
-                print(f"audited {row_index + 1} rows", flush=True)
     finally:
         for handle in issue_handles:
             handle.close()
 
     with (args.output_dir / "resolved_paths.tsv").open("w", encoding="utf-8", newline="") as handle:
-        handle.write("field\traw_path\treferences\tstatus\trule\tresolved_path\tcandidate_paths\n")
+        handle.write("field\traw_path\treferences\tstatus\trule\tresolved_path\tcandidate_paths\tmethod\n")
         for key, result in sorted(resolutions.items()):
             field, raw_path = key
             handle.write("\t".join([
                 tsv_value(field), tsv_value(raw_path), str(reference_counts.get(f"{field}\t{raw_path}", 0)),
                 tsv_value(result.get("status", "")), tsv_value(result.get("rule", "")),
                 tsv_value(result.get("path", "")), tsv_value(" | ".join(result.get("candidate_paths", []))),
+                tsv_value(result.get("method", "")),
             ]) + "\n")
 
     summary = {
@@ -558,6 +734,7 @@ def main(argv: list[str] | None = None) -> int:
                 "prefix": rule["prefix"],
                 "match": rule["match"],
                 "roots": [str(root) for root in rule["roots"]],
+                **({"metadata_root": str(rule["metadata_root"])} if "metadata_root" in rule else {}),
             }
             for rule in rules
         ],
@@ -566,16 +743,18 @@ def main(argv: list[str] | None = None) -> int:
         "source_rows": dict(source_counts),
         "source_status": {f"{source}\t{status}": count for (source, status), count in sorted(source_status.items())},
         "rule_status": {f"{rule}\t{status}": count for (rule, status), count in sorted(rule_counts.items())},
+        "method_rows": dict(method_counts),
         "unique_raw_references": len(resolutions),
         "unique_existing_files": sum(1 for item in resolutions.values() if item.get("status") == "exists"),
         "unique_missing_or_unmapped_references": sum(1 for item in resolutions.values() if item.get("status") != "exists"),
         "decode_results": decode_results if args.decode else {},
-        "exit_policy": "allowed MusicCaps/train-other-500 issues are recorded but do not fail; retained missing/unmapped or decode failures return 2",
+        "exit_policy": "allowed MusicCaps/train-other-500 issues are recorded but do not fail; retained missing/ambiguous/unmapped or decode failures return 2",
     }
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     hard_failures = (
         counters["retained_missing_rows"]
+        + counters["retained_ambiguous_rows"]
         + counters["retained_unmapped_rows"]
         + counters["retained_decode_failure_rows"]
     )

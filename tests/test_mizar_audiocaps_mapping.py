@@ -1,0 +1,148 @@
+"""Tests for AudioCaps v2 ID/start-time path resolution in the Mizar audit."""
+from __future__ import annotations
+
+import importlib.util
+import io
+import json
+from contextlib import redirect_stdout
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "code/RSmol/scripts/audit_mizar_s1_raw_audio.py"
+SPEC = importlib.util.spec_from_file_location("mizar_audio_audit", SCRIPT)
+audit = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = audit
+SPEC.loader.exec_module(audit)
+
+
+class AudioCapsV2MappingTest(unittest.TestCase):
+    def make_rules(self, root: Path, train_rows: list[tuple[str, int]]) -> list[dict]:
+        for split, rows in {
+            "train": train_rows,
+            "val": [],
+            "test": [],
+        }.items():
+            contents = "youtube_id,start_time,caption\n" + "".join(
+                f"{youtube_id},{start_time},caption\n" for youtube_id, start_time in rows
+            )
+            (root / f"{split}.csv").write_text(contents, encoding="utf-8")
+        config = root / "mapping.json"
+        config.write_text(json.dumps({"rules": [{
+            "name": "audiomcq_audiocaps",
+            "field": "audio_path",
+            "prefix": "audiocaps_audios/",
+            "match": "audiocaps_v2",
+            "roots": [str(root)],
+            "metadata_root": str(root),
+        }]}), encoding="utf-8")
+        rules = audit.load_rules(config)
+        audit.build_recursive_indexes(rules)
+        return rules
+
+    def test_legacy_youtube_filename_maps_after_csv_key_check(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            audio = root / "train" / "YpgLXVFvo5GI.wav"
+            audio.parent.mkdir()
+            audio.touch()
+            rules = self.make_rules(root, [("pgLXVFvo5GI", 27), ("pgLXVFvo5GI", 27)])
+            result = audit.resolve("audiocaps_audios/pgLXVFvo5GI_27.wav", "audio_path", rules)
+            self.assertEqual(result["status"], "exists")
+            self.assertEqual(Path(result["path"]), audio.resolve())
+            self.assertEqual(result["method"], "audiocaps_v2_csv_legacy_youtube_id")
+
+    def test_legacy_filename_is_ambiguous_when_start_time_was_discarded(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            audio = root / "train" / "YpgLXVFvo5GI.wav"
+            audio.parent.mkdir()
+            audio.touch()
+            rules = self.make_rules(root, [("pgLXVFvo5GI", 27), ("pgLXVFvo5GI", 55)])
+            result = audit.resolve("audiocaps_audios/pgLXVFvo5GI_27.wav", "audio_path", rules)
+            self.assertEqual(result["status"], "ambiguous")
+            self.assertEqual(result["method"], "audiocaps_v2_legacy_name_loses_start_time")
+
+    def test_canonical_filename_preserves_start_time_even_if_id_repeats(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            audio = root / "train" / "pgLXVFvo5GI_27.wav"
+            audio.parent.mkdir()
+            audio.touch()
+            rules = self.make_rules(root, [("pgLXVFvo5GI", 27), ("pgLXVFvo5GI", 55)])
+            result = audit.resolve("audiocaps_audios/pgLXVFvo5GI_27.wav", "audio_path", rules)
+            self.assertEqual(result["status"], "exists")
+            self.assertEqual(Path(result["path"]), audio.resolve())
+            self.assertEqual(result["method"], "audiocaps_v2_csv_canonical")
+
+    def test_csv_key_and_audio_file_failures_are_distinguished(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rules = self.make_rules(root, [("pgLXVFvo5GI", 27)])
+            missing_file = audit.resolve(
+                "audiocaps_audios/pgLXVFvo5GI_27.wav", "audio_path", rules
+            )
+            unknown_key = audit.resolve(
+                "audiocaps_audios/pgLXVFvo5GI_28.wav", "audio_path", rules
+            )
+            self.assertEqual(missing_file["status"], "missing")
+            self.assertEqual(missing_file["method"], "audiocaps_v2_csv_key_file_missing")
+            self.assertEqual(unknown_key["status"], "unmapped")
+            self.assertEqual(unknown_key["method"], "audiocaps_metadata_key_not_found")
+
+    def test_full_audit_reports_legacy_resolution_method(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            audio = root / "train" / "YpgLXVFvo5GI.wav"
+            audio.parent.mkdir()
+            audio.touch()
+            self.make_rules(root, [("pgLXVFvo5GI", 27)])
+            manifest = root / "s1.json"
+            manifest.write_text(json.dumps([{
+                "source_dataset": "AudioMCQ",
+                "audio_path": "audiocaps_audios/pgLXVFvo5GI_27.wav",
+            }]), encoding="utf-8")
+            output = root / "audit"
+            with redirect_stdout(io.StringIO()):
+                code = audit.main([
+                    "--manifest", str(manifest),
+                    "--mapping-json", str(root / "mapping.json"),
+                    "--output-dir", str(output),
+                    "--progress-every", "0",
+                ])
+            report = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(code, 0)
+            self.assertEqual(report["counts"]["exists"], 1)
+            self.assertEqual(report["method_rows"]["audiocaps_v2_csv_legacy_youtube_id"], 1)
+
+    def test_full_audit_writes_ambiguous_rows_separately(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            audio = root / "train" / "YpgLXVFvo5GI.wav"
+            audio.parent.mkdir()
+            audio.touch()
+            self.make_rules(root, [("pgLXVFvo5GI", 27), ("pgLXVFvo5GI", 55)])
+            manifest = root / "s1.json"
+            manifest.write_text(json.dumps([{
+                "source_dataset": "AudioMCQ",
+                "audio_path": "audiocaps_audios/pgLXVFvo5GI_27.wav",
+            }]), encoding="utf-8")
+            output = root / "audit"
+            with redirect_stdout(io.StringIO()):
+                code = audit.main([
+                    "--manifest", str(manifest),
+                    "--mapping-json", str(root / "mapping.json"),
+                    "--output-dir", str(output),
+                    "--progress-every", "0",
+                ])
+            issues = [json.loads(line) for line in (output / "ambiguous.jsonl").read_text().splitlines()]
+            self.assertEqual(code, 2)
+            self.assertEqual(len(issues), 1)
+            self.assertEqual(issues[0]["method"], "audiocaps_v2_legacy_name_loses_start_time")
+            self.assertEqual((output / "retained_missing.jsonl").read_text(), "")
+
+
+if __name__ == "__main__":
+    unittest.main()
