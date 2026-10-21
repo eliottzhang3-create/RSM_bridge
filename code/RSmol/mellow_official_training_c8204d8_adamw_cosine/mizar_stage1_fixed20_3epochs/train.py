@@ -149,8 +149,8 @@ def probe_sources(model, dataset, prepared, device):
     try:
         with torch.no_grad():
             for source, indices in prepared["probe_rows"].items():
-                # All three rows/source were decoded at staging; one/source
-                # also passes the actual HTSAT -> mapper -> LM -> CE on GPU.
+                # Decode through the training loader, then run the real
+                # HTSAT -> mapper -> LM -> CE on GPU; staging only copies bytes.
                 batch = collate_fn([dataset.original_item(indices[0])])
                 inputs = move_batch(batch, device)
                 output = model(inputs)
@@ -393,7 +393,7 @@ def train(config, rank, device):
                   "rank_checks": rank_checks, "layout": model.caption_decoder.last_layout,
                   "checkpoint": checkpoint_audit, "elapsed_seconds": time.monotonic() - start_time,
                   "config_audit": str(run_dir / "config_audit.json"),
-                  "decode_scope": "3 raw rows/source + all consumed training batches; not an exhaustive decode audit"}
+                  "decode_scope": "1 staged row/source through training loader/model + all consumed training batches; no staging decode"}
         write_json(run_dir / "training_report.json", report)
         print(json.dumps({"event": "PASS", "mode": config["mode"], "optimizer_steps": step,
                           "report": str(run_dir / "training_report.json")}), flush=True)

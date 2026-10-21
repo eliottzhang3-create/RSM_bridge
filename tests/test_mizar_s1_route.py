@@ -122,6 +122,36 @@ class MizarS1RouteTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no successful audited path"):
                 stage_data.prepare(manifest, {}, root / "metadata.jsonl", strict_counts=False)
 
+    def test_staging_copies_only_consumed_or_source_probe_files_as_raw_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            originals = [root / f"original{i}.wav" for i in range(3)]
+            for i, path in enumerate(originals):
+                # Not decodable audio: staging must only copy bytes.
+                path.write_bytes(f"unchanged raw bytes {i}".encode())
+            rows = [{"source_dataset": "Clotho", "audio_path": "probe.wav"},
+                    {"source_dataset": "Clotho", "audio_path": "train-alias.wav"},
+                    {"source_dataset": "Clotho", "audio_path": "unused.wav"},
+                    {"source_dataset": "AudioCaps", "audio_path": "other-source.wav"}]
+            manifest = root / "s1.json"
+            manifest.write_text(json.dumps(rows), encoding="utf-8")
+            resolutions = {("audio_path", "probe.wav"): str(originals[0]),
+                           ("audio_path", "train-alias.wav"): str(originals[0]),
+                           ("audio_path", "unused.wav"): str(originals[1]),
+                           ("audio_path", "other-source.wav"): str(originals[2])}
+            report, files = stage_data.prepare(manifest, resolutions, root / "rows.jsonl", strict_counts=False)
+            self.assertEqual(report["probe_rows"], {"Clotho": [0], "AudioCaps": [3]})
+            selected = stage_data.select_files(report, files, {"0": [1], "1": [1]}, "smoke")
+            self.assertEqual({entry["source"] for entry in selected.values()},
+                             {str(originals[0].resolve()), str(originals[2].resolve())})
+            self.assertEqual(stage_data.select_files(report, files, {}, "formal"), files)
+            staged = root / "staged"
+            (staged / "audio").mkdir(parents=True)
+            stage_data.copy_files(staged, selected)
+            self.assertEqual(len(list((staged / "audio").iterdir())), 2)
+            for relative, entry in selected.items():
+                self.assertEqual((staged / relative).read_bytes(), Path(entry["source"]).read_bytes())
+
     def test_changed_mixture_aborts_preparation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

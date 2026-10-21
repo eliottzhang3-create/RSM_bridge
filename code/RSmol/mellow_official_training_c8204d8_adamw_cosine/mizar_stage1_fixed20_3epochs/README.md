@@ -42,14 +42,14 @@ MusicCaps 与 SpeechCraft `train-other-500` 已过滤。SpeechCraft 使用共享
 
 原 manifest 的字段和值保持不变，仅为本次任务生成带 `s1_raw_paths` 的 JSONL 和索引。准备该索引时顺便统计来源数并计算原始行的 canonical SHA256 和映射 SHA256；不是额外扫描原始 JSON 字节，也不是重新生成过滤文件。
 
-原始音频按实际文件去重并复制到独占的 `/dev/shm/mizar_s1_<job-id>`，文件内容不重编码。训练在线执行：
+原始音频按实际文件去重并复制到独占的 `/dev/shm/mizar_s1_<job-id>`。staging 只做路径映射、容量/文件大小检查和原始字节复制，不解码、重采样、裁剪、补零或生成音频特征。训练在线执行：
 
 1. soundfile 解码为 float32，所有声道取均值，重采样至 32 kHz。
 2. 单个原始文件先中心裁剪或右侧补零到 20 秒，再分为连续的两个 10 秒。
 3. 真正双文件各自中心裁剪或右补零到 10 秒，再按顺序拼接。只有显式 `filepath2_original` / `audio_path2` 才表示第二个原始文件，并且同样要求成功审计。
 4. 两个 10 秒分别进入现有 HTSAT。历史 `filepath1` / `filepath2` 是旧的处理后路径，不能据此判断原始双文件。
 
-smoke 只复制各 rank 实际前 8 批需要的音频，以及每个来源的 3 个解码探针；正式训练复制全部保留行所需的原始音频。两种模式都读取完整 manifest 以保持相同采样顺序和数据身份。
+smoke 只复制各 rank 实际前 8 批需要的音频，以及每个来源 1 行训练前向探针需要的音频；探针通过训练数据加载器在线解码。正式训练复制过滤后全部保留行引用的原始音频。同一文件被多行引用只复制一次，不会整目录复制数据集，也不会复制已排除的 MusicCaps / train-other-500 行专属音频。两种模式都读取完整 manifest 以保持相同采样顺序和数据身份。
 
 复制前检查 tmpfs 和可用 cgroup 内存，额外保留 32 GiB；不足则在训练前明确退出。默认任务申请 256 GiB 主存，是否容得下全部原始音频以 `staging_report.json` 的实际字节数为准。清理只允许带本任务所有权标记的直接子目录，退出时自动执行。
 
@@ -129,20 +129,24 @@ bash run_mizar_s1_5090.sh --mode smoke-then-formal \
 
 每种模式在 `<output-root>/smoke/` 或 `<output-root>/formal/` 写入：
 
-- `staging_report.json`：数据身份、映射、文件数/大小、容量、各来源原始/复制后波形一致性。
+- `staging_report.json`：数据身份、映射、文件数/大小、容量、各准备阶段耗时；明确记录 staging 不做音频处理。
 - `runtime.json`：完整配置、资产 SHA256、软件版本、训练更新数、已知差异。
 - `config_audit.json`、`trainable_params.txt`：实际参数组、LR、PAD/EOS、精度、冻结状态、每来源 GPU 前向探针。
 - `metrics.jsonl`：实际更新数、loss、使用的/下一步 LR、梯度范数和缩放、显存、采样行。
 - `training_report.json`：最终成功报告；失败则尽可能写入 `failure_rank<N>.json` 并使任务失败。
 - `checkpoints/`：完整状态 checkpoint。
 
-启动时先在现有 GPU 环境运行 8 项小型张量测试，检查 fixed20、解码/重采样、采样/恢复、文本、序列和 loss shift、GradNorm、优化器及下一步恢复一致性。随后每来源解码 3 行，并让每来源 1 行经过真实 HTSAT→mapper→LM→CE。smoke 再让每卡实际训练 8 批，共 256 次样本使用，并检查第 1/8 步三个可训练组件的非零有限梯度、权重变化及 HTSAT 完全不变。
+8 项小型张量测试已由用户在远程通过（2026-10-21，PyTorch 2.11.0+cu128 / CUDA 12.8，8 张卡可见），按用户要求注释掉 `run.sh` 中的自动执行入口。文件仍保留，如需手动诊断，可在本路线目录执行 `python runtime_checks.py`。这 8 项单元检查与下面的 8 次真实训练更新是两个步骤。
+
+staging 完成并启动 trainer 后，每来源 1 行通过训练数据加载器在线解码并经过真实 HTSAT→mapper→LM→CE。smoke 再让每卡实际训练 8 批，共 256 次样本使用，并检查第 1/8 步三个可训练组件的非零有限梯度、权重变化及 HTSAT 完全不变。该端到端 smoke 和正式训练门禁保留。
+
+用户日志中 8 项测试的主体耗时为 0.034 秒，跳过它们对长时间 GPU 空闲的改善有限。索引完整 manifest 和复制原始音频仍需要准备时间；日志与 `staging_report.json.phase_seconds` 分别记录加载映射、建立索引/选择文件及复制耗时。
 
 smoke checkpoint 为 `checkpoints/model--step-8.ckpt`，保存后重新读取并核对模型张量及完整训练状态。formal 在 20,490 / 40,979 / 61,468 / 81,958 / 102,448 / 122,937 步保存，最终文件为 `formal/checkpoints/model--epo-3.ckpt`。
 
 这不是全量音频解码审计；未抽到的坏文件仍可能在正式训练中暴露。训练期间解码失败会带原始行、来源和路径中止，不会默默跳过。
 
-本地验证记录：新路线标准库测试 11 项、已有过滤/映射测试 11 项通过；Python 语法及两份 Bash 启动脚本语法检查通过。官方函数对照覆盖 1,344 次文本与随机状态比较、8 次 tokenizer 参数比较、122,938 个 LR 位置、10,000 次 GradNorm 标量比较。本地没有 PyTorch、数据、预训练权重或 CUDA，真实张量测试、8 卡 smoke 和正式训练必须以远程报告为准。现有统一 evaluator 尚未适配此路线的新序列合同与 checkpoint。
+本地验证记录：新路线标准库测试 12 项、已有过滤/映射测试 11 项通过；包含 staging 文件选择、去重和原始字节复制检查。Python 语法及两份 Bash 启动脚本语法检查通过。官方函数对照覆盖 1,344 次文本与随机状态比较、8 次 tokenizer 参数比较、122,938 个 LR 位置、10,000 次 GradNorm 标量比较。本地没有 PyTorch、数据、预训练权重或 CUDA；远程 8 项小型张量检查已通过，8 卡真实训练 smoke 和正式训练尚待远程报告。现有统一 evaluator 尚未适配此路线的新序列合同与 checkpoint。
 
 ## 许可证
 

@@ -28,7 +28,9 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-python runtime_checks.py
+# These eight checks passed remotely on 2026-10-21 (torch 2.11.0+cu128).
+# Keep them available for manual diagnostics without rerunning at each launch.
+# python runtime_checks.py
 
 run_one() {
   local run_mode=$1

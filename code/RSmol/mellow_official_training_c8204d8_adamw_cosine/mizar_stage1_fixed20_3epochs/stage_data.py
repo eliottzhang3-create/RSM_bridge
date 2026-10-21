@@ -1,7 +1,8 @@
 """Resolve the filtered S1 rows using the completed audit and stage raw files.
 
-No waveform is rewritten and no encoder feature is cached. The JSONL/index are
-job-local views of the unchanged source manifest, shared by all eight ranks.
+Audio is copied as raw bytes without decoding, resampling or cropping; no encoder
+feature is cached. The JSONL/index are job-local views of the unchanged source
+manifest, shared by all eight ranks. Source probes run later in the trainer.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import os
 import shutil
 import struct
 import sys
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -82,7 +84,7 @@ def prepare(manifest, resolutions, metadata, *, strict_counts=True):
             index.write(struct.pack("<Q", output.tell()))
             output.write(json.dumps(augmented, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")
             counts[source] += 1
-            if len(probes.setdefault(source, [])) < 3:
+            if not probes.setdefault(source, []):
                 probes[source].append(row_index)
             rows += 1
             if rows % 100000 == 0:
@@ -106,6 +108,22 @@ def smoke_rows(rows):
     per_rank = rows // WORLD_SIZE
     return {str(rank): [order[i] for i in permutation[rank * per_rank:rank * per_rank + 8 * BATCH_SIZE]]
             for rank in range(WORLD_SIZE)}
+
+
+def select_files(prepared, files, expected_rows, mode):
+    """Stage only rows used by training or the trainer's one-row/source probes."""
+    if mode == "formal":
+        return files
+    if mode != "smoke":
+        raise ValueError(f"unknown staging mode: {mode}")
+    selected = {x for indices in expected_rows.values() for x in indices}
+    selected.update(indices[0] for indices in prepared["probe_rows"].values())
+    indexed = IndexedRows(prepared["metadata"])
+    try:
+        names = {p for i in selected for p in indexed[i]["s1_raw_paths"]}
+    finally:
+        indexed.close()
+    return {p: files[p] for p in sorted(names)}
 
 
 def validate_stage_root(path):
@@ -177,31 +195,6 @@ def copy_files(root, files):
                 print(f"staged {done:,}/{len(files):,} original audio files", flush=True)
 
 
-def decode_probes(prepared, root, files):
-    import soundfile as sf
-    import torch
-    from data.fixed20 import load_fixed20, self_test
-    rows = IndexedRows(prepared["metadata"])
-    reports = []
-    try:
-        for source, indices in prepared["probe_rows"].items():
-            for index in indices:
-                relative = rows[index]["s1_raw_paths"]
-                staged = [root / p for p in relative]
-                originals = [files[p]["source"] for p in relative]
-                before = load_fixed20(originals[0], originals[1] if len(originals) == 2 else "")
-                after = load_fixed20(staged[0], staged[1] if len(staged) == 2 else "")
-                if any(not torch.equal(a, b) for a, b in zip(before, after)):
-                    raise ValueError(f"source/staged fixed20 waveforms differ at {index}")
-                info = sf.info(str(staged[0]))
-                reports.append({"source": source, "row_index": index, "raw_sample_rate": info.samplerate,
-                                "raw_channels": info.channels, "raw_frames": info.frames,
-                                "halves": [list(x.shape) for x in after], "source_staged_equal": True})
-    finally:
-        rows.close()
-    return {"fixed20_self_test": self_test(), "rows": reports, "decode_all_files": False}
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path)
@@ -225,30 +218,34 @@ def main():
     (root / "audio").mkdir()
     reserve = 32 * 1024**3
     check_capacity(root, 0, reserve)
-    prepared, files = prepare(args.manifest, load_resolutions(args.resolved_paths), root / "metadata" / "rows.jsonl")
+    start = time.monotonic()
+    print("[staging] loading audited path mappings (no audio decoding)", flush=True)
+    resolutions = load_resolutions(args.resolved_paths)
+    mapped = time.monotonic()
+    print(f"[staging] mappings loaded in {mapped - start:.1f}s; indexing manifest", flush=True)
+    prepared, files = prepare(args.manifest, resolutions, root / "metadata" / "rows.jsonl")
+    del resolutions
     prepared["geometry"] = geometry(prepared["rows"])
     expected_rows = smoke_rows(prepared["rows"])
-    if args.mode == "formal":
-        to_copy = files
-    else:
-        selected = {x for indices in expected_rows.values() for x in indices}
-        selected.update(x for indices in prepared["probe_rows"].values() for x in indices)
-        indexed = IndexedRows(prepared["metadata"])
-        try:
-            names = {p for i in selected for p in indexed[i]["s1_raw_paths"]}
-        finally:
-            indexed.close()
-        to_copy = {p: files[p] for p in sorted(names)}
+    to_copy = select_files(prepared, files, expected_rows, args.mode)
     prepared.update({"mode": args.mode, "stage_root": str(root), "expected_first8_rows": expected_rows,
                      "staged_files": len(to_copy), "staged_bytes": sum(x["bytes"] for x in to_copy.values()),
-                     "capacity": check_capacity(root, sum(x["bytes"] for x in to_copy.values()), reserve)})
+                     "capacity": check_capacity(root, sum(x["bytes"] for x in to_copy.values()), reserve),
+                     "audio_processing": {"decode_during_staging": False, "fixed20_during_staging": False,
+                                          "encoder_feature_cache": False, "processing_phase": "training_data_loader"}})
+    indexed = time.monotonic()
+    print(f"[staging] index/selection ready in {indexed - mapped:.1f}s; copying "
+          f"{len(to_copy):,} raw files ({prepared['staged_bytes'] / 1024**3:.2f} GiB)", flush=True)
     copy_files(root, to_copy)
-    prepared["decode_probes"] = decode_probes(prepared, root, files)
+    copied = time.monotonic()
+    prepared["phase_seconds"] = {"load_mappings": mapped - start, "index_and_select": indexed - mapped,
+                                 "copy_raw_files": copied - indexed, "total": copied - start}
     prepared["status"] = "PASS"
     write_json(args.output, prepared)
     write_json(root / "READY.json", prepared)
     print(json.dumps({"status": "PASS", "mode": args.mode, "rows": prepared["rows"],
-                      "staged_files": len(to_copy), "report": str(args.output)}, ensure_ascii=False), flush=True)
+                      "staged_files": len(to_copy), "phase_seconds": prepared["phase_seconds"],
+                      "report": str(args.output)}, ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":

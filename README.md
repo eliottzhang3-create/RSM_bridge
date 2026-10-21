@@ -15,7 +15,9 @@ bash run_mizar_s1_5090.sh --mode smoke \
 
 也可用 `--mode smoke-then-formal` 自动在 smoke PASS 后进入正式 3 epochs。分开提交 formal、checkpoint 恢复、输出文件和详细配方见新路线 README。官方 CED 的 126 个音频 tokens、缓存特征与这里的 HTSAT/在线解码有明确差异；8×4 和官方 4×8 保持 GBS32，但不保证相同参数轨迹。
 
-本地标准库单元验证共 **22 项通过**；已按官方源码比较文本/随机状态 1,344 次、tokenizer 参数 8 次、完整 LR 曲线 122,938 个位置与 GradNorm 标量策略 10,000 次。真实张量测试、8 卡 smoke、正式训练尚待远程执行：本地没有 PyTorch、权重、数据或 CUDA，不能将上述检查当作 GPU 训练通过。现有统一 evaluator 尚未接入该路线。
+远程 8 项小型张量检查已由用户确认通过（PyTorch 2.11.0+cu128 / CUDA 12.8，8 卡可见），按用户要求注释掉自动执行入口，保留手动诊断脚本；8 次真实 optimizer update 的端到端 smoke 仍保留。staging 现在只映射、检查容量/文件大小、复制需要的原始音频字节，不解码或预处理；每来源 1 行前向探针和训练批次都在 trainer 启动后在线解码。smoke 仅复制前 8 批和来源探针引用的去重文件，formal 复制过滤后全部保留行引用的去重文件，准备日志增加分阶段耗时。
+
+本地标准库单元验证共 **23 项通过**；已按官方源码比较文本/随机状态 1,344 次、tokenizer 参数 8 次、完整 LR 曲线 122,938 个位置与 GradNorm 标量策略 10,000 次。8 卡真实训练 smoke、正式训练尚待远程执行：本地没有 PyTorch、权重、数据或 CUDA，不能将上述检查当作 GPU 训练通过。现有统一 evaluator 尚未接入该路线。
 
 ## 2026-10-20：LR10 路线复制出的 30-epoch、max_lr=4e-5 训练线
 
