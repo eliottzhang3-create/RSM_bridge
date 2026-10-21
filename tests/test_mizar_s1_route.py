@@ -23,6 +23,7 @@ def passed_smoke():
             "rank_checks": [{"rank": rank, "seed": 1234 + rank, "optimizer_steps": 8,
                              "first8_rows": list(range(rank * 32, (rank + 1) * 32)),
                              "frozen_htsat_equal": True, "parameters_finite": True, "htsat_all_eval": True,
+                             "staging_complete": True,
                              "gradients": {"1": copy.deepcopy(gradients), "8": copy.deepcopy(gradients)},
                              "trainable_weight_changes": {role: {"changed": True} for role in gradients}}
                             for rank in range(8)],
@@ -191,7 +192,7 @@ class MizarS1RouteTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_smoke(report, "recipe-b")
         for key, value in (("optimizer_steps", 7), ("seed", 1234), ("frozen_htsat_equal", False),
-                           ("parameters_finite", False), ("first8_rows", [])):
+                           ("parameters_finite", False), ("first8_rows", []), ("staging_complete", False)):
             broken = copy.deepcopy(report)
             broken["rank_checks"][7][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):

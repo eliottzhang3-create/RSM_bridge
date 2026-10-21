@@ -17,7 +17,7 @@ from data.fixed20 import HALF_SAMPLES, load_fixed20, load_mono, self_test
 from data.sampler import CustomDistributedSampler
 from models.decoder import DecoderModel, downsample
 from optim import GradNormTracker, build_optimizer
-from stage_data import smoke_rows
+from stage_data import epoch_priorities, smoke_rows
 from train import answer_loss
 
 
@@ -57,6 +57,7 @@ class RuntimeChecks(unittest.TestCase):
         count = 1033  # deliberately not divisible by world size or batch size
         order = data_order(count)
         planned = smoke_rows(count)
+        priorities, _ = epoch_priorities(count)
         permutation = torch.randperm(count, generator=torch.Generator().manual_seed(SEED)).tolist()
         all_indices = []
         for rank in range(WORLD_SIZE):
@@ -64,11 +65,19 @@ class RuntimeChecks(unittest.TestCase):
             indices = list(sampler)
             self.assertEqual([order[i] for i in indices[:32]], planned[str(rank)])
             self.assertEqual(indices, permutation[rank * 129:(rank + 1) * 129])
+            for cursor, dataset_index in enumerate(indices[:128]):
+                self.assertEqual(priorities[order[dataset_index]], cursor // BATCH_SIZE)
             sampler.start_index = 13 * BATCH_SIZE
             self.assertEqual(list(sampler), indices[52:])
             self.assertEqual(len(sampler), 129 - 52)
             all_indices.extend(indices)
         self.assertEqual(len(set(all_indices)), 1032)
+        priorities, _ = epoch_priorities(count, epoch=1, start_batch=7)
+        for rank in range(WORLD_SIZE):
+            sampler = CustomDistributedSampler(range(count), WORLD_SIZE, rank, seed=SEED, drop_last=True)
+            sampler.set_epoch(1)
+            for cursor, dataset_index in enumerate(list(sampler)[:128]):
+                self.assertEqual(priorities[order[dataset_index]], 32 if cursor < 28 else cursor // BATCH_SIZE)
 
     def test_text_metadata_fallback_and_cot_preservation(self):
         _, caption = text_pair({"input": "caption first audio", "answer": "Fallback Answer."})

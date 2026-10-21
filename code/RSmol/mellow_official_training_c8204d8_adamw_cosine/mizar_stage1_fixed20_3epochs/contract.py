@@ -6,6 +6,7 @@ import json
 import math
 import os
 import random
+import time
 from pathlib import Path
 
 ROUTE = "htsat_mizar_s1_fixed20_v1"
@@ -69,7 +70,16 @@ def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + f".tmp-{os.getpid()}")
     temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    for attempt in range(20):
+        try:
+            os.replace(temporary, path)
+            break
+        except PermissionError:
+            # Windows readers briefly deny replacing an open file. Linux
+            # renames remain atomic immediately; never hide a real Unix error.
+            if os.name != "nt" or attempt == 19:
+                raise
+            time.sleep(.01)
 
 
 def digest(value):

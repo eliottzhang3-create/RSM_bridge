@@ -28,6 +28,7 @@ from contract import (ANSWER_TOKENS, BATCH_SIZE, EPOCHS, PREFIX_TOKENS, ROUTE, S
                       validate_tokenizer_contract, write_json)
 from data.audiotext_dataset import AudioTextDataset, collate_fn
 from data.sampler import CustomDistributedSampler
+from data.staging import StagingGate
 from models.mellow import Mellow
 from optim import GradNormTracker, build_optimizer, parameter_role
 
@@ -213,8 +214,11 @@ def train(config, rank, device):
     if geometry["world_size"] != WORLD_SIZE or geometry["microbatch"] != BATCH_SIZE or geometry["gradient_accumulation_steps"] != 1:
         raise ValueError("this route requires 8 GPUs x microbatch4 x accumulation1")
     prepared = json.loads(Path(config["prepared_report"]).read_text(encoding="utf-8"))
-    if prepared.get("status") != "PASS" or prepared["mode"] != config["mode"]:
+    if prepared["mode"] != config["mode"]:
         raise ValueError("missing/mismatched successful staging")
+    staging = StagingGate(prepared, log=rank == 0)
+    if staging.info:
+        staging.wait_for_batch(staging.info["epoch"], staging.info["start_batch"])
     local_seed = rank_seed(rank)
     random.seed(local_seed)
     np.random.seed(local_seed & 0xFFFFFFFF)
@@ -261,6 +265,8 @@ def train(config, rank, device):
             raise ValueError("invalid resume sampler/scheduler cursor")
         resume_rng = saved["random_state_by_rank"][rank]
         del saved
+    if staging.info and (staging.info["epoch"], staging.info["start_batch"]) != (start_epoch, start_batch):
+        raise ValueError("background staging cursor differs from the actual training resume cursor")
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(exist_ok=True)
     source_probes = probe_sources(model, dataset, prepared, device) if rank == 0 else []
@@ -318,6 +324,7 @@ def train(config, rank, device):
         for batch_index in range(skipped_batches, geometry["steps_per_epoch"]):
             if step >= max_steps:
                 break
+            staging.wait_for_batch(epoch, batch_index)
             batch = next(iterator)
             if epoch == 0 and batch_index < 8:
                 first_rows.extend(batch["row_index"])
@@ -356,6 +363,8 @@ def train(config, rank, device):
                           "grad_scaler": scaler.get_scale(), "seconds": time.monotonic() - start_time,
                           "rank0_rows": batch["row_index"], "rank0_sources": batch["source"],
                           "gpu_peak_bytes": torch.cuda.max_memory_allocated(device)}
+                record["staging_wait_seconds"] = staging.wait_seconds
+                record["staging_complete"] = staging.complete
                 metrics.write(json.dumps(record) + "\n")
                 if config["mode"] == "smoke" or step % 25 == 0:
                     metrics.flush()
@@ -368,6 +377,7 @@ def train(config, rank, device):
         start_batch = 0
     if metrics:
         metrics.close()
+    staging.wait_complete()
     collective_require(step == max_steps, "training ended before the requested real optimizer updates", device)
     if config["mode"] == "formal":
         last_checkpoint = checkpoint_dir / "model--epo-3.ckpt"
@@ -387,6 +397,8 @@ def train(config, rank, device):
                   "gradients": grad_report, "trainable_weight_changes": changed,
                   "frozen_htsat_equal": frozen_equal, "parameters_finite": finite,
                   "htsat_all_eval": all(not m.training for m in core.modules())}
+    rank_check["staging_wait_seconds"] = staging.wait_seconds
+    rank_check["staging_complete"] = staging.complete
     rank_checks = [None] * WORLD_SIZE
     dist.all_gather_object(rank_checks, rank_check)
     if rank == 0:

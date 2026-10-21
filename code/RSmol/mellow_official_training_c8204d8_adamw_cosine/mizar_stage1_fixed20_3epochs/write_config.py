@@ -7,6 +7,7 @@ import platform
 from pathlib import Path
 
 from contract import ROUTE, digest, rank_seed, semantic_contract, write_json
+from data.staging import StagingGate
 
 
 def file_sha256(path):
@@ -44,6 +45,7 @@ def validate_smoke(report, contract_sha):
         if (check.get("optimizer_steps") != 8 or check.get("seed") != rank_seed(check["rank"])
                 or check.get("frozen_htsat_equal") is not True
                 or check.get("parameters_finite") is not True or check.get("htsat_all_eval") is not True
+                or check.get("staging_complete") is not True
                 or len(check.get("first8_rows", [])) != 32
                 or set(check.get("gradients", {})) != {"1", "8"}
                 or set(changes) != {"c2l", "projection", "lm"}
@@ -73,8 +75,11 @@ def main():
     parser.add_argument("--resume-checkpoint", type=Path)
     args = parser.parse_args()
     prepared = json.loads(args.prepared.read_text(encoding="utf-8"))
-    if prepared.get("status") != "PASS" or prepared.get("mode") != args.mode:
-        raise ValueError("staging did not complete for the requested run mode")
+    if prepared.get("mode") != args.mode:
+        raise ValueError("staging mode differs from the requested run mode")
+    staging = StagingGate(prepared)
+    if staging.info:
+        staging.wait_for_batch(staging.info["epoch"], staging.info["start_batch"])
     contract = semantic_contract(prepared, args.text_model_dir.resolve(), args.htsat_root.resolve())
     contract["assets"] = asset_identity(args.text_model_dir, args.htsat_root)
     contract["packages"] = {name: importlib.metadata.version(name) for name in
@@ -92,6 +97,9 @@ def main():
               "max_optimizer_steps": 8 if args.mode == "smoke" else contract["geometry"]["total_steps"],
               "resume_checkpoint": str(args.resume_checkpoint.resolve()) if args.resume_checkpoint else "",
               "smoke_report": str(args.smoke_report.resolve()) if args.smoke_report else "",
+              "staging": {key: prepared[key] for key in
+                          ("initial_steps", "startup_budgets", "planned_files", "planned_bytes", "copy_workers")
+                          if key in prepared},
               "checkpoint_steps": [round(contract["geometry"]["total_steps"] * i / 6) for i in range(1, 7)],
               "official_reference": "Mizar_159M/configs/s1.yaml.in + runtime/stage1 + pipeline/build_ced_cache.py",
               "intentional_differences": ["HTSAT(129+129) plus existing c2l/projection instead of CED freq_merge_126",
