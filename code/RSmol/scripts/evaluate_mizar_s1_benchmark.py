@@ -96,7 +96,10 @@ def claim_output(args: argparse.Namespace, identity: Mapping[str, Any]) -> None:
         if prior != dict(identity):
             raise RuntimeError(f"output directory belongs to another checkpoint/dataset/protocol: {args.output_dir}")
     elif any(args.output_dir.iterdir()):
-        raise FileExistsError(f"refusing a non-empty unowned output directory: {args.output_dir}")
+        entries = sorted(path.name for path in args.output_dir.iterdir())
+        raise FileExistsError(
+            f"refusing a non-empty unowned output directory: {args.output_dir}; entries={entries[:20]}"
+        )
     else:
         mmau._write_json(path, identity)
 
@@ -420,6 +423,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as exc:
         report["fatal_error"] = report.get("fatal_error") or {
             "error": repr(exc), "traceback": traceback.format_exc()}
+        print(json.dumps({"event": "EVALUATION_FAILURE", "benchmark": args.benchmark,
+                          "output_claimed": output_claimed,
+                          "fatal_error": report["fatal_error"]},
+                         ensure_ascii=False), file=sys.stderr, flush=True)
         report["inference_coverage"] = {"status": "FAILED", "error": repr(exc)}
         if store is not None:
             report["records"] = mmau._counts(store)
@@ -440,7 +447,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(json.dumps({"benchmark": args.benchmark, "status": report["status"],
                       "records": report.get("records"),
                       "official_evaluation": report.get("official_evaluation"),
-                      "report": str(args.output_dir / "evaluation_report.json")},
+                      "fatal_error": report.get("fatal_error"),
+                      "report": (str(args.output_dir / "evaluation_report.json")
+                                 if (args.output_dir / "evaluation_report.json").is_file() else None)},
                      ensure_ascii=False))
     return 0 if report["status"] == "PASS" else 1
 
