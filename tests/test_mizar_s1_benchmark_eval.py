@@ -83,6 +83,34 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.module.claim_output(args, {"checkpoint": "two"})
 
+    def test_mmau_audio_directory_is_optional_but_mmar_audio_is_required(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint = root / "checkpoint.ckpt"
+            runtime = root / "runtime.json"
+            route = root / "route"
+            metadata = root / "metadata.json"
+            scorer = root / "evaluation.py"
+            parquet = root / "test_mini.parquet"
+            audio_root = root / "missing-audios"
+            checkpoint.touch()
+            runtime.touch()
+            route.mkdir()
+            metadata.touch()
+            scorer.touch()
+            parquet.touch()
+            args = type("Args", (), {
+                "benchmark": "mmau", "checkpoint": checkpoint,
+                "runtime_config": runtime, "route_root": route,
+                "metadata_json": metadata, "evaluation_script": scorer,
+                "parquet": parquet, "audio_root": audio_root,
+            })()
+            self.module._validate_input_paths(args)
+
+            args.benchmark = "mmar"
+            with self.assertRaisesRegex(FileNotFoundError, "audio root not found"):
+                self.module._validate_input_paths(args)
+
     def test_submission_wrappers_request_one_gpu_and_official_full_runner(self):
         mmau_submit = (ROOT / "code/RSmol/run_mizar_s1_mmau_eval_5090.sh").read_text(encoding="utf-8")
         mmar_submit = (ROOT / "code/RSmol/run_mizar_s1_mmar_eval_5090.sh").read_text(encoding="utf-8")

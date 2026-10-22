@@ -314,6 +314,26 @@ def _call_model_loader(args):
     return runtime_adapter.load_runtime(args)
 
 
+def _validate_input_paths(args: argparse.Namespace) -> None:
+    required = [
+        (args.checkpoint, "checkpoint"),
+        (args.runtime_config, "runtime config"),
+        (args.route_root, "training route"),
+        (args.metadata_json, "official metadata"),
+        (args.evaluation_script, "official scorer"),
+    ]
+    if args.benchmark == "mmar":
+        required.append((args.audio_root, "audio root"))
+    for path, label in required:
+        if not path.exists():
+            raise FileNotFoundError(f"{label} not found: {path}")
+    if args.benchmark == "mmau":
+        if not args.parquet.is_file():
+            raise FileNotFoundError(f"MMAU parquet not found: {args.parquet}")
+        if args.audio_root.exists() and not args.audio_root.is_dir():
+            raise NotADirectoryError(f"MMAU audio root is not a directory: {args.audio_root}")
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.time()
     report: dict[str, Any] = {"status": "FAILED", "benchmark": args.benchmark,
@@ -324,14 +344,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     output_claimed = False
     official_records: list[dict[str, Any]] = []
     try:
-        for path, label in ((args.checkpoint, "checkpoint"), (args.runtime_config, "runtime config"),
-                            (args.route_root, "training route"), (args.audio_root, "audio root"),
-                            (args.metadata_json, "official metadata"),
-                            (args.evaluation_script, "official scorer")):
-            if not path.exists():
-                raise FileNotFoundError(f"{label} not found: {path}")
-        if args.benchmark == "mmau" and not args.parquet.is_file():
-            raise FileNotFoundError(f"MMAU parquet not found: {args.parquet}")
+        _validate_input_paths(args)
         if args.benchmark == "mmau":
             import pyarrow.parquet as pq
             parquet_rows = int(pq.ParquetFile(args.parquet).metadata.num_rows)
@@ -339,6 +352,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise ValueError(f"expected {EXPECTED_ROWS} MMAU parquet rows, got {parquet_rows}")
         output_key = scorer_prediction_key(args.evaluation_script)
         identity = _identity(args, output_key)
+        if args.benchmark == "mmau":
+            identity["audio_source_policy"] = "prefer_id_wav_if_present_else_parquet_embedded"
+            identity["audio_root_available"] = args.audio_root.is_dir()
         identity["identity_sha256"] = _sha256_json({k: v for k, v in identity.items() if k != "identity_sha256"})
         claim_output(args, identity)
         output_claimed = True
