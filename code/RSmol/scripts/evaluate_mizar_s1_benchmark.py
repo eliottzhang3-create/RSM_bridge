@@ -179,7 +179,10 @@ def _fixed20_pair(runtime: tuple, sample: Mapping[str, Any]):
 def generate(runtime: tuple, sample: Mapping[str, Any]) -> dict[str, Any]:
     import torch
 
-    model, tokenizer, device, text_encoder, _, _ = runtime
+    # load_runtime returns (model, tokenizer, device, text_encoder, fixed20,
+    # audit, route_modules). Keep the runtime tuple contract explicit here so
+    # an added loader audit field cannot shift generation inputs silently.
+    model, tokenizer, device, text_encoder, _, _, _ = runtime
     prompt = str(sample["prompt"]).lower()
     text_input = text_encoder.tokenize(prompt, runtime_adapter.PROMPT_TOKENS)
     prompt_original_count = len(tokenizer.encode(prompt + " <|endoftext|>", add_special_tokens=True))

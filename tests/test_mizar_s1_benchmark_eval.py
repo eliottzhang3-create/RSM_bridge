@@ -40,6 +40,18 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
         self.assertEqual(protocol["prediction_preprocessing"],
                          "none_including_eos_no_strip_no_label_extraction")
 
+    def test_runtime_tuple_contract_has_loader_audit_and_route_modules(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn(
+            "model, tokenizer, device, text_encoder, _, _, _ = runtime",
+            source,
+        )
+        runtime_source = RUNTIME_SOURCE.read_text(encoding="utf-8")
+        self.assertIn(
+            "return model, tokenizer, device, text_encoder, modules[\"data.fixed20\"], audit, modules",
+            runtime_source,
+        )
+
     def test_benchmark_defaults_use_separate_full_evaluation_directories(self):
         mmau = self.module.parse_args(["--benchmark", "mmau"])
         mmar = self.module.parse_args(["--benchmark", "mmar"])
