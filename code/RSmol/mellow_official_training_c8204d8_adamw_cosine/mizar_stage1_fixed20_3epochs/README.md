@@ -151,6 +151,27 @@ smoke checkpoint 为 `checkpoints/model--step-8.ckpt`，保存后重新读取并
 
 本地验证记录：本次移除 smoke 门槛后，路线标准库测试 13 项、后台 staging 并发/故障测试 9 项通过；已有过滤/映射测试 11 项在此前通过。当前测试验证无 smoke 报告的完整 formal 配置生成、八卡连续分片与 resume 索引、跨预拷贝边界等待、后续 epoch 等待全量、原子复制、后台失败/进程消失/心跳超时、PAD/EOS 合同，以及实际 Bash formal 入口在正常/配置失败时的并行执行和进程清理模拟。Python 与两份 Bash 启动脚本语法检查通过。此前官方函数对照覆盖 1,344 次文本与随机状态比较、8 次 tokenizer 参数比较、122,938 个 LR 位置、10,000 次 GradNorm 标量比较。本地没有 PyTorch、数据、预训练权重或 CUDA；后台 staging 版本的真实 8 卡训练尚待远程报告。现有统一 evaluator 尚未适配此路线的新序列合同与 checkpoint。
 
+## 对已有 MMAU 生成结果按选项标签重评分
+
+同步代码后，可在登录节点直接执行以下 CPU 命令，不加载模型、音频或 checkpoint，也不重新生成：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+python scripts/rescore_mmau_mellow_author_reply.py \
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/formal_async_v3/eval/mmau_test_mini_step122937_retry2/raw_generations.jsonl \
+  --expected-rows 1000
+```
+
+直接复用旧的标签评分规则：`generated_text.split(')')[0].lower()` 与正确选项标签比较；不额外 trim、去 EOS 或提取答案正文。`B) anything` 对正确标签 b 判对，` b) ...`、`answer is b) ...` 不会被纠正；若没有 `)`，比较整个输出的小写形式。正确标签来自每条记录的 `official_record.answer` 与原始顺序的 `official_record.choices`，不是重新排序选项。
+
+JSONL 输入默认要求完整 1,000 条 generated 记录、唯一 ID 与连续 row_index，损坏行、重复或缺行会报错；答案无法精确对应选项则保留分母并记录为错误。只读取原始 `generated_text`，不使用可能经过处理的 `model_output`。输出到输入文件同级的 `choice_label_rescore/`，可用 `--output-dir` 指定其他目录：
+
+- `mellow_author_reply_evaluation.txt`：总分、sound/music/speech 与难度分组分数。
+- `mellow_author_reply_evaluation.json`：上述分数及逐题完整输出、正确标签、判分与元数据错误。
+- `mellow_author_reply_rescore_report.json`：输入文件 SHA256、完整性检查、评分规则与摘要。
+
+这是同一份生成结果上的额外评分规则，不是 MMAU 官方 scorer 的分数，也不改变本次 Mizar S1 的推理协议。原始 JSONL 与既有官方评分文件保持不变。脚本仅使用 Python 标准库；本地验证包含 1,000 条模拟记录的 `python -S` 命令行测试，不代表已读取远程真实输出或已获得模型分数。
+
 ## 许可证
 
 模型基础保留 Mellow MIT `LICENSE`。移植的 Mizar 部分保留 `licenses/Mizar-ClearBSD.txt`，归属说明见 `NOTICE`。
