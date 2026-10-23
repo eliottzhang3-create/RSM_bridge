@@ -214,6 +214,41 @@ def diagnose(audit_dir: Path, mapping_path: Path, data_root: Path) -> dict:
     return result
 
 
+def print_summary(report: dict[str, Any], max_examples: int = 1) -> None:
+    """Print the small subset needed to decide whether mapping needs repair."""
+    print("current audit:")
+    for source, counts in report["current_audit"].items():
+        print(f"  {source}: {counts}")
+    print("S2 mapping status counts:")
+    for source, counts in report["s2_mapping_records_by_source_status"].items():
+        print(f"  {source}: {counts}")
+    for source, details in report["datasets"].items():
+        inventory = details["directory_inventory"]
+        print(f"\n{source}")
+        print(
+            "  directory: "
+            f"exists={inventory['root_exists']} "
+            f"audio_files={inventory['audio_file_entries']} "
+            f"all_files={inventory['file_entries']}"
+        )
+        print("  failed unique references:", details["failed_unique_references_by_diagnosis"])
+        print("  failed manifest rows:", details["failed_manifest_rows_by_diagnosis"])
+        for kind, examples in details["examples"].items():
+            for example in examples[:max_examples]:
+                print(
+                    f"  example [{kind}] rows={example['manifest_rows']} "
+                    f"raw={example['raw_path']}"
+                )
+                if "s2_record" in example:
+                    print(
+                        "    s2_local_path="
+                        f"{example['s2_record'].get('local_path', '')}"
+                    )
+                for key in ("candidate", "hints_not_accepted", "candidates", "s2_records"):
+                    if key in example:
+                        print(f"    {key}={example[key]}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--audit-dir", type=Path, required=True)
@@ -222,9 +257,25 @@ def main(argv: list[str] | None = None) -> int:
         "--data-root", type=Path,
         default=Path("/hpc_stor03/sjtu_home/jinwei.zhang/data"),
     )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="print compact counts and one example per diagnosis instead of full JSON",
+    )
+    parser.add_argument(
+        "--max-examples",
+        type=int,
+        default=1,
+        help="examples per diagnosis in --summary-only output",
+    )
     args = parser.parse_args(argv)
+    if args.max_examples < 0:
+        parser.error("--max-examples must be non-negative")
     report = diagnose(args.audit_dir, args.s2_mapping, args.data_root)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if args.summary_only:
+        print_summary(report, args.max_examples)
+    else:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
 
