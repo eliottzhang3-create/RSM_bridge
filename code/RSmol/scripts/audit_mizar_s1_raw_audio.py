@@ -29,9 +29,12 @@ has separate train/validation directories.  A rule may set ``match`` to
 after the exact candidates fail; only a unique match is accepted.  Original
 manifest text is never rewritten.  ``match: "audiocaps_v2"`` instead reads
 train/val/test CSVs from ``metadata_root``, validates the YouTube ID and start
-time, then checks the corresponding split below each audio root.  Legacy
-``Y<id>.wav`` names are accepted only when the CSV has one distinct start
-time for that ID in the split; repeated captions for the same clip are fine.
+time, then checks the corresponding split below each preferred audio root.
+Optional ``flat_roots`` are recursively indexed and consulted only when the
+preferred roots are missing; an ambiguous preferred match is not replaced.
+Legacy ``Y<id>.wav`` names are accepted only when the CSV has one distinct
+start time for that ID in the relevant split; repeated captions for the same
+clip are fine.
 """
 
 from __future__ import annotations
@@ -226,6 +229,9 @@ def load_rules(path: Path) -> list[dict[str, Any]]:
         roots = raw.get("roots", raw.get("root"))
         if isinstance(roots, (str, Path)):
             roots = [str(roots)]
+        flat_roots = raw.get("flat_roots", [])
+        if isinstance(flat_roots, (str, Path)):
+            flat_roots = [str(flat_roots)]
         match = text(raw.get("match") or "exact").lower()
         if match not in {"exact", "basename", "normalized_stem", "audiocaps_v2"}:
             raise ValueError(
@@ -237,11 +243,22 @@ def load_rules(path: Path) -> list[dict[str, Any]]:
         normalised_roots = [Path(str(root)).expanduser() for root in roots if text(root)]
         if not normalised_roots:
             raise ValueError(f"mapping rule {name!r} has no non-empty roots")
+        if not isinstance(flat_roots, list):
+            raise ValueError(f"mapping rule {name!r} flat_roots must be a list")
+        normalised_flat_roots = [
+            Path(str(root)).expanduser() for root in flat_roots if text(root)
+        ]
+        if normalised_flat_roots and match != "audiocaps_v2":
+            raise ValueError(
+                f"mapping rule {name!r} uses flat_roots, which is supported only "
+                "with match audiocaps_v2"
+            )
         rule = {
             "name": name,
             "field": field,
             "prefix": prefix,
             "roots": normalised_roots,
+            "flat_roots": normalised_flat_roots,
             "match": match,
         }
         if match == "audiocaps_v2":
@@ -327,6 +344,20 @@ def build_recursive_indexes(rules: list[dict[str, Any]]) -> None:
             rule["_audiocaps_keys_to_splits"] = dict(keys_to_splits)
             rule["_audiocaps_starts_by_split_id"] = dict(starts_by_split_id)
             rule["_audiocaps_metadata_audit"] = metadata_audit
+            supplemental_index: defaultdict[str, list[str]] = defaultdict(list)
+            seen_supplemental: set[str] = set()
+            for root in rule.get("flat_roots", []):
+                if not root.is_dir():
+                    continue
+                for candidate in root.rglob("*"):
+                    if not candidate.is_file():
+                        continue
+                    resolved = str(candidate.resolve())
+                    if resolved in seen_supplemental:
+                        continue
+                    seen_supplemental.add(resolved)
+                    supplemental_index[candidate.name.casefold()].append(resolved)
+            rule["_audiocaps_supplemental_index"] = dict(supplemental_index)
             continue
         basename: defaultdict[str, list[str]] = defaultdict(list)
         normalized_stem: defaultdict[str, list[str]] = defaultdict(list)
@@ -453,77 +484,106 @@ def resolve_audiocaps_v2(tail: str, rule: dict[str, Any]) -> dict[str, Any]:
             "method": "audiocaps_metadata_key_not_found",
         }
 
-    candidates: list[Path] = []
-    canonical: list[Path] = []
-    aliases: list[Path] = []
-    ambiguous_aliases: list[Path] = []
     starts_by_split_id = rule.get("_audiocaps_starts_by_split_id", {})
-    for split in splits:
-        starts = starts_by_split_id.get((split, youtube_id), set())
-        for root in rule["roots"]:
-            split_root = root / split
-            canonical_path = split_root / f"{youtube_id}_{start_time}{suffix}"
-            legacy_y_path = split_root / f"Y{youtube_id}{suffix}"
-            legacy_path = split_root / f"{youtube_id}{suffix}"
-            candidates.extend((canonical_path, legacy_y_path, legacy_path))
-            if canonical_path.is_file():
-                canonical.append(canonical_path)
-            if legacy_y_path.is_file():
-                if starts == {start_time}:
-                    aliases.append(legacy_y_path)
-                else:
-                    ambiguous_aliases.append(legacy_y_path)
-            if legacy_path.is_file():
-                if starts == {start_time}:
-                    aliases.append(legacy_path)
-                else:
-                    ambiguous_aliases.append(legacy_path)
+    roots = [
+        *((root, False) for root in rule["roots"]),
+        *((root, True) for root in rule.get("flat_roots", [])),
+    ]
+    candidates: list[Path] = []
 
-    # The canonical name retains the start time, so it is authoritative even
-    # when multiple clips from the same YouTube video occur in one split.
-    exact_matches = sorted({str(path.resolve()) for path in canonical})
-    if len(exact_matches) == 1:
-        return {
-            "status": "exists",
-            "rule": rule["name"],
-            "path": exact_matches[0],
-            "candidate_paths": [str(path) for path in candidates],
-            "method": "audiocaps_v2_csv_canonical",
-        }
-    if len(exact_matches) > 1:
-        return {
-            "status": "ambiguous",
-            "rule": rule["name"],
-            "path": "",
-            "candidate_paths": exact_matches,
-            "method": "audiocaps_v2_multiple_canonical_files",
-        }
+    # Resolve each preferred root completely before consulting supplemental
+    # roots. This preserves a valid legacy mapping and refuses to hide an
+    # ambiguity in the preferred data with a second copy.
+    for root, is_supplemental in roots:
+        canonical: list[Path] = []
+        aliases: list[Path] = []
+        ambiguous_aliases: list[Path] = []
+        local_candidates: list[Path] = []
+        for split in splits:
+            starts = starts_by_split_id.get((split, youtube_id), set())
+            names = (
+                f"{youtube_id}_{start_time}{suffix}",
+                f"Y{youtube_id}{suffix}",
+                f"{youtube_id}{suffix}",
+            )
+            local_candidates.extend(
+                root / name if is_supplemental else root / split / name
+                for name in names
+            )
+            if is_supplemental:
+                index = rule.get("_audiocaps_supplemental_index", {})
+                canonical.extend(
+                    Path(path) for path in index.get(names[0].casefold(), [])
+                )
+                legacy_paths = [
+                    *index.get(names[1].casefold(), []),
+                    *index.get(names[2].casefold(), []),
+                ]
+                all_starts = set().union(*(
+                    starts_by_split_id.get((candidate_split, youtube_id), set())
+                    for candidate_split in splits
+                ))
+                for path in legacy_paths:
+                    if all_starts == {start_time}:
+                        aliases.append(Path(path))
+                    else:
+                        ambiguous_aliases.append(Path(path))
+            else:
+                canonical_path, legacy_y_path, legacy_path = local_candidates[-3:]
+                if canonical_path.is_file():
+                    canonical.append(canonical_path)
+                for path in (legacy_y_path, legacy_path):
+                    if path.is_file():
+                        if starts == {start_time}:
+                            aliases.append(path)
+                        else:
+                            ambiguous_aliases.append(path)
+        candidates.extend(local_candidates)
+        exact_matches = sorted({str(path.resolve()) for path in canonical})
+        if len(exact_matches) == 1:
+            return {
+                "status": "exists",
+                "rule": rule["name"],
+                "path": exact_matches[0],
+                "candidate_paths": [str(path) for path in candidates],
+                "method": "audiocaps_v2_csv_canonical",
+            }
+        if len(exact_matches) > 1:
+            return {
+                "status": "ambiguous",
+                "rule": rule["name"],
+                "path": "",
+                "candidate_paths": exact_matches,
+                "method": "audiocaps_v2_multiple_canonical_files",
+            }
+        if ambiguous_aliases:
+            return {
+                "status": "ambiguous",
+                "rule": rule["name"],
+                "path": "",
+                "candidate_paths": sorted({
+                    str(path.resolve()) for path in ambiguous_aliases
+                }),
+                "method": "audiocaps_v2_legacy_name_loses_start_time",
+            }
+        alias_matches = sorted({str(path.resolve()) for path in aliases})
+        if len(alias_matches) == 1:
+            return {
+                "status": "exists",
+                "rule": rule["name"],
+                "path": alias_matches[0],
+                "candidate_paths": [str(path) for path in candidates],
+                "method": "audiocaps_v2_csv_legacy_youtube_id",
+            }
+        if len(alias_matches) > 1:
+            return {
+                "status": "ambiguous",
+                "rule": rule["name"],
+                "path": "",
+                "candidate_paths": alias_matches,
+                "method": "audiocaps_v2_multiple_legacy_files",
+            }
 
-    if ambiguous_aliases:
-        return {
-            "status": "ambiguous",
-            "rule": rule["name"],
-            "path": "",
-            "candidate_paths": sorted({str(path.resolve()) for path in ambiguous_aliases}),
-            "method": "audiocaps_v2_legacy_name_loses_start_time",
-        }
-    alias_matches = sorted({str(path.resolve()) for path in aliases})
-    if len(alias_matches) == 1:
-        return {
-            "status": "exists",
-            "rule": rule["name"],
-            "path": alias_matches[0],
-            "candidate_paths": [str(path) for path in candidates],
-            "method": "audiocaps_v2_csv_legacy_youtube_id",
-        }
-    if len(alias_matches) > 1:
-        return {
-            "status": "ambiguous",
-            "rule": rule["name"],
-            "path": "",
-            "candidate_paths": alias_matches,
-            "method": "audiocaps_v2_multiple_legacy_files",
-        }
     return {
         "status": "missing",
         "rule": rule["name"],
@@ -628,6 +688,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--decode", action="store_true", help="CPU decode each unique existing file")
     parser.add_argument("--decode-limit", type=int, default=0, help="maximum unique files to decode; 0 means all")
     parser.add_argument("--ffprobe", default=None, help="ffprobe executable; default searches PATH")
+    parser.add_argument(
+        "--canonicalize-resolved-paths",
+        action="store_true",
+        help="write real paths so symlink aliases share one staging path",
+    )
+    parser.add_argument(
+        "--max-unique-audio-gib",
+        type=float,
+        default=0.0,
+        help="return exit code 3 if resolved unique audio exceeds this GiB limit",
+    )
     parser.add_argument("--progress-every", type=int, default=100000)
     args = parser.parse_args(argv)
 
@@ -635,8 +706,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"manifest does not exist: {args.manifest}")
     if not args.mapping_json.is_file():
         parser.error(f"mapping JSON does not exist: {args.mapping_json}")
-    if args.decode_limit < 0:
-        parser.error("--decode-limit must be non-negative")
+    if args.decode_limit < 0 or args.max_unique_audio_gib < 0:
+        parser.error("decode limit and unique-audio limit must be non-negative")
     rules = load_rules(args.mapping_json)
     build_recursive_indexes(rules)
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -656,6 +727,9 @@ def main(argv: list[str] | None = None) -> int:
     reference_counts: Counter[str] = Counter()
     resolutions: dict[tuple[str, str], dict[str, Any]] = {}
     decode_results: dict[str, dict[str, Any]] = {}
+    unique_file_sizes: dict[str, int] = {}
+    unique_file_references: Counter[str] = Counter()
+    size_stat_failures: list[dict[str, Any]] = []
     decode_attempts = 0
 
     try:
@@ -686,6 +760,23 @@ def main(argv: list[str] | None = None) -> int:
                     result = resolve(raw_path, field, rules)
                     resolutions[cache_key] = result
             status = str(result["status"])
+            if status == "exists":
+                try:
+                    resolved_real_path = Path(result["path"]).resolve(strict=True)
+                    file_size = resolved_real_path.stat().st_size
+                    real_path_text = str(resolved_real_path)
+                    unique_file_sizes[real_path_text] = file_size
+                    unique_file_references[real_path_text] += 1
+                    if args.canonicalize_resolved_paths:
+                        result["path"] = real_path_text
+                except OSError as exc:
+                    size_stat_failures.append({
+                        "row_index": row_index,
+                        "field": field,
+                        "raw_path": raw_path,
+                        "resolved_path": result.get("path", ""),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
             counters[status] += 1
             source_status[(source, status)] += 1
             rule_counts[(str(result.get("rule") or ""), status)] += 1
@@ -752,6 +843,28 @@ def main(argv: list[str] | None = None) -> int:
                 tsv_value(result.get("method", "")),
             ]) + "\n")
 
+    with (args.output_dir / "unique_files.tsv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        handle.write("resolved_path\tsize_bytes\tmanifest_rows\n")
+        for path in sorted(unique_file_sizes):
+            handle.write("\t".join([
+                tsv_value(path),
+                str(unique_file_sizes[path]),
+                str(unique_file_references[path]),
+            ]) + "\n")
+    with (args.output_dir / "size_stat_failures.jsonl").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        for failure in size_stat_failures:
+            write_jsonl(handle, failure)
+
+    unique_audio_bytes = sum(unique_file_sizes.values())
+    max_unique_audio_bytes = int(args.max_unique_audio_gib * (1024 ** 3))
+    capacity_exceeded = bool(
+        max_unique_audio_bytes and unique_audio_bytes > max_unique_audio_bytes
+    )
+
     summary = {
         "manifest": str(args.manifest),
         "mapping_json": str(args.mapping_json),
@@ -763,6 +876,7 @@ def main(argv: list[str] | None = None) -> int:
                 "prefix": rule["prefix"],
                 "match": rule["match"],
                 "roots": [str(root) for root in rule["roots"]],
+                "flat_roots": [str(root) for root in rule.get("flat_roots", [])],
                 **({"metadata_root": str(rule["metadata_root"])} if "metadata_root" in rule else {}),
             }
             for rule in rules
@@ -773,6 +887,7 @@ def main(argv: list[str] | None = None) -> int:
             if "_audiocaps_metadata_audit" in rule
         },
         "decoder": {"requested": bool(args.decode), "ffprobe": ffprobe, "unique_attempts": decode_attempts},
+        "path_canonicalization": bool(args.canonicalize_resolved_paths),
         "counts": dict(counters),
         "source_rows": dict(source_counts),
         "source_status": {f"{source}\t{status}": count for (source, status), count in sorted(source_status.items())},
@@ -780,9 +895,17 @@ def main(argv: list[str] | None = None) -> int:
         "method_rows": dict(method_counts),
         "unique_raw_references": len(resolutions),
         "unique_existing_files": sum(1 for item in resolutions.values() if item.get("status") == "exists"),
+        "unique_resolved_files": len(unique_file_sizes),
+        "unique_resolved_audio_bytes": unique_audio_bytes,
+        "unique_resolved_audio_gib": unique_audio_bytes / (1024 ** 3),
+        "size_stat_failures": len(size_stat_failures),
+        "capacity_check": {
+            "limit_gib": args.max_unique_audio_gib or None,
+            "exceeded": capacity_exceeded,
+        },
         "unique_missing_or_unmapped_references": sum(1 for item in resolutions.values() if item.get("status") != "exists"),
         "decode_results": decode_results if args.decode else {},
-        "exit_policy": "allowed MusicCaps/train-other-500 issues are recorded but do not fail; retained missing/ambiguous/unmapped or decode failures return 2",
+        "exit_policy": "missing MusicCaps/train-other-500 rows are recorded as allowed; retained missing/ambiguous/unmapped, decode or file-size failures return 2; unique audio capacity excess returns 3",
     }
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
@@ -791,7 +914,10 @@ def main(argv: list[str] | None = None) -> int:
         + counters["retained_ambiguous_rows"]
         + counters["retained_unmapped_rows"]
         + counters["retained_decode_failure_rows"]
+        + len(size_stat_failures)
     )
+    if capacity_exceeded:
+        return 3
     return 2 if hard_failures else 0
 
 

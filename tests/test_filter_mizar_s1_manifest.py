@@ -77,6 +77,9 @@ class FilterMizarS1ManifestTest(unittest.TestCase):
                 "existing_rows": len(rows) - 3,
                 "decode_failures": 0,
             },
+            "unique_resolved_audio_bytes": 123,
+            "unique_resolved_audio_gib": 123 / (1024 ** 3),
+            "size_stat_failures": 0,
             "source_rows": {
                 source: sum(row["source"] == source for row in rows)
                 for source in {row["source"] for row in rows}
@@ -115,13 +118,25 @@ class FilterMizarS1ManifestTest(unittest.TestCase):
             )
         return manifest, audit_dir, rows
 
-    def run_filter(self, manifest: Path, audit_dir: Path, output: Path) -> dict:
+    def run_filter(
+        self,
+        manifest: Path,
+        audit_dir: Path,
+        output: Path,
+        *,
+        keep_musiccaps: bool = False,
+        keep_train_other_500: bool = False,
+        max_unique_audio_gib: float = 0.0,
+    ) -> dict:
         return filtering.filter_manifest(filtering.argparse.Namespace(
             manifest=manifest,
             audit_dir=audit_dir,
             output_manifest=output,
             excluded_jsonl=None,
             report=None,
+            keep_musiccaps=keep_musiccaps,
+            keep_train_other_500=keep_train_other_500,
+            max_unique_audio_gib=max_unique_audio_gib,
             progress_every=0,
         ))
 
@@ -150,6 +165,43 @@ class FilterMizarS1ManifestTest(unittest.TestCase):
             mc_reasons = next(item["exclude_reasons"] for item in excluded if item["row_index"] == 1)
             self.assertEqual(mc_reasons, ["audit_allowed_missing", "dataset_musiccaps"])
             self.assertTrue((root / "filtered.filter_report.json").is_file())
+
+    def test_expanded_policy_keeps_resolved_musiccaps_and_train_other_rows(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest, audit_dir, original_rows = self.create_fixture(root)
+            output = root / "expanded.json"
+
+            report = self.run_filter(
+                manifest,
+                audit_dir,
+                output,
+                keep_musiccaps=True,
+                keep_train_other_500=True,
+                max_unique_audio_gib=1.0,
+            )
+
+            kept = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(kept, [original_rows[index] for index in (0, 2, 5, 6, 7)])
+            self.assertEqual(report["counts"]["kept_rows"], 5)
+            self.assertTrue(report["retention_policy"]["keep_musiccaps"])
+            self.assertTrue(report["retention_policy"]["keep_speechcraft_train_other_500"])
+
+    def test_capacity_guard_refuses_manifest_over_limit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest, audit_dir, _ = self.create_fixture(root)
+
+            with self.assertRaisesRegex(ValueError, "exceeds the requested staging limit"):
+                self.run_filter(
+                    manifest,
+                    audit_dir,
+                    root / "over_limit.json",
+                    keep_musiccaps=True,
+                    keep_train_other_500=True,
+                    max_unique_audio_gib=0.000000001,
+                )
+            self.assertFalse((root / "over_limit.json").exists())
 
     def test_rejects_issue_index_that_disagrees_with_manifest_row(self):
         with tempfile.TemporaryDirectory() as temp:

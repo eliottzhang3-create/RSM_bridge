@@ -41,6 +41,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-manifest", type=Path, required=True)
     parser.add_argument("--excluded-jsonl", type=Path)
     parser.add_argument("--report", type=Path)
+    parser.add_argument(
+        "--keep-musiccaps",
+        action="store_true",
+        help="retain resolvable MusicCaps rows instead of applying the historical exclusion",
+    )
+    parser.add_argument(
+        "--keep-train-other-500",
+        action="store_true",
+        help="retain resolvable SpeechCraft train-other-500 rows",
+    )
+    parser.add_argument(
+        "--max-unique-audio-gib",
+        type=float,
+        default=0.0,
+        help="refuse to publish if the audit's unique resolved audio exceeds this GiB limit",
+    )
     parser.add_argument("--progress-every", type=int, default=100_000)
     return parser.parse_args(argv)
 
@@ -173,14 +189,21 @@ def path_has_train_other_500(value: str) -> bool:
 def row_filter_reasons(
     row: dict[str, Any],
     audit_reasons: list[str],
+    keep_musiccaps: bool = False,
+    keep_train_other_500: bool = False,
 ) -> list[str]:
     reasons = list(audit_reasons)
     source = source_label(row)
-    if source_key(source) == "musiccaps":
+    if source_key(source) == "musiccaps" and not keep_musiccaps:
         reasons.append("dataset_musiccaps")
 
     field, raw_path = raw_reference(row, source)
-    if source_key(source) == "speechcraft" and field and path_has_train_other_500(raw_path):
+    if (
+        source_key(source) == "speechcraft"
+        and field
+        and path_has_train_other_500(raw_path)
+        and not keep_train_other_500
+    ):
         reasons.append("speechcraft_train_other_500")
     return list(dict.fromkeys(reasons))
 
@@ -238,6 +261,31 @@ def filter_manifest(args: argparse.Namespace) -> dict[str, Any]:
     validate_paths(manifest, audit_dir, output_manifest, excluded_jsonl, report_path)
 
     summary = load_summary(audit_dir, manifest)
+    keep_musiccaps = bool(getattr(args, "keep_musiccaps", False))
+    keep_train_other_500 = bool(getattr(args, "keep_train_other_500", False))
+    max_unique_audio_gib = float(getattr(args, "max_unique_audio_gib", 0.0))
+    if max_unique_audio_gib < 0:
+        raise ValueError("--max-unique-audio-gib must be non-negative")
+    if max_unique_audio_gib:
+        unique_audio_bytes = summary.get("unique_resolved_audio_bytes")
+        stat_failures = summary.get("size_stat_failures")
+        if not isinstance(unique_audio_bytes, int) or isinstance(unique_audio_bytes, bool):
+            raise ValueError(
+                "audit summary has no unique_resolved_audio_bytes; rerun the updated "
+                "CPU audio audit before filtering"
+            )
+        if stat_failures != 0:
+            raise ValueError(
+                f"audio audit has {stat_failures!r} file-size stat failures; "
+                "cannot enforce the staging capacity"
+            )
+        limit_bytes = int(max_unique_audio_gib * (1024 ** 3))
+        if unique_audio_bytes > limit_bytes:
+            raise ValueError(
+                "unique resolved audio exceeds the requested staging limit: "
+                f"{unique_audio_bytes / (1024 ** 3):.3f} GiB > "
+                f"{max_unique_audio_gib:.3f} GiB"
+            )
     expected_rows = summary["counts"]["rows"]
     expected_existing = summary["counts"]["existing_rows"]
     expected_status_issues = expected_rows - expected_existing
@@ -295,7 +343,12 @@ def filter_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 issue = issue_records.get(row_index)
                 if issue is not None:
                     validate_issue_record(row_index, row, issue)
-                reasons = row_filter_reasons(row, audit_reasons.get(row_index, []))
+                reasons = row_filter_reasons(
+                    row,
+                    audit_reasons.get(row_index, []),
+                    keep_musiccaps=keep_musiccaps,
+                    keep_train_other_500=keep_train_other_500,
+                )
                 if reasons:
                     rows_excluded += 1
                     reason_counts.update(reasons)
@@ -357,11 +410,21 @@ def filter_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "source_rows_after": dict(sorted(source_after.items())),
             "audit_issue_file_rows": issue_file_counts,
             "filters": [
-                "all rows whose source is MusicCaps",
-                "all SpeechCraft rows whose raw audio path contains the train-other-500 path segment",
+                *([] if keep_musiccaps else ["all rows whose source is MusicCaps"]),
+                *([] if keep_train_other_500 else [
+                    "all SpeechCraft rows whose raw audio path contains the train-other-500 path segment"
+                ]),
                 "all rows listed in allowed_missing.jsonl, retained_missing.jsonl, ambiguous.jsonl, or unmapped.jsonl",
                 "all rows listed in decode_failures.jsonl",
             ],
+            "retention_policy": {
+                "keep_musiccaps": keep_musiccaps,
+                "keep_speechcraft_train_other_500": keep_train_other_500,
+                "max_unique_audio_gib": max_unique_audio_gib or None,
+                "audited_unique_resolved_audio_gib": summary.get(
+                    "unique_resolved_audio_gib"
+                ),
+            },
         }
         write_report(temp_report, report)
 
