@@ -76,19 +76,23 @@
       "name": "musiccaps",
       "field": "audio_path",
       "prefix": "musiccaps_audios/",
-      "match": "basename",
+      "match": "s2_mapping",
       "roots": [
         "/hpc_stor03/sjtu_home/jinwei.zhang/data/MusicCaps"
-      ]
+      ],
+      "s2_mapping_jsonl": "/hpc_stor03/sjtu_home/jinwei.zhang/data/AudioMCQ/audio_mapping.s2.jsonl",
+      "source_dataset": "MusicCaps"
     },
     {
       "name": "speechcraft_libritts_r",
       "field": "audio_path",
       "prefix": "libritts_r_audios/",
-      "match": "basename",
+      "match": "s2_mapping",
       "roots": [
         "/hpc_stor03/sjtu_home/jinwei.zhang/data/SpeechCraft"
-      ]
+      ],
+      "s2_mapping_jsonl": "/hpc_stor03/sjtu_home/jinwei.zhang/data/AudioMCQ/audio_mapping.s2.jsonl",
+      "source_dataset": "SpeechCraft"
     }
   ]
 }

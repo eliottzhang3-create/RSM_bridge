@@ -231,6 +231,14 @@ def print_summary(report: dict[str, Any], max_examples: int = 1) -> None:
             f"audio_files={inventory['audio_file_entries']} "
             f"all_files={inventory['file_entries']}"
         )
+        print("  extensions:", inventory["extensions"])
+        print("  audio path examples:", inventory["example_audio_relative_paths"][:3])
+        print("  directory walk errors:", inventory["walk_error_count"])
+        if inventory["walk_errors"]:
+            print("    ", inventory["walk_errors"][:3])
+        print("  skipped symlink directories:", inventory["skipped_symlink_directory_count"])
+        if inventory["skipped_symlink_directory_count"]:
+            print("    ", inventory["skipped_symlink_directories_first_10"][:3])
         print("  failed unique references:", details["failed_unique_references_by_diagnosis"])
         print("  failed manifest rows:", details["failed_manifest_rows_by_diagnosis"])
         for kind, examples in details["examples"].items():
@@ -240,10 +248,11 @@ def print_summary(report: dict[str, Any], max_examples: int = 1) -> None:
                     f"raw={example['raw_path']}"
                 )
                 if "s2_record" in example:
-                    print(
-                        "    s2_local_path="
-                        f"{example['s2_record'].get('local_path', '')}"
-                    )
+                    record = example["s2_record"]
+                    print(f"    s2_status={record.get('status', '')}")
+                    print(f"    s2_local_path={record.get('local_path', '')}")
+                    print(f"    s2_archive_path={record.get('archive_path', '')}")
+                    print(f"    s2_archive_member={record.get('archive_member', '')}")
                 for key in ("candidate", "hints_not_accepted", "candidates", "s2_records"):
                     if key in example:
                         print(f"    {key}={example[key]}")

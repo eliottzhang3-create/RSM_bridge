@@ -94,6 +94,36 @@ class DiagnoseTransferredAudioTest(unittest.TestCase):
         self.assertEqual(kind, "advisor_filename_has_multiple_candidates")
         self.assertEqual(len(details["candidates"]), 2)
 
+    def test_summary_shows_archive_member_and_directory_scan_status(self):
+        report = {
+            "current_audit": {}, "s2_mapping_records_by_source_status": {},
+            "datasets": {"SpeechCraft": {
+                "directory_inventory": {
+                    "root_exists": True, "audio_file_entries": 0, "file_entries": 0,
+                    "extensions": {}, "example_audio_relative_paths": [],
+                    "walk_error_count": 1, "walk_errors": ["permission denied"],
+                    "skipped_symlink_directory_count": 1,
+                    "skipped_symlink_directories_first_10": ["/audio/linked"],
+                },
+                "failed_unique_references_by_diagnosis": {"advisor_filename_absent": 1},
+                "failed_manifest_rows_by_diagnosis": {"advisor_filename_absent": 2},
+                "examples": {"advisor_filename_absent": [{
+                    "manifest_rows": 2, "raw_path": "libritts_r_audios/a.wav",
+                    "s2_record": {"status": "archive", "local_path": "",
+                                  "archive_path": "/s2/audio.tar",
+                                  "archive_member": "LibriTTS_R/a.wav"},
+                }]},
+            }},
+        }
+        output = io.StringIO()
+        with redirect_stdout(output):
+            diagnosis.print_summary(report)
+        summary = output.getvalue()
+        self.assertIn("s2_archive_member=LibriTTS_R/a.wav", summary)
+        self.assertIn("s2_archive_path=/s2/audio.tar", summary)
+        self.assertIn("directory walk errors: 1", summary)
+        self.assertIn("skipped symlink directories: 1", summary)
+
 
 if __name__ == "__main__":
     unittest.main()

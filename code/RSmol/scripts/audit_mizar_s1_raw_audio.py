@@ -35,6 +35,13 @@ preferred roots are missing; an ambiguous preferred match is not replaced.
 Legacy ``Y<id>.wav`` names are accepted only when the CSV has one distinct
 start time for that ID in the relevant split; repeated captions for the same
 clip are fine.
+
+``match: "s2_mapping"`` uses the exact ``source_dataset`` and original
+``audio_path`` key in ``s2_mapping_jsonl``. A file record supplies its full
+``local_path`` filename; an archive record supplies its full ``archive_member``
+filename. Only one exact, case-sensitive filename below the dataset's roots
+is accepted. Conflicting mapping records and duplicate destination names are
+reported as ambiguous; missing records never trigger a guessed fallback.
 """
 
 from __future__ import annotations
@@ -52,7 +59,7 @@ import sys
 import unicodedata
 import wave
 from collections import Counter, defaultdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Iterator
 
 
@@ -233,10 +240,10 @@ def load_rules(path: Path) -> list[dict[str, Any]]:
         if isinstance(flat_roots, (str, Path)):
             flat_roots = [str(flat_roots)]
         match = text(raw.get("match") or "exact").lower()
-        if match not in {"exact", "basename", "normalized_stem", "audiocaps_v2"}:
+        if match not in {"exact", "basename", "normalized_stem", "audiocaps_v2", "s2_mapping"}:
             raise ValueError(
                 f"mapping rule {name!r} has unsupported match {match!r}; "
-                "use exact, basename, normalized_stem, or audiocaps_v2"
+                "use exact, basename, normalized_stem, audiocaps_v2, or s2_mapping"
             )
         if not field or not isinstance(roots, list) or not roots:
             raise ValueError(f"mapping rule {name!r} requires field and roots")
@@ -266,6 +273,15 @@ def load_rules(path: Path) -> list[dict[str, Any]]:
             if not metadata_root:
                 raise ValueError(f"mapping rule {name!r} requires metadata_root for audiocaps_v2")
             rule["metadata_root"] = Path(metadata_root).expanduser()
+        if match == "s2_mapping":
+            mapping_path = text(raw.get("s2_mapping_jsonl"))
+            mapping_source = text(raw.get("source_dataset"))
+            if not mapping_path or not mapping_source:
+                raise ValueError(
+                    f"mapping rule {name!r} requires s2_mapping_jsonl and source_dataset"
+                )
+            rule["s2_mapping_jsonl"] = Path(mapping_path).expanduser()
+            rule["source_dataset"] = mapping_source
         rules.append(rule)
     return rules
 
@@ -361,6 +377,7 @@ def build_recursive_indexes(rules: list[dict[str, Any]]) -> None:
             continue
         basename: defaultdict[str, list[str]] = defaultdict(list)
         normalized_stem: defaultdict[str, list[str]] = defaultdict(list)
+        exact_names: defaultdict[str, list[str]] = defaultdict(list)
         seen: set[str] = set()
         for root in rule["roots"]:
             if not root.is_dir():
@@ -369,6 +386,8 @@ def build_recursive_indexes(rules: list[dict[str, Any]]) -> None:
                 if not candidate.is_file():
                     continue
                 resolved = str(candidate.resolve())
+                if rule["match"] == "s2_mapping":
+                    exact_names[candidate.name].append(resolved)
                 if resolved in seen:
                     continue
                 seen.add(resolved)
@@ -376,6 +395,67 @@ def build_recursive_indexes(rules: list[dict[str, Any]]) -> None:
                 normalized_stem[normalized_stem_key(candidate.name)].append(resolved)
         rule["_basename_index"] = dict(basename)
         rule["_normalized_stem_index"] = dict(normalized_stem)
+        if rule["match"] == "s2_mapping":
+            records: defaultdict[str, set[tuple[str, str, str, str]]] = defaultdict(set)
+            # The advisor's record supplies the complete actual filename.
+            # Never strip the Y prefix, start offset, extension or utterance ID.
+            with rule["s2_mapping_jsonl"].open(
+                "r", encoding="utf-8-sig"
+            ) as handle:
+                for line_number, line in enumerate(handle, 1):
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    if not isinstance(record, dict):
+                        raise ValueError(
+                            f"{rule['s2_mapping_jsonl']}:{line_number}: expected an object"
+                        )
+                    if text(record.get("source_dataset")) != rule["source_dataset"]:
+                        continue
+                    raw_path = slash(text(record.get("audio_path")))
+                    records[raw_path].add((
+                        text(record.get("status")),
+                        slash(text(record.get("local_path"))),
+                        slash(text(record.get("archive_path"))),
+                        slash(text(record.get("archive_member"))),
+                    ))
+            rule["_s2_records"] = dict(records)
+            rule["_s2_exact_name_index"] = dict(exact_names)
+
+
+def resolve_s2_mapping(raw_path: str, rule: dict[str, Any]) -> dict[str, Any]:
+    """Use an exact AudioMCQ key and the advisor's explicit filename."""
+
+    result = {
+        "status": "missing",
+        "rule": rule["name"],
+        "path": "",
+        "candidate_paths": [],
+        "method": "s2_mapping_key_not_found",
+    }
+    records = rule.get("_s2_records", {}).get(slash(raw_path), set())
+    if not records:
+        return result
+    if len(records) != 1:
+        result.update(status="ambiguous", method="s2_mapping_conflicting_records")
+        return result
+    status, local_path, _, archive_member = next(iter(records))
+    original_path = local_path if status == "file" else archive_member
+    name = PurePosixPath(original_path).name if original_path else ""
+    if status not in {"file", "archive"} or not name:
+        result["method"] = "s2_mapping_advisor_missing_or_unusable"
+        return result
+    matches = sorted(set(rule.get("_s2_exact_name_index", {}).get(name, [])))
+    result["candidate_paths"] = matches
+    if len(matches) == 1:
+        result.update(
+            status="exists", path=matches[0], method="s2_mapping_exact_filename"
+        )
+    elif len(matches) > 1:
+        result.update(status="ambiguous", method="s2_mapping_multiple_local_files")
+    else:
+        result["method"] = "s2_mapping_local_file_missing"
+    return result
 
 
 def resolve(raw_path: str, field: str, rules: list[dict[str, Any]]) -> dict[str, Any]:
@@ -395,6 +475,13 @@ def resolve(raw_path: str, field: str, rules: list[dict[str, Any]]) -> dict[str,
         prefix = rule["prefix"]
         tail = normalized[len(prefix):] if prefix else normalized
         candidate_paths = [str(root / Path(tail)) for root in rule["roots"]]
+        if rule["match"] == "s2_mapping":
+            result = resolve_s2_mapping(normalized, rule)
+            if result["status"] in {"exists", "ambiguous"}:
+                return result
+            if first_missing is None:
+                first_missing = result
+            continue
         if rule["match"] == "audiocaps_v2":
             result = resolve_audiocaps_v2(tail, rule)
             result["rule"] = rule["name"]
@@ -878,6 +965,10 @@ def main(argv: list[str] | None = None) -> int:
                 "roots": [str(root) for root in rule["roots"]],
                 "flat_roots": [str(root) for root in rule.get("flat_roots", [])],
                 **({"metadata_root": str(rule["metadata_root"])} if "metadata_root" in rule else {}),
+                **({
+                    "s2_mapping_jsonl": str(rule["s2_mapping_jsonl"]),
+                    "source_dataset": rule["source_dataset"],
+                } if "s2_mapping_jsonl" in rule else {}),
             }
             for rule in rules
         ],
