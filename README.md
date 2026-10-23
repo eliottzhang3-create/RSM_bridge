@@ -1,5 +1,21 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-23：独立的 Mizar Stage 1 / GBS256 消融线
+
+新增隔离副本 [mizar_stage1_fixed20_gbs256_3epochs](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs/README.md) 和提交入口 [run_mizar_s1_gbs256_5090.sh](code/RSmol/run_mizar_s1_gbs256_5090.sh)。它保留 GBS32 路线的 HTSAT + c2l + projection + SmolLM2、固定20在线音频、已过滤的 1,311,334 行数据及 Mizar Stage 1 优化设置；改为 8 GPU × microbatch 8 × accumulation 4，GBS256。原 GBS32 路线和 checkpoint 合同不变。
+
+每 epoch **5,122** 次 optimizer update，3 epochs 共 **15,366** 次，5% warmup 为 **768** 次；每 epoch 消耗 1,311,232 行、丢弃 102 行。为保持与 GBS32 路线相近的预拷贝样本量，先 staging 64 个 optimizer updates，再边训练边复制；后台水位每 16 updates 前进。该路线默认直接 formal，不要求或运行 smoke。
+
+远程 GitHub 同步后，在 code/RSmol/ 提交：
+
+~~~bash
+bash run_mizar_s1_gbs256_5090.sh \
+  --stage-start-steps 64 --stage-workers 16 \
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_async_v1
+~~~
+
+本机没有 PyTorch/CUDA 与训练数据，因此不能本地验证 microbatch 8 的显存适配或真实 DDP 训练；后台 staging 和配置只通过 CPU/stdlib 测试。本路线会以独立 route_variant 拒绝 GBS32 checkpoint resume。
+
 ## 2026-10-21：HTSAT 架构采用 Mizar Stage 1，8×4×1，3 epochs
 
 当前新增隔离路线 [mizar_stage1_fixed20_3epochs](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_3epochs/README.md)，从用户指定的 `reasonaqa_global_batch256_lr_ablation_5epochs` 保留 HTSAT + c2l + residual projection + 完整 SmolLM2 架构，移植官方 Mizar S1 的文本、分词、answer-only rank-local CE、AdamW 分组、5% warmup/cosine 和 GradNormTracker。既有 ReasonAQA 路线不改动。
