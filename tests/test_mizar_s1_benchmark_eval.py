@@ -3,8 +3,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shlex
+import shutil
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -62,6 +67,74 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
         self.assertEqual(mmar.audio_root.name, "mmar-audio")
         self.assertIn("mmau_test_mini_step122937", str(mmau.output_dir))
         self.assertIn("mmar_step122937", str(mmar.output_dir))
+
+    def test_gbs256_checkpoint_contract_is_selectable(self):
+        args = self.module.parse_args([
+            "--benchmark", "mmau", "--expected-step", "15366",
+            "--expected-geometry", "8,8,4",
+        ])
+        self.assertEqual(args.expected_step, 15366)
+        self.assertEqual(args.expected_geometry, (8, 8, 4))
+        self.assertIn("mmau_test_mini_step15366", str(args.output_dir))
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "artifact"
+            source.touch()
+            for key in ("checkpoint", "runtime_config", "metadata_json", "parquet", "evaluation_script"):
+                setattr(args, key, source)
+            identity = self.module._identity(args, "model_output")
+        self.assertEqual(identity["expected_step"], 15366)
+        self.assertEqual(identity["expected_geometry"], [8, 8, 4])
+
+    def checkpoint_fixture(self, variant):
+        folder = ("mizar_stage1_fixed20_gbs256_3epochs" if variant == "gbs256"
+                  else "mizar_stage1_fixed20_3epochs")
+        route = load_module("test_contract_" + variant, ROOT / "code/RSmol" /
+                            "mellow_official_training_c8204d8_adamw_cosine" / folder / "contract.py")
+        contract = route.semantic_contract({
+            "rows": 1311334, "source_rows": route.SOURCE_COUNTS,
+            "rows_canonical_sha256": "manifest", "mapping_sha256": "mapping",
+        }, "text-model", "htsat")
+        identity = route.digest(contract)
+        saved = {
+            "schema_version": 1, "route_variant": route.ROUTE, "mode": "formal",
+            "state_dict": {"test_parameter": [1]}, "contract": contract,
+            "contract_sha256": identity, "total_step": contract["geometry"]["total_steps"],
+            "num_epochs": 3,
+            "loss_reduction": (
+                "mean_of_rank_local_microbatch_token_means_then_DDP_mean"
+                if variant == "gbs256" else "rank_local_token_mean_then_DDP_mean"),
+        }
+        runtime = {"contract": contract, "contract_sha256": identity,
+                   "route": route.ROUTE, "mode": "formal"}
+        return saved, runtime, route
+
+    def test_both_checkpoint_schemas_validate_and_cross_route_use_fails(self):
+        for variant, geometry, step in (("gbs32", (8, 4, 1), 122937),
+                                        ("gbs256", (8, 8, 4), 15366)):
+            with self.subTest(variant=variant):
+                saved, runtime, route = self.checkpoint_fixture(variant)
+                contract = self.runtime.validate_checkpoint(saved, runtime, route, step, geometry)
+                self.assertEqual(contract["geometry"]["total_steps"], step)
+                wrong_geometry = (8, 8, 4) if variant == "gbs32" else (8, 4, 1)
+                with self.assertRaisesRegex(ValueError, "expected training geometry"):
+                    self.runtime.validate_checkpoint(saved, runtime, route, step, wrong_geometry)
+                with self.assertRaisesRegex(ValueError, "step / epoch horizon"):
+                    self.runtime.validate_checkpoint(saved, runtime, route, step + 1, geometry)
+                other = self.checkpoint_fixture("gbs32" if variant == "gbs256" else "gbs256")[2]
+                with self.assertRaisesRegex(ValueError, "complete formal"):
+                    self.runtime.validate_checkpoint(saved, runtime, other, step, geometry)
+
+    def test_gbs256_keeps_source_runtime_and_loss_checks(self):
+        saved, runtime, route = self.checkpoint_fixture("gbs256")
+        with patch.object(route, "code_digest", return_value="different-source"):
+            with self.assertRaisesRegex(ValueError, "training source differs"):
+                self.runtime.validate_checkpoint(saved, runtime, route, 15366, (8, 8, 4))
+        with self.assertRaisesRegex(ValueError, "runtime.json does not belong"):
+            self.runtime.validate_checkpoint(saved, {**runtime, "contract_sha256": "other"},
+                                             route, 15366, (8, 8, 4))
+        saved["loss_reduction"] = "rank_local_token_mean_then_DDP_mean"
+        with self.assertRaisesRegex(ValueError, "training loss contract mismatch"):
+            self.runtime.validate_checkpoint(saved, runtime, route, 15366, (8, 8, 4))
 
     def test_scorer_key_is_taken_from_official_script(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -133,7 +206,56 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             self.assertIn(f"--benchmark {benchmark}", content)
             self.assertIn("model--step-122937.ckpt", content)
             self.assertIn("vc submit", content)
+        self.assertIn("RSMOL_MIZAR_S1_EVAL_VARIANT", mmau_submit)
+        self.assertIn("model--step-15366.ckpt", mmau_submit)
+        self.assertIn("--expected-geometry", mmau_submit)
         self.assertIn("conda activate mellow_c8204d8", inner)
+
+    def test_submission_selects_checkpoint_runtime_route_and_geometry_together(self):
+        bash = shutil.which("bash") or "C:/Program Files/Git/bin/bash.exe"
+        if not Path(bash).is_file():
+            self.skipTest("Bash is not installed")
+
+        def bash_path(path):
+            value = path.resolve().as_posix()
+            return f"/{value[0].lower()}{value[2:]}" if os.name == "nt" else value
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            submit = root / "run_mizar_s1_mmau_eval_5090.sh"
+            submit.write_bytes((ROOT / "code/RSmol" / submit.name).read_bytes().replace(b"\r\n", b"\n"))
+            binary = root / "bin"
+            binary.mkdir()
+            stub = binary / "vc"
+            stub.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$RSM_TEST_CAPTURE"\n',
+                            encoding="utf-8", newline="\n")
+            stub.chmod(0o755)
+            clean_env = {key: value for key, value in os.environ.items()
+                         if not key.startswith("RSMOL_")}
+            for variant, run, step, geometry in (
+                ("gbs32", "mizar_s1_htsat_5090/formal_async_v3", "122937", "8,4,1"),
+                ("gbs256", "mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3", "15366", "8,8,4"),
+            ):
+                with self.subTest(variant=variant):
+                    capture = root / f"{variant}.args"
+                    env = dict(clean_env, RSMOL_MIZAR_S1_EVAL_VARIANT=variant,
+                               RSM_TEST_CAPTURE=bash_path(capture),
+                               PATH=f"{bash_path(binary)}:/usr/bin:/bin")
+                    subprocess.run([bash, bash_path(submit)], env=env,
+                                   capture_output=True, text=True, check=True)
+                    submission = capture.read_text(encoding="utf-8").splitlines()
+                    self.assertEqual(submission[submission.index("-g") + 1], "1")
+                    command = shlex.split(submission[submission.index("--cmd") + 1])
+                    self.assertEqual(command[:2], ["bash", "scripts/evaluate_mizar_s1_benchmark.sh"])
+                    options = dict(zip(command[2::2], command[3::2]))
+                    self.assertTrue(options["--checkpoint"].endswith(
+                        f"{run}/formal/checkpoints/model--step-{step}.ckpt"))
+                    self.assertTrue(options["--runtime-config"].endswith(f"{run}/formal/runtime.json"))
+                    self.assertTrue(options["--output-dir"].endswith(f"{run}/eval/mmau_test_mini_step{step}"))
+                    route = "mizar_stage1_fixed20_gbs256_3epochs" if variant == "gbs256" else "mizar_stage1_fixed20_3epochs"
+                    self.assertTrue(options["--route-root"].endswith(route))
+                    self.assertEqual(options["--expected-step"], step)
+                    self.assertEqual(options["--expected-geometry"], geometry)
 
     def test_inference_path_has_no_legacy_audio_or_prefix_contract(self):
         source = SOURCE.read_text(encoding="utf-8")

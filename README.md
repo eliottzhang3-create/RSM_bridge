@@ -1,5 +1,27 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-23：Mizar S1 / GBS256 checkpoint 的 MMAU test-mini 评测
+
+`code/RSmol/run_mizar_s1_mmau_eval_5090.sh` 新增 `RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256` 选择项，默认仍为 GBS32。GBS256 自动选择 `mizar_stage1_fixed20_gbs256_3epochs`、`formal_sharedstart_v3/formal/runtime.json` 和 `model--step-15366.ckpt`，校验训练几何 `8×8×4` 及累积训练的 loss 标识。checkpoint/runtime 合同、源码 SHA、组件资产和模型 strict loading 校验继续执行；不要求训练 staging 目录仍存在。
+
+经 GitHub 同步到远程后，在 `code/RSmol/` 执行：
+
+```bash
+RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256 bash run_mizar_s1_mmau_eval_5090.sh
+```
+
+单卡、完整 1,000 行、确定性 greedy、EOS 停止且最多 300 new tokens，音频读取/重采样/fixed20 和 `129+129+1+256` prefix 与选中训练路线一致。完整生成原样交给 MMAU 官方 scorer。默认结果位于 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/eval/mmau_test_mini_step15366/`。
+
+官方评测完成后，在登录节点单独重评分，无需 GPU 或重新生成：
+
+```bash
+python scripts/rescore_mmau_mellow_author_reply.py \
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/eval/mmau_test_mini_step15366/raw_generations.jsonl \
+  --expected-rows 1000
+```
+
+重评分仍使用第一个 `)` 前的内容做 lowercase 标签比较，不 trim；结果写入该目录下的 `choice_label_rescore/`，保留官方结果。它自动从同目录 `run_config.json` 携带 checkpoint、记录的 SHA256、step 和训练几何，不加载 checkpoint。也可用 `--source-checkpoint PATH` 显式标记来源；若与 `run_config.json` 不同则拒绝。实现经本地 CPU 合同、重评分和两种 variant 的 Bash 提交参数模拟验证，真实 checkpoint 加载及 GPU 推理仍需远程作业验证。
+
 ## 2026-10-23：独立的 Mizar Stage 1 / GBS256 消融线
 
 新增隔离副本 [mizar_stage1_fixed20_gbs256_3epochs](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs/README.md) 和提交入口 [run_mizar_s1_gbs256_5090.sh](code/RSmol/run_mizar_s1_gbs256_5090.sh)。它保留 GBS32 路线的 HTSAT + c2l + projection + SmolLM2、固定20在线音频、已过滤的 1,311,334 行数据及 Mizar Stage 1 优化设置；改为 8 GPU × microbatch 8 × accumulation 4，GBS256。原 GBS32 路线和 checkpoint 合同不变。

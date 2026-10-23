@@ -38,6 +38,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="prediction JSON array or raw_generations.jsonl")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--expected-rows", type=int, choices=(5, 1000))
+    parser.add_argument(
+        "--source-checkpoint", type=Path,
+        help="optional provenance only; the checkpoint is never loaded or hashed",
+    )
     args = parser.parse_args(argv)
     args.output_dir = args.output_dir or (
         args.predictions.parent / "choice_label_rescore"
@@ -145,6 +149,27 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             f"prediction denominator mismatch: expected={args.expected_rows} actual={len(predictions)}"
         )
+    # The same scorer works for GBS32 and GBS256. Carry over the evaluator's
+    # recorded checkpoint identity without touching the large checkpoint file.
+    run_config_path = args.predictions.parent / "run_config.json"
+    source_run = None
+    source_checkpoint = args.source_checkpoint
+    if run_config_path.is_file():
+        run_config = json.loads(run_config_path.read_text(encoding="utf-8-sig"))
+        recorded_checkpoint = run_config.get("checkpoint")
+        if recorded_checkpoint:
+            recorded_checkpoint = Path(recorded_checkpoint)
+            if (source_checkpoint is not None
+                    and source_checkpoint.resolve() != recorded_checkpoint.resolve()):
+                raise ValueError("--source-checkpoint differs from the prediction run_config.json")
+            source_checkpoint = recorded_checkpoint
+        source_run = {
+            "run_config": str(run_config_path.resolve()),
+            "run_config_sha256": _sha256(run_config_path),
+            **{key: run_config.get(key) for key in (
+                "checkpoint", "checkpoint_sha256", "runtime_config", "route_root",
+                "expected_step", "expected_geometry", "identity_sha256")},
+        }
     args.output_dir.mkdir(parents=True, exist_ok=True)
     score = mmau.write_mellow_author_reply_evaluation(args.output_dir, predictions)
     report = {
@@ -152,6 +177,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "operation": "scorer_only_no_inference",
         "source_predictions": str(args.predictions.resolve()),
         "source_predictions_sha256": _sha256(args.predictions),
+        "source_checkpoint": (
+            str(source_checkpoint.resolve()) if source_checkpoint else None
+        ),
+        "source_evaluation_run": source_run,
         "input_format": "raw_generations_jsonl" if raw_jsonl else "predictions_json",
         "input_audit": input_audit,
         "prediction_count": len(predictions),

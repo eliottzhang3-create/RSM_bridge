@@ -15,6 +15,10 @@ DEFAULT_RUN = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ht
 DEFAULT_CHECKPOINT = DEFAULT_RUN / "checkpoints/model--step-122937.ckpt"
 DEFAULT_RUNTIME = DEFAULT_RUN / "runtime.json"
 PROMPT_TOKENS, MAX_NEW_TOKENS, PREFIX_TOKENS, HIDDEN_SIZE = 256, 300, 515, 576
+TRAINING_LOSS_REDUCTIONS = {
+    "htsat_mizar_s1_fixed20_v1": "rank_local_token_mean_then_DDP_mean",
+    "htsat_mizar_s1_fixed20_gbs256_v1": "mean_of_rank_local_microbatch_token_means_then_DDP_mean",
+}
 PROTOCOL = {
     "version": "htsat_mizar_s1_fixed20_raw_greedy_v1",
     "audio_policy": "training_load_fixed20_single_center_crop_or_right_pad20_then_split10",
@@ -61,7 +65,27 @@ def import_training_route(route_root=ROUTE_ROOT):
     return modules
 
 
-def validate_checkpoint(saved, runtime, route_contract, expected_step):
+def parse_training_geometry(value):
+    """Normalize an evaluator geometry override to (world, microbatch, accumulation)."""
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.split(",")]
+    else:
+        parts = list(value)
+    if len(parts) != 3:
+        raise ValueError(f"expected geometry world_size,microbatch,gradient_accumulation, got {value!r}")
+    try:
+        result = tuple(int(part) for part in parts)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"expected integer geometry, got {value!r}") from exc
+    if any(part < 1 for part in result):
+        raise ValueError(f"expected positive geometry, got {result!r}")
+    return result
+
+
+def validate_checkpoint(saved, runtime, route_contract, expected_step,
+                        expected_geometry=(8, 4, 1)):
+    if route_contract.ROUTE not in TRAINING_LOSS_REDUCTIONS:
+        raise ValueError(f"unsupported HTSAT / Mizar S1 training route: {route_contract.ROUTE}")
     contract = saved.get("contract", {})
     if (saved.get("schema_version") != 1 or saved.get("route_variant") != route_contract.ROUTE
             or saved.get("mode") != "formal" or not saved.get("state_dict")):
@@ -75,7 +99,7 @@ def validate_checkpoint(saved, runtime, route_contract, expected_step):
     if contract.get("code_sha256") != route_contract.code_digest():
         raise ValueError("training source differs from the source recorded in the checkpoint")
     if (saved.get("total_step") != expected_step or saved.get("num_epochs") != 3
-            or saved.get("loss_reduction") != "rank_local_token_mean_then_DDP_mean"):
+            or saved.get("loss_reduction") != TRAINING_LOSS_REDUCTIONS[route_contract.ROUTE]):
         raise ValueError("checkpoint step / epoch horizon / training loss contract mismatch")
     expected = {"route": route_contract.ROUTE, "sample_rate": 32000,
                 "audio_policy": "mono_resample_center_crop_right_pad_fixed20_split10",
@@ -86,9 +110,15 @@ def validate_checkpoint(saved, runtime, route_contract, expected_step):
         if key not in contract or contract[key] != value:
             raise ValueError(f"checkpoint training contract mismatch: {key}: {contract.get(key)!r}")
     geometry = contract.get("geometry", {})
-    if (geometry.get("world_size"), geometry.get("microbatch"),
-            geometry.get("gradient_accumulation_steps")) != (8, 4, 1):
-        raise ValueError("expected training geometry 8 x 4 x 1")
+    expected_geometry = parse_training_geometry(expected_geometry)
+    actual_geometry = (geometry.get("world_size"), geometry.get("microbatch"),
+                       geometry.get("gradient_accumulation_steps"))
+    if actual_geometry != expected_geometry:
+        raise ValueError(
+            "expected training geometry "
+            f"{expected_geometry[0]} x {expected_geometry[1]} x {expected_geometry[2]}, "
+            f"got {actual_geometry[0]} x {actual_geometry[1]} x {actual_geometry[2]}"
+        )
     if not 0 < expected_step <= geometry.get("total_steps", 0):
         raise ValueError("checkpoint step is outside the recorded training horizon")
     return contract
@@ -132,7 +162,8 @@ def load_runtime(args):
     route_contract = modules["contract"]
     saved = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     runtime = json.loads(args.runtime_config.read_text(encoding="utf-8"))
-    contract = validate_checkpoint(saved, runtime, route_contract, args.expected_step)
+    contract = validate_checkpoint(saved, runtime, route_contract, args.expected_step,
+                                   args.expected_geometry)
     assets = audit_assets(contract)
     model = modules["models.mellow"].Mellow(
         audioenc_name="HTSAT", d_in=768, d_out=HIDDEN_SIZE,
@@ -172,6 +203,10 @@ def load_runtime(args):
              "dtype": "float32", "deterministic_greedy": True, "tf32": False,
              "ddp_state_dict_prefix_normalized": bool(keys and all(str(key).startswith("module.") for key in keys)),
              "state_dict_source": "training_checkpoint_state_dict",
+             "training_route": saved["route_variant"],
+             "training_geometry": contract["geometry"],
+             "training_loss_reduction": saved["loss_reduction"],
+             "expected_geometry": list(parse_training_geometry(args.expected_geometry)),
              "parameter_count": sum(p.numel() for p in model.parameters()),
              "torch": torch.__version__, "cuda": torch.version.cuda,
              "gpu": torch.cuda.get_device_name(device)}

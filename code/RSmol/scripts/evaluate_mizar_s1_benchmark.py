@@ -44,9 +44,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--evaluation-script", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--parquet-batch-size", type=int, default=8)
+    parser.add_argument("--expected-step", type=int, default=122937,
+                        help="checkpoint total_step expected by the selected training route")
+    parser.add_argument("--expected-geometry", type=runtime_adapter.parse_training_geometry,
+                        default=(8, 4, 1),
+                        help="world_size,microbatch,gradient_accumulation (default: 8,4,1)")
     args = parser.parse_args(argv)
 
-    args.expected_step = 122937
+    if args.expected_step < 1:
+        parser.error("--expected-step must be positive")
     args.dataset_dir = (args.dataset_dir or (DEFAULT_MMAU_DIR if args.benchmark == "mmau" else DEFAULT_MMAR_DIR)).resolve()
     args.metadata_json = (args.metadata_json or args.dataset_dir / ("mmau-test-mini.json" if args.benchmark == "mmau" else "MMAR-meta.json")).resolve()
     args.evaluation_script = (args.evaluation_script or args.dataset_dir / ("evaluation.py" if args.benchmark == "mmau" else "code/evaluation.py")).resolve()
@@ -59,7 +65,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args.checkpoint = args.checkpoint.resolve()
     args.runtime_config = args.runtime_config.resolve()
     args.route_root = args.route_root.resolve()
-    args.output_dir = (args.output_dir or OUTPUT_ROOT / ("mmau_test_mini_step122937" if args.benchmark == "mmau" else "mmar_step122937")).resolve()
+    args.output_dir = (args.output_dir or OUTPUT_ROOT / (
+        f"mmau_test_mini_step{args.expected_step}" if args.benchmark == "mmau"
+        else f"mmar_step{args.expected_step}")).resolve()
     if args.parquet_batch_size < 1:
         parser.error("--parquet-batch-size must be positive")
     return args
@@ -309,6 +317,8 @@ def _identity(args: argparse.Namespace, scorer_key: str) -> dict[str, Any]:
         "evaluation_sha256": runtime_adapter.sha256_file(args.evaluation_script),
         "evaluation_code": evaluation_code,
         "prediction_key": scorer_key, "generation": dict(runtime_adapter.PROTOCOL),
+        "expected_step": args.expected_step,
+        "expected_geometry": list(args.expected_geometry),
         "identity_sha256": None,
     }
 

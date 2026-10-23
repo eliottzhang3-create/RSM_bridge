@@ -150,6 +150,30 @@ formal 在 2,561 / 5,122 / 7,683 / 10,244 / 12,805 / 15,366 步保存，最终�
 
 本地验证覆盖：CPU 索引原子发布/复用、仅时间戳变化和内容相同的路径别名复用、保留大小/时间戳的内容变化拒绝、输入变化的详细诊断、旧身份格式拒绝、首个文件仍在复制时启动、共享读取跨 epoch、不读取 partial 文件、显式切换后仅用本地路径、复制失败/进程死亡/心跳过期、全量计数校验、原始文件大小/mtime 改变、零已复制文件的 formal 配置，以及 optimizer 边界 collective 切换的代码结构。Python/Bash 语法与 Git whitespace 检查通过。本地没有 PyTorch、真实数据、权重或 CUDA，不能将这些 CPU 检查作为真实八卡同步切换或 microbatch 8 显存适配通过。统一 evaluator 尚未适配本路线。
 
+## MMAU test-mini 评测
+
+已适配现有专用 Mizar S1 evaluator。远程仓库 `code/RSmol/` 中执行：
+
+```bash
+RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256 bash run_mizar_s1_mmau_eval_5090.sh
+```
+
+自动选取 `outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/formal/checkpoints/model--step-15366.ckpt` 及同 run 的 `runtime.json`，从本路线导入模型、fixed20 和 tokenizer 实现。校验 `8×8×4`、step 15366 和累积 loss 标识；合同/源码 SHA、资产与 strict state_dict 仍须一致。无需恢复训练 staging 或重新训练。
+
+维持原 GBS32 评测协议：一张 5090，完整 1,000 行，FP32、TF32 关闭、确定性 greedy，固定 515-token prefix 后生成，最多 300 new tokens，遇 EOS 停止，完整文本原样传入 MMAU 官方 scorer。
+
+默认输出目录为 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/eval/mmau_test_mini_step15366`；需要重试新目录时可用 `RSMOL_MMAU_OUTPUT_DIR` 覆盖。
+
+官方评测完成后，在登录节点执行独立标签重评分：
+
+```bash
+python scripts/rescore_mmau_mellow_author_reply.py \
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/eval/mmau_test_mini_step15366/raw_generations.jsonl \
+  --expected-rows 1000
+```
+
+结果写入 `choice_label_rescore/`，规则仍是第一个 `)` 前的 lowercase 字符串比较、不 trim。自动记录同目录 `run_config.json` 的 checkpoint/step/几何；只读取已有生成与 metadata，不读取权重或音频。上述适配已在本地通过 CPU 合同和提交参数模拟；真实权重加载与推理需远程验证。本节所用专用 evaluator 与前文未适配的旧统一 evaluator 是不同入口。
+
 ## 许可证
 
 模型基础保留 Mellow MIT `LICENSE`。移植的 Mizar 部分保留 `licenses/Mizar-ClearBSD.txt`，归属说明见 `NOTICE`。

@@ -183,6 +183,40 @@ class RescoreRawGenerationsTest(unittest.TestCase):
             self.assertEqual(report["score"]["correct"], 5)
             self.assertEqual(report["input_format"], "predictions_json")
 
+    def test_checkpoint_provenance_is_recorded_without_loading_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "raw_generations.jsonl"
+            checkpoint = root / "model--step-15366.ckpt"
+            checkpoint.write_bytes(b"checkpoint placeholder")
+            write_jsonl(path, [raw_row(index) for index in range(5)])
+            report = scorer.run(scorer.parse_args([
+                str(path), "--expected-rows", "5", "--source-checkpoint", str(checkpoint)
+            ]))
+            self.assertEqual(report["source_checkpoint"], str(checkpoint.resolve()))
+            self.assertIsNone(report["source_evaluation_run"])
+            self.assertEqual(report["operation"], "scorer_only_no_inference")
+
+    def test_gbs256_run_identity_is_carried_over_and_wrong_checkpoint_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "raw_generations.jsonl"
+            checkpoint = root / "model--step-15366.ckpt"
+            write_jsonl(path, [raw_row(index) for index in range(5)])
+            identity = {"checkpoint": str(checkpoint), "checkpoint_sha256": "recorded-sha256",
+                        "expected_step": 15366, "expected_geometry": [8, 8, 4]}
+            (root / "run_config.json").write_text(json.dumps(identity), encoding="utf-8")
+            report = scorer.run(scorer.parse_args([str(path), "--expected-rows", "5"]))
+            self.assertEqual(report["source_checkpoint"], str(checkpoint.resolve()))
+            self.assertEqual(report["source_evaluation_run"]["checkpoint_sha256"], "recorded-sha256")
+            self.assertEqual(report["source_evaluation_run"]["expected_geometry"], [8, 8, 4])
+            self.assertEqual(report["score"]["correct"], 5)
+            with self.assertRaisesRegex(ValueError, "differs from the prediction run_config"):
+                scorer.run(scorer.parse_args([
+                    str(path), "--expected-rows", "5", "--source-checkpoint",
+                    str(root / "model--step-122937.ckpt"),
+                ]))
+
 
 if __name__ == "__main__":
     unittest.main()
