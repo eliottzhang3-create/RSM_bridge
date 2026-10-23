@@ -7,18 +7,20 @@ import time
 from pathlib import Path
 
 from contract import code_digest, digest, write_json
-from data.prepared_index import input_identity, load_index
+from data.prepared_index import (INDEX_SCHEMA_VERSION, check_input_contents, input_contents,
+                                 input_identity, load_index)
 from stage_data import load_resolutions, prepare
 
 
 def ensure_index(manifest, resolutions, cache_root):
     inputs = input_identity(manifest, resolutions)
-    signature = digest({"inputs": inputs, "code_sha256": code_digest()})
+    signature = digest({"inputs": input_contents(inputs), "code_sha256": code_digest()})
     cache_root = Path(cache_root).resolve()
     cache_root.mkdir(parents=True, exist_ok=True)
     destination = cache_root / signature
     if destination.exists():
-        load_index(destination, manifest, resolutions)
+        report = load_index(destination)
+        check_input_contents(report["inputs"], inputs)
         print(f"[cpu-index] reusing {destination}", flush=True)
         return destination
     start = time.monotonic()
@@ -27,9 +29,8 @@ def ensure_index(manifest, resolutions, cache_root):
         temporary = Path(directory)
         report, files = prepare(manifest, load_resolutions(resolutions), temporary / "rows.jsonl")
         write_json(temporary / "files.json", files)
-        if inputs != input_identity(manifest, resolutions):
-            raise RuntimeError("manifest/audit TSV changed during CPU index preparation")
-        report.update(schema_version=1, status="PASS", code_sha256=code_digest(), inputs=inputs,
+        check_input_contents(inputs, input_identity(manifest, resolutions), "during CPU index preparation")
+        report.update(schema_version=INDEX_SCHEMA_VERSION, status="PASS", code_sha256=code_digest(), inputs=inputs,
                       preparation_seconds=time.monotonic() - start,
                       artifact_bytes={name: (temporary / name).stat().st_size for name in
                                       ("rows.jsonl", "rows.jsonl.idx", "files.json")})
@@ -42,7 +43,8 @@ def ensure_index(manifest, resolutions, cache_root):
             # Another submission may have finished the same immutable index.
             if not destination.exists():
                 raise
-        load_index(destination, manifest, resolutions)
+        report = load_index(destination)
+        check_input_contents(report["inputs"], inputs)
     print(f"[cpu-index] ready in {time.monotonic() - start:.1f}s: {destination}", flush=True)
     return destination
 

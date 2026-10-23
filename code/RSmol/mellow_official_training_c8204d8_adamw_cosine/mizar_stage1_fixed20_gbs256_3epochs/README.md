@@ -40,7 +40,9 @@ MusicCaps 与 SpeechCraft `train-other-500` 已过滤。SpeechCraft 使用共享
 
 提交器先在登录节点调用纯标准库的 `prepare_index.py`，按审计 TSV 的 `(field, raw_path)` 查找成功映射。ReasonAQA 使用 `filepath1_original`，其他来源使用 `audio_path`；过滤后的行号不用于匹配原审计。映射失败、原文件缺失、空文件或来源计数变化都会中止，并且不会申请 GPU。
 
-原 manifest 的字段和值保持不变，额外生成带 `s1_raw_paths`、`s1_original_paths` 的 JSONL/offset 索引、去重文件列表和 `index_report.json`。索引保存在共享存储 `index_cache/<signature>/`；签名包含路线代码 SHA256、manifest/审计 TSV 的绝对路径、大小与 mtime。首次准备统计来源数、原始行 canonical SHA256、映射 SHA256 和每个原始音频的大小/mtime；后续同代码/输入的提交直接复用，不扫描全部音频。索引经临时目录原子发布，缺失/不完整产物报错。输入文件应保持只读不变；缓存身份检查不是逐次重算所有音频的内容哈希。
+原 manifest 的字段和值保持不变，额外生成带 `s1_raw_paths`、`s1_original_paths` 的 JSONL/offset 索引、去重文件列表和 `index_report.json`。索引保存在共享存储 `index_cache/<signature>/`；签名包含路线代码 SHA256、manifest/审计 TSV 的大小与内容 SHA256，输入绝对路径只作溯源记录。时间戳变化或内容相同的路径别名不使索引失效。首次准备统计来源数、原始行 canonical SHA256、映射 SHA256 和每个原始音频的大小/mtime；后续同代码/输入的提交直接复用，不扫描全部音频。索引经临时目录原子发布，缺失/不完整产物报错。输入文件应保持只读不变；每次复用索引只重新计算 manifest/审计 TSV 两个输入文件的 SHA256，不重扫 333,510 个音频。
+
+2026-10-23 远程作业曾在加载 CPU 索引时报告 `manifest/audit TSV changed since CPU index preparation`。旧实现将路径、大小、`mtime_ns` 整体比较，错误没有指出差异，因此现有日志不能确认究竟是哪一项变化。现已采用 schema 2 的内容指纹；若内容变化，报错会列出具体输入及预期/当前路径、大小、SHA256。旧索引不会直接复用，更新代码后正常提交会在申请 GPU 前自动建立新的缓存项，无需手动删除旧缓存。GPU 节点启动只顺序读取这两个 metadata 输入验证 SHA256，不重新扫描音频。
 
 原始音频按实际文件去重并复制到独占的 `/dev/shm/mizar_s1_gbs256_<job-id>`。staging 只做路径映射、容量/文件大小检查和原始字节复制，不解码、重采样、裁剪、补零或生成音频特征。训练在线执行：
 
@@ -115,7 +117,7 @@ GBS256 是相对于 Mizar Stage 1 GBS32 的 batch-size 消融，不是官方 bat
 ```bash
 bash run_mizar_s1_gbs256_5090.sh \
   --stage-workers 4 \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v1
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v2
 ```
 
 本路线入口仅提交 formal，不接受 smoke 参数，也不读取历史 GBS32 smoke 或 checkpoint。仍记录本次配置、权重 SHA256 和软件版本，核对数据映射、tokenizer、参数组、精度、HTSAT 冻结和 staging 身份。`--stage-start-steps` 已移除；`--index-cache-root DIR` 可指定共享索引缓存根目录，`--stage-workers N` 仅控制 I/O 并发。默认缓存位于 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/index_cache/`。
@@ -146,7 +148,7 @@ formal 在 2,561 / 5,122 / 7,683 / 10,244 / 12,805 / 15,366 步保存，最终�
 
 这不是全量音频解码审计；未抽到的坏文件仍可能在正式训练中暴露。训练期间解码失败会带原始行、来源和路径中止，不会默默跳过。
 
-本地验证覆盖：CPU 索引原子发布/复用/输入改变拒绝、首个文件仍在复制时启动、共享读取跨 epoch、不读取 partial 文件、显式切换后仅用本地路径、复制失败/进程死亡/心跳过期、全量计数校验、原始文件大小/mtime 改变、零已复制文件的 formal 配置，以及 optimizer 边界 collective 切换的代码结构。Python/Bash 语法与 Git whitespace 检查通过。本地没有 PyTorch、真实数据、权重或 CUDA，不能将这些 CPU 检查作为真实八卡同步切换或 microbatch 8 显存适配通过。统一 evaluator 尚未适配本路线。
+本地验证覆盖：CPU 索引原子发布/复用、仅时间戳变化和内容相同的路径别名复用、保留大小/时间戳的内容变化拒绝、输入变化的详细诊断、旧身份格式拒绝、首个文件仍在复制时启动、共享读取跨 epoch、不读取 partial 文件、显式切换后仅用本地路径、复制失败/进程死亡/心跳过期、全量计数校验、原始文件大小/mtime 改变、零已复制文件的 formal 配置，以及 optimizer 边界 collective 切换的代码结构。Python/Bash 语法与 Git whitespace 检查通过。本地没有 PyTorch、真实数据、权重或 CUDA，不能将这些 CPU 检查作为真实八卡同步切换或 microbatch 8 显存适配通过。统一 evaluator 尚未适配本路线。
 
 ## 许可证
 

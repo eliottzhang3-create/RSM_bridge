@@ -11,10 +11,10 @@
 ~~~bash
 bash run_mizar_s1_gbs256_5090.sh \
   --stage-workers 4 \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v1
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v2
 ~~~
 
-首次 CPU 索引扫描可能耗时数分钟，此时还未申请 GPU；默认共享缓存为 `outputs/RSmol/mizar_s1_htsat_gbs256_5090/index_cache/<signature>/`，同代码/manifest/TSV 的重试直接复用。模型与权重加载仍需时间；共享读取期间训练与后台复制竞争带宽，不能据此保证平台不终止任务。日志 `AUDIO_READ_SWITCH` 与 metrics 的 `audio_read_mode`/`local_switch_step` 记录切换。本机没有 PyTorch/CUDA 与真实数据，验证仅限 CPU/stdlib、并发与脚本模拟。改前 GBS256 checkpoint 因代码 SHA 改变不能直接 resume；GBS32 checkpoint 也不能使用。
+首次 CPU 索引扫描可能耗时数分钟，此时还未申请 GPU；默认共享缓存为 `outputs/RSmol/mizar_s1_htsat_gbs256_5090/index_cache/<signature>/`，同代码/manifest/TSV 的重试直接复用。远程曾因旧版路径/大小/mtime 整体比较而报输入身份不一致；现改用 schema 2 的大小与内容 SHA256，时间戳和内容相同的路径别名不使校验失败，真实内容变化则列出具体输入、预期/当前路径、大小及 SHA256。新版本在申请 GPU 前自动建立新的 CPU 索引，不需删除旧缓存；GPU 启动仅校验两个 metadata 输入，不重扫音频。模型与权重加载仍需时间；共享读取期间训练与后台复制竞争带宽，不能据此保证平台不终止任务。日志 `AUDIO_READ_SWITCH` 与 metrics 的 `audio_read_mode`/`local_switch_step` 记录切换。本机没有 PyTorch/CUDA 与真实数据，验证仅限 CPU/stdlib、并发与脚本模拟。改前 GBS256 checkpoint 因代码 SHA 改变不能直接 resume；GBS32 checkpoint 也不能使用。
 
 ## 2026-10-21：HTSAT 架构采用 Mizar Stage 1，8×4×1，3 epochs
 

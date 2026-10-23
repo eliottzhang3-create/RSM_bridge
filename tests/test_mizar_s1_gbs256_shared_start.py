@@ -22,7 +22,7 @@ import stage_data
 import write_config
 from contract import SOURCE_COUNTS, code_digest, write_json
 from data.audio_paths import AudioPaths
-from data.prepared_index import load_index
+from data.prepared_index import check_input_contents, input_identity, load_index
 from data.staging import StagingGate, wait_for_start
 
 
@@ -178,17 +178,67 @@ class SharedStartTests(unittest.TestCase):
             self.assertEqual(augmented["s1_original_paths"], [str(source.resolve())])
             files = json.loads(Path(data["files_path"]).read_text())
             self.assertEqual(next(iter(files.values()))["mtime_ns"], source.stat().st_mtime_ns)
+            original_inputs = input_identity(manifest, resolutions)
+            # Login/container views may expose different timestamp precision.
+            for path in (manifest, resolutions):
+                stat = path.stat()
+                os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10000000))
+            self.assertEqual(input_identity(manifest, resolutions), original_inputs)
             with patch.object(prepare_index, "prepare", side_effect=AssertionError("must not rescan audio")), \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(prepare_index.ensure_index(manifest, resolutions, root / "cache"), index)
+                aliases = root / "mount-alias"
+                aliases.mkdir()
+                alias_manifest, alias_resolutions = aliases / manifest.name, aliases / resolutions.name
+                shutil.copyfile(manifest, alias_manifest)
+                shutil.copyfile(resolutions, alias_resolutions)
+                self.assertEqual(load_index(index, alias_manifest, alias_resolutions)["index_dir"], str(index))
+                self.assertEqual(prepare_index.ensure_index(alias_manifest, alias_resolutions, root / "cache"), index)
             with patch.object(prepare_index, "code_digest", return_value="different-code"), \
                     patch("data.prepared_index.code_digest", return_value="different-code"), \
                     patch.object(prepare_index, "prepare", small_prepare), contextlib.redirect_stdout(io.StringIO()):
                 # A code change selects another cache entry rather than overwriting.
                 self.assertNotEqual(prepare_index.ensure_index(manifest, resolutions, root / "cache"), index)
-            manifest.write_text(manifest.read_text() + " ")
-            with self.assertRaisesRegex(ValueError, "changed since CPU"):
-                load_index(index, manifest, resolutions)
+            for name, path, before, after in (("manifest", manifest, b"one.wav", b"two.wav"),
+                                               ("resolved_paths", resolutions, b"exists", b"absent")):
+                with self.subTest(changed_input=name):
+                    contents, stat = path.read_bytes(), path.stat()
+                    changed = contents.replace(before, after)
+                    self.assertNotEqual(changed, contents)
+                    self.assertEqual(len(changed), len(contents))
+                    path.write_bytes(changed)
+                    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+                    with contextlib.redirect_stdout(io.StringIO()), \
+                            self.assertRaisesRegex(ValueError, "content changed since CPU") as error:
+                        load_index(index, manifest, resolutions)
+                    differences = json.loads(str(error.exception).split(": ", 1)[1])
+                    self.assertEqual(set(differences), {name})
+                    self.assertEqual(differences[name]["expected"]["bytes"], differences[name]["current"]["bytes"])
+                    self.assertNotEqual(differences[name]["expected"]["sha256"], differences[name]["current"]["sha256"])
+                    path.write_bytes(contents)
+                    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+    def test_content_check_identifies_size_change_and_keeps_expected_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, resolutions = root / "s1.json", root / "resolved.tsv"
+            manifest.write_bytes(b"[]")
+            resolutions.write_bytes(b"header\n")
+            expected = input_identity(manifest, resolutions)
+            resolutions.write_bytes(b"header\nnew row\n")
+            current = input_identity(manifest, resolutions)
+            with self.assertRaisesRegex(ValueError, "content changed during CPU") as error:
+                check_input_contents(expected, current, "during CPU index preparation")
+            differences = json.loads(str(error.exception).split(": ", 1)[1])
+            self.assertEqual(set(differences), {"resolved_paths"})
+            self.assertEqual(differences["resolved_paths"]["expected"], expected["resolved_paths"])
+            self.assertEqual(differences["resolved_paths"]["current"], current["resolved_paths"])
+
+    def test_legacy_timestamp_only_identity_requires_rebuild(self):
+        legacy = {name: {"path": name, "bytes": 3, "mtime_ns": 123456789}
+                  for name in ("manifest", "resolved_paths")}
+        with self.assertRaisesRegex(ValueError, "lacks content fingerprints"):
+            check_input_contents(legacy, legacy)
 
     def test_formal_config_is_created_with_zero_staged_files(self):
         with tempfile.TemporaryDirectory() as directory:
