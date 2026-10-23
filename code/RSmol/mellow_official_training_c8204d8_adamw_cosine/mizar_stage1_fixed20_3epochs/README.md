@@ -166,6 +166,8 @@ python scripts/rescore_mmau_mellow_author_reply.py \
 
 JSONL 输入默认要求完整 1,000 条 generated 记录、唯一 ID 与连续 row_index，损坏行、重复或缺行会报错；答案无法精确对应选项则保留分母并记录为错误。只读取原始 `generated_text`，不使用可能经过处理的 `model_output`。输出到输入文件同级的 `choice_label_rescore/`，可用 `--output-dir` 指定其他目录：
 
+日志顶层的 `question`/`choices` 按推理时相同的提取函数与 `official_record` 校验，允许生成阶段已做的两端空白清理，并在 `input_audit.metadata_normalization_counts` 记录条数；实际题目或选项不一致仍报错。该校验不清理模型输出，`generated_text` 的前导空白仍按原评分规则保留。
+
 - `mellow_author_reply_evaluation.txt`：总分、sound/music/speech 与难度分组分数。
 - `mellow_author_reply_evaluation.json`：上述分数及逐题完整输出、正确标签、判分与元数据错误。
 - `mellow_author_reply_rescore_report.json`：输入文件 SHA256、完整性检查、评分规则与摘要。

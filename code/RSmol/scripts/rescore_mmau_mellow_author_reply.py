@@ -51,6 +51,7 @@ def load_raw_predictions(path: Path, expected_rows: int) -> tuple[list[dict[str,
     by_index: dict[int, dict[str, Any]] = {}
     seen_ids: set[str] = set()
     blank_lines = 0
+    metadata_normalization_counts = {"question": 0, "choices": 0}
     with path.open(encoding="utf-8-sig") as handle:
         for line_number, line in enumerate(handle, 1):
             if not line.strip():
@@ -85,9 +86,21 @@ def load_raw_predictions(path: Path, expected_rows: int) -> tuple[list[dict[str,
             for field in ("question", "answer", "task", "difficulty"):
                 if not isinstance(official.get(field), str) or not official[field]:
                     raise ValueError(f"{where}: official_record has invalid {field}")
-            for field in ("question", "choices"):
-                if field in row and row[field] != official[field]:
-                    raise ValueError(f"{where}: {field} differs from official_record")
+            # Inference extracts stripped display fields but saves the untouched
+            # official_record alongside them. Compare using the same extractors.
+            display_fields = {
+                "question": mmau.extract_record_question(official),
+                "choices": mmau._coerce_choices(official["choices"]),
+            }
+            for field, expected in display_fields.items():
+                if field in row:
+                    if row[field] != expected:
+                        raise ValueError(
+                            f"{where}: {field} differs from inference-normalized official_record; "
+                            f"actual={row[field]!r}, expected={expected!r}"
+                        )
+                    if row[field] != official[field]:
+                        metadata_normalization_counts[field] += 1
             if (official["task"] not in {"sound", "music", "speech"}
                     or official["difficulty"] not in {"easy", "medium", "hard"}):
                 raise ValueError(f"{where}: invalid MMAU task or difficulty")
@@ -110,6 +123,8 @@ def load_raw_predictions(path: Path, expected_rows: int) -> tuple[list[dict[str,
         "generated_rows": len(by_index), "unique_ids": len(seen_ids),
         "blank_lines": blank_lines, "row_index_coverage": f"0..{expected_rows - 1}",
         "prediction_field": "generated_text", "metadata_field": "official_record",
+        "metadata_comparison_policy": "same_extractors_as_inference",
+        "metadata_normalization_counts": metadata_normalization_counts,
     }
 
 

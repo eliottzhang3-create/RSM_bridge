@@ -123,6 +123,41 @@ class RescoreRawGenerationsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "row_index coverage differs"):
                 scorer.load_raw_predictions(path, 5)
 
+    def test_actual_inference_metadata_extraction_accepts_official_whitespace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "raw_generations.jsonl"
+            rows = [raw_row(index) for index in range(5)]
+            official = rows[0]["official_record"]
+            official["question"] = " \tWhich sound?\r\n"
+            official["choices"] = [" first ", "Second\n"]
+            sample = scorer.mmau._prepare_metadata_row(
+                {"id": official["id"], "question": "Which sound?",
+                 "choices": ["first", "Second"], "answer": "SECOND",
+                 "audio": {"array": [0.0], "sampling_rate": 16000}},
+                metadata_index={official["id"]: official}, dataset_dir=root,
+                audio_decoder=lambda payload, *, base_dir: (None, {}),
+            )
+            rows[0].update({field: sample[field] for field in ("question", "choices", "official_record")})
+            rows[1]["generated_text"] = " b) second"
+            write_jsonl(path, rows)
+            original = path.read_bytes()
+            report = scorer.run(scorer.parse_args([str(path), "--expected-rows", "5"]))
+            self.assertEqual(report["input_audit"]["metadata_normalization_counts"],
+                             {"question": 1, "choices": 1})
+            self.assertEqual(report["score"]["correct"], 4)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(official["question"], " \tWhich sound?\r\n")
+
+    def test_real_question_change_is_still_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "raw_generations.jsonl"
+            rows = [raw_row(index) for index in range(5)]
+            rows[0]["question"] = "A genuinely different question?"
+            write_jsonl(path, rows)
+            with self.assertRaisesRegex(ValueError, "question differs from inference-normalized"):
+                scorer.load_raw_predictions(path, 5)
+
     def test_unmatched_gold_and_empty_generation_keep_full_denominator(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "raw_generations.jsonl"
