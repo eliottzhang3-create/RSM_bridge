@@ -61,7 +61,7 @@ def prepare(manifest, resolutions, metadata, *, strict_counts=True, row_prioriti
             canonical = json.dumps(row, sort_keys=True, ensure_ascii=False,
                                    separators=(",", ":")).encode("utf-8") + b"\n"
             row_hash.update(canonical)
-            paths = []
+            paths, originals = [], []
             for field, raw in refs:
                 # The TSV is keyed by raw field + reference, not original row ID.
                 # Original audit row IDs are invalid after filtering rows.
@@ -74,18 +74,23 @@ def prepare(manifest, resolutions, metadata, *, strict_counts=True, row_prioriti
                 relative = "audio/" + hashlib.sha256(original.encode("utf-8")).hexdigest()[:32] + Path(original).suffix.lower()
                 if relative not in files:
                     file_path = Path(original)
-                    if not file_path.is_file() or file_path.stat().st_size <= 0:
+                    if not file_path.is_file():
                         raise ValueError(f"row {row_index}: audited raw file is missing/empty: {original}")
-                    files[relative] = {"source": original, "bytes": file_path.stat().st_size}
+                    stat = file_path.stat()
+                    if stat.st_size <= 0:
+                        raise ValueError(f"row {row_index}: audited raw file is missing/empty: {original}")
+                    files[relative] = {"source": original, "bytes": stat.st_size,
+                                       "mtime_ns": stat.st_mtime_ns}
                 elif files[relative]["source"] != original:
                     raise RuntimeError("staging filename hash collision")
                 if priority is not None:
                     files[relative]["first_batch"] = min(priority, files[relative].get("first_batch", priority))
                 paths.append(relative)
+                originals.append(original)
                 used[key] = original
-            if "s1_raw_paths" in row or "s1_source" in row:
+            if any(key in row for key in ("s1_raw_paths", "s1_original_paths", "s1_source")):
                 raise ValueError("source manifest already contains job-local staging fields")
-            augmented = dict(row, s1_raw_paths=paths, s1_source=source)
+            augmented = dict(row, s1_raw_paths=paths, s1_original_paths=originals, s1_source=source)
             index.write(struct.pack("<Q", output.tell()))
             output.write(json.dumps(augmented, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")
             counts[source] += 1
@@ -190,9 +195,16 @@ def copy_one(root, entry):
     target = root / relative
     temporary = target.with_name(target.name + ".partial")
     try:
+        def check_source():
+            stat = Path(info["source"]).stat()
+            if stat.st_size != info["bytes"] or ("mtime_ns" in info and stat.st_mtime_ns != info["mtime_ns"]):
+                raise IOError(f"source changed since CPU index preparation: {info['source']}")
+
+        check_source()
         shutil.copyfile(info["source"], temporary)
         if temporary.stat().st_size != info["bytes"]:
             raise IOError(f"short staging copy: {info['source']}")
+        check_source()
         os.replace(temporary, target)
     except Exception:
         temporary.unlink(missing_ok=True)
@@ -236,7 +248,7 @@ def staging_plan(files, steps, start_batch, requested_steps):
     return ordered, initial_steps, budgets
 
 
-def copy_background(root, prepared, ordered, output, state, *, workers=16, window_steps=128):
+def copy_background(root, prepared, ordered, output, state, *, workers=4, window_steps=16):
     """Publish a global contiguous batch watermark only after atomic copies.
 
     Queue depth is bounded at 512 files. The initial step budget is a strict
@@ -248,7 +260,9 @@ def copy_background(root, prepared, ordered, output, state, *, workers=16, windo
     start, last_publish, cursor = time.monotonic(), 0., 0
     steps, start_batch = prepared["staging_epoch_steps"], state["start_batch"]
     initial_end = start_batch + prepared["initial_steps"]
-    state.update(phase="PREFILL", copied_files=0, copied_bytes=0, ready_through_batch=start_batch)
+    direct = prepared.get("read_policy") == "shared_until_complete"
+    state.update(phase="COPYING" if direct else "PREFILL", copied_files=0, copied_bytes=0,
+                 ready_through_batch=start_batch)
 
     def publish(force=False):
         nonlocal last_publish
@@ -297,7 +311,20 @@ def copy_background(root, prepared, ordered, output, state, *, workers=16, windo
 
     try:
         publish(True)
+        if direct:
+            # Both original and local names are fixed before any audio is copied.
+            # Training may decode originals immediately; no prefill is required.
+            prepared["startup_seconds"] = prepared["precopy_seconds"]
+            report("TRAINING_READY")
+            print("[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues", flush=True)
         with ThreadPoolExecutor(max_workers=workers) as pool:
+            if direct:
+                copy_until(len(ordered), pool)
+                state["ready_through_batch"] = steps
+                state["phase"] = "COMPLETE"
+                report("PASS")
+                publish(True)
+                return
             end_batch = initial_end
             while True:
                 end = cursor
@@ -305,7 +332,7 @@ def copy_background(root, prepared, ordered, output, state, *, workers=16, windo
                     end += 1
                 copy_until(end, pool)
                 state["ready_through_batch"] = end_batch
-                if end_batch == initial_end:
+                if end_batch == initial_end and not direct:
                     state["phase"] = "COPYING"
                     prepared["startup_seconds"] = prepared["precopy_seconds"] + time.monotonic() - start
                     publish(True)
@@ -333,13 +360,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--resolved-paths", type=Path)
+    parser.add_argument("--prepared-index", type=Path, required=False)
     parser.add_argument("--stage-root", required=True, type=Path)
     parser.add_argument("--token", required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--mode", choices=("formal",), default="formal")
     parser.add_argument("--background", action="store_true")
-    parser.add_argument("--start-steps", type=int, default=64)
-    parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--window-steps", type=int, default=16)
     parser.add_argument("--resume-checkpoint", type=Path)
     parser.add_argument("--cleanup", action="store_true")
@@ -347,10 +374,10 @@ def main():
     if args.cleanup:
         cleanup(args.stage_root, args.token)
         return
-    if not all((args.manifest, args.resolved_paths, args.output)):
-        parser.error("--manifest, --resolved-paths and --output are required for staging")
-    if min(args.start_steps, args.workers, args.window_steps) < 1:
-        parser.error("--start-steps, --workers and --window-steps must be positive")
+    if not all((args.manifest, args.resolved_paths, args.output, args.prepared_index)):
+        parser.error("--manifest, --resolved-paths, --prepared-index and --output are required")
+    if min(args.workers, args.window_steps) < 1:
+        parser.error("--workers and --window-steps must be positive")
     import torch
     torch.set_num_threads(1)
     root = validate_stage_root(args.stage_root)
@@ -373,10 +400,11 @@ def main():
 
 
 def run_stage(args, root, state):
+    from data.prepared_index import load_index
+
     reserve = 32 * 1024**3
     check_capacity(root, 0, reserve)
     start = time.monotonic()
-    row_priorities = None
     if args.background:
         if args.resume_checkpoint:
             import torch
@@ -387,21 +415,19 @@ def run_stage(args, root, state):
             if not 0 <= state["epoch"] < EPOCHS:
                 raise ValueError("cannot stage a checkpoint whose training is already complete")
             del saved
-        row_priorities, expected_rows = epoch_priorities(
-            sum(SOURCE_COUNTS.values()), state["epoch"], state["start_batch"])
         write_json(root / "STAGING.json", dict(state, heartbeat=time.time()))
-    print("[staging] loading audited path mappings (no audio decoding)", flush=True)
-    resolutions = load_resolutions(args.resolved_paths)
+    print("[staging] loading CPU-prepared index; no shared audio scan or prefill", flush=True)
+    prepared = load_index(args.prepared_index, args.manifest, args.resolved_paths)
     mapped = time.monotonic()
-    print(f"[staging] mappings loaded in {mapped - start:.1f}s; indexing manifest", flush=True)
-    prepared, files = prepare(args.manifest, resolutions, root / "metadata" / "rows.jsonl", row_priorities=row_priorities)
-    del resolutions
-    del row_priorities
+    # This is only a compact file list, not a scan of 333k shared audio files.
+    files = json.loads(Path(prepared.pop("files_path")).read_text(encoding="utf-8"))
+    for info in files.values():
+        info["first_batch"] = 0
     prepared["geometry"] = geometry(prepared["rows"])
-    if not args.background:
-        expected_rows = first_optimizer_rows(prepared["rows"])
+    expected_rows = first_optimizer_rows(prepared["rows"])
     to_copy = select_files(files, args.mode)
     prepared.update({"mode": args.mode, "stage_root": str(root), "expected_first8_rows": expected_rows,
+                     "read_policy": "shared_until_complete",
                      "staged_files": len(to_copy), "staged_bytes": sum(x["bytes"] for x in to_copy.values()),
                      "capacity": check_capacity(root, sum(x["bytes"] for x in to_copy.values()), reserve),
                      "audio_processing": {"decode_during_staging": False, "fixed20_during_staging": False,
@@ -409,18 +435,17 @@ def run_stage(args, root, state):
     indexed = time.monotonic()
     if args.background:
         steps = prepared["geometry"]["steps_per_epoch"]
-        ordered, initial_steps, budgets = staging_plan(
-            to_copy, steps, state["start_batch"], args.start_steps)
+        ordered = sorted(to_copy.items())
         prepared.update(planned_files=len(to_copy), planned_bytes=prepared["staged_bytes"],
-                        staging_epoch_steps=steps, initial_steps=initial_steps,
-                        startup_budgets=budgets, copy_workers=args.workers,
+                        staging_epoch_steps=steps, initial_steps=0,
+                        startup_budgets=[], copy_workers=args.workers,
                         precopy_seconds=indexed - start)
         prepared["async_staging"] = {key: state[key] for key in ("token", "producer_pid", "epoch", "start_batch")}
         prepared["async_staging"]["status_path"] = str(root / "STAGING.json")
         prepared["phase_seconds"] = {"load_mappings": mapped - start, "index_and_select": indexed - mapped}
         print(json.dumps({"event": "STAGING_PLAN", "epoch": state["epoch"] + 1,
-                          "start_batch": state["start_batch"], "initial_steps": initial_steps,
-                          "workers": args.workers, "budgets": budgets,
+                          "start_batch": state["start_batch"], "initial_steps": 0,
+                          "read_policy": "shared_until_complete", "workers": args.workers,
                           "planned_files": len(to_copy), "planned_GiB": prepared["planned_bytes"] / 1024**3}), flush=True)
         del files, to_copy
         copy_background(root, prepared, ordered, args.output, state, workers=args.workers,

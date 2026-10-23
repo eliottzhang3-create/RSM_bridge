@@ -8,6 +8,7 @@ from transformers import AutoTokenizer
 
 from contract import ANSWER_TOKENS, PROMPT_TOKENS, data_order
 from data.fixed20 import load_fixed20
+from data.audio_paths import AudioPaths
 from data.indexed_jsonl import IndexedRows
 from data.template import BOTH, FIRST, SECOND, EMOTION, WORDONLY, LONGLINEONLY, DETAILONLY
 
@@ -56,10 +57,11 @@ def text_pair(row):
 
 
 class AudioTextDataset(Dataset):
-    def __init__(self, metadata_path, stage_root, tokenizer_path):
+    def __init__(self, metadata_path, stage_root, tokenizer_path, read_policy="staged_only"):
         self.rows = IndexedRows(metadata_path)
         self.order = data_order(len(self.rows))
         self.stage_root = Path(stage_root).resolve()
+        self.audio_paths = AudioPaths(self.stage_root, read_policy)
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
         self.tokenizer.add_special_tokens({"pad_token": "!"})
         self.pad_id = self.tokenizer.encode(self.tokenizer.pad_token)[0]
@@ -80,9 +82,7 @@ class AudioTextDataset(Dataset):
 
     def original_item(self, original_index):
         row = self.rows[original_index]
-        paths = [(self.stage_root / name).resolve() for name in row["s1_raw_paths"]]
-        if any(not path.is_relative_to(self.stage_root) for path in paths):
-            raise ValueError("audio path escaped the job's staging directory")
+        paths = self.audio_paths.resolve(row)
         try:
             first, second = load_fixed20(paths[0], paths[1] if len(paths) == 2 else "")
         except Exception as exc:

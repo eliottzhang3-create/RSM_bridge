@@ -214,7 +214,8 @@ def train(config, rank, device):
     # but never wraps its forward in autocast, despite its float16 config label.
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
-    dataset = AudioTextDataset(prepared["metadata"], prepared["stage_root"], contract["text_model_dir"])
+    dataset = AudioTextDataset(prepared["metadata"], prepared["stage_root"], contract["text_model_dir"],
+                               read_policy=prepared["read_policy"])
     if len(dataset) != geometry["rows"]:
         raise ValueError("prepared row count differs from the resolved recipe")
     model = Mellow(audioenc_name="HTSAT", d_in=768, d_out=576,
@@ -291,6 +292,7 @@ def train(config, rank, device):
         raise ValueError("the GBS256 route requires the complete three-epoch formal schedule")
     optimizer.zero_grad(set_to_none=True)
     first_rows, last_checkpoint = [], None
+    local_switch_step = None
     start_time = time.monotonic()
     cursor_epoch, cursor_batch = start_epoch, start_batch
     metrics = (run_dir / "metrics.jsonl").open("a", encoding="utf-8") if rank == 0 else None
@@ -309,8 +311,17 @@ def train(config, rank, device):
         for update_index in range(skipped_batches, geometry["steps_per_epoch"]):
             if step >= max_steps:
                 break
-            # This watermark includes all four microbatches on every rank.
+            # Check copy health without waiting for an audio watermark.
             staging.wait_for_batch(epoch, update_index)
+            if not dataset.audio_paths.local:
+                ready = torch.tensor(int(staging.complete), device=device)
+                dist.all_reduce(ready, op=dist.ReduceOp.MIN)
+                if ready.item():
+                    dataset.audio_paths.use_local()
+                    local_switch_step = step
+                    if rank == 0:
+                        print(json.dumps({"event": "AUDIO_READ_SWITCH", "completed_optimizer_steps": step,
+                                          "next_optimizer_step": step + 1, "from": "shared", "to": "local"}), flush=True)
             lr_used = [float(g["lr"]) for g in optimizer.param_groups]
             expected_factor = lr_factor(step, geometry["total_steps"])
             collective_require(all(math.isclose(g["lr"], g["initial_lr"] * expected_factor, rel_tol=1e-12)
@@ -362,6 +373,9 @@ def train(config, rank, device):
                           "gpu_peak_bytes": torch.cuda.max_memory_allocated(device)}
                 record["staging_wait_seconds"] = staging.wait_seconds
                 record["staging_complete"] = staging.complete
+                record["audio_read_mode"] = "local" if dataset.audio_paths.local else "shared"
+                record["audio_read_files_rank0"] = dict(dataset.audio_paths.read_files)
+                record["local_switch_step"] = local_switch_step
                 metrics.write(json.dumps(record) + "\n")
                 if step % 25 == 0:
                     metrics.flush()
@@ -387,6 +401,8 @@ def train(config, rank, device):
                   "htsat_all_eval": all(not m.training for m in core.modules())}
     rank_check["staging_wait_seconds"] = staging.wait_seconds
     rank_check["staging_complete"] = staging.complete
+    rank_check["audio_read_files"] = dataset.audio_paths.read_files
+    rank_check["local_switch_step"] = local_switch_step
     rank_checks = [None] * WORLD_SIZE
     dist.all_gather_object(rank_checks, rank_check)
     if rank == 0:

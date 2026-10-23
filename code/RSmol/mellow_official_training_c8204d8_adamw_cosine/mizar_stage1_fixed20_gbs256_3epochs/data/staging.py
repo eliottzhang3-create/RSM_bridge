@@ -44,6 +44,9 @@ class StagingGate:
     def __init__(self, prepared, *, log=False, timeout=600., poll=.2):
         self.info = prepared.get("async_staging")
         self.complete = self.info is None
+        self.read_policy = prepared.get("read_policy", "staged_only")
+        if self.read_policy not in {"staged_only", "shared_until_complete"}:
+            raise ValueError("unknown staging read policy")
         self.log, self.timeout, self.poll = log, timeout, poll
         self.wait_seconds = 0.
         self.last_ready_batch = 0
@@ -89,6 +92,11 @@ class StagingGate:
         """
         if self.complete:
             return
+        if self.read_policy == "shared_until_complete":
+            # Check producer health, but training reads original shared files
+            # until the trainer collectively selects the complete local copy.
+            self._read()
+            return
         start, next_log = time.monotonic(), 0.
         try:
             while True:
@@ -112,7 +120,18 @@ class StagingGate:
             self.wait_seconds += time.monotonic() - start
 
     def wait_complete(self):
-        if self.info:
+        if self.info and self.read_policy == "shared_until_complete":
+            start = time.monotonic()
+            while not self.complete:
+                self._read()
+                if self.complete:
+                    break
+                if time.monotonic() - start > self.timeout:
+                    raise TimeoutError("background audio copy did not complete before final report")
+                if not self.complete:
+                    time.sleep(self.poll)
+            self.wait_seconds += time.monotonic() - start
+        elif self.info:
             self.wait_for_batch(self.info["epoch"] + 1, 0)
 
 
@@ -133,7 +152,7 @@ def wait_for_start(report, root, producer_pid, *, timeout=3600., poll=.5):
                     raise RuntimeError("training-ready report belongs to another staging process")
                 gate = StagingGate(prepared)
                 gate.wait_for_batch(gate.info["epoch"], gate.info["start_batch"])
-                print(f"[staging] training can start: prefill_steps={prepared['initial_steps']} "
+                print(f"[staging] training can start: read_policy={gate.read_policy} prefill_steps={prepared['initial_steps']} "
                       f"ready_through_batch={gate.last_ready_batch} report={report}", flush=True)
                 return
         if not process_alive(producer_pid):

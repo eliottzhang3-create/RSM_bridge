@@ -4,17 +4,17 @@
 
 新增隔离副本 [mizar_stage1_fixed20_gbs256_3epochs](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs/README.md) 和提交入口 [run_mizar_s1_gbs256_5090.sh](code/RSmol/run_mizar_s1_gbs256_5090.sh)。它保留 GBS32 路线的 HTSAT + c2l + projection + SmolLM2、固定20在线音频、已过滤的 1,311,334 行数据及 Mizar Stage 1 优化设置；改为 8 GPU × microbatch 8 × accumulation 4，GBS256。原 GBS32 路线和 checkpoint 合同不变。
 
-每 epoch **5,122** 次 optimizer update，3 epochs 共 **15,366** 次，5% warmup 为 **768** 次；每 epoch 消耗 1,311,232 行、丢弃 102 行。为保持与 GBS32 路线相近的预拷贝样本量，先 staging 64 个 optimizer updates，再边训练边复制；后台水位每 16 updates 前进。该路线默认直接 formal，不要求或运行 smoke。
+每 epoch **5,122** 次 optimizer update，3 epochs 共 **15,366** 次，5% warmup 为 **768** 次；每 epoch 消耗 1,311,232 行、丢弃 102 行。用户反馈三次未能启动后，GBS256 已改为：提交前在登录节点用标准库准备/复用 metadata 与去重文件索引；GPU 作业直接读原始共享音频开始 formal，同时默认 4 线程后台复制；全部复制完成后，在 optimizer update 边界八卡 MIN all-reduce 确认并切换到本地音频。取消预拷贝和跨 epoch staging 水位等待；不做 smoke。原数据、在线 fixed20、优化器/累积/LR/GradNorm 配方不变。
 
 远程 GitHub 同步后，在 code/RSmol/ 提交：
 
 ~~~bash
 bash run_mizar_s1_gbs256_5090.sh \
-  --stage-start-steps 64 --stage-workers 16 \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_async_v1
+  --stage-workers 4 \
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v1
 ~~~
 
-本机没有 PyTorch/CUDA 与训练数据，因此不能本地验证 microbatch 8 的显存适配或真实 DDP 训练；后台 staging 和配置只通过 CPU/stdlib 测试。本路线会以独立 route_variant 拒绝 GBS32 checkpoint resume。
+首次 CPU 索引扫描可能耗时数分钟，此时还未申请 GPU；默认共享缓存为 `outputs/RSmol/mizar_s1_htsat_gbs256_5090/index_cache/<signature>/`，同代码/manifest/TSV 的重试直接复用。模型与权重加载仍需时间；共享读取期间训练与后台复制竞争带宽，不能据此保证平台不终止任务。日志 `AUDIO_READ_SWITCH` 与 metrics 的 `audio_read_mode`/`local_switch_step` 记录切换。本机没有 PyTorch/CUDA 与真实数据，验证仅限 CPU/stdlib、并发与脚本模拟。改前 GBS256 checkpoint 因代码 SHA 改变不能直接 resume；GBS32 checkpoint 也不能使用。
 
 ## 2026-10-21：HTSAT 架构采用 Mizar Stage 1，8×4×1，3 epochs
 

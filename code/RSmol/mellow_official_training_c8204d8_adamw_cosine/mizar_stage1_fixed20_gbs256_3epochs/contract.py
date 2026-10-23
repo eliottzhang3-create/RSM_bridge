@@ -168,6 +168,7 @@ def semantic_contract(prepared, text_model_dir, htsat_root):
         "source_rows": prepared["source_rows"], "geometry": geometry(prepared["rows"]),
         "text_model_dir": str(text_model_dir), "htsat_root": str(htsat_root),
         "sample_rate": 32000, "audio_policy": "mono_resample_center_crop_right_pad_fixed20_split10",
+        "audio_read_policy": "shared_until_complete_collective_optimizer_boundary_switch",
         "prefix": [129, 129, 1, 256], "answer_tokens": 300,
         "attention_mask": None, "pad_token": "!", "eos_suffix": " <|endoftext|>",
         "loss": "rank_local_token_mean_then_DDP_mean",

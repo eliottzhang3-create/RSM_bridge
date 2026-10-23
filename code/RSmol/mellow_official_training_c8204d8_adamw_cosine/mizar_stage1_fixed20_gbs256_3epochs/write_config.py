@@ -59,12 +59,12 @@ def main():
               "max_optimizer_steps": contract["geometry"]["total_steps"],
               "resume_checkpoint": str(args.resume_checkpoint.resolve()) if args.resume_checkpoint else "",
               "staging": {key: prepared[key] for key in
-                          ("initial_steps", "startup_budgets", "planned_files", "planned_bytes", "copy_workers")
+                          ("read_policy", "index_dir", "initial_steps", "startup_budgets", "planned_files", "planned_bytes", "copy_workers")
                           if key in prepared},
               "checkpoint_steps": [round(contract["geometry"]["total_steps"] * i / 6) for i in range(1, 7)],
               "official_reference": "Mizar_159M/configs/s1.yaml.in + runtime/stage1 + pipeline/build_ced_cache.py",
               "intentional_differences": ["HTSAT(129+129) plus existing c2l/projection instead of CED freq_merge_126",
-                   "raw audio staged then decoded online instead of hidden.f16 feature cache",
+                   "shared raw audio decoded online, collective switch to staged bytes after full copy; no CED cache",
                    "8 GPUs x microbatch8 x accumulation4; global batch256 ablation",
                    "filtered 1311334-row mixture; original LibriTTS clean100/360 replaces LibriTTS-R"]}
     write_json(args.output, config)

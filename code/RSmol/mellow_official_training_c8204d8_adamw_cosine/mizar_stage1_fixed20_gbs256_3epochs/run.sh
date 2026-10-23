@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
-[[ $# == 6 || $# == 8 ]] || { echo "run via code/RSmol/run_mizar_s1_gbs256_5090.sh" >&2; exit 2; }
+[[ $# == 7 || $# == 8 ]] || { echo "run via code/RSmol/run_mizar_s1_gbs256_5090.sh" >&2; exit 2; }
 MODE=$1
 RESOLVED_PATHS=$(readlink -f "$2")
 OUTPUT_ROOT=$(readlink -m "$3")
 RESUME_CHECKPOINT=$4
 TEXT_MODEL_DIR=$(readlink -f "$5")
 HTSAT_ROOT=$(readlink -f "$6")
-STAGE_START_STEPS=${7:-64}
-STAGE_WORKERS=${8:-16}
+PREPARED_INDEX=$7
+STAGE_WORKERS=${8:-4}
 ROUTE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 MANIFEST=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_filtered.json
 [[ "$MODE" == formal ]] || { echo "this route runs formal training only" >&2; exit 2; }
@@ -52,9 +52,9 @@ run_one() {
   fi
   STAGE_TOKEN="${run_mode}_${RUN_ID}"
   STAGE_ROOT="/dev/shm/mizar_s1_gbs256_${STAGE_TOKEN}"
-  local stage_args=(--manifest "$MANIFEST" --resolved-paths "$RESOLVED_PATHS" \
+  local stage_args=(--manifest "$MANIFEST" --resolved-paths "$RESOLVED_PATHS" --prepared-index "$PREPARED_INDEX" \
     --stage-root "$STAGE_ROOT" --token "$STAGE_TOKEN" --mode "$run_mode" --output "$run_dir/staging_report.json" \
-    --background --start-steps "$STAGE_START_STEPS" --workers "$STAGE_WORKERS")
+    --background --workers "$STAGE_WORKERS")
   if [[ -n "$RESUME_CHECKPOINT" ]]; then
     stage_args+=(--resume-checkpoint "$RESUME_CHECKPOINT")
   fi

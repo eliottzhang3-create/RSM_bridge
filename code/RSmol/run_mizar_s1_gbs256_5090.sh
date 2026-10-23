@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 [--output-dir DIR] [--resume-checkpoint PATH] [--resolved-paths TSV] [--text-model-dir DIR] [--htsat-root DIR] [--stage-start-steps N] [--stage-workers N]" >&2
+  echo "usage: $0 [--output-dir DIR] [--resume-checkpoint PATH] [--resolved-paths TSV] [--text-model-dir DIR] [--htsat-root DIR] [--index-cache-root DIR] [--stage-workers N]" >&2
   exit 2
 }
 
@@ -13,8 +13,8 @@ HTSAT_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT
 MANIFEST=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_filtered.json
 OUTPUT_DIR=""
 RESUME_CHECKPOINT=""
-STAGE_START_STEPS=64
-STAGE_WORKERS=16
+INDEX_CACHE_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/index_cache
+STAGE_WORKERS=4
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || usage
   case "$1" in
@@ -23,13 +23,13 @@ while [[ $# -gt 0 ]]; do
     --resolved-paths) RESOLVED_PATHS=$2 ;;
     --text-model-dir) TEXT_MODEL_DIR=$2 ;;
     --htsat-root) HTSAT_ROOT=$2 ;;
-    --stage-start-steps) STAGE_START_STEPS=$2 ;;
+    --index-cache-root) INDEX_CACHE_ROOT=$2 ;;
     --stage-workers) STAGE_WORKERS=$2 ;;
     *) usage ;;
   esac
   shift 2
 done
-[[ "$STAGE_START_STEPS" =~ ^[1-9][0-9]*$ && "$STAGE_WORKERS" =~ ^[1-9][0-9]*$ ]] || { echo "staging steps/workers must be positive integers" >&2; exit 2; }
+[[ "$STAGE_WORKERS" =~ ^[1-9][0-9]*$ ]] || { echo "staging workers must be a positive integer" >&2; exit 2; }
 [[ -z "$RESUME_CHECKPOINT" || -f "$RESUME_CHECKPOINT" ]] || { echo "formal resume checkpoint does not exist" >&2; exit 2; }
 [[ -f "$MANIFEST" && -f "$RESOLVED_PATHS" ]] || { echo "filtered manifest or resolved_paths.tsv missing" >&2; exit 2; }
 [[ -d "$TEXT_MODEL_DIR" && -f "$HTSAT_ROOT/HTSAT_AudioSet_Saved_1.ckpt" ]] || { echo "local pretrained components missing" >&2; exit 2; }
@@ -44,7 +44,15 @@ if [[ -z "$RESUME_CHECKPOINT" && -d "$OUTPUT_DIR" && -n "$(find "$OUTPUT_DIR" -m
   exit 2
 fi
 mkdir -p "$SCRIPT_DIR/log"
-ARGS=(formal "$RESOLVED_PATHS" "$OUTPUT_DIR" "$RESUME_CHECKPOINT" "$TEXT_MODEL_DIR" "$HTSAT_ROOT" "$STAGE_START_STEPS" "$STAGE_WORKERS")
+INDEX_PATH_FILE=$(mktemp)
+cleanup_index_path() { rm -f "$INDEX_PATH_FILE"; }
+trap cleanup_index_path EXIT
+python "$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs/prepare_index.py" \
+  --manifest "$MANIFEST" --resolved-paths "$RESOLVED_PATHS" \
+  --cache-root "$INDEX_CACHE_ROOT" --path-output "$INDEX_PATH_FILE"
+INDEX_DIR=$(tr -d '\r\n' < "$INDEX_PATH_FILE")
+[[ -d "$INDEX_DIR" ]] || { echo "CPU-prepared index was not created: $INDEX_DIR" >&2; exit 2; }
+ARGS=(formal "$RESOLVED_PATHS" "$OUTPUT_DIR" "$RESUME_CHECKPOINT" "$TEXT_MODEL_DIR" "$HTSAT_ROOT" "$INDEX_DIR" "$STAGE_WORKERS")
 printf -v CMD_ARGS '%q ' "${ARGS[@]}"
 vc submit \
   -p pdgpu-5090 \
@@ -55,4 +63,4 @@ vc submit \
   JOB=1:1 "$SCRIPT_DIR/log/mizar_s1_gbs256.${RUN_TAG}.JOB.log" \
   --cmd "bash mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs/run.sh $CMD_ARGS"
 echo "Submitted Mizar S1 / HTSAT GBS256: 8 GPUs x microbatch8 x accumulation4; output=$OUTPUT_DIR"
-echo "Raw audio staging: first $STAGE_START_STEPS optimizer updates, then background copy; workers=$STAGE_WORKERS"
+echo "Raw audio: shared-path training starts immediately; background local copy then collective switch; workers=$STAGE_WORKERS; index=$INDEX_DIR"
