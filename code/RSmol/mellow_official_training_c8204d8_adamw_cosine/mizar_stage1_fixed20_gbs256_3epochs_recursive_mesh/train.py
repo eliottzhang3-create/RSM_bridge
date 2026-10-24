@@ -29,7 +29,8 @@ from contract import (ACCUMULATION_STEPS, ANSWER_TOKENS, BATCH_SIZE, EPOCHS,
                       PREFIX_TOKENS, RANK_UPDATE_SAMPLES, ROUTE, SEED, WORLD_SIZE,
                       TEXT_MODEL_CONTRACT, TEXT_MODEL_SCHEDULE, code_digest,
                       digest, lr_factor, rank_seed, recursive_model_source_sha256,
-                      validate_tokenizer_contract, write_json)
+                      validate_checkpoint_tokenizer, validate_tokenizer_contract,
+                      write_json)
 from data.audiotext_dataset import AudioTextDataset, collate_fn
 from data.sampler import CustomDistributedSampler
 from data.staging import StagingGate
@@ -102,11 +103,23 @@ def answer_loss(output, inputs, ignore_index):
     prefix_len = logits.shape[1] - inputs["answer"]["input_ids"].shape[1]
     if prefix_len != PREFIX_TOKENS or logits.shape[1] != PREFIX_TOKENS + ANSWER_TOKENS:
         raise ValueError(f"unexpected prefix/total sequence: {prefix_len}, {logits.shape[1]}")
-    # The prediction at prefix_len-1 predicts answer token zero. Prompt/audio
-    # contribute context only. Each rank uses its own mean over non-! targets.
+    # Match Mizar's _answer_token_loss: the tokenizer attention mask and the
+    # PAD target check jointly define valid answer targets. Prompt/audio
+    # contribute context only; each rank averages its own valid answer tokens.
     logits = logits[:, prefix_len - 1:-1]
-    targets = inputs["answer"]["input_ids"]
-    return F.cross_entropy(logits.reshape(-1, logits.shape[-1]), targets.flatten(), ignore_index=ignore_index)
+    answer = inputs["answer"]
+    targets = answer["input_ids"]
+    attention_mask = answer.get("attention_mask")
+    if attention_mask is None or attention_mask.shape != targets.shape:
+        raise ValueError("Mizar answer padding requires an attention_mask matching input_ids")
+    valid = attention_mask.to(dtype=torch.bool) & targets.ne(ignore_index)
+    token_loss = F.cross_entropy(
+        logits.transpose(1, 2), targets, reduction="none", ignore_index=ignore_index
+    )
+    valid_count = valid.sum()
+    if valid_count.item() == 0:
+        raise ValueError("answer batch contains no valid target tokens")
+    return (token_loss * valid).sum() / valid_count
 
 
 def inspect_tokenizer(dataset, model):
@@ -147,29 +160,16 @@ def inspect_tokenizer(dataset, model):
 
 
 def audit_checkpoint_tokenizer(text_model_dir):
-    """Check the checkpoint tokenizer before baseline adds the Mizar PAD token."""
+    """Audit source metadata before assigning Mizar's ``!`` PAD token.
+
+    A recursive checkpoint may serialize EOS (``<|endoftext|>``) as its
+    tokenizer-level PAD.  That source setting is not the training contract:
+    ``AudioTextDataset`` deliberately assigns the existing ``!`` vocabulary
+    token as PAD without resizing the model.  Keep the source PAD metadata in
+    the audit, but validate the invariants that must survive that override.
+    """
     tokenizer = AutoTokenizer.from_pretrained(text_model_dir, local_files_only=True)
-    eos_id = getattr(tokenizer, "eos_token_id", None)
-    if eos_id != 0:
-        raise ValueError(f"recursive checkpoint tokenizer eos_token_id must be 0, got {eos_id!r}")
-    pad_token = getattr(tokenizer, "pad_token", None)
-    pad_id = getattr(tokenizer, "pad_token_id", None)
-    if pad_token is not None:
-        if pad_token != "!":
-            raise ValueError(
-                "recursive checkpoint tokenizer has an incompatible existing pad token: "
-                f"{pad_token!r} (expected '!')"
-            )
-        if tokenizer.encode("!", add_special_tokens=False) != [pad_id] or pad_id in {0, eos_id}:
-            raise ValueError("recursive checkpoint tokenizer has an incompatible !/PAD contract")
-    return {
-        "source": "recursive_checkpoint",
-        "pad_token": pad_token,
-        "pad_id": pad_id,
-        "eos_id": eos_id,
-        "vocab_rows": len(tokenizer),
-        "existing_pad_contract": pad_token is not None,
-    }
+    return validate_checkpoint_tokenizer(tokenizer, len(tokenizer))
 
 
 def probe_sources(model, dataset, prepared, device):

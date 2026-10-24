@@ -106,6 +106,50 @@ class RecursiveMizarRouteTests(unittest.TestCase):
             self.assertEqual(report["config"]["routers"], 6)
             self.assertIn("tokenizer.json", report["tokenizer_files"])
 
+    def test_source_eos_pad_is_overridden_by_mizar_bang_pad(self):
+        class SourceTokenizer:
+            eos_token_id = 0
+            pad_token = "<|endoftext|>"
+            pad_token_id = 0
+
+            def __len__(self):
+                return 49152
+
+            def add_special_tokens(self, mapping):
+                self.pad_token = mapping["pad_token"]
+                self.pad_token_id = 17
+                return 0
+
+            def encode(self, text, add_special_tokens=False):
+                return [17] if text == "!" else [0]
+
+        audit = contract.validate_checkpoint_tokenizer(SourceTokenizer(), 49152)
+        self.assertEqual(audit["source_pad_token"], "<|endoftext|>")
+        self.assertEqual(audit["source_pad_id"], 0)
+        self.assertEqual(audit["mizar_pad_ids"], [17])
+        self.assertEqual(audit["mizar_pad_id"], 17)
+        self.assertTrue(audit["existing_pad_contract"])
+
+    def test_source_tokenizer_rejects_bang_aliasing_eos(self):
+        class InvalidTokenizer:
+            eos_token_id = 0
+            pad_token = "<|endoftext|>"
+            pad_token_id = 0
+
+            def __len__(self):
+                return 49152
+
+            def add_special_tokens(self, mapping):
+                self.pad_token = mapping["pad_token"]
+                self.pad_token_id = 0
+                return 0
+
+            def encode(self, text, add_special_tokens=False):
+                return [0]
+
+        with self.assertRaisesRegex(ValueError, "aliases EOS/SEP"):
+            contract.validate_checkpoint_tokenizer(InvalidTokenizer(), 49152)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -59,9 +59,12 @@ the baseline c2l/projection and parameter-role grouping remain unchanged.
 
 The tokenizer is loaded from the recursive checkpoint itself. The route
 requires `!` as PAD, PAD distinct from EOS/SEP, EOS/SEP ID 0, a one-token
-encoding for `!`, and tokenizer rows equal to LM embedding rows. Existing
-checkpoint tokenizer metadata is checked before the baseline adds any PAD
-token; incompatible metadata fails rather than falling back to SmolLM2.
+encoding for `!`, and tokenizer rows equal to LM embedding rows. Runtime
+padding follows Mizar exactly: it calls `add_special_tokens({'pad_token':
+'!'})`, derives the ignore index from `encode(tokenizer.pad_token)[0]`, and
+uses `padding='max_length'` after appending the EOS text. A source checkpoint
+may serialize `<|endoftext|>` as its tokenizer PAD; that metadata is
+overridden by the same Mizar operation and is recorded only for audit.
 
 ## Sequence and optimization
 

@@ -144,7 +144,8 @@ class RuntimeChecks(unittest.TestCase):
         targets = (torch.arange(300).repeat(2, 1) % 15 + 1).long()
         targets[:, 199] = eos_id
         targets[:, 200:] = pad_id
-        answer = {"input_ids": targets}
+        answer = {"input_ids": targets,
+                  "attention_mask": targets.ne(pad_id).long()}
         decoder(a, b, prompt, answer)
         seen = decoder.lm.seen
         embedding = seen["inputs_embeds"]

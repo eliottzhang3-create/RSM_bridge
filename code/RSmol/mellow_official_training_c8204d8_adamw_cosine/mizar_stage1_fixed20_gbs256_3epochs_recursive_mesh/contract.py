@@ -40,7 +40,9 @@ def validate_tokenizer_contract(tokenizer, pad_id, embedding_rows):
     tokenizer_rows = len(tokenizer)
     tokenizer_pad_id = getattr(tokenizer, "pad_token_id", None)
     eos_id = getattr(tokenizer, "eos_token_id", None)
-    encoded_pad = tokenizer.encode(PAD_TOKEN, add_special_tokens=False)
+    # This intentionally mirrors AudioTextDataset and the released Mizar
+    # trainer, which derive ignore_index with encode(tokenizer.pad_token)[0].
+    encoded_pad = tokenizer.encode(tokenizer.pad_token)
     audit = {
         "pad_token": getattr(tokenizer, "pad_token", None),
         "pad_id": int(pad_id),
@@ -56,8 +58,8 @@ def validate_tokenizer_contract(tokenizer, pad_id, embedding_rows):
         problems.append(f"pad_token={audit['pad_token']!r}, expected {PAD_TOKEN!r}")
     if audit["pad_id"] != tokenizer_pad_id:
         problems.append(f"dataset pad_id={audit['pad_id']}, tokenizer.pad_token_id={tokenizer_pad_id}")
-    if encoded_pad != [audit["pad_id"]]:
-        problems.append(f"encode({PAD_TOKEN!r})={encoded_pad}, expected [{audit['pad_id']}]")
+    if not encoded_pad or encoded_pad[0] != audit["pad_id"]:
+        problems.append(f"encode({PAD_TOKEN!r})={encoded_pad}, expected first ID {audit['pad_id']}")
     if audit["pad_id"] in {SEPARATOR_TOKEN_ID, EOS_TOKEN_ID}:
         problems.append(f"pad_id={audit['pad_id']} aliases SEP/EOS={SEPARATOR_TOKEN_ID}")
     if eos_id != EOS_TOKEN_ID:
@@ -69,6 +71,76 @@ def validate_tokenizer_contract(tokenizer, pad_id, embedding_rows):
     if problems:
         details = ", ".join(f"{key}={value!r}" for key, value in audit.items())
         raise ValueError("invalid Mizar tokenizer contract: " + "; ".join(problems) + "; " + details)
+    return audit
+
+
+def validate_checkpoint_tokenizer(tokenizer, model_vocab_size):
+    """Apply and audit Mizar's exact tokenizer padding operation.
+
+    Recursive checkpoints commonly serialize EOS as their source padding
+    token.  Mizar unconditionally calls ``add_special_tokens`` with the
+    existing ``!`` vocabulary token, so the source PAD identity is
+    informational.  The important constraints are the post-override
+    ``!``/PAD contract, EOS=0, and no vocabulary growth.
+    """
+    try:
+        model_vocab_size = int(model_vocab_size)
+    except (TypeError, ValueError):
+        model_vocab_size = -1
+    source_rows = len(tokenizer)
+    source_pad_id = getattr(tokenizer, "pad_token_id", None)
+    source_pad_token = getattr(tokenizer, "pad_token", None)
+    added_tokens = tokenizer.add_special_tokens({"pad_token": PAD_TOKEN})
+    tokenizer_rows = len(tokenizer)
+    # Keep this call identical to AudioTextDataset/Mizar rather than relying
+    # on a separately derived token ID.  The no-special-token encoding below
+    # separately proves that ``!`` is one existing vocabulary token.
+    pad_encoding = tokenizer.encode(tokenizer.pad_token)
+    if not pad_encoding:
+        raise ValueError("Mizar pad token encoding is empty")
+    pad_id = pad_encoding[0]
+    encoded_pad = tokenizer.encode(PAD_TOKEN, add_special_tokens=False)
+    eos_id = getattr(tokenizer, "eos_token_id", None)
+    audit = {
+        "source": "recursive_checkpoint",
+        "source_pad_token": source_pad_token,
+        "source_pad_id": source_pad_id,
+        "mizar_pad_token": PAD_TOKEN,
+        "mizar_pad_id": pad_id,
+        "mizar_pad_ids": encoded_pad,
+        "mizar_pad_encoding": pad_encoding,
+        "added_tokens": int(added_tokens),
+        "eos_id": eos_id,
+        "source_vocab_rows": source_rows,
+        "tokenizer_vocab_rows": tokenizer_rows,
+        "model_vocab_size": model_vocab_size,
+        "existing_pad_contract": (added_tokens == 0 and encoded_pad == [pad_id]),
+    }
+    problems = []
+    if eos_id != EOS_TOKEN_ID:
+        problems.append(f"eos_token_id={eos_id!r}, expected {EOS_TOKEN_ID}")
+    if model_vocab_size <= 0 or tokenizer_rows != model_vocab_size:
+        problems.append(
+            f"tokenizer rows={tokenizer_rows}, model vocab_size={model_vocab_size}"
+        )
+    if added_tokens != 0:
+        problems.append(
+            f"Mizar pad assignment added {added_tokens} vocabulary token(s); expected existing {PAD_TOKEN!r}"
+        )
+    if tokenizer.pad_token != PAD_TOKEN:
+        problems.append(f"pad_token={tokenizer.pad_token!r}, expected {PAD_TOKEN!r}")
+    if len(encoded_pad) != 1 or encoded_pad != [pad_id]:
+        problems.append(
+            f"encode({PAD_TOKEN!r})={encoded_pad!r}, expected [{pad_id}]"
+        )
+    elif not 0 <= int(pad_id) < min(tokenizer_rows, model_vocab_size):
+        problems.append(f"{PAD_TOKEN!r} token ID {pad_id} is outside the model vocabulary")
+    elif int(pad_id) == EOS_TOKEN_ID:
+        problems.append(f"{PAD_TOKEN!r} token ID aliases EOS/SEP={EOS_TOKEN_ID}")
+    if source_pad_id is not None and not 0 <= int(source_pad_id) < tokenizer_rows:
+        problems.append(f"source pad_token_id={source_pad_id!r} is outside the tokenizer vocabulary")
+    if problems:
+        raise ValueError("invalid recursive checkpoint tokenizer: " + "; ".join(problems))
     return audit
 
 
