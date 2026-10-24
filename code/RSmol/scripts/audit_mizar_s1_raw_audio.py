@@ -42,6 +42,12 @@ clip are fine.
 filename. Only one exact, case-sensitive filename below the dataset's roots
 is accepted. Conflicting mapping records and duplicate destination names are
 reported as ambiguous; missing records never trigger a guessed fallback.
+
+Use ``--require-all-sources`` when MusicCaps and SpeechCraft train-other-500
+are both in scope. Missing references then fail the audit like any other
+source. The default retains the earlier audit's allowed-missing policy for
+compatibility. Neither mode filters or rewrites the input manifest. The
+output directory must be new or empty.
 """
 
 from __future__ import annotations
@@ -292,10 +298,12 @@ def normalized_stem_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", ascii_stem.casefold())
 
 
-def build_recursive_indexes(rules: list[dict[str, Any]]) -> None:
+def build_recursive_indexes(rules: list[dict[str, Any]], *, progress: bool = False) -> None:
     """Build requested basename/stem indexes or the AudioCaps CSV lookup."""
 
     for rule in rules:
+        if progress:
+            print(f"preparing rule {rule['name']} (match={rule['match']})", flush=True)
         if rule["match"] == "exact":
             continue
         if rule["match"] == "audiocaps_v2":
@@ -772,6 +780,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", required=True, type=Path, help="s1.json, s1.json.gz, or JSONL")
     parser.add_argument("--mapping-json", required=True, type=Path, help="dataset-specific raw-audio mapping JSON")
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument(
+        "--require-all-sources",
+        action="store_true",
+        help="report missing MusicCaps/train-other-500 as failures, with no source exemptions",
+    )
     parser.add_argument("--decode", action="store_true", help="CPU decode each unique existing file")
     parser.add_argument("--decode-limit", type=int, default=0, help="maximum unique files to decode; 0 means all")
     parser.add_argument("--ffprobe", default=None, help="ffprobe executable; default searches PATH")
@@ -795,8 +808,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"mapping JSON does not exist: {args.mapping_json}")
     if args.decode_limit < 0 or args.max_unique_audio_gib < 0:
         parser.error("decode limit and unique-audio limit must be non-negative")
+    if args.output_dir.exists() and (
+        not args.output_dir.is_dir() or any(args.output_dir.iterdir())
+    ):
+        parser.error(f"refusing to overwrite a non-empty audit output: {args.output_dir}")
     rules = load_rules(args.mapping_json)
-    build_recursive_indexes(rules)
+    build_recursive_indexes(rules, progress=args.progress_every > 0)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     ffprobe = args.ffprobe or shutil.which("ffprobe")
 
@@ -816,6 +833,7 @@ def main(argv: list[str] | None = None) -> int:
     decode_results: dict[str, dict[str, Any]] = {}
     unique_file_sizes: dict[str, int] = {}
     unique_file_references: Counter[str] = Counter()
+    file_metadata: dict[str, tuple[str, int]] = {}
     size_stat_failures: list[dict[str, Any]] = []
     decode_attempts = 0
 
@@ -825,7 +843,10 @@ def main(argv: list[str] | None = None) -> int:
             source = source_label(row)
             source_counts[source] += 1
             field, raw_path = raw_reference(row, source)
-            allowed, allowed_kind = is_allowed_row(row, source, raw_path)
+            allowed, allowed_kind = (
+                (False, "retained") if args.require_all_sources
+                else is_allowed_row(row, source, raw_path)
+            )
             base = {
                 "row_index": row_index,
                 "source": source,
@@ -849,9 +870,14 @@ def main(argv: list[str] | None = None) -> int:
             status = str(result["status"])
             if status == "exists":
                 try:
-                    resolved_real_path = Path(result["path"]).resolve(strict=True)
-                    file_size = resolved_real_path.stat().st_size
-                    real_path_text = str(resolved_real_path)
+                    path_text = str(result["path"])
+                    metadata = file_metadata.get(path_text)
+                    if metadata is None:
+                        resolved_real_path = Path(path_text).resolve(strict=True)
+                        metadata = (str(resolved_real_path), resolved_real_path.stat().st_size)
+                        file_metadata[path_text] = metadata
+                        file_metadata[metadata[0]] = metadata
+                    real_path_text, file_size = metadata
                     unique_file_sizes[real_path_text] = file_size
                     unique_file_references[real_path_text] += 1
                     if args.canonicalize_resolved_paths:
@@ -951,6 +977,16 @@ def main(argv: list[str] | None = None) -> int:
     capacity_exceeded = bool(
         max_unique_audio_bytes and unique_audio_bytes > max_unique_audio_bytes
     )
+    speechcraft_by_split: dict[str, dict[str, dict[str, int]]] = {}
+    for (field, raw_path), result in resolutions.items():
+        parts = slash(raw_path).split("/")
+        if field != "audio_path" or len(parts) < 3 or parts[0] != "libritts_r_audios":
+            continue
+        status_counts = speechcraft_by_split.setdefault(parts[1], {}).setdefault(
+            str(result["status"]), {"unique_references": 0, "manifest_rows": 0}
+        )
+        status_counts["unique_references"] += 1
+        status_counts["manifest_rows"] += reference_counts[f"{field}\t{raw_path}"]
 
     summary = {
         "manifest": str(args.manifest),
@@ -979,11 +1015,13 @@ def main(argv: list[str] | None = None) -> int:
         },
         "decoder": {"requested": bool(args.decode), "ffprobe": ffprobe, "unique_attempts": decode_attempts},
         "path_canonicalization": bool(args.canonicalize_resolved_paths),
+        "require_all_sources": bool(args.require_all_sources),
         "counts": dict(counters),
         "source_rows": dict(source_counts),
         "source_status": {f"{source}\t{status}": count for (source, status), count in sorted(source_status.items())},
         "rule_status": {f"{rule}\t{status}": count for (rule, status), count in sorted(rule_counts.items())},
         "method_rows": dict(method_counts),
+        "speechcraft_by_split": speechcraft_by_split,
         "unique_raw_references": len(resolutions),
         "unique_existing_files": sum(1 for item in resolutions.values() if item.get("status") == "exists"),
         "unique_resolved_files": len(unique_file_sizes),
@@ -996,7 +1034,12 @@ def main(argv: list[str] | None = None) -> int:
         },
         "unique_missing_or_unmapped_references": sum(1 for item in resolutions.values() if item.get("status") != "exists"),
         "decode_results": decode_results if args.decode else {},
-        "exit_policy": "missing MusicCaps/train-other-500 rows are recorded as allowed; retained missing/ambiguous/unmapped, decode or file-size failures return 2; unique audio capacity excess returns 3",
+        "exit_policy": (
+            "all sources required; missing/ambiguous/unmapped, decode or file-size failures return 2; "
+            "unique audio capacity excess returns 3"
+            if args.require_all_sources else
+            "missing MusicCaps/train-other-500 rows are recorded as allowed; retained missing/ambiguous/unmapped, decode or file-size failures return 2; unique audio capacity excess returns 3"
+        ),
     }
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2, ensure_ascii=False))

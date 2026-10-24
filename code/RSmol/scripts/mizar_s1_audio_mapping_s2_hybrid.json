@@ -1,0 +1,85 @@
+{
+  "rules": [
+    {
+      "name": "reasonaqa_audiocaps",
+      "field": "filepath1_original",
+      "prefix": "AudioCapsLarger/",
+      "roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2"]
+    },
+    {
+      "name": "reasonaqa_clotho_v21",
+      "field": "filepath1_original",
+      "prefix": "ClothoV21/",
+      "match": "basename",
+      "roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1"]
+    },
+    {
+      "name": "reasonaqa_clotho_aqa",
+      "field": "filepath1_original",
+      "prefix": "ClothoAQA/audio_files/",
+      "match": "normalized_stem",
+      "roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_aqa_audio/audio_files"]
+    },
+    {
+      "name": "audiomcq_audiocaps",
+      "field": "audio_path",
+      "prefix": "audiocaps_audios/",
+      "match": "audiocaps_v2",
+      "roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2"],
+      "flat_roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/AudioCaps"],
+      "metadata_root": "/hpc_stor03/sjtu_home/jinwei.zhang/data/audiocaps_v2"
+    },
+    {
+      "name": "clotho",
+      "field": "audio_path",
+      "prefix": "clotho_audios/",
+      "match": "basename",
+      "roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/clotho_v2_1"]
+    },
+    {
+      "name": "compa_r",
+      "field": "audio_path",
+      "prefix": "compa_r_audios/",
+      "roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/compa_r_train_audios/compa_r_train_audios"]
+    },
+    {
+      "name": "tacos",
+      "field": "audio_path",
+      "prefix": "tacos_audios/",
+      "roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/TACOS"]
+    },
+    {
+      "name": "lp_musiccaps_mtt",
+      "field": "audio_path",
+      "prefix": "magnatagatune_audios/",
+      "roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/LP-MusicCaps/MP3"]
+    },
+    {
+      "name": "musiccaps",
+      "field": "audio_path",
+      "prefix": "musiccaps_audios/",
+      "match": "s2_mapping",
+      "roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/MusicCaps"],
+      "s2_mapping_jsonl": "/hpc_stor03/sjtu_home/jinwei.zhang/data/AudioMCQ/audio_mapping.s2.jsonl",
+      "source_dataset": "MusicCaps"
+    },
+    {
+      "name": "speechcraft_libritts_clean100",
+      "field": "audio_path",
+      "prefix": "libritts_r_audios/train-clean-100/",
+      "roots": ["/hpc_stor03/public/shared/data/tts/LibriTTS/train-clean-100"]
+    },
+    {
+      "name": "speechcraft_libritts_clean360",
+      "field": "audio_path",
+      "prefix": "libritts_r_audios/train-clean-360/",
+      "roots": ["/hpc_stor03/public/shared/data/tts/LibriTTS/train-clean-360"]
+    },
+    {
+      "name": "speechcraft_libritts_r_other500",
+      "field": "audio_path",
+      "prefix": "libritts_r_audios/train-other-500/",
+      "roots": ["/hpc_stor03/sjtu_home/jinwei.zhang/data/SpeechCraft/libritts_r_audios/train-other-500"]
+    }
+  ]
+}

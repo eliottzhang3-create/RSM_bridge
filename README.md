@@ -1,5 +1,47 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-24：扩展 Mizar S1 音频范围后的完整 CPU 审计
+
+当前数据准备重新从原始 `/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1.json` 出发，**MusicCaps 和 SpeechCraft train-other-500 均纳入使用范围**。这项更新只准备新的审计，不修改现有训练使用的 `s1_stage1_filtered.json`、旧审计结果或训练入口；下面 2026-10-21 的过滤范围仍描述旧训练产物。
+
+新增 `code/RSmol/scripts/mizar_s1_audio_mapping_s2_hybrid.json`，保留既有各来源映射。AudioMCQ AudioCaps 继续用 `audiocaps_v2` CSV 校验 YouTube ID/start-time，优先复用原 `audiocaps_v2` 文件，只在缺失时查补充 `data/AudioCaps`。MusicCaps 继续通过 `data/AudioMCQ/audio_mapping.s2.jsonl` 的精确原始 key 和实际文件名查 `data/MusicCaps`。SpeechCraft 三个 split 改为精确相对路径映射：
+
+- `train-clean-100` → `/hpc_stor03/public/shared/data/tts/LibriTTS/train-clean-100`。
+- `train-clean-360` → `/hpc_stor03/public/shared/data/tts/LibriTTS/train-clean-360`。
+- `train-other-500` → `/hpc_stor03/sjtu_home/jinwei.zhang/data/SpeechCraft/libritts_r_audios/train-other-500`，使用从学长 S2 传输、已解压的 LibriTTS-R。
+
+clean100/360 使用原始 LibriTTS、other500 使用 LibriTTS-R，是用户选择的混合音频版本；路径存在性审计不能证明两种版本的波形或音质相同。新审计参数 `--require-all-sources` 将所有来源的缺失、歧义和无法映射都正常报错，不再豁免 MusicCaps/other500；不加该参数仍兼容旧策略。新增 `speechcraft_by_split` 统计，保留 `resolved_paths.tsv`、按真实路径去重的 `unique_files.tsv`、文件总字节数及容量检查；对重复引用复用文件大小检查，减少共享文件系统请求。脚本拒绝写入非空审计目录。
+
+GitHub 同步后，在远程登录节点执行（不需要 GPU 或额外 Python 包）：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+audit_dir="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_$(date +%Y%m%d_%H%M%S)"
+audit_log="${audit_dir}.log"
+if python -u scripts/audit_mizar_s1_raw_audio.py \
+  --manifest /hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1.json \
+  --mapping-json scripts/mizar_s1_audio_mapping_s2_hybrid.json \
+  --output-dir "$audit_dir" \
+  --require-all-sources \
+  --canonicalize-resolved-paths \
+  --max-unique-audio-gib 256 \
+  --progress-every 100000 >"$audit_log" 2>&1; then
+  audit_status=0
+else
+  audit_status=$?
+fi
+echo "audit_exit=$audit_status"
+echo "audit_dir=$audit_dir"
+echo "audit_log=$audit_log"
+if [ -f "$audit_dir/summary.json" ]; then
+  python -c 'import json,sys; d=json.load(open(sys.argv[1])); k=("counts","source_status","speechcraft_by_split","method_rows","unique_resolved_files","unique_resolved_audio_gib","capacity_check"); print(json.dumps({x:d.get(x) for x in k},ensure_ascii=False,indent=2))' "$audit_dir/summary.json"
+else
+  tail -n 40 "$audit_log"
+fi
+```
+
+本命令只核对路径和文件大小，不解码、不复制音频、不生成过滤 manifest。退出码 2 表示还有待处理数据问题，3 表示唯一音频总大小超过 256 GiB；两者仍会写出审计报告。唯一大小按真实路径去重，不做全库内容哈希，不能识别任意不同路径下的相同波形；AudioCaps 两来源复用原文件由优先映射保证。后续过滤如使用现有 `filter_mizar_s1_manifest.py`，必须显式保留 MusicCaps 与 other500（`--keep-musiccaps --keep-train-other-500`），并使用新的输出文件名；本次尚未执行过滤。新增混合映射、已有 AudioCaps/S2 映射共 20 项本地 CPU 测试通过；远程完整数据审计待用户执行。
+
 ## 2026-10-23：Mizar S1 / GBS256 checkpoint 的 MMAU test-mini 评测
 
 `code/RSmol/run_mizar_s1_mmau_eval_5090.sh` 新增 `RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256` 选择项，默认仍为 GBS32。GBS256 自动选择 `mizar_stage1_fixed20_gbs256_3epochs`、`formal_sharedstart_v3/formal/runtime.json` 和 `model--step-15366.ckpt`，校验训练几何 `8×8×4` 及累积训练的 loss 标识。checkpoint/runtime 合同、源码 SHA、组件资产和模型 strict loading 校验继续执行；不要求训练 staging 目录仍存在。
