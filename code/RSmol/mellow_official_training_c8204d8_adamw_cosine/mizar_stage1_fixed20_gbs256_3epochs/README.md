@@ -18,11 +18,11 @@
 
 ## 数据与音频
 
-固定输入文件：
+固定输入文件（hybrid filtered manifest）：
 
 ```text
-/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_filtered.json
-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_audiocaps_csv_retry1/resolved_paths.tsv
+/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_20261024_170403/resolved_paths.tsv
 ```
 
 | 来源 | 保留行数 |
@@ -30,17 +30,18 @@
 | reasonaqa_oneaudio | 756,968 |
 | AudioCaps | 113,844 |
 | Clotho | 4,798 |
+| MusicCaps | 3,221 |
 | CompA-R | 249,161 |
 | LP-MusicCaps-MTT | 19,632 |
-| SpeechCraft | 124,790 |
+| SpeechCraft | 287,727 |
 | TACOS | 42,141 |
-| 合计 | **1,311,334** |
+| 合计 | **1,477,492** |
 
-MusicCaps 与 SpeechCraft `train-other-500` 已过滤。SpeechCraft 使用共享目录的原始 LibriTTS clean-100/360，音质来源与官方 LibriTTS-R 存在差异。
+MusicCaps 保留 3,221 行。SpeechCraft 的 clean-100/360 使用共享目录原始 LibriTTS，`train-other-500` 使用 `/hpc_stor03/sjtu_home/jinwei.zhang/data/SpeechCraft/libritts_r_audios/train-other-500`。
 
 提交器先在登录节点调用纯标准库的 `prepare_index.py`，按审计 TSV 的 `(field, raw_path)` 查找成功映射。ReasonAQA 使用 `filepath1_original`，其他来源使用 `audio_path`；过滤后的行号不用于匹配原审计。映射失败、原文件缺失、空文件或来源计数变化都会中止，并且不会申请 GPU。
 
-原 manifest 的字段和值保持不变，额外生成带 `s1_raw_paths`、`s1_original_paths` 的 JSONL/offset 索引、去重文件列表和 `index_report.json`。索引保存在共享存储 `index_cache/<signature>/`；签名包含路线代码 SHA256、manifest/审计 TSV 的大小与内容 SHA256，输入绝对路径只作溯源记录。时间戳变化或内容相同的路径别名不使索引失效。首次准备统计来源数、原始行 canonical SHA256、映射 SHA256 和每个原始音频的大小/mtime；后续同代码/输入的提交直接复用，不扫描全部音频。索引经临时目录原子发布，缺失/不完整产物报错。输入文件应保持只读不变；每次复用索引只重新计算 manifest/审计 TSV 两个输入文件的 SHA256，不重扫 333,510 个音频。
+原 manifest 的字段和值保持不变，额外生成带 `s1_raw_paths`、`s1_original_paths` 的 JSONL/offset 索引、去重文件列表和 `index_report.json`。索引保存在共享存储 `index_cache/<signature>/`；签名包含路线代码 SHA256、manifest/审计 TSV 的大小与内容 SHA256，输入绝对路径只作溯源记录。时间戳变化或内容相同的路径别名不使索引失效。首次准备统计来源数、原始行 canonical SHA256、映射 SHA256 和每个原始音频的大小/mtime；后续同代码/输入的提交直接复用，不扫描全部音频。索引经临时目录原子发布，缺失/不完整产物报错。输入文件应保持只读不变；每次复用索引只重新计算 manifest/审计 TSV 两个输入文件的 SHA256，不重扫音频目录。
 
 2026-10-23 远程作业曾在加载 CPU 索引时报告 `manifest/audit TSV changed since CPU index preparation`。旧实现将路径、大小、`mtime_ns` 整体比较，错误没有指出差异，因此现有日志不能确认究竟是哪一项变化。现已采用 schema 2 的内容指纹；若内容变化，报错会列出具体输入及预期/当前路径、大小、SHA256。旧索引不会直接复用，更新代码后正常提交会在申请 GPU 前自动建立新的缓存项，无需手动删除旧缓存。GPU 节点启动只顺序读取这两个 metadata 输入验证 SHA256，不重新扫描音频。
 
@@ -51,7 +52,7 @@ MusicCaps 与 SpeechCraft `train-other-500` 已过滤。SpeechCraft 使用共享
 3. 真正双文件各自中心裁剪或右补零到 10 秒，再按顺序拼接。只有显式 `filepath2_original` / `audio_path2` 才表示第二个原始文件，并且同样要求成功审计。
 4. 两个 10 秒分别进入现有 HTSAT。历史 `filepath1` / `filepath2` 是旧的处理后路径，不能据此判断原始双文件。
 
-正式训练复制过滤后全部保留行引用的原始音频。同一文件被多行引用只复制一次，不会整目录复制数据集，也不会复制已排除的 MusicCaps / train-other-500 行专属音频。
+正式训练复制全部保留行引用的原始音频。同一文件被多行引用只复制一次，不会整目录复制数据集。
 
 当前使用“共享存储开始训练 → 后台全量复制 → 八卡一起切换”的流程：
 
@@ -62,7 +63,7 @@ MusicCaps 与 SpeechCraft `train-other-500` 已过滤。SpeechCraft 使用共享
 5. 完整 optimizer update 边界、加载下一个 microbatch 之前，各 rank 对全量完成标志做 MIN all-reduce。只有八卡都确认完成，才一起把整个数据读取模式切为本地。不会按文件混用路径，也不会在四个 microbatch 中间切换。日志发布 `AUDIO_READ_SWITCH`，记录已完成的 optimizer steps；采样顺序、模型、optimizer、scheduler、GradNorm/RNG 和在线 fixed20 处理不重置。
 6. 已复制音频保留到作业结束；若训练先结束，最终成功报告仍要求后台复制完成。退出先终止/回收复制进程，再清理本作业独占的 tmpfs。共享 CPU 索引保留供后续提交复用。
 
-后台只复制原始字节，不解码或占用 GPU，没有音频归档或额外完整音频副本。最终音频仍约 333,510 个文件 / 173.48 GiB；CPU 索引额外占少量共享磁盘，训练通过 mmap 读取。并行复制与训练共享申请的 32 CPU / 256 GiB 主存。这个方案移除了 GPU 作业中的全量映射扫描和预拷贝等待，不能保证共享存储读取速度或平台不再终止作业，之前三次终止的确切原因仍需平台日志确认。
+后台只复制原始字节，不解码或占用 GPU，没有音频归档或额外完整音频副本。新 hybrid manifest 的唯一已解析音频约 182.28 GiB；CPU 索引额外占少量共享磁盘，训练通过 mmap 读取。并行复制与训练共享申请的 32 CPU / 256 GiB 主存。这个方案移除了 GPU 作业中的全量映射扫描和预拷贝等待，不能保证共享存储读取速度或平台不再终止作业，之前三次终止的确切原因仍需平台日志确认。
 
 复制前检查 tmpfs 和可用 cgroup 内存，额外保留 32 GiB；不足则在训练前明确退出。默认任务申请 256 GiB 主存，是否容得下全部原始音频以 `staging_report.json` 的实际字节数为准。清理只允许带本任务所有权标记的直接子目录，退出时自动执行。
 
@@ -97,7 +98,7 @@ prompt 和 answer 各自在分词前追加 `" <|endoftext|>"`，然后分别截�
 
 官方配置虽然标注 float16，当前参考 trainer 没有在 forward 使用 autocast；此处按其实际执行路径实现 FP32 + GradScaler。GradNormTracker 不等于固定 global clip 0.5 或 `clip_grad_norm_(..., 1.0)`。
 
-每轮 **5,122** 次 optimizer updates，丢弃 **102** 行；3 轮共 **15,366** 次更新，warmup **768** 次。每步累计 4 个 microbatch 的 rank-local token mean，每个 loss 除以 4 后反向传播；前三个 DDP microbatch 使用 `no_sync()`，最后一个同步。累积结束后仅执行一次 unscale、GradNormTracker、optimizer 和 scheduler 更新。不同 microbatch 的有效 token 数不等时，这等于四个 microbatch 均权平均，而不是将 32 个样本的有效 token 合并后一次求均值。LambdaLR 初始比例为 0.1，因此第一次更新实际 LR 为 LM 3e-5、mapper 6e-5。
+每轮 **5,771** 次 optimizer updates，丢弃 **116** 行；3 轮共 **17,313** 次更新，warmup **866** 次。每步累计 4 个 microbatch 的 rank-local token mean，每个 loss 除以 4 后反向传播；前三个 DDP microbatch 使用 `no_sync()`，最后一个同步。累积结束后仅执行一次 unscale、GradNormTracker、optimizer 和 scheduler 更新。不同 microbatch 的有效 token 数不等时，这等于四个 microbatch 均权平均，而不是将 32 个样本的有效 token 合并后一次求均值。LambdaLR 初始比例为 0.1，因此第一次更新实际 LR 为 LM 3e-5、mapper 6e-5。
 
 GBS256 是相对于 Mizar Stage 1 GBS32 的 batch-size 消融，不是官方 batch 配置。沿用相同峰值学习率以单独考察 batch size；每 epoch 的样本曝光和 5% warmup 曝光量与 GBS32 接近，但 optimizer 更新次数减少约 8 倍，因此训练轨迹不会相同。单次 microbatch 从 4 增至 8 会提高每 GPU 激活显存；梯度累积逐个执行 microbatch，不会同时保留四份激活。能否在目标 GPU 上容纳 microbatch 8 仍须以正式作业的峰值显存和日志验证。其他明确差异为 HTSAT 架构、在线解码、过滤后的数据混合与原始 LibriTTS 音质。
 
@@ -117,7 +118,7 @@ GBS256 是相对于 Mizar Stage 1 GBS32 的 batch-size 消融，不是官方 bat
 ```bash
 bash run_mizar_s1_gbs256_5090.sh \
   --stage-workers 4 \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v2
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1
 ```
 
 本路线入口仅提交 formal，不接受 smoke 参数，也不读取历史 GBS32 smoke 或 checkpoint。仍记录本次配置、权重 SHA256 和软件版本，核对数据映射、tokenizer、参数组、精度、HTSAT 冻结和 staging 身份。`--stage-start-steps` 已移除；`--index-cache-root DIR` 可指定共享索引缓存根目录，`--stage-workers N` 仅控制 I/O 并发。默认缓存位于 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/index_cache/`。
@@ -144,7 +145,7 @@ trainer 启动后，每来源 1 行通过训练数据加载器在线解码并经
 
 首次索引耗时记录在共享 `index_report.json.preparation_seconds`；GPU 节点加载索引和音频复制耗时写入 `staging_report.json.phase_seconds`，不会把 CPU 索引准备时间记为 GPU 训练时间。
 
-formal 在 2,561 / 5,122 / 7,683 / 10,244 / 12,805 / 15,366 步保存，最终文件为 `formal/checkpoints/model--epo-3.ckpt`。
+formal 在 2,886 / 5,771 / 8,656 / 11,542 / 14,428 / 17,313 步保存，最终文件为 `formal/checkpoints/model--epo-3.ckpt`。
 
 这不是全量音频解码审计；未抽到的坏文件仍可能在正式训练中暴露。训练期间解码失败会带原始行、来源和路径中止，不会默默跳过。
 
@@ -158,17 +159,17 @@ formal 在 2,561 / 5,122 / 7,683 / 10,244 / 12,805 / 15,366 步保存，最终�
 RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256 bash run_mizar_s1_mmau_eval_5090.sh
 ```
 
-自动选取 `outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/formal/checkpoints/model--step-15366.ckpt` 及同 run 的 `runtime.json`，从本路线导入模型、fixed20 和 tokenizer 实现。校验 `8×8×4`、step 15366 和累积 loss 标识；合同/源码 SHA、资产与 strict state_dict 仍须一致。无需恢复训练 staging 或重新训练。
+自动选取 `outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/formal/checkpoints/model--step-17313.ckpt` 及同 run 的 `runtime.json`，从本路线导入模型、fixed20 和 tokenizer 实现。校验 `8×8×4`、step 17313 和累积 loss 标识；合同/源码 SHA、资产与 strict state_dict 仍须一致。无需恢复训练 staging 或重新训练。
 
 维持原 GBS32 评测协议：一张 5090，完整 1,000 行，FP32、TF32 关闭、确定性 greedy，固定 515-token prefix 后生成，最多 300 new tokens，遇 EOS 停止，完整文本原样传入 MMAU 官方 scorer。
 
-默认输出目录为 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/eval/mmau_test_mini_step15366`；需要重试新目录时可用 `RSMOL_MMAU_OUTPUT_DIR` 覆盖。
+默认输出目录为 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/eval/mmau_test_mini_step17313`；需要重试新目录时可用 `RSMOL_MMAU_OUTPUT_DIR` 覆盖。
 
 官方评测完成后，在登录节点执行独立标签重评分：
 
 ```bash
 python scripts/rescore_mmau_mellow_author_reply.py \
-  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/eval/mmau_test_mini_step15366/raw_generations.jsonl \
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/eval/mmau_test_mini_step17313/raw_generations.jsonl \
   --expected-rows 1000
 ```
 

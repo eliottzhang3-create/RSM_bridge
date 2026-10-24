@@ -70,19 +70,19 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
 
     def test_gbs256_checkpoint_contract_is_selectable(self):
         args = self.module.parse_args([
-            "--benchmark", "mmau", "--expected-step", "15366",
+            "--benchmark", "mmau", "--expected-step", "17313",
             "--expected-geometry", "8,8,4",
         ])
-        self.assertEqual(args.expected_step, 15366)
+        self.assertEqual(args.expected_step, 17313)
         self.assertEqual(args.expected_geometry, (8, 8, 4))
-        self.assertIn("mmau_test_mini_step15366", str(args.output_dir))
+        self.assertIn("mmau_test_mini_step17313", str(args.output_dir))
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "artifact"
             source.touch()
             for key in ("checkpoint", "runtime_config", "metadata_json", "parquet", "evaluation_script"):
                 setattr(args, key, source)
             identity = self.module._identity(args, "model_output")
-        self.assertEqual(identity["expected_step"], 15366)
+        self.assertEqual(identity["expected_step"], 17313)
         self.assertEqual(identity["expected_geometry"], [8, 8, 4])
 
     def checkpoint_fixture(self, variant):
@@ -91,7 +91,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
         route = load_module("test_contract_" + variant, ROOT / "code/RSmol" /
                             "mellow_official_training_c8204d8_adamw_cosine" / folder / "contract.py")
         contract = route.semantic_contract({
-            "rows": 1311334, "source_rows": route.SOURCE_COUNTS,
+            "rows": (1477492 if variant == "gbs256" else 1311334), "source_rows": route.SOURCE_COUNTS,
             "rows_canonical_sha256": "manifest", "mapping_sha256": "mapping",
         }, "text-model", "htsat")
         identity = route.digest(contract)
@@ -110,7 +110,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
 
     def test_both_checkpoint_schemas_validate_and_cross_route_use_fails(self):
         for variant, geometry, step in (("gbs32", (8, 4, 1), 122937),
-                                        ("gbs256", (8, 8, 4), 15366)):
+                                        ("gbs256", (8, 8, 4), 17313)):
             with self.subTest(variant=variant):
                 saved, runtime, route = self.checkpoint_fixture(variant)
                 contract = self.runtime.validate_checkpoint(saved, runtime, route, step, geometry)
@@ -128,13 +128,13 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
         saved, runtime, route = self.checkpoint_fixture("gbs256")
         with patch.object(route, "code_digest", return_value="different-source"):
             with self.assertRaisesRegex(ValueError, "training source differs"):
-                self.runtime.validate_checkpoint(saved, runtime, route, 15366, (8, 8, 4))
+                self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
         with self.assertRaisesRegex(ValueError, "runtime.json does not belong"):
             self.runtime.validate_checkpoint(saved, {**runtime, "contract_sha256": "other"},
-                                             route, 15366, (8, 8, 4))
+                                             route, 17313, (8, 8, 4))
         saved["loss_reduction"] = "rank_local_token_mean_then_DDP_mean"
         with self.assertRaisesRegex(ValueError, "training loss contract mismatch"):
-            self.runtime.validate_checkpoint(saved, runtime, route, 15366, (8, 8, 4))
+            self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
 
     def test_scorer_key_is_taken_from_official_script(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -207,7 +207,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             self.assertIn("model--step-122937.ckpt", content)
             self.assertIn("vc submit", content)
         self.assertIn("RSMOL_MIZAR_S1_EVAL_VARIANT", mmau_submit)
-        self.assertIn("model--step-15366.ckpt", mmau_submit)
+        self.assertIn("model--step-17313.ckpt", mmau_submit)
         self.assertIn("--expected-geometry", mmau_submit)
         self.assertIn("conda activate mellow_c8204d8", inner)
 
@@ -234,7 +234,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                          if not key.startswith("RSMOL_")}
             for variant, run, step, geometry in (
                 ("gbs32", "mizar_s1_htsat_5090/formal_async_v3", "122937", "8,4,1"),
-                ("gbs256", "mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3", "15366", "8,8,4"),
+                ("gbs256", "mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1", "17313", "8,8,4"),
             ):
                 with self.subTest(variant=variant):
                     capture = root / f"{variant}.args"

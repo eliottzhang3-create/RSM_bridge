@@ -14,15 +14,15 @@ import stage_data
 
 class MizarS1Gbs256Tests(unittest.TestCase):
     def test_geometry_matches_effective_batch_and_epoch_tail(self):
-        result = contract.geometry(1311334)
+        result = contract.geometry(1477492)
         self.assertEqual(contract.ROUTE, "htsat_mizar_s1_fixed20_gbs256_v1")
         self.assertEqual((contract.WORLD_SIZE, contract.BATCH_SIZE, contract.ACCUMULATION_STEPS), (8, 8, 4))
         self.assertEqual(contract.GLOBAL_BATCH_SIZE, 256)
         self.assertEqual(contract.RANK_UPDATE_SAMPLES, 32)
-        self.assertEqual(result["steps_per_epoch"], 5122)
-        self.assertEqual(result["total_steps"], 15366)
-        self.assertEqual(result["warmup_steps"], 768)
-        self.assertEqual(result["dropped_rows_per_epoch"], 102)
+        self.assertEqual(result["steps_per_epoch"], 5771)
+        self.assertEqual(result["total_steps"], 17313)
+        self.assertEqual(result["warmup_steps"], 866)
+        self.assertEqual(result["dropped_rows_per_epoch"], 116)
 
     def test_staging_priorities_cover_each_complete_accumulation_group(self):
         rows = 2073
@@ -53,7 +53,7 @@ class MizarS1Gbs256Tests(unittest.TestCase):
             "audio/prefill-last.wav": {"bytes": 3, "first_batch": 63},
             "audio/next.wav": {"bytes": 4, "first_batch": 64},
         }
-        ordered, initial, budgets = stage_data.staging_plan(files, 5122, 0, 64)
+        ordered, initial, budgets = stage_data.staging_plan(files, 5771, 0, 64)
         self.assertEqual(initial, 64)
         self.assertEqual([name for name, _ in ordered], [
             "audio/probe.wav", "audio/first.wav", "audio/prefill-last.wav", "audio/next.wav"])
@@ -85,6 +85,25 @@ class MizarS1Gbs256Tests(unittest.TestCase):
         self.assertIn('choices=("formal",)', config)
         self.assertNotIn("smoke-report", launcher + runner + config)
         self.assertNotIn("smoke-then-formal", launcher + runner)
+
+    def test_hybrid_manifest_and_mapping_are_the_active_inputs(self):
+        launcher = (ROOT / "code/RSmol/run_mizar_s1_gbs256_5090.sh").read_text(encoding="utf-8")
+        runner = (ROUTE / "run.sh").read_text(encoding="utf-8")
+        expected_manifest = "/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json"
+        expected_audit = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_20261024_170403/resolved_paths.tsv"
+        for source in (launcher, runner):
+            self.assertIn(expected_manifest, source)
+            self.assertNotIn("s1_stage1_filtered.json", source)
+        self.assertIn(expected_audit, launcher)
+        self.assertNotIn("mizar_s1_audio_audit_audiocaps_csv_retry1", launcher)
+
+    def test_hybrid_sources_are_allowed_by_raw_reference_contract(self):
+        self.assertEqual(contract.raw_references(
+            {"source_dataset": "MusicCaps", "audio_path": "musiccaps_audios/a.wav"}),
+            ("MusicCaps", [("audio_path", "musiccaps_audios/a.wav")]))
+        self.assertEqual(contract.raw_references(
+            {"source_dataset": "SpeechCraft", "audio_path": "libritts_r_audios/train-other-500/a.wav"}),
+            ("SpeechCraft", [("audio_path", "libritts_r_audios/train-other-500/a.wav")]))
 
 
 if __name__ == "__main__":

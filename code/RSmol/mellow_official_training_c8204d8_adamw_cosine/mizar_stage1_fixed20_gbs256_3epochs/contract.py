@@ -18,8 +18,8 @@ PREFIX_TOKENS = AUDIO_TOKENS + 1 + PROMPT_TOKENS
 PAD_TOKEN, SEPARATOR_TOKEN_ID, EOS_TOKEN_ID = "!", 0, 0
 SOURCE_COUNTS = {
     "reasonaqa_oneaudio": 756968, "AudioCaps": 113844, "Clotho": 4798,
-    "CompA-R": 249161, "LP-MusicCaps-MTT": 19632,
-    "SpeechCraft": 124790, "TACOS": 42141,
+    "MusicCaps": 3221, "CompA-R": 249161, "LP-MusicCaps-MTT": 19632,
+    "SpeechCraft": 287727, "TACOS": 42141,
 }
 
 
@@ -149,8 +149,6 @@ def raw_references(row):
     raw = str(row.get(field) or "").strip()
     if not raw:
         raise ValueError(f"missing original audio field {field!r} for {source}")
-    if source == "MusicCaps" or "train-other-500" in raw.replace("\\", "/"):
-        raise ValueError("unfiltered MusicCaps / train-other-500 row in fixed manifest")
     refs = [(field, raw)]
     second = str(row.get("filepath2_original") or row.get("audio_path2") or "").strip()
     if second:

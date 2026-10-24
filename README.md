@@ -2,7 +2,7 @@
 
 ## 2026-10-24：扩展 Mizar S1 音频范围后的完整 CPU 审计
 
-当前数据准备重新从原始 `/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1.json` 出发，**MusicCaps 和 SpeechCraft train-other-500 均纳入使用范围**。这项更新只准备新的审计，不修改现有训练使用的 `s1_stage1_filtered.json`、旧审计结果或训练入口；下面 2026-10-21 的过滤范围仍描述旧训练产物。
+当前数据准备重新从原始 `/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1.json` 出发，**MusicCaps 和 SpeechCraft train-other-500 均纳入使用范围**。hybrid manifest 现已接入 GBS256 训练入口；旧的 `s1_stage1_filtered.json` 和旧审计 TSV 不再用于该路线，下面历史段落保留旧实验记录。
 
 新增 `code/RSmol/scripts/mizar_s1_audio_mapping_s2_hybrid.json`，保留既有各来源映射。AudioMCQ AudioCaps 继续用 `audiocaps_v2` CSV 校验 YouTube ID/start-time，优先复用原 `audiocaps_v2` 文件，只在缺失时查补充 `data/AudioCaps`。MusicCaps 继续通过 `data/AudioMCQ/audio_mapping.s2.jsonl` 的精确原始 key 和实际文件名查 `data/MusicCaps`。SpeechCraft 三个 split 改为精确相对路径映射：
 
@@ -44,7 +44,7 @@ fi
 
 ## 2026-10-23：Mizar S1 / GBS256 checkpoint 的 MMAU test-mini 评测
 
-`code/RSmol/run_mizar_s1_mmau_eval_5090.sh` 新增 `RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256` 选择项，默认仍为 GBS32。GBS256 自动选择 `mizar_stage1_fixed20_gbs256_3epochs`、`formal_sharedstart_v3/formal/runtime.json` 和 `model--step-15366.ckpt`，校验训练几何 `8×8×4` 及累积训练的 loss 标识。checkpoint/runtime 合同、源码 SHA、组件资产和模型 strict loading 校验继续执行；不要求训练 staging 目录仍存在。
+`code/RSmol/run_mizar_s1_mmau_eval_5090.sh` 新增 `RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256` 选择项，默认仍为 GBS32。GBS256 自动选择 `mizar_stage1_fixed20_gbs256_3epochs`、`formal_hybrid_gbs256_v1/formal/runtime.json` 和 `model--step-17313.ckpt`，校验训练几何 `8×8×4` 及累积训练的 loss 标识。checkpoint/runtime 合同、源码 SHA、组件资产和模型 strict loading 校验继续执行；不要求训练 staging 目录仍存在。
 
 经 GitHub 同步到远程后，在 `code/RSmol/` 执行：
 
@@ -52,13 +52,13 @@ fi
 RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256 bash run_mizar_s1_mmau_eval_5090.sh
 ```
 
-单卡、完整 1,000 行、确定性 greedy、EOS 停止且最多 300 new tokens，音频读取/重采样/fixed20 和 `129+129+1+256` prefix 与选中训练路线一致。完整生成原样交给 MMAU 官方 scorer。默认结果位于 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/eval/mmau_test_mini_step15366/`。
+单卡、完整 1,000 行、确定性 greedy、EOS 停止且最多 300 new tokens，音频读取/重采样/fixed20 和 `129+129+1+256` prefix 与选中训练路线一致。完整生成原样交给 MMAU 官方 scorer。默认结果位于 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/eval/mmau_test_mini_step17313/`。
 
 官方评测完成后，在登录节点单独重评分，无需 GPU 或重新生成：
 
 ```bash
 python scripts/rescore_mmau_mellow_author_reply.py \
-  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/eval/mmau_test_mini_step15366/raw_generations.jsonl \
+  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/eval/mmau_test_mini_step17313/raw_generations.jsonl \
   --expected-rows 1000
 ```
 

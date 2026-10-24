@@ -35,7 +35,7 @@ def fixture(root):
              "copied_files": 0, "copied_bytes": 0}
     prepared = {"status": "TRAINING_READY", "read_policy": "shared_until_complete",
                 "stage_root": str(root), "async_staging": info, "planned_files": 1, "planned_bytes": 3,
-                "initial_steps": 0, "staging_epoch_steps": 5122, "phase_seconds": {}, "precopy_seconds": 0.}
+                "initial_steps": 0, "staging_epoch_steps": 5771, "phase_seconds": {}, "precopy_seconds": 0.}
     write_json(root / "STAGING.json", state)
     return prepared, state
 
@@ -244,7 +244,7 @@ class SharedStartTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             prepared, _ = fixture(root)
-            prepared.update(mode="formal", rows=1311334, source_rows=SOURCE_COUNTS,
+            prepared.update(mode="formal", rows=1477492, source_rows=SOURCE_COUNTS,
                             rows_canonical_sha256="rows", mapping_sha256="mapping")
             text, htsat = root / "text", root / "htsat"
             text.mkdir()
@@ -259,7 +259,7 @@ class SharedStartTests(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()):
                 write_config.main()
             config = json.loads(output.read_text())
-            self.assertEqual(config["max_optimizer_steps"], 15366)
+            self.assertEqual(config["max_optimizer_steps"], 17313)
             self.assertEqual(config["staging"]["initial_steps"], 0)
             self.assertEqual(config["staging"]["read_policy"], "shared_until_complete")
 

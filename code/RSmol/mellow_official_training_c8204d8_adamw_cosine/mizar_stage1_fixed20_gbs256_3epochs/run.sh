@@ -10,7 +10,7 @@ HTSAT_ROOT=$(readlink -f "$6")
 PREPARED_INDEX=$7
 STAGE_WORKERS=${8:-4}
 ROUTE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-MANIFEST=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_filtered.json
+MANIFEST=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json
 [[ "$MODE" == formal ]] || { echo "this route runs formal training only" >&2; exit 2; }
 CONDA_BASE=${MELLOW_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3}
 source "$CONDA_BASE/etc/profile.d/conda.sh"
@@ -75,7 +75,7 @@ import json
 import sys
 from pathlib import Path
 report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-expected = 15366
+expected = 17313
 if report.get("status") != "PASS" or report.get("optimizer_steps") != expected:
     raise SystemExit("training report did not confirm all required optimizer updates")
 print(f"[{sys.argv[2]}] PASS: {expected} optimizer updates; report={sys.argv[1]}")

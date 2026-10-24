@@ -18,12 +18,12 @@ case "$VARIANT" in
     DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/formal_async_v3/eval/mmau_test_mini_step122937"
     ;;
   gbs256)
-    DEFAULT_RUN_ROOT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/formal"
+    DEFAULT_RUN_ROOT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/formal"
     DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs"
-    DEFAULT_CHECKPOINT_NAME="model--step-15366.ckpt"
-    EXPECTED_STEP="15366"
+    DEFAULT_CHECKPOINT_NAME="model--step-17313.ckpt"
+    EXPECTED_STEP="17313"
     EXPECTED_GEOMETRY="8,8,4"
-    DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_sharedstart_v3/eval/mmau_test_mini_step15366"
+    DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/eval/mmau_test_mini_step17313"
     ;;
   *)
     echo "unsupported RSMOL_MIZAR_S1_EVAL_VARIANT=$VARIANT (use gbs32 or gbs256)" >&2

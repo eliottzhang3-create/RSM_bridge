@@ -66,7 +66,7 @@ def main():
               "intentional_differences": ["HTSAT(129+129) plus existing c2l/projection instead of CED freq_merge_126",
                    "shared raw audio decoded online, collective switch to staged bytes after full copy; no CED cache",
                    "8 GPUs x microbatch8 x accumulation4; global batch256 ablation",
-                   "filtered 1311334-row mixture; original LibriTTS clean100/360 replaces LibriTTS-R"]}
+                   "hybrid 1477492-row mixture; MusicCaps and all SpeechCraft splits retained; LibriTTS clean100/360 plus LibriTTS-R train-other-500"]}
     write_json(args.output, config)
     print(json.dumps({"config": str(args.output), "mode": args.mode, "contract_sha256": contract_sha,
                       "geometry": contract["geometry"]}), flush=True)

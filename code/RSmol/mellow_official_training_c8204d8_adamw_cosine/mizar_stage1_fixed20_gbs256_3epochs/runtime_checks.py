@@ -24,12 +24,12 @@ from train import answer_loss
 
 class RuntimeChecks(unittest.TestCase):
     def test_gbs256_optimizer_geometry(self):
-        actual = geometry(1311334)
+        actual = geometry(1477492)
         self.assertEqual((WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, GLOBAL_BATCH_SIZE), (8, 8, 4, 256))
-        self.assertEqual(actual["steps_per_epoch"], 5122)
-        self.assertEqual(actual["total_steps"], 15366)
-        self.assertEqual(actual["warmup_steps"], 768)
-        self.assertEqual(actual["dropped_rows_per_epoch"], 102)
+        self.assertEqual(actual["steps_per_epoch"], 5771)
+        self.assertEqual(actual["total_steps"], 17313)
+        self.assertEqual(actual["warmup_steps"], 866)
+        self.assertEqual(actual["dropped_rows_per_epoch"], 116)
 
     def test_fixed20_single_order_and_right_padding(self):
         self_test()
