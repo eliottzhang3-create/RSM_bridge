@@ -1,5 +1,6 @@
 """CPU-only contract checks for the isolated recursive MeSH Mizar route."""
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -7,6 +8,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,26 @@ spec.loader.exec_module(contract)
 
 def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class ExistingBangTokenizer:
+    """Match the remote checkpoint's existing token and registration result."""
+
+    eos_token_id = 0
+    pad_token = "<|endoftext|>"
+    pad_token_id = 0
+    bang_id = 17
+
+    def __len__(self):
+        return 49152
+
+    def add_special_tokens(self, mapping):
+        self.pad_token = mapping["pad_token"]
+        self.pad_token_id = self.bang_id
+        return 1
+
+    def encode(self, text, add_special_tokens=False):
+        return [self.bang_id] if text == "!" else [0]
 
 
 class RecursiveMizarRouteTests(unittest.TestCase):
@@ -149,6 +172,107 @@ class RecursiveMizarRouteTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "aliases EOS/SEP"):
             contract.validate_checkpoint_tokenizer(InvalidTokenizer(), 49152)
+
+    def test_existing_bang_special_registration_can_return_one(self):
+        audit = contract.validate_checkpoint_tokenizer(ExistingBangTokenizer(), 49152)
+        self.assertEqual(audit["added_tokens"], 1)
+        self.assertEqual(audit["vocabulary_growth"], 0)
+        self.assertEqual(audit["source_vocab_rows"], audit["tokenizer_vocab_rows"])
+        self.assertEqual(audit["source_mizar_pad_ids"], audit["mizar_pad_ids"])
+        self.assertEqual(audit["mizar_pad_id"], 17)
+        self.assertEqual(audit["eos_id"], 0)
+        self.assertTrue(audit["existing_pad_contract"])
+
+    def test_source_tokenizer_still_rejects_actual_vocabulary_growth(self):
+        class GrowingTokenizer:
+            eos_token_id = 0
+            pad_token = "<|endoftext|>"
+            pad_token_id = 0
+            rows = 49152
+
+            def __len__(self):
+                return self.rows
+
+            def add_special_tokens(self, mapping):
+                self.pad_token = mapping["pad_token"]
+                self.pad_token_id = self.rows
+                self.rows += 1
+                return 1
+
+            def encode(self, text, add_special_tokens=False):
+                return [self.pad_token_id] if text == "!" else [0]
+
+        with self.assertRaisesRegex(ValueError, "changed vocabulary rows from 49152 to 49153"):
+            contract.validate_checkpoint_tokenizer(GrowingTokenizer(), 49152)
+
+    def test_source_tokenizer_rejects_changed_bang_id_without_vocabulary_growth(self):
+        class ChangingTokenizer(ExistingBangTokenizer):
+            def add_special_tokens(self, mapping):
+                self.bang_id = 18
+                return super().add_special_tokens(mapping)
+
+        with self.assertRaisesRegex(ValueError, "changed '!' token IDs from \\[17\\] to \\[18\\]"):
+            contract.validate_checkpoint_tokenizer(ChangingTokenizer(), 49152)
+
+    def test_startup_tokenizer_audit_uses_resolved_model_vocab_size(self):
+        # Execute the real startup helper/call without importing the GPU stack.
+        tree = ast.parse((ROUTE / "train.py").read_text(encoding="utf-8"))
+        helper = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                      and node.name == "audit_checkpoint_tokenizer")
+        train = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "train")
+        assignment = next(node for node in train.body if isinstance(node, ast.Assign)
+                          and any(isinstance(target, ast.Name) and target.id == "source_tokenizer_audit"
+                                  for target in node.targets))
+        startup = compile(ast.Module(body=[helper, assignment], type_ignores=[]), str(ROUTE / "train.py"), "exec")
+        for vocab_size in (49152, 49151):
+            with self.subTest(model_vocab_size=vocab_size):
+                loader = Mock(return_value=ExistingBangTokenizer())
+                scope = {
+                    "AutoTokenizer": SimpleNamespace(from_pretrained=loader),
+                    "validate_checkpoint_tokenizer": contract.validate_checkpoint_tokenizer,
+                    "contract": {"text_model_dir": "/remote/mesh",
+                                 "recursive_text_checkpoint": {"config": {"vocab_size": vocab_size}}},
+                }
+                if vocab_size == 49152:
+                    exec(startup, scope)
+                    self.assertEqual(scope["source_tokenizer_audit"]["model_vocab_size"], vocab_size)
+                else:
+                    with self.assertRaisesRegex(ValueError, "model vocab_size=49151"):
+                        exec(startup, scope)
+                loader.assert_called_once_with("/remote/mesh", local_files_only=True)
+
+    def test_startup_logs_serialize_both_tokenizer_audit_levels(self):
+        tokenizer = ExistingBangTokenizer()
+        source_audit = contract.validate_checkpoint_tokenizer(tokenizer, 49152)
+        runtime_audit = contract.validate_tokenizer_contract(tokenizer, 17, 49152)
+        runtime_audit.update(ignore_index=17, checkpoint_source=source_audit)
+        tree = ast.parse((ROUTE / "train.py").read_text(encoding="utf-8"))
+        train = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "train")
+        events = {}
+        for node in ast.walk(train):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "print" and node.args):
+                continue
+            expression = node.args[0]
+            if not (isinstance(expression, ast.Call) and expression.args
+                    and isinstance(expression.args[0], ast.Dict)):
+                continue
+            event_values = [value.value for key, value in zip(expression.args[0].keys, expression.args[0].values)
+                            if isinstance(key, ast.Constant) and key.value == "event"
+                            and isinstance(value, ast.Constant)]
+            if not event_values or event_values[0] not in {"CHECKPOINT_TOKENIZER_PASS", "PREFLIGHT_PASS"}:
+                continue
+            payload = eval(compile(ast.Expression(expression), str(ROUTE / "train.py"), "eval"), {
+                "json": json, "geometry": {}, "tokenizer_audit": runtime_audit,
+                "source_tokenizer_audit": source_audit, "audit": {"initial_optimizer_lrs": []},
+            })
+            events[event_values[0]] = json.loads(payload)
+        self.assertEqual(set(events), {"CHECKPOINT_TOKENIZER_PASS", "PREFLIGHT_PASS"})
+        self.assertEqual(events["CHECKPOINT_TOKENIZER_PASS"]["tokenizer"], source_audit)
+        self.assertEqual(events["PREFLIGHT_PASS"]["checkpoint_tokenizer"], source_audit)
+        self.assertEqual(events["PREFLIGHT_PASS"]["tokenizer"]["embedding_rows"], 49152)
 
 
 if __name__ == "__main__":

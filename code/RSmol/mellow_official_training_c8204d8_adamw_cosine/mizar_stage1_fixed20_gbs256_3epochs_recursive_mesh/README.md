@@ -66,6 +66,18 @@ uses `padding='max_length'` after appending the EOS text. A source checkpoint
 may serialize `<|endoftext|>` as its tokenizer PAD; that metadata is
 overridden by the same Mizar operation and is recorded only for audit.
 
+The remote CPU-only comparison confirmed that the canonical SmolLM2 and
+`checkpoint-009244` token-to-ID dictionaries are exactly equal (SHA256
+`d59adeae1bb1c383e51bcf30fd8ad05a2b82f7e752f72106f0f94c324cdb44b6`).
+In that environment, `add_special_tokens` returns 1 while the tokenizer length
+stays unchanged. This return value must not be treated as vocabulary growth.
+The audit instead compares tokenizer lengths and `!` IDs before/after the
+Mizar assignment, checks the checkpoint's actual `config.vocab_size`, and
+later checks the loaded LM embedding rows. `CHECKPOINT_TOKENIZER_PASS` logs
+the source PAD metadata, API return value, and actual vocabulary growth.
+The earlier tokenizer failures happened before training; the remote CPU check
+does not establish a successful GPU training run.
+
 ## Sequence and optimization
 
 ```text
@@ -114,7 +126,7 @@ From the remote repository's `code/RSmol` directory:
 ```bash
 bash run_mizar_s1_gbs256_recursive_mesh_5090.sh \
   --stage-workers 4 \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_gbs256_v1
+  --output-dir "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_padfix_$(date +%Y%m%d_%H%M%S%N)"
 ```
 
 The wrapper uses the same `pdgpu-5090` container, 32 CPUs, 256G memory and 8

@@ -90,8 +90,13 @@ def validate_checkpoint_tokenizer(tokenizer, model_vocab_size):
     source_rows = len(tokenizer)
     source_pad_id = getattr(tokenizer, "pad_token_id", None)
     source_pad_token = getattr(tokenizer, "pad_token", None)
+    source_encoded_pad = tokenizer.encode(PAD_TOKEN, add_special_tokens=False)
     added_tokens = tokenizer.add_special_tokens({"pad_token": PAD_TOKEN})
     tokenizer_rows = len(tokenizer)
+    # Fast tokenizers can return 1 when registering an existing vocabulary
+    # token as special, while keeping both its ID and vocabulary size intact.
+    # The API return value is diagnostic, not a vocabulary-size delta.
+    vocabulary_growth = tokenizer_rows - source_rows
     # Keep this call identical to AudioTextDataset/Mizar rather than relying
     # on a separately derived token ID.  The no-special-token encoding below
     # separately proves that ``!`` is one existing vocabulary token.
@@ -105,16 +110,20 @@ def validate_checkpoint_tokenizer(tokenizer, model_vocab_size):
         "source": "recursive_checkpoint",
         "source_pad_token": source_pad_token,
         "source_pad_id": source_pad_id,
+        "source_mizar_pad_ids": source_encoded_pad,
         "mizar_pad_token": PAD_TOKEN,
         "mizar_pad_id": pad_id,
         "mizar_pad_ids": encoded_pad,
         "mizar_pad_encoding": pad_encoding,
         "added_tokens": int(added_tokens),
+        "vocabulary_growth": vocabulary_growth,
         "eos_id": eos_id,
         "source_vocab_rows": source_rows,
         "tokenizer_vocab_rows": tokenizer_rows,
         "model_vocab_size": model_vocab_size,
-        "existing_pad_contract": (added_tokens == 0 and encoded_pad == [pad_id]),
+        "existing_pad_contract": (
+            vocabulary_growth == 0 and source_encoded_pad == encoded_pad == [pad_id]
+        ),
     }
     problems = []
     if eos_id != EOS_TOKEN_ID:
@@ -123,9 +132,15 @@ def validate_checkpoint_tokenizer(tokenizer, model_vocab_size):
         problems.append(
             f"tokenizer rows={tokenizer_rows}, model vocab_size={model_vocab_size}"
         )
-    if added_tokens != 0:
+    if vocabulary_growth != 0:
         problems.append(
-            f"Mizar pad assignment added {added_tokens} vocabulary token(s); expected existing {PAD_TOKEN!r}"
+            f"Mizar pad assignment changed vocabulary rows from {source_rows} to {tokenizer_rows}; "
+            f"expected existing {PAD_TOKEN!r} (add_special_tokens returned {added_tokens})"
+        )
+    if source_encoded_pad != encoded_pad:
+        problems.append(
+            f"Mizar pad assignment changed {PAD_TOKEN!r} token IDs from "
+            f"{source_encoded_pad!r} to {encoded_pad!r}"
         )
     if tokenizer.pad_token != PAD_TOKEN:
         problems.append(f"pad_token={tokenizer.pad_token!r}, expected {PAD_TOKEN!r}")

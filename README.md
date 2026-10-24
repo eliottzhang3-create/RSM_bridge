@@ -1,5 +1,11 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-25：Mizar S1 / GBS256 MeSH tokenizer 审计修正
+
+隔离路线 [mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh/README.md) 仅替换 GBS256 母本的文本模型初始化，加载既有 MeSH 文本 `checkpoint-009244`。用户远程 CPU 检查确认：canonical SmolLM2 和该 checkpoint 的完整词表及 token ID 一致，词表 SHA256 均为 `d59adeae1bb1c383e51bcf30fd8ad05a2b82f7e752f72106f0f94c324cdb44b6`；执行 Mizar 的 `add_special_tokens({"pad_token": "!"})` 返回 1，但词表大小不变，并与模型配置一致。此前将返回值误当作新增词表行数的审计已修正；现在检查实际词表大小和 `!` ID 前后不变、checkpoint `config.vocab_size` 及加载后的 embedding 行数。源 tokenizer 的 EOS-as-PAD 元数据由原 Mizar 调用覆盖。
+
+本次只修审计及启动日志，不扩 embedding。固定 padding、`attention_mask=None`、answer-only loss、数据、优化器和正式训练步数保持原路线实现。正式提交入口为 `code/RSmol/run_mizar_s1_gbs256_recursive_mesh_5090.sh`，8 GPU × microbatch 8 × accumulation 4，3 epochs / 17,313 updates；使用新输出目录重新提交。本地 MeSH 审计 13 项、GBS256 母本 7 项、共享读取/后台 staging 11 项，共 31 项 CPU 测试通过。远程 tokenizer CPU 检查已确认兼容，真实 GPU 加载及训练仍待执行，不能把 CPU 结果记为训练 PASS。
+
 ## 2026-10-24：扩展 Mizar S1 音频范围后的完整 CPU 审计
 
 当前数据准备重新从原始 `/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1.json` 出发，**MusicCaps 和 SpeechCraft train-other-500 均纳入使用范围**。hybrid manifest 现已接入 GBS256 训练入口；旧的 `s1_stage1_filtered.json` 和旧审计 TSV 不再用于该路线，下面历史段落保留旧实验记录。

@@ -159,7 +159,7 @@ def inspect_tokenizer(dataset, model):
             "eos_policy": "append before encode/truncate, no forced EOS reinsertion"}
 
 
-def audit_checkpoint_tokenizer(text_model_dir):
+def audit_checkpoint_tokenizer(text_model_dir, model_vocab_size):
     """Audit source metadata before assigning Mizar's ``!`` PAD token.
 
     A recursive checkpoint may serialize EOS (``<|endoftext|>``) as its
@@ -169,7 +169,7 @@ def audit_checkpoint_tokenizer(text_model_dir):
     the audit, but validate the invariants that must survive that override.
     """
     tokenizer = AutoTokenizer.from_pretrained(text_model_dir, local_files_only=True)
-    return validate_checkpoint_tokenizer(tokenizer, len(tokenizer))
+    return validate_checkpoint_tokenizer(tokenizer, model_vocab_size)
 
 
 def probe_sources(model, dataset, prepared, device):
@@ -265,7 +265,13 @@ def train(config, rank, device):
     # but never wraps its forward in autocast, despite its float16 config label.
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
-    source_tokenizer_audit = audit_checkpoint_tokenizer(contract["text_model_dir"])
+    source_tokenizer_audit = audit_checkpoint_tokenizer(
+        contract["text_model_dir"],
+        contract["recursive_text_checkpoint"]["config"]["vocab_size"],
+    )
+    if rank == 0:
+        print(json.dumps({"event": "CHECKPOINT_TOKENIZER_PASS",
+                          "tokenizer": source_tokenizer_audit}), flush=True)
     dataset = AudioTextDataset(prepared["metadata"], prepared["stage_root"], contract["text_model_dir"],
                                read_policy=prepared["read_policy"])
     if len(dataset) != geometry["rows"]:
@@ -338,6 +344,7 @@ def train(config, rank, device):
                           "tokenizer": {key: tokenizer_audit[key] for key in
                                         ("pad_id", "sep_id", "eos_id", "ignore_index",
                                          "tokenizer_vocab_rows", "embedding_rows")},
+                          "checkpoint_tokenizer": source_tokenizer_audit,
                           "optimizer_lrs": audit["initial_optimizer_lrs"]}), flush=True)
     sampler = CustomDistributedSampler(dataset, WORLD_SIZE, rank, shuffle=True, seed=SEED, drop_last=True)
     max_steps = config["max_optimizer_steps"]
