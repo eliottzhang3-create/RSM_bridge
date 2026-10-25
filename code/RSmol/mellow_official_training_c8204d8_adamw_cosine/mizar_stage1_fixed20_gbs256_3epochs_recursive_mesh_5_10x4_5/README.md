@@ -1,8 +1,10 @@
-# HTSAT / 5-10x4-5 MeSH Mizar S1 GBS256
+# HTSAT / 5-10x4-5 MeSH Mizar S1 GBS128
 
 This route is an isolated copy of the Mizar Stage 1 fixed20 GBS256 recursive
-MeSH trainer. It changes only the initialized recursive text backbone from the
-5-10x2-5 model to the 5-10x4-5 model. Data selection, online audio decoding,
+MeSH trainer. It replaces the initialized recursive text backbone from the
+5-10x2-5 model with the 5-10x4-5 model. After the GBS256 run ran out of GPU
+memory, the per-rank microbatch was reduced from 8 to 4 while accumulation
+remains 4, giving GBS128. Data selection, online audio decoding,
 fixed20 processing, staging, sequence layout, answer loss, optimizer,
 scheduler, GradNorm, checkpointing, and resume semantics remain aligned with
 the Mizar mother route.
@@ -25,9 +27,20 @@ The route uses the audited 1,477,492-row mixture, including MusicCaps and all
 SpeechCraft splits. Raw audio bytes are staged while decoding, resampling,
 fixed20 cropping/padding and HTSAT processing remain online.
 
-The fixed geometry is 8 GPUs, microbatch 8 per rank, accumulation 4, global
-batch 256, and 3 epochs: 5,771 optimizer updates per epoch, 17,313 total,
-866 warmup updates, and 116 dropped rows per epoch.
+The fixed geometry is 8 GPUs, microbatch 4 per rank, accumulation 4, global
+batch 128, and 3 epochs: 11,542 optimizer updates per epoch, 34,626 total,
+1,731 warmup updates, and 116 dropped rows per epoch. Reducing the microbatch
+reduces activation memory per forward/backward pass; reducing accumulation
+alone would keep the same microbatch and would not address that peak. Model
+parameters and optimizer-state memory are unchanged, so total peak memory
+is not expected to halve. Learning-rate values and the 5% warmup/cosine rule
+are unchanged; the schedule is recalculated for the new optimizer-step count.
+
+The route directory and wrapper filename retain their historical `gbs256`
+names for compatibility. Runtime/checkpoint identity, job name, logs, index
+cache and default output directory now identify GBS128. Start in a new output
+directory from the same text checkpoint; GBS256 audio-training checkpoints
+cannot be resumed under the changed batch geometry and schedule.
 
 ## 5-10x4-5 text contract
 
@@ -88,17 +101,28 @@ GradNorm                  = initial_l2 1, initial_max 10, overdrive 2.5, momentu
 ## Remote preflight and formal submission
 
 After synchronizing the repository to Linux, run the route's CPU-only static
-tests and confirm that the remote checkpoint/config/tokenizer files exist. The
-wrapper performs the prepared-index audit before submitting one formal job.
+tests and confirm that the remote checkpoint/config/tokenizer files exist. Run
+the tests from the repository root because the test files live in `tests/`;
+the training wrapper itself is submitted from `code/RSmol`.
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+python -m unittest discover -s tests \
+  -p 'test_mizar_s1_recursive_mesh_5_10x4_5_static.py' -v
+```
+
+The wrapper performs the prepared-index audit before submitting one formal job.
 From the remote repository's `code/RSmol` directory:
 
 ```bash
 bash run_mizar_s1_gbs256_recursive_mesh_5_10x4_5_5090.sh \
   --stage-workers 4 \
-  --output-dir "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_mesh_5_10x4_5_5090/formal_$(date +%Y%m%d_%H%M%S%N)"
+  --output-dir "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_$(date +%Y%m%d_%H%M%S%N)"
 ```
 
-The wrapper uses `pdgpu-5090`, 32 CPUs, 256G memory and 8 GPUs. It calls the
+The wrapper uses the current remote allocation: `pdgpu-3090`, 64 CPUs, 256G
+memory and 8 GPUs. Its shortened job name stays below the 60-character limit.
+It calls the
 isolated `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5/run.sh`
 route and creates a unique x4 staging directory. The expected final checkpoint
 is:
@@ -107,7 +131,8 @@ is:
 <output-dir>/formal/checkpoints/model--epo-3.ckpt
 ```
 
-Intermediate checkpoints are written at steps 2,886, 5,771, 8,656, 11,542,
-14,428 and 17,313. The route identity is
-`htsat_mizar_s1_fixed20_gbs256_recursive_mesh_5_10x4_5_v1`; x2 and old
-formal30 checkpoints are rejected by the strict contract and resume checks.
+Intermediate checkpoints are written at steps 5,771, 11,542, 17,313, 23,084,
+28,855 and 34,626. The route identity is
+`htsat_mizar_s1_fixed20_gbs128_recursive_mesh_5_10x4_5_v1`; x2, previous x4
+GBS256 and old formal30 checkpoints are rejected by the strict contract and
+resume checks.

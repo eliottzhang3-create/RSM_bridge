@@ -1,15 +1,20 @@
 """CPU-only contract checks for the isolated recursive MeSH Mizar route."""
 
+import argparse
 import ast
 import hashlib
 import importlib.util
+import io
 import json
+import re
 import sys
 import tempfile
 import unittest
+from array import array
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,15 +54,20 @@ class ExistingBangTokenizer:
 
 class RecursiveMizarRouteTests(unittest.TestCase):
     def test_route_identity_and_geometry(self):
-        self.assertEqual(contract.ROUTE, "htsat_mizar_s1_fixed20_gbs256_recursive_mesh_5_10x4_5_v1")
+        self.assertEqual(contract.ROUTE, "htsat_mizar_s1_fixed20_gbs128_recursive_mesh_5_10x4_5_v1")
         self.assertEqual(contract.TEXT_MODEL_CONTRACT, "logical_50_physical_20_5_10x4_5")
         self.assertEqual(tuple(contract.TEXT_MODEL_SCHEDULE), tuple(
             list(range(5)) + list(range(5, 15)) * 4 + list(range(15, 20))))
         geometry = contract.geometry(1477492)
         self.assertEqual(
+            (geometry["world_size"], geometry["microbatch"],
+             geometry["gradient_accumulation_steps"], geometry["global_batch_size"]),
+            (8, 4, 4, 128),
+        )
+        self.assertEqual(
             (geometry["steps_per_epoch"], geometry["total_steps"],
              geometry["warmup_steps"], geometry["dropped_rows_per_epoch"]),
-            (5771, 17313, 866, 116),
+            (11542, 34626, 1731, 116),
         )
 
     def test_optimizer_and_sequence_contract_are_baseline_values(self):
@@ -99,10 +109,95 @@ class RecursiveMizarRouteTests(unittest.TestCase):
     def test_outer_launcher_isolated_and_uses_remote_mesh_checkpoint(self):
         source = OUTER.read_text(encoding="utf-8")
         self.assertIn("stage4_5_10x4_5_mesh/formal_2epochs_18488steps_20261007_004959_3090_v1/checkpoint-018488", source)
-        self.assertIn("mizar_s1_htsat_gbs256_recursive_mesh_5_10x4_5_5090", source)
+        self.assertIn("mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090", source)
         self.assertIn("mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5/run.sh", source)
-        self.assertIn("-c 32 -m 256G -g 8 -n 1", source)
+        self.assertIn("-p pdgpu-3090", source)
+        self.assertRegex(source, r"-c (?:32|64) -m 256G -g 8 -n 1")
+        self.assertIn("8 GPUs x microbatch4 x accumulation4", source)
+        job_name = re.search(r'-j "([^"]+)"', source).group(1)
+        self.assertIn("gbs128", job_name)
+        self.assertIn("date +%Y%m%d_%H%M%S%N", source)
+        self.assertLessEqual(len(job_name.replace("${RUN_TAG}", "20261026_123456123456789")), 60)
         self.assertNotIn("SmolLM2", source)
+
+    def test_generated_formal_config_uses_gbs128_schedule(self):
+        tree = ast.parse((ROUTE / "write_config.py").read_text(encoding="utf-8"))
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "main")
+        scope = {
+            "argparse": argparse, "json": json, "Path": Path,
+            "ROUTE": contract.ROUTE, "digest": contract.digest,
+            "semantic_contract": contract.semantic_contract, "write_json": contract.write_json,
+            "StagingGate": lambda prepared: SimpleNamespace(info=None),
+            "recursive_checkpoint_contract": Mock(return_value={"fixture": True}),
+            "asset_identity": Mock(return_value={"fixture": True}),
+            "importlib": SimpleNamespace(metadata=SimpleNamespace(version=lambda name: "fixture")),
+            "platform": SimpleNamespace(python_version=lambda: "fixture"),
+        }
+        exec(compile(ast.Module(body=[main], type_ignores=[]), str(ROUTE / "write_config.py"), "exec"), scope)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared = root / "prepared.json"
+            prepared.write_text(json.dumps({
+                "mode": "formal", "rows": 1477492, "source_rows": contract.SOURCE_COUNTS,
+                "rows_canonical_sha256": "rows", "mapping_sha256": "mapping",
+            }), encoding="utf-8")
+            output = root / "runtime.json"
+            args = ["write_config.py", "--prepared", str(prepared), "--output", str(output),
+                    "--mode", "formal", "--run-dir", str(root),
+                    "--text-model-dir", str(root / "text"), "--htsat-root", str(root / "htsat")]
+            with patch.object(sys, "argv", args), patch("sys.stdout", new=io.StringIO()):
+                scope["main"]()
+            config = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(config["route"], contract.ROUTE)
+        self.assertEqual(config["contract"]["geometry"]["microbatch"], 4)
+        self.assertEqual(config["contract"]["geometry"]["global_batch_size"], 128)
+        self.assertEqual(config["contract"]["gradient_accumulation"]["steps"], 4)
+        self.assertEqual(config["max_optimizer_steps"], 34626)
+        self.assertEqual(config["checkpoint_steps"], [5771, 11542, 17313, 23084, 28855, 34626])
+        self.assertEqual(config["contract_sha256"], contract.digest(config["contract"]))
+        self.assertEqual(config["resume_checkpoint"], "")
+
+    def test_completion_check_accepts_new_schedule_and_rejects_old_schedule(self):
+        source = (ROUTE / "run.sh").read_text(encoding="utf-8")
+        completion = source.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        code = compile(completion, str(ROUTE / "run.sh"), "exec")
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "training_report.json"
+            for step, status, passes in ((34626, "PASS", True), (17313, "PASS", False),
+                                         (34626, "FAIL", False)):
+                with self.subTest(step=step, status=status):
+                    report.write_text(json.dumps({"status": status, "optimizer_steps": step}), encoding="utf-8")
+                    with patch.object(sys, "argv", ["-", str(report), "formal"]), \
+                            patch.dict(sys.modules, {"contract": contract}), \
+                            patch("sys.stdout", new=io.StringIO()):
+                        if passes:
+                            exec(code, {})
+                        else:
+                            with self.assertRaises(SystemExit):
+                                exec(code, {})
+
+    def test_staging_rows_follow_reduced_microbatch_and_resume_cursor(self):
+        tree = ast.parse((ROUTE / "stage_data.py").read_text(encoding="utf-8"))
+        planner = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                       and node.name == "epoch_priorities")
+        scope = {"array": array, "data_order": contract.data_order,
+                 "WORLD_SIZE": contract.WORLD_SIZE, "RANK_UPDATE_SAMPLES": contract.RANK_UPDATE_SAMPLES}
+        exec(compile(ast.Module(body=[planner], type_ignores=[]), str(ROUTE / "stage_data.py"), "exec"), scope)
+        rows = 8 * 128 + 25
+        order = contract.data_order(rows)
+        permutation = list(reversed(range(rows)))
+        for start in (0, 3):
+            priorities, first8 = scope["epoch_priorities"](rows, start_batch=start, permutation=permutation)
+            expected_counts = {step: 128 for step in range(start, 8)}
+            expected_counts[8] = 25 + start * 128
+            self.assertEqual(Counter(priorities), expected_counts)
+            for rank in range(8):
+                offset = rank * (rows // 8)
+                self.assertEqual(first8[str(rank)], [order[i] for i in permutation[offset:offset + 128]])
+                for step in range(start, 8):
+                    indices = permutation[offset + step * 16:offset + (step + 1) * 16]
+                    self.assertTrue(all(priorities[order[i]] == step for i in indices))
 
     def test_recursive_checkpoint_contract_rejects_missing_assets(self):
         with self.assertRaises(FileNotFoundError):

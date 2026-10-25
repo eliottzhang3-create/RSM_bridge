@@ -23,12 +23,12 @@ from train import answer_loss
 
 
 class RuntimeChecks(unittest.TestCase):
-    def test_gbs256_optimizer_geometry(self):
+    def test_gbs128_optimizer_geometry(self):
         actual = geometry(1477492)
-        self.assertEqual((WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, GLOBAL_BATCH_SIZE), (8, 8, 4, 256))
-        self.assertEqual(actual["steps_per_epoch"], 5771)
-        self.assertEqual(actual["total_steps"], 17313)
-        self.assertEqual(actual["warmup_steps"], 866)
+        self.assertEqual((WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, GLOBAL_BATCH_SIZE), (8, 4, 4, 128))
+        self.assertEqual(actual["steps_per_epoch"], 11542)
+        self.assertEqual(actual["total_steps"], 34626)
+        self.assertEqual(actual["warmup_steps"], 1731)
         self.assertEqual(actual["dropped_rows_per_epoch"], 116)
 
     def test_fixed20_single_order_and_right_padding(self):
@@ -63,7 +63,8 @@ class RuntimeChecks(unittest.TestCase):
         self.assertEqual(int(mono.count_nonzero()), 0)
 
     def test_sampler_staging_and_consumed_cursor_agree(self):
-        count = 2073  # eight full optimizer updates plus an uneven per-rank tail
+        count = 8 * GLOBAL_BATCH_SIZE + 25  # eight updates plus an uneven per-rank tail
+        per_rank = count // WORLD_SIZE
         order = data_order(count)
         planned = first_optimizer_rows(count)
         priorities, _ = epoch_priorities(count)
@@ -73,14 +74,14 @@ class RuntimeChecks(unittest.TestCase):
             sampler = CustomDistributedSampler(range(count), WORLD_SIZE, rank, seed=SEED, drop_last=True)
             indices = list(sampler)
             self.assertEqual([order[i] for i in indices[:8 * RANK_UPDATE_SAMPLES]], planned[str(rank)])
-            self.assertEqual(indices, permutation[rank * 259:(rank + 1) * 259])
+            self.assertEqual(indices, permutation[rank * per_rank:(rank + 1) * per_rank])
             for cursor, dataset_index in enumerate(indices[:8 * RANK_UPDATE_SAMPLES]):
                 self.assertEqual(priorities[order[dataset_index]], cursor // RANK_UPDATE_SAMPLES)
             sampler.start_index = 3 * RANK_UPDATE_SAMPLES
             self.assertEqual(list(sampler), indices[3 * RANK_UPDATE_SAMPLES:])
-            self.assertEqual(len(sampler), 259 - 3 * RANK_UPDATE_SAMPLES)
+            self.assertEqual(len(sampler), per_rank - 3 * RANK_UPDATE_SAMPLES)
             all_indices.extend(indices)
-        self.assertEqual(len(set(all_indices)), 1032)
+        self.assertEqual(len(set(all_indices)), WORLD_SIZE * per_rank)
         priorities, _ = epoch_priorities(count, epoch=1, start_batch=7)
         for rank in range(WORLD_SIZE):
             sampler = CustomDistributedSampler(range(count), WORLD_SIZE, rank, seed=SEED, drop_last=True)

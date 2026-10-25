@@ -1,5 +1,19 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-26：Mizar S1 / 5-10x4-5 MeSH 因 OOM 调整为 GBS128
+
+现有隔离路线 [mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5/README.md) 在远程 GBS256 运行中发生 OOM，按用户要求改为 **8 GPU × microbatch 4 × accumulation 4 = GBS128**。减半 microbatch 以降低单次前向/反向激活显存；仅减半 accumulation 不能降低原 microbatch 的激活峰值。总显存还包含参数与优化器状态，不能保证总峰值减半。
+
+文本初始化仍为 `stage4_5_10x4_5_mesh/formal_2epochs_18488steps_20261007_004959_3090_v1/checkpoint-018488`，4 loops / 7 memory slots；HTSAT、fixed20、数据、815-token 序列、FP32、answer-only loss、AdamW 各组 LR 和 GradNorm 均保留。3 epochs 重新计算为 **11,542 updates/epoch、34,626 total、1,731 warmup**，每 epoch 仍丢弃 116 行。保存步骤和训练结束校验同步使用新总步数。
+
+目录和提交脚本保留历史 `gbs256` 文件名；runtime/checkpoint route 已改为 `htsat_mizar_s1_fixed20_gbs128_recursive_mesh_5_10x4_5_v1`，输出/日志改为 GBS128。提交脚本同步远程实际资源 `pdgpu-3090 / 64 CPU / 256G / 8 GPU`，并缩短 job 名以满足 60 位上限。经 GitHub 同步后，在 `code/RSmol/` 执行：
+
+```bash
+bash run_mizar_s1_gbs256_recursive_mesh_5_10x4_5_5090.sh --stage-workers 4
+```
+
+默认写入新的 `outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_<时间戳>/`，从指定文本 checkpoint 重新初始化，不使用 OOM 任务的音频 checkpoint resume。真实 GPU 显存和训练仍需远程运行确认。
+
 ## 2026-10-25：Mizar S1 / GBS256 非 MeSH 5+10×2+5 文本初始化消融
 
 新增隔离路线 [mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5/README.md)。它从已修复的 Mizar MeSH GBS256 路线复制，只把文本模型初始化替换为远程 checkpoint：

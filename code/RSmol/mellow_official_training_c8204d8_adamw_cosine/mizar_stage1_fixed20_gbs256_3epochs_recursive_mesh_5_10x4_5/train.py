@@ -1,4 +1,4 @@
-"""Isolated HTSAT Mizar S1 GBS256 ablation: fixed20 online with gradient accumulation.
+"""Isolated HTSAT Mizar S1 GBS128 ablation: fixed20 online with gradient accumulation.
 
 The active loss/optimizer/LambdaLR/GradNorm sequence is ported from Mizar S1.
 An independent entry keeps the historical ReasonAQA routes unchanged.
@@ -258,7 +258,7 @@ def train(config, rank, device):
     if (geometry["world_size"] != WORLD_SIZE or geometry["microbatch"] != BATCH_SIZE
             or geometry["gradient_accumulation_steps"] != ACCUMULATION_STEPS
             or geometry["global_batch_size"] != WORLD_SIZE * RANK_UPDATE_SAMPLES):
-        raise ValueError("this route requires 8 GPUs x microbatch8 x accumulation4 (global batch 256)")
+        raise ValueError("this route requires 8 GPUs x microbatch4 x accumulation4 (global batch 128)")
     prepared = json.loads(Path(config["prepared_report"]).read_text(encoding="utf-8"))
     if prepared["mode"] != config["mode"]:
         raise ValueError("missing/mismatched successful staging")
@@ -358,7 +358,7 @@ def train(config, rank, device):
     sampler = CustomDistributedSampler(dataset, WORLD_SIZE, rank, shuffle=True, seed=SEED, drop_last=True)
     max_steps = config["max_optimizer_steps"]
     if config["mode"] != "formal" or max_steps != geometry["total_steps"]:
-        raise ValueError("the GBS256 route requires the complete three-epoch formal schedule")
+        raise ValueError("the GBS128 route requires the complete three-epoch formal schedule")
     optimizer.zero_grad(set_to_none=True)
     first_rows, last_checkpoint = [], None
     local_switch_step = None

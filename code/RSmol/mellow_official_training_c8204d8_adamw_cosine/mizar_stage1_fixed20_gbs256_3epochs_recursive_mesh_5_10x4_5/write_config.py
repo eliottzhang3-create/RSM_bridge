@@ -77,7 +77,7 @@ def main():
                   "only text decoder initialization changes from SmolLM2 to the validated 5-10x4-5 MeSH recursive checkpoint",
                   "HTSAT(129+129) plus existing c2l/projection instead of CED freq_merge_126",
                   "shared raw audio decoded online, collective switch to staged bytes after full copy; no CED cache",
-                  "8 GPUs x microbatch8 x accumulation4; global batch256 ablation",
+                  "8 GPUs x microbatch4 x accumulation4; global batch128 after microbatch reduction for OOM",
                   "hybrid 1477492-row mixture; MusicCaps and all SpeechCraft splits retained; LibriTTS clean100/360 plus LibriTTS-R train-other-500"]}
     write_json(args.output, config)
     print(json.dumps({"config": str(args.output), "mode": args.mode, "contract_sha256": contract_sha,

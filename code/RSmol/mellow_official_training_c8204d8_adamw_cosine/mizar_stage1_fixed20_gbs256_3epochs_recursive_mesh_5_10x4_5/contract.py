@@ -9,13 +9,13 @@ import random
 import time
 from pathlib import Path
 
-ROUTE = "htsat_mizar_s1_fixed20_gbs256_recursive_mesh_5_10x4_5_v1"
+ROUTE = "htsat_mizar_s1_fixed20_gbs128_recursive_mesh_5_10x4_5_v1"
 TEXT_MODEL_CONTRACT = "logical_50_physical_20_5_10x4_5"
 TEXT_MODEL_ARCHITECTURE = "logical_50_physical_20_5_10x4_5_mesh"
 TEXT_MODEL_SCHEDULE = tuple(
     list(range(0, 5)) + list(range(5, 15)) * 4 + list(range(15, 20))
 )
-WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, EPOCHS, SEED = 8, 8, 4, 3, 1234
+WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, EPOCHS, SEED = 8, 4, 4, 3, 1234
 RANK_UPDATE_SAMPLES = BATCH_SIZE * ACCUMULATION_STEPS
 GLOBAL_BATCH_SIZE = WORLD_SIZE * RANK_UPDATE_SAMPLES
 PROMPT_TOKENS, ANSWER_TOKENS, AUDIO_TOKENS = 256, 300, 258

@@ -74,8 +74,9 @@ run_one() {
 import json
 import sys
 from pathlib import Path
+from contract import SOURCE_COUNTS, geometry
 report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-expected = 17313
+expected = geometry(sum(SOURCE_COUNTS.values()))["total_steps"]
 if report.get("status") != "PASS" or report.get("optimizer_steps") != expected:
     raise SystemExit("training report did not confirm all required optimizer updates")
 print(f"[{sys.argv[2]}] PASS: {expected} optimizer updates; report={sys.argv[1]}")

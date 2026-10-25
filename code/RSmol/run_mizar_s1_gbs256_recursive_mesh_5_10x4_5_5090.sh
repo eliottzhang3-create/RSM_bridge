@@ -13,7 +13,7 @@ HTSAT_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT
 MANIFEST=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json
 OUTPUT_DIR=""
 RESUME_CHECKPOINT=""
-INDEX_CACHE_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_mesh_5_10x4_5_5090/index_cache
+INDEX_CACHE_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/index_cache
 STAGE_WORKERS=4
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || usage
@@ -34,7 +34,7 @@ done
 [[ -f "$MANIFEST" && -f "$RESOLVED_PATHS" ]] || { echo "filtered manifest or resolved_paths.tsv missing" >&2; exit 2; }
 [[ -d "$TEXT_MODEL_DIR" && -f "$TEXT_MODEL_DIR/config.json" && -f "$HTSAT_ROOT/HTSAT_AudioSet_Saved_1.ckpt" ]] || { echo "recursive text checkpoint or HTSAT components missing" >&2; exit 2; }
 RUN_TAG=$(date +%Y%m%d_%H%M%S%N)
-OUTPUT_DIR=${OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_mesh_5_10x4_5_5090/formal_${RUN_TAG}}
+OUTPUT_DIR=${OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_${RUN_TAG}}
 if [[ -e "$OUTPUT_DIR" && ! -d "$OUTPUT_DIR" ]]; then
   echo "output path is not a directory: $OUTPUT_DIR" >&2
   exit 2
@@ -55,12 +55,12 @@ INDEX_DIR=$(tr -d '\r\n' < "$INDEX_PATH_FILE")
 ARGS=(formal "$RESOLVED_PATHS" "$OUTPUT_DIR" "$RESUME_CHECKPOINT" "$TEXT_MODEL_DIR" "$HTSAT_ROOT" "$INDEX_DIR" "$STAGE_WORKERS")
 printf -v CMD_ARGS '%q ' "${ARGS[@]}"
 vc submit \
-  -p pdgpu-5090 \
+  -p pdgpu-3090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
-  -c 32 -m 256G -g 8 -n 1 \
-  -j "mizar-s1-gbs256-recursive-mesh-5-10x4-5-${RUN_TAG}" \
+  -c 64 -m 256G -g 8 -n 1 \
+  -j "mizar-s1-gbs128-r-mesh-5-10x4-5-${RUN_TAG}" \
   -d "$SCRIPT_DIR" \
-  JOB=1:1 "$SCRIPT_DIR/log/mizar_s1_gbs256_recursive_mesh_5_10x4_5.${RUN_TAG}.JOB.log" \
+  JOB=1:1 "$SCRIPT_DIR/log/mizar_s1_gbs128_recursive_mesh_5_10x4_5.${RUN_TAG}.JOB.log" \
   --cmd "bash mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5/run.sh $CMD_ARGS"
-echo "Submitted Mizar S1 / HTSAT GBS256 / recursive 5-10x4-5 MeSH: 8 GPUs x microbatch8 x accumulation4; output=$OUTPUT_DIR"
+echo "Submitted Mizar S1 / HTSAT GBS128 / recursive 5-10x4-5 MeSH: 8 GPUs x microbatch4 x accumulation4; output=$OUTPUT_DIR"
 echo "Raw audio: shared-path training starts immediately; background local copy then collective switch; workers=$STAGE_WORKERS; index=$INDEX_DIR"
