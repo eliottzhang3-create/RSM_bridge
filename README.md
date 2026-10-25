@@ -1,5 +1,25 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-25：Mizar S1 / GBS256 非 MeSH 5+10×2+5 文本初始化消融
+
+新增隔离路线 [mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5/README.md)。它从已修复的 Mizar MeSH GBS256 路线复制，只把文本模型初始化替换为远程 checkpoint：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10_5/formal-epoch2-continue-20260902_184936/checkpoint-step-009244
+```
+
+该 checkpoint 使用 `code/RSmol/recursive_model_5_10_5.py` 的非 MeSH 实现：20 个独立物理层，逻辑执行为 `0..14, 5..14, 15..19`，即固定 `5+10×2+5`。loader 显式导入该类，不依赖全局 AutoModel 注册，并拒绝 router、memory-slot 或 MeSH 参数/缓冲区。文本权重只作为初始化载入；optimizer、scheduler、RNG、数据游标和音频侧模块均从新的 Mizar S1 GBS256 训练开始。
+
+除文本模型加载、模型审计和路线身份外，数据 manifest、在线 fixed20、HTSAT、`129+129+1+256+300` 序列、Mizar padding/`attention_mask=None`、answer-only rank-local CE、AdamW/LambdaLR/GradNorm、后台 staging、checkpoint 与 resume 合同都保持修复后的 MeSH 母本一致。CPU 对齐审计已通过，母本训练/数据/优化文件逐字节一致；本地没有远程权重、数据或 CUDA，因此真实 GPU 加载和训练仍需远程执行。
+
+远程同步后，先可运行 tokenizer/config CPU 检查，再从 `code/RSmol/` 提交正式训练：
+
+```bash
+bash run_mizar_s1_gbs256_recursive_5_10_5_5090.sh \
+  --stage-workers 4 \
+  --output-dir "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_5_10_5_5090/formal_$(date +%Y%m%d_%H%M%S%N)"
+```
+
 ## 2026-10-25：Mizar S1 / GBS256 MeSH tokenizer 审计修正
 
 隔离路线 [mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh/README.md) 仅替换 GBS256 母本的文本模型初始化，加载既有 MeSH 文本 `checkpoint-009244`。用户远程 CPU 检查确认：canonical SmolLM2 和该 checkpoint 的完整词表及 token ID 一致，词表 SHA256 均为 `d59adeae1bb1c383e51bcf30fd8ad05a2b82f7e752f72106f0f94c324cdb44b6`；执行 Mizar 的 `add_special_tokens({"pad_token": "!"})` 返回 1，但词表大小不变，并与模型配置一致。此前将返回值误当作新增词表行数的审计已修正；现在检查实际词表大小和 `!` ID 前后不变、checkpoint `config.vocab_size` 及加载后的 embedding 行数。源 tokenizer 的 EOS-as-PAD 元数据由原 Mizar 调用覆盖。
@@ -48,9 +68,9 @@ fi
 
 本命令只核对路径和文件大小，不解码、不复制音频、不生成过滤 manifest。退出码 2 表示还有待处理数据问题，3 表示唯一音频总大小超过 256 GiB；两者仍会写出审计报告。唯一大小按真实路径去重，不做全库内容哈希，不能识别任意不同路径下的相同波形；AudioCaps 两来源复用原文件由优先映射保证。后续过滤如使用现有 `filter_mizar_s1_manifest.py`，必须显式保留 MusicCaps 与 other500（`--keep-musiccaps --keep-train-other-500`），并使用新的输出文件名；本次尚未执行过滤。新增混合映射、已有 AudioCaps/S2 映射共 20 项本地 CPU 测试通过；远程完整数据审计待用户执行。
 
-## 2026-10-23：Mizar S1 / GBS256 checkpoint 的 MMAU test-mini 评测
+## 2026-10-25：Mizar S1 / hybrid GBS256 checkpoint 的 MMAU / MMAR 官方评测
 
-`code/RSmol/run_mizar_s1_mmau_eval_5090.sh` 新增 `RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256` 选择项，默认仍为 GBS32。GBS256 自动选择 `mizar_stage1_fixed20_gbs256_3epochs`、`formal_hybrid_gbs256_v1/formal/runtime.json` 和 `model--step-17313.ckpt`，校验训练几何 `8×8×4` 及累积训练的 loss 标识。checkpoint/runtime 合同、源码 SHA、组件资产和模型 strict loading 校验继续执行；不要求训练 staging 目录仍存在。
+`code/RSmol/run_mizar_s1_mmau_eval_5090.sh` 和 `code/RSmol/run_mizar_s1_mmar_eval_5090.sh` 都支持 `RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256`，默认仍为 GBS32。GBS256 自动选择 `mizar_stage1_fixed20_gbs256_3epochs`、`formal_hybrid_gbs256_v1/formal/runtime.json` 和 `model--step-17313.ckpt`，校验训练几何 `8×8×4` 及累积训练的 loss 标识。checkpoint/runtime 合同、源码 SHA、组件资产和模型 strict loading 校验继续执行；不要求训练 staging 目录仍存在。
 
 经 GitHub 同步到远程后，在 `code/RSmol/` 执行：
 
@@ -58,17 +78,18 @@ fi
 RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256 bash run_mizar_s1_mmau_eval_5090.sh
 ```
 
-单卡、完整 1,000 行、确定性 greedy、EOS 停止且最多 300 new tokens，音频读取/重采样/fixed20 和 `129+129+1+256` prefix 与选中训练路线一致。完整生成原样交给 MMAU 官方 scorer。默认结果位于 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/eval/mmau_test_mini_step17313/`。
-
-官方评测完成后，在登录节点单独重评分，无需 GPU 或重新生成：
+同一路线的 MMAR 评测提交：
 
 ```bash
-python scripts/rescore_mmau_mellow_author_reply.py \
-  /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/eval/mmau_test_mini_step17313/raw_generations.jsonl \
-  --expected-rows 1000
+RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256 bash run_mizar_s1_mmar_eval_5090.sh
 ```
 
-重评分仍使用第一个 `)` 前的内容做 lowercase 标签比较，不 trim；结果写入该目录下的 `choice_label_rescore/`，保留官方结果。它自动从同目录 `run_config.json` 携带 checkpoint、记录的 SHA256、step 和训练几何，不加载 checkpoint。也可用 `--source-checkpoint PATH` 显式标记来源；若与 `run_config.json` 不同则拒绝。实现经本地 CPU 合同、重评分和两种 variant 的 Bash 提交参数模拟验证，真实 checkpoint 加载及 GPU 推理仍需远程作业验证。
+两项评测均为单卡、完整 1,000 行、确定性 greedy、EOS 停止且最多 300 new tokens；音频读取/重采样/fixed20 和 `129+129+1+256` prefix 与选中训练路线一致。完整生成原样交给各自官方 scorer，不做标签截取或文本预处理。默认结果分别位于：
+
+- MMAU：`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/eval/mmau_test_mini_step17313/`。
+- MMAR：`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/eval/mmar_step17313/`。
+
+本次两项结果均以各自目录中的 `evaluation_report.json` 和 `official_evaluation.txt` 为准；`raw_generations.jsonl` 只作为生成审计，不执行额外标签重评分。实现经本地 CPU 合同和两种 variant 的 Bash 提交参数模拟验证，真实 checkpoint 加载及 GPU 推理仍需远程作业验证。
 
 ## 2026-10-23：独立的 Mizar Stage 1 / GBS256 消融线
 

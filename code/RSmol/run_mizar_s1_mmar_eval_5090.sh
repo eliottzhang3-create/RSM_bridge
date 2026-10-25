@@ -6,16 +6,43 @@ cd "$SCRIPT_DIR"
 mkdir -p log
 
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
-RUN_ROOT="${RSMOL_MIZAR_RUN_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/formal_async_v3/formal}"
-CHECKPOINT="${RSMOL_MIZAR_CHECKPOINT:-$RUN_ROOT/checkpoints/model--step-122937.ckpt}"
+VARIANT="${RSMOL_MIZAR_S1_EVAL_VARIANT:-gbs32}"
+VARIANT="${VARIANT,,}"
+case "$VARIANT" in
+  gbs32)
+    DEFAULT_RUN_ROOT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/formal_async_v3/formal"
+    DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_3epochs"
+    DEFAULT_CHECKPOINT_NAME="model--step-122937.ckpt"
+    EXPECTED_STEP="122937"
+    EXPECTED_GEOMETRY="8,4,1"
+    DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/formal_async_v3/eval/mmar_step122937"
+    ;;
+  gbs256)
+    DEFAULT_RUN_ROOT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/formal"
+    DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs"
+    DEFAULT_CHECKPOINT_NAME="model--step-17313.ckpt"
+    EXPECTED_STEP="17313"
+    EXPECTED_GEOMETRY="8,8,4"
+    DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1/eval/mmar_step17313"
+    ;;
+  *)
+    echo "unsupported RSMOL_MIZAR_S1_EVAL_VARIANT=$VARIANT (use gbs32 or gbs256)" >&2
+    exit 2
+    ;;
+esac
+RUN_ROOT="${RSMOL_MIZAR_RUN_ROOT:-$DEFAULT_RUN_ROOT}"
+EXPECTED_STEP="${RSMOL_MIZAR_EXPECTED_STEP:-$EXPECTED_STEP}"
+EXPECTED_GEOMETRY="${RSMOL_MIZAR_EXPECTED_GEOMETRY:-$EXPECTED_GEOMETRY}"
+CHECKPOINT="${RSMOL_MIZAR_CHECKPOINT:-$RUN_ROOT/checkpoints/$DEFAULT_CHECKPOINT_NAME}"
 RUNTIME_CONFIG="${RSMOL_MIZAR_RUNTIME_CONFIG:-$RUN_ROOT/runtime.json}"
-ROUTE_ROOT="${RSMOL_MIZAR_ROUTE_ROOT:-$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_3epochs}"
+ROUTE_ROOT="${RSMOL_MIZAR_ROUTE_ROOT:-$DEFAULT_ROUTE_ROOT}"
 DATASET_DIR="${RSMOL_MMAR_DATASET_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/MMAR}"
-OUTPUT_DIR="${RSMOL_MMAR_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_5090/formal_async_v3/eval/mmar_step122937}"
+OUTPUT_DIR="${RSMOL_MMAR_OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
 JOB_LOG="$SCRIPT_DIR/log/mizar_s1_mmar_5090.${RUN_TAG}.JOB.log"
 
 ARGS=(--benchmark mmar --checkpoint "$CHECKPOINT" --runtime-config "$RUNTIME_CONFIG"
-      --route-root "$ROUTE_ROOT" --dataset-dir "$DATASET_DIR" --output-dir "$OUTPUT_DIR")
+      --route-root "$ROUTE_ROOT" --dataset-dir "$DATASET_DIR" --output-dir "$OUTPUT_DIR"
+      --expected-step "$EXPECTED_STEP" --expected-geometry "$EXPECTED_GEOMETRY")
 if (($#)); then ARGS+=("$@"); fi
 printf -v CMD_ARGS '%q ' "${ARGS[@]}"
 

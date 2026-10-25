@@ -205,10 +205,13 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             self.assertIn("-g 1", content)
             self.assertIn(f"--benchmark {benchmark}", content)
             self.assertIn("model--step-122937.ckpt", content)
+            self.assertIn("--expected-step", content)
+            self.assertIn("--expected-geometry", content)
             self.assertIn("vc submit", content)
         self.assertIn("RSMOL_MIZAR_S1_EVAL_VARIANT", mmau_submit)
         self.assertIn("model--step-17313.ckpt", mmau_submit)
-        self.assertIn("--expected-geometry", mmau_submit)
+        self.assertIn("RSMOL_MIZAR_S1_EVAL_VARIANT", mmar_submit)
+        self.assertIn("model--step-17313.ckpt", mmar_submit)
         self.assertIn("conda activate mellow_c8204d8", inner)
 
     def test_submission_selects_checkpoint_runtime_route_and_geometry_together(self):
@@ -252,6 +255,52 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                         f"{run}/formal/checkpoints/model--step-{step}.ckpt"))
                     self.assertTrue(options["--runtime-config"].endswith(f"{run}/formal/runtime.json"))
                     self.assertTrue(options["--output-dir"].endswith(f"{run}/eval/mmau_test_mini_step{step}"))
+                    route = "mizar_stage1_fixed20_gbs256_3epochs" if variant == "gbs256" else "mizar_stage1_fixed20_3epochs"
+                    self.assertTrue(options["--route-root"].endswith(route))
+                    self.assertEqual(options["--expected-step"], step)
+                    self.assertEqual(options["--expected-geometry"], geometry)
+
+    def test_mmar_submission_selects_checkpoint_runtime_route_and_geometry_together(self):
+        bash = shutil.which("bash") or "C:/Program Files/Git/bin/bash.exe"
+        if not Path(bash).is_file():
+            self.skipTest("Bash is not installed")
+
+        def bash_path(path):
+            value = path.resolve().as_posix()
+            return f"/{value[0].lower()}{value[2:]}" if os.name == "nt" else value
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            submit = root / "run_mizar_s1_mmar_eval_5090.sh"
+            submit.write_bytes((ROOT / "code/RSmol" / submit.name).read_bytes().replace(b"\r\n", b"\n"))
+            binary = root / "bin"
+            binary.mkdir()
+            stub = binary / "vc"
+            stub.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$RSM_TEST_CAPTURE"\n',
+                            encoding="utf-8", newline="\n")
+            stub.chmod(0o755)
+            clean_env = {key: value for key, value in os.environ.items()
+                         if not key.startswith("RSMOL_")}
+            for variant, run, step, geometry in (
+                ("gbs32", "mizar_s1_htsat_5090/formal_async_v3", "122937", "8,4,1"),
+                ("gbs256", "mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1", "17313", "8,8,4"),
+            ):
+                with self.subTest(variant=variant):
+                    capture = root / f"mmar_{variant}.args"
+                    env = dict(clean_env, RSMOL_MIZAR_S1_EVAL_VARIANT=variant,
+                               RSM_TEST_CAPTURE=bash_path(capture),
+                               PATH=f"{bash_path(binary)}:/usr/bin:/bin")
+                    subprocess.run([bash, bash_path(submit)], env=env,
+                                   capture_output=True, text=True, check=True)
+                    submission = capture.read_text(encoding="utf-8").splitlines()
+                    self.assertEqual(submission[submission.index("-g") + 1], "1")
+                    command = shlex.split(submission[submission.index("--cmd") + 1])
+                    self.assertEqual(command[:2], ["bash", "scripts/evaluate_mizar_s1_benchmark.sh"])
+                    options = dict(zip(command[2::2], command[3::2]))
+                    self.assertTrue(options["--checkpoint"].endswith(
+                        f"{run}/formal/checkpoints/model--step-{step}.ckpt"))
+                    self.assertTrue(options["--runtime-config"].endswith(f"{run}/formal/runtime.json"))
+                    self.assertTrue(options["--output-dir"].endswith(f"{run}/eval/mmar_step{step}"))
                     route = "mizar_stage1_fixed20_gbs256_3epochs" if variant == "gbs256" else "mizar_stage1_fixed20_3epochs"
                     self.assertTrue(options["--route-root"].endswith(route))
                     self.assertEqual(options["--expected-step"], step)
