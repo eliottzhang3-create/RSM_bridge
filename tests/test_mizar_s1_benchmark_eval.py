@@ -218,6 +218,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
         inner = (SCRIPTS / "evaluate_mizar_s1_benchmark.sh").read_text(encoding="utf-8")
         for content, benchmark in ((mmau_submit, "mmau"), (mmar_submit, "mmar")):
             self.assertIn("-p pdgpu-5090", content)
+            self.assertIn("-c 8 -m 32G -g 1 -n 1", content)
             self.assertIn("-g 1", content)
             self.assertIn(f"--benchmark {benchmark}", content)
             self.assertIn("model--step-122937.ckpt", content)
@@ -229,6 +230,11 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
         self.assertIn("RSMOL_MIZAR_S1_EVAL_VARIANT", mmar_submit)
         self.assertIn("model--step-17313.ckpt", mmar_submit)
         self.assertIn("conda activate mellow_c8204d8", inner)
+
+    def test_recursive_loader_uses_text_module_validator(self):
+        source = RUNTIME_SOURCE.read_text(encoding="utf-8")
+        self.assertIn('importlib.import_module("models.recursive_text")', source)
+        self.assertNotIn("route_contract.validate_recursive_config", source)
 
     def test_submission_selects_checkpoint_runtime_route_and_geometry_together(self):
         bash = shutil.which("bash") or "C:/Program Files/Git/bin/bash.exe"

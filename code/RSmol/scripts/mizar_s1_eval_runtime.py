@@ -163,7 +163,11 @@ def audit_recursive_route(route_contract, contract, model):
     actual = route_contract.recursive_checkpoint_contract(text_root)
     if expected is not None and actual != expected:
         raise ValueError("recursive text checkpoint changed since the training runtime was written")
-    route_contract.validate_recursive_config(model.caption_decoder.lm.config)
+    # The config validator belongs to the route's recursive text loader, not
+    # to contract.py.  Import it after the route has been isolated so a stale
+    # contract module from another training route cannot be used.
+    recursive_text = importlib.import_module("models.recursive_text")
+    recursive_text.validate_recursive_config(model.caption_decoder.lm.config)
     recursive_impl = importlib.import_module("recursive_model_5_10x2_5_mesh")
     parameter_audit = recursive_impl.parameter_audit(model.caption_decoder.lm)
     required = {

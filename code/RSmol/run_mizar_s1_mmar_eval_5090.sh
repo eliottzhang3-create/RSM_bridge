@@ -57,7 +57,7 @@ printf -v CMD_ARGS '%q ' "${ARGS[@]}"
 vc submit \
   -p pdgpu-5090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
-  -c 32 -m 256G -g 1 -n 1 \
+  -c 8 -m 32G -g 1 -n 1 \
   -j "mizar-s1-mmar-${RUN_TAG}" \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$JOB_LOG" \
