@@ -91,6 +91,24 @@ RSMOL_MIZAR_S1_EVAL_VARIANT=gbs256 bash run_mizar_s1_mmar_eval_5090.sh
 
 本次两项结果均以各自目录中的 `evaluation_report.json` 和 `official_evaluation.txt` 为准；`raw_generations.jsonl` 只作为生成审计，不执行额外标签重评分。实现经本地 CPU 合同和两种 variant 的 Bash 提交参数模拟验证，真实 checkpoint 加载及 GPU 推理仍需远程作业验证。
 
+## 2026-10-25：Mizar S1 / recursive MeSH GBS256 checkpoint 的 MMAU / MMAR 官方评测
+
+现已将 recursive MeSH route 接入同一官方评测器。使用 `RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_mesh` 时，两个入口自动选择 route `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh`、step `17313` 的 checkpoint/runtime，以及独立输出目录。加载时额外校验 recursive route contract、`recursive_model_5_10x2_5_mesh.py` 源码 SHA、文本 checkpoint config/tokenizer 文件、30 logical / 20 physical / 2 loop / 5 memory slot / 6 router 参数审计和 strict state_dict。
+
+远程同步后提交：
+
+```bash
+RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_mesh bash run_mizar_s1_mmau_eval_5090.sh
+RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_mesh bash run_mizar_s1_mmar_eval_5090.sh
+```
+
+recursive MeSH 与普通 GBS256 评测共用 fixed20 音频、`129+129+1+256+300` 序列、FP32、`attention_mask=None`、纯 argmax greedy、最多 300 new tokens 和各自官方 scorer；差异只在文本 decoder route。默认输出为：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_padfix_20261025_003124507033014/eval/mmau_test_mini_step17313/
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_padfix_20261025_003124507033014/eval/mmar_step17313/
+```
+
 ## 2026-10-23：独立的 Mizar Stage 1 / GBS256 消融线
 
 新增隔离副本 [mizar_stage1_fixed20_gbs256_3epochs](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs/README.md) 和提交入口 [run_mizar_s1_gbs256_5090.sh](code/RSmol/run_mizar_s1_gbs256_5090.sh)。它保留 GBS32 路线的 HTSAT + c2l + projection + SmolLM2、固定20在线音频、已过滤的 1,311,334 行数据及 Mizar Stage 1 优化设置；改为 8 GPU × microbatch 8 × accumulation 4，GBS256。原 GBS32 路线和 checkpoint 合同不变。

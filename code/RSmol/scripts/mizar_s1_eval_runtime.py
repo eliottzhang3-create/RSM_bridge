@@ -18,6 +18,7 @@ PROMPT_TOKENS, MAX_NEW_TOKENS, PREFIX_TOKENS, HIDDEN_SIZE = 256, 300, 515, 576
 TRAINING_LOSS_REDUCTIONS = {
     "htsat_mizar_s1_fixed20_v1": "rank_local_token_mean_then_DDP_mean",
     "htsat_mizar_s1_fixed20_gbs256_v1": "mean_of_rank_local_microbatch_token_means_then_DDP_mean",
+    "htsat_mizar_s1_fixed20_gbs256_recursive_mesh_v1": "mean_of_rank_local_microbatch_token_means_then_DDP_mean",
 }
 PROTOCOL = {
     "version": "htsat_mizar_s1_fixed20_raw_greedy_v1",
@@ -109,6 +110,20 @@ def validate_checkpoint(saved, runtime, route_contract, expected_step,
     for key, value in expected.items():
         if key not in contract or contract[key] != value:
             raise ValueError(f"checkpoint training contract mismatch: {key}: {contract.get(key)!r}")
+    if hasattr(route_contract, "TEXT_MODEL_CONTRACT"):
+        recursive_expected = {
+            "text_model_contract": route_contract.TEXT_MODEL_CONTRACT,
+            "text_model_architecture": route_contract.TEXT_MODEL_ARCHITECTURE,
+            "text_model_schedule": list(route_contract.TEXT_MODEL_SCHEDULE),
+        }
+        for key, value in recursive_expected.items():
+            if contract.get(key) != value:
+                raise ValueError(
+                    f"recursive text training contract mismatch: {key}: {contract.get(key)!r}"
+                )
+        expected_source_sha = route_contract.recursive_model_source_sha256()
+        if contract.get("recursive_model_source_sha256") != expected_source_sha:
+            raise ValueError("recursive model source differs from the source recorded in the checkpoint")
     geometry = contract.get("geometry", {})
     expected_geometry = parse_training_geometry(expected_geometry)
     actual_geometry = (geometry.get("world_size"), geometry.get("microbatch"),
@@ -137,6 +152,33 @@ def audit_assets(contract):
                 or sha256_file(path) != item["sha256"]):
             raise ValueError(f"pretrained component changed since training: {path}")
     return {"status": "PASS", "verified_files": len(entries)}
+
+
+def audit_recursive_route(route_contract, contract, model):
+    """Recheck the recursive text artifact and loaded parameter geometry."""
+    if not hasattr(route_contract, "recursive_checkpoint_contract"):
+        return None
+    text_root = Path(contract["text_model_dir"])
+    expected = contract.get("recursive_text_checkpoint")
+    actual = route_contract.recursive_checkpoint_contract(text_root)
+    if expected is not None and actual != expected:
+        raise ValueError("recursive text checkpoint changed since the training runtime was written")
+    route_contract.validate_recursive_config(model.caption_decoder.lm.config)
+    recursive_impl = importlib.import_module("recursive_model_5_10x2_5_mesh")
+    parameter_audit = recursive_impl.parameter_audit(model.caption_decoder.lm)
+    required = {
+        "logical_layer_count": 30,
+        "physical_layer_count": 20,
+        "logical_cache_slot_count": 30,
+        "recursive_loops": 2,
+        "memory_slots": 5,
+        "router_count": 6,
+    }
+    if any(parameter_audit.get(key) != value for key, value in required.items()):
+        raise ValueError(f"loaded recursive parameter audit mismatch: {parameter_audit}")
+    if parameter_audit.get("schedule") != list(route_contract.TEXT_MODEL_SCHEDULE):
+        raise ValueError("loaded recursive parameter schedule mismatch")
+    return {"checkpoint": actual, "parameters": parameter_audit}
 
 
 def load_runtime(args):
@@ -178,6 +220,7 @@ def load_runtime(args):
     if keys and all(str(key).startswith("module.") for key in keys):
         state_dict = {str(key)[len("module."):]: value for key, value in state_dict.items()}
     model.load_state_dict(state_dict, strict=True)
+    recursive_audit = audit_recursive_route(route_contract, contract, model)
     model.float().to(device).eval()
     model.requires_grad_(False)
     tokenizer = AutoTokenizer.from_pretrained(contract["text_model_dir"], local_files_only=True)
@@ -206,6 +249,7 @@ def load_runtime(args):
              "training_route": saved["route_variant"],
              "training_geometry": contract["geometry"],
              "training_loss_reduction": saved["loss_reduction"],
+             "recursive_audit": recursive_audit,
              "expected_geometry": list(parse_training_geometry(args.expected_geometry)),
              "parameter_count": sum(p.numel() for p in model.parameters()),
              "torch": torch.__version__, "cuda": torch.version.cuda,

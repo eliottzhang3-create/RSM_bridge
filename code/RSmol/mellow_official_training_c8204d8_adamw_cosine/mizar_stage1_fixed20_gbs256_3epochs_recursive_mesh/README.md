@@ -142,6 +142,28 @@ Intermediate checkpoints are written at steps 2,886, 5,771, 8,656, 11,542,
 `htsat_mizar_s1_fixed20_gbs256_recursive_mesh_v1`; baseline checkpoints are
 rejected by strict route and contract checks.
 
-The current repository has no verified evaluator for this new recursive route.
-Evaluation should be added only after a successful training report and must
-load this route's runtime contract and checkpoint identity.
+## MMAU test-mini / MMAR official evaluation
+
+The route now uses the shared deterministic Mizar S1 evaluator with a
+recursive-MeSH-specific loader and contract audit. From the remote
+repository's `code/RSmol` directory:
+
+```bash
+RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_mesh bash run_mizar_s1_mmau_eval_5090.sh
+RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_mesh bash run_mizar_s1_mmar_eval_5090.sh
+```
+
+Both commands select the completed checkpoint at step 17,313 and the same
+route `runtime.json`, then run one 5090 GPU over all 1,000 samples. The
+evaluator keeps the route's fixed20 audio, `129+129+1+256` prefix,
+`attention_mask=None`, FP32 deterministic greedy decoding and 300-token limit.
+It additionally audits the recursive text config/tokenizer, source SHA,
+parameter geometry and strict outer checkpoint state before inference. Full
+generated text is passed directly to the official MMAU or MMAR scorer.
+
+Outputs are isolated under the training run's `eval/` directory:
+
+```text
+mmau_test_mini_step17313/
+mmar_step17313/
+```

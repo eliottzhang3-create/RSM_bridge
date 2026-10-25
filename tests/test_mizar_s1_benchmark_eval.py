@@ -86,12 +86,15 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
         self.assertEqual(identity["expected_geometry"], [8, 8, 4])
 
     def checkpoint_fixture(self, variant):
-        folder = ("mizar_stage1_fixed20_gbs256_3epochs" if variant == "gbs256"
-                  else "mizar_stage1_fixed20_3epochs")
+        folder = {
+            "gbs32": "mizar_stage1_fixed20_3epochs",
+            "gbs256": "mizar_stage1_fixed20_gbs256_3epochs",
+            "recursive_mesh": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh",
+        }[variant]
         route = load_module("test_contract_" + variant, ROOT / "code/RSmol" /
                             "mellow_official_training_c8204d8_adamw_cosine" / folder / "contract.py")
         contract = route.semantic_contract({
-            "rows": (1477492 if variant == "gbs256" else 1311334), "source_rows": route.SOURCE_COUNTS,
+            "rows": (1477492 if variant in {"gbs256", "recursive_mesh"} else 1311334), "source_rows": route.SOURCE_COUNTS,
             "rows_canonical_sha256": "manifest", "mapping_sha256": "mapping",
         }, "text-model", "htsat")
         identity = route.digest(contract)
@@ -102,7 +105,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             "num_epochs": 3,
             "loss_reduction": (
                 "mean_of_rank_local_microbatch_token_means_then_DDP_mean"
-                if variant == "gbs256" else "rank_local_token_mean_then_DDP_mean"),
+                if variant in {"gbs256", "recursive_mesh"} else "rank_local_token_mean_then_DDP_mean"),
         }
         runtime = {"contract": contract, "contract_sha256": identity,
                    "route": route.ROUTE, "mode": "formal"}
@@ -110,7 +113,8 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
 
     def test_both_checkpoint_schemas_validate_and_cross_route_use_fails(self):
         for variant, geometry, step in (("gbs32", (8, 4, 1), 122937),
-                                        ("gbs256", (8, 8, 4), 17313)):
+                                        ("gbs256", (8, 8, 4), 17313),
+                                        ("recursive_mesh", (8, 8, 4), 17313)):
             with self.subTest(variant=variant):
                 saved, runtime, route = self.checkpoint_fixture(variant)
                 contract = self.runtime.validate_checkpoint(saved, runtime, route, step, geometry)
@@ -120,9 +124,21 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                     self.runtime.validate_checkpoint(saved, runtime, route, step, wrong_geometry)
                 with self.assertRaisesRegex(ValueError, "step / epoch horizon"):
                     self.runtime.validate_checkpoint(saved, runtime, route, step + 1, geometry)
-                other = self.checkpoint_fixture("gbs32" if variant == "gbs256" else "gbs256")[2]
+                other = self.checkpoint_fixture("gbs32" if variant != "gbs32" else "gbs256")[2]
                 with self.assertRaisesRegex(ValueError, "complete formal"):
                     self.runtime.validate_checkpoint(saved, runtime, other, step, geometry)
+
+    def test_recursive_mesh_contract_requires_text_architecture_and_source(self):
+        saved, runtime, route = self.checkpoint_fixture("recursive_mesh")
+        contract = self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
+        self.assertEqual(contract["text_model_contract"], route.TEXT_MODEL_CONTRACT)
+        self.assertEqual(contract["text_model_schedule"], list(route.TEXT_MODEL_SCHEDULE))
+        saved["contract"]["text_model_schedule"] = list(reversed(route.TEXT_MODEL_SCHEDULE))
+        saved["contract_sha256"] = route.digest(saved["contract"])
+        runtime["contract"] = saved["contract"]
+        runtime["contract_sha256"] = saved["contract_sha256"]
+        with self.assertRaisesRegex(ValueError, "recursive text training contract"):
+            self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
 
     def test_gbs256_keeps_source_runtime_and_loss_checks(self):
         saved, runtime, route = self.checkpoint_fixture("gbs256")
@@ -238,6 +254,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             for variant, run, step, geometry in (
                 ("gbs32", "mizar_s1_htsat_5090/formal_async_v3", "122937", "8,4,1"),
                 ("gbs256", "mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1", "17313", "8,8,4"),
+                ("recursive_mesh", "mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_padfix_20261025_003124507033014", "17313", "8,8,4"),
             ):
                 with self.subTest(variant=variant):
                     capture = root / f"{variant}.args"
@@ -255,7 +272,11 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                         f"{run}/formal/checkpoints/model--step-{step}.ckpt"))
                     self.assertTrue(options["--runtime-config"].endswith(f"{run}/formal/runtime.json"))
                     self.assertTrue(options["--output-dir"].endswith(f"{run}/eval/mmau_test_mini_step{step}"))
-                    route = "mizar_stage1_fixed20_gbs256_3epochs" if variant == "gbs256" else "mizar_stage1_fixed20_3epochs"
+                    route = {
+                        "gbs32": "mizar_stage1_fixed20_3epochs",
+                        "gbs256": "mizar_stage1_fixed20_gbs256_3epochs",
+                        "recursive_mesh": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh",
+                    }[variant]
                     self.assertTrue(options["--route-root"].endswith(route))
                     self.assertEqual(options["--expected-step"], step)
                     self.assertEqual(options["--expected-geometry"], geometry)
@@ -284,6 +305,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             for variant, run, step, geometry in (
                 ("gbs32", "mizar_s1_htsat_5090/formal_async_v3", "122937", "8,4,1"),
                 ("gbs256", "mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1", "17313", "8,8,4"),
+                ("recursive_mesh", "mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_padfix_20261025_003124507033014", "17313", "8,8,4"),
             ):
                 with self.subTest(variant=variant):
                     capture = root / f"mmar_{variant}.args"
@@ -301,7 +323,11 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                         f"{run}/formal/checkpoints/model--step-{step}.ckpt"))
                     self.assertTrue(options["--runtime-config"].endswith(f"{run}/formal/runtime.json"))
                     self.assertTrue(options["--output-dir"].endswith(f"{run}/eval/mmar_step{step}"))
-                    route = "mizar_stage1_fixed20_gbs256_3epochs" if variant == "gbs256" else "mizar_stage1_fixed20_3epochs"
+                    route = {
+                        "gbs32": "mizar_stage1_fixed20_3epochs",
+                        "gbs256": "mizar_stage1_fixed20_gbs256_3epochs",
+                        "recursive_mesh": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh",
+                    }[variant]
                     self.assertTrue(options["--route-root"].endswith(route))
                     self.assertEqual(options["--expected-step"], step)
                     self.assertEqual(options["--expected-geometry"], geometry)
