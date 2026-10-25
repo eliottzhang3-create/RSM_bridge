@@ -3,21 +3,78 @@ from __future__ import annotations
 
 import hashlib
 
+import numpy as np
 import torch
 
 from contract import TEXT_MODEL_SCHEDULE
 from optim import parameter_role
 
 
+def assert_state_exact(expected, actual, path="checkpoint"):
+    """Compare serialized optimizer/scheduler/scaler/RNG state recursively."""
+    if isinstance(expected, torch.Tensor):
+        matches = (isinstance(actual, torch.Tensor) and expected.dtype == actual.dtype
+                   and torch.equal(expected.detach().cpu(), actual.detach().cpu()))
+    elif isinstance(expected, np.ndarray):
+        matches = (isinstance(actual, np.ndarray) and expected.dtype == actual.dtype
+                   and np.array_equal(expected, actual))
+    elif isinstance(expected, dict):
+        matches = isinstance(actual, dict) and expected.keys() == actual.keys()
+        if matches:
+            for key in expected:
+                assert_state_exact(expected[key], actual[key], f"{path}.{key}")
+    elif isinstance(expected, (list, tuple)):
+        matches = type(expected) is type(actual) and len(expected) == len(actual)
+        if matches:
+            for index, (left, right) in enumerate(zip(expected, actual)):
+                assert_state_exact(left, right, f"{path}[{index}]")
+    else:
+        matches = expected == actual
+    if not matches:
+        raise ValueError(f"serialized state differs: {path}")
+
+
 def frozen_digest(model):
-    """Hash every frozen parameter byte, rather than sampling a few entries."""
+    """Hash every frozen parameter and persistent buffer byte."""
     result = hashlib.sha256()
-    for name, tensor in model.named_parameters():
-        if tensor.requires_grad:
+    trainable_names = {name for name, p in model.named_parameters(remove_duplicate=False) if p.requires_grad}
+    for name, tensor in model.state_dict().items():
+        if name in trainable_names:
             continue
         result.update(name.encode() + b"\0")
         result.update(tensor.detach().cpu().contiguous().numpy().tobytes())
     return result.hexdigest()
+
+
+def trainable_digest(model):
+    result = hashlib.sha256()
+    for name, parameter in model.named_parameters():
+        if parameter.requires_grad:
+            result.update(name.encode() + b"\0")
+            result.update(parameter.detach().cpu().contiguous().numpy().tobytes())
+    return result.hexdigest()
+
+
+def parameter_component(name):
+    """Audit each Core layer/router/adapter/projection, not only broad roles."""
+    local = name.removeprefix("caption_decoder.lm.model.")
+    parts = local.split(".")
+    if parts[0] in {"layers", "write_routers", "read_routers", "perceive_routers"}:
+        return ".".join(parts[:2])
+    if parts[0] == "audio_attention" and parts[1] in {"q_norms", "q_projs", "o_projs"}:
+        return ".".join(parts[:3])
+    return ".".join(parts[:2])
+
+
+def component_update_audit(changed):
+    components = {}
+    for name, item in changed.items():
+        component = parameter_component(name)
+        components[component] = components.get(component, False) or item["changed"]
+    unchanged = [name for name, updated in components.items() if not updated]
+    if unchanged:
+        raise ValueError(f"trainable components did not update: {unchanged}")
+    return components
 
 
 def trainable_snapshot(model):
@@ -80,8 +137,8 @@ def assert_query_semantics(mesh):
         torch.testing.assert_close(memory, mesh.last_memory_write_history[index], rtol=1e-5, atol=1e-6)
         read = mesh.last_router_weights[f"read_{suffix}"]
         expected_hidden = (memory * read.transpose(1, 2).unsqueeze(-1)).sum(1)
-        if index < 2:
-            torch.testing.assert_close(expected_hidden, mesh.last_core_inputs[index], rtol=1e-5, atol=1e-6)
+        target = mesh.last_core_inputs[index] if index < 2 else mesh.last_suffix_input
+        torch.testing.assert_close(expected_hidden, target, rtol=1e-5, atol=1e-6)
     return {name: True for name in checks} | {"memory_recurrence": True, "router_softmax": True,
                                              "audio_rounds": 2, "router_calls": 8}
 
@@ -132,7 +189,7 @@ def zero_init_audit(model, inputs):
 
 def gradient_audit(model):
     """Run after unscale, before clipping/step/zero_grad."""
-    roles = {}
+    roles, components = {}, {}
     missing, nonfinite, frozen = [], [], []
     for name, p in model.named_parameters():
         if not p.requires_grad:
@@ -146,7 +203,10 @@ def gradient_audit(model):
         grad = p.grad.detach()
         if not bool(torch.isfinite(grad).all()):
             nonfinite.append(name)
-        roles[role] = roles.get(role, 0.0) + float(grad.square().sum())
+        square_sum = float(grad.square().sum())
+        roles[role] = roles.get(role, 0.0) + square_sum
+        component = parameter_component(name)
+        components[component] = components.get(component, 0.0) + square_sum
     if missing or nonfinite or frozen:
         raise ValueError(f"gradient contract failed: missing={missing}, nonfinite={nonfinite}, frozen={frozen}")
     mesh = model.caption_decoder.lm.model
@@ -156,9 +216,11 @@ def gradient_audit(model):
             valid = tensor.grad is not None and bool(torch.isfinite(tensor.grad).all()) and bool(tensor.grad.count_nonzero())
             if not valid:
                 raise ValueError(f"gradient did not reach Core boundary {kind}{index}")
-            boundaries.append({"boundary": f"{kind}{index}", "gradient_norm": float(tensor.grad.norm())})
+            boundaries.append({"boundary": f"{kind}{index if kind == 'H' else index + 1}",
+                               "scaled_gradient_norm": float(tensor.grad.norm())})
     if len(boundaries) != 4:
         raise ValueError("both shared Core executions must retain input/output gradients")
     return {"role_gradient_l2": {k: v ** 0.5 for k, v in roles.items()},
+            "component_gradient_l2": {k: v ** 0.5 for k, v in components.items()},
             "frozen_grads_absent": True, "all_trainable_grads_present_finite": True,
             "core_boundary_gradients": boundaries}

@@ -37,8 +37,9 @@ from data.staging import StagingGate
 from models.mellow import Mellow
 from optim import GradNormTracker, build_optimizer, configure_trainability
 from initialization import load_trained_initialization
-from audits import (assert_query_semantics, changed_parameters, frozen_digest,
-                    gradient_audit, trainable_snapshot, zero_init_audit)
+from audits import (assert_query_semantics, assert_state_exact, changed_parameters, component_update_audit,
+                    frozen_digest, gradient_audit, trainable_digest,
+                    trainable_snapshot, zero_init_audit)
 
 
 def collective_require(condition, message, device):
@@ -194,7 +195,7 @@ def save_checkpoint(path, model, optimizer, scheduler, scaler, tracker, config, 
     dist.barrier()
 
 
-def reload_audit(path, model, config, step):
+def reload_audit(path, model, optimizer, scheduler, scaler, tracker, config, step, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
     required = {"state_dict", "optimizer", "scheduler", "grad_scaler", "grad_norm_tracker", "random_state_by_rank",
                 "epoch", "next_optimizer_step", "total_step", "contract_sha256", "mode", "schema_version", "route_variant"}
@@ -207,8 +208,15 @@ def reload_audit(path, model, config, step):
             raise ValueError(f"checkpoint tensor reload mismatch: {name}")
     if any(int(value["step"]) != step for value in saved["optimizer"]["state"].values()):
         raise ValueError("optimizer did not perform the required real updates")
+    for name, state in (("optimizer", optimizer.state_dict()), ("scheduler", scheduler.state_dict()),
+                        ("grad_scaler", scaler.state_dict()), ("grad_norm_tracker", tracker.state_dict())):
+        assert_state_exact(state, saved[name], name)
+    assert_state_exact(rng_state(device), saved["random_state_by_rank"][0], "rank0_rng")
     return {"status": "PASS", "path": str(path), "optimizer_steps": step,
             "model_tensors_equal": True, "optimizer_state_entries": len(saved["optimizer"]["state"]),
+            "optimizer_state_exact": True, "scheduler_state_exact": True,
+            "grad_scaler_state_exact": True, "grad_norm_tracker_state_exact": True,
+            "rank0_rng_exact": True,
             "scheduler_step": saved["scheduler"]["last_epoch"], "rng_ranks": WORLD_SIZE}
 
 
@@ -465,6 +473,11 @@ def train(config, rank, device):
     save_checkpoint(last_checkpoint, model, optimizer, scheduler, scaler, tracker,
                     config, step, cursor_epoch, cursor_batch, device)
     changed = changed_parameters(model, before)
+    component_updates = component_update_audit(changed)
+    if smoke:
+        if any(not any(check["component_gradient_l2"].get(name, 0.) > 0. for check in gradient_checks)
+               for name in component_updates):
+            raise ValueError("a trainable component had no nonzero gradient in all five smoke updates")
     frozen_after = frozen_digest(model)
     collective_require(frozen_before == frozen_after, "a frozen parameter changed during training", device)
     collective_require(all(any(item["changed"] for item in changed.values() if item["role"] == role)
@@ -474,6 +487,8 @@ def train(config, rank, device):
     collective_require(finite, "nonfinite final parameters", device)
     rank_check = {"rank": rank, "seed": local_seed, "optimizer_steps": step, "first8_rows": first_rows,
                   "trainable_weight_changes": changed, "parameters_finite": finite,
+                  "trainable_components_updated": component_updates,
+                  "trainable_parameters_sha256": trainable_digest(model),
                   "frozen_parameters_exact": frozen_before == frozen_after,
                   "frozen_parameters_sha256_after": frozen_after,
                   "gradient_audits": gradient_checks,
@@ -484,8 +499,11 @@ def train(config, rank, device):
     rank_check["local_switch_step"] = local_switch_step
     rank_checks = [None] * WORLD_SIZE
     dist.all_gather_object(rank_checks, rank_check)
+    if len({item["trainable_parameters_sha256"] for item in rank_checks}) != 1:
+        raise ValueError("DDP ranks ended with different trainable parameters")
     if rank == 0:
-        checkpoint_audit = reload_audit(last_checkpoint, model, config, step)
+        checkpoint_audit = reload_audit(last_checkpoint, model, optimizer, scheduler, scaler, tracker,
+                                        config, step, device)
         report = {"status": "PASS", "route": ROUTE, "mode": config["mode"], "optimizer_steps": step,
                   "contract_sha256": config["contract_sha256"], "code_sha256": contract["code_sha256"], "geometry": geometry,
                   "rank_checks": rank_checks, "layout": model.caption_decoder.last_layout,
@@ -493,6 +511,7 @@ def train(config, rank, device):
                   "config_audit": str(run_dir / "config_audit.json"),
                   "zero_init": initial_audit, "initialization": initialization,
                   "audio_memory": dict(mesh.audio_memory_builder.last_layout),
+                  "ddp_trainable_parameters_exact": True,
                   "decode_scope": "1 raw row/source + zero-init example + all consumed training batches",
                   "staging_used": not smoke}
         write_json(run_dir / "training_report.json", report)

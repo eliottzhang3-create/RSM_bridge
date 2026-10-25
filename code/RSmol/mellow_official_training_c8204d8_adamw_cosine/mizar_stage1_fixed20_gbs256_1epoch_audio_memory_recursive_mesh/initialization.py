@@ -36,8 +36,9 @@ def load_trained_initialization(model, checkpoint):
         raise ValueError("load_state_dict did not preserve the audited legacy key contract")
     # Exact comparison of all legacy tensors; no optimizer/RNG/scheduler state
     # from the source run is used in this new one-epoch run.
+    loaded = model.state_dict()
     for name, old in source.items():
-        if not torch.equal(model.state_dict()[name].detach().cpu(), old):
+        if not torch.equal(loaded[name].detach().cpu(), old):
             raise ValueError(f"legacy tensor was not loaded exactly: {name}")
     return {"path": str(checkpoint), "source_route": payload["route_variant"],
             "source_step": payload["total_step"], "loaded_tensors": len(source),

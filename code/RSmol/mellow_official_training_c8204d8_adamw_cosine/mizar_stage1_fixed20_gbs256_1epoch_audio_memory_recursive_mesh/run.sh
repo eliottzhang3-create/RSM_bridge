@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-[[ $# == 7 || $# == 8 ]] || { echo "run via code/RSmol/run_mizar_s1_gbs256_recursive_mesh_5090.sh" >&2; exit 2; }
+[[ $# == 9 ]] || { echo "run via code/RSmol/run_mizar_s1_audio_memory_gbs256_5090.sh" >&2; exit 2; }
 MODE=$1
 RESOLVED_PATHS=$(readlink -f "$2")
 OUTPUT_ROOT=$(readlink -m "$3")
@@ -8,10 +8,11 @@ RESUME_CHECKPOINT=$4
 TEXT_MODEL_DIR=$(readlink -f "$5")
 HTSAT_ROOT=$(readlink -f "$6")
 PREPARED_INDEX=$7
-STAGE_WORKERS=${8:-4}
+STAGE_WORKERS=$8
+INIT_CHECKPOINT=$(readlink -f "$9")
 ROUTE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 MANIFEST=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json
-[[ "$MODE" == formal ]] || { echo "this route runs formal training only" >&2; exit 2; }
+[[ "$MODE" == formal || "$MODE" == smoke ]] || { echo "mode must be formal or smoke" >&2; exit 2; }
 CONDA_BASE=${MELLOW_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3}
 source "$CONDA_BASE/etc/profile.d/conda.sh"
 conda activate mellow_c8204d8
@@ -40,7 +41,33 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
-# The optional runtime checks are not part of this formal job.
+[[ -f "$INIT_CHECKPOINT" ]] || { echo "initialization checkpoint missing" >&2; exit 2; }
+
+if [[ "$MODE" == smoke ]]; then
+  RUN_DIR="$OUTPUT_ROOT/smoke"
+  mkdir -p "$RUN_DIR"
+  [[ -z "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" && -z "$RESUME_CHECKPOINT" ]] || {
+    echo "smoke requires a fresh empty directory and no resume" >&2; exit 2;
+  }
+  # CPU numerical contracts, then the SAME train.py/AdamW/5771-step schedule
+  # as formal. No stage_data process and no tmpfs audio directory is created.
+  python runtime_checks.py
+  python write_config.py --mode smoke --prepared-index "$PREPARED_INDEX" \
+    --output "$RUN_DIR/runtime.json" --run-dir "$RUN_DIR" \
+    --text-model-dir "$TEXT_MODEL_DIR" --htsat-root "$HTSAT_ROOT" --init-checkpoint "$INIT_CHECKPOINT"
+  torchrun --standalone --nnodes=1 --nproc_per_node=8 train.py --config "$RUN_DIR/runtime.json"
+  python - "$RUN_DIR/training_report.json" <<'PY'
+import json, sys
+from pathlib import Path
+report = json.loads(Path(sys.argv[1]).read_text())
+assert report["status"] == "PASS" and report["optimizer_steps"] == 5
+assert report["staging_used"] is False
+assert all(x["frozen_parameters_exact"] and len(x["gradient_audits"]) == 5 for x in report["rank_checks"])
+assert all(x["audio_read_files"]["local"] == 0 and x["audio_read_files"]["shared"] > 0 for x in report["rank_checks"])
+print(f"[smoke] PASS: five real updates, no staging; report={sys.argv[1]}")
+PY
+  exit 0
+fi
 
 run_one() {
   local run_mode=$1
@@ -51,7 +78,7 @@ run_one() {
     return 2
   fi
   STAGE_TOKEN="${run_mode}_${RUN_ID}"
-  STAGE_ROOT="/dev/shm/mizar_s1_gbs256_recursive_mesh_${STAGE_TOKEN}"
+  STAGE_ROOT="/dev/shm/mizar_s1_gbs256_audio_memory_mesh_${STAGE_TOKEN}"
   local stage_args=(--manifest "$MANIFEST" --resolved-paths "$RESOLVED_PATHS" --prepared-index "$PREPARED_INDEX" \
     --stage-root "$STAGE_ROOT" --token "$STAGE_TOKEN" --mode "$run_mode" --output "$run_dir/staging_report.json" \
     --background --workers "$STAGE_WORKERS")
@@ -62,7 +89,8 @@ run_one() {
   STAGE_PID=$!
   python -m data.staging --report "$run_dir/staging_report.json" --stage-root "$STAGE_ROOT" --producer-pid "$STAGE_PID"
   local config_args=(--prepared "$run_dir/staging_report.json" --output "$run_dir/runtime.json" \
-    --run-dir "$run_dir" --mode "$run_mode" --text-model-dir "$TEXT_MODEL_DIR" --htsat-root "$HTSAT_ROOT")
+    --run-dir "$run_dir" --mode "$run_mode" --text-model-dir "$TEXT_MODEL_DIR" --htsat-root "$HTSAT_ROOT" \
+    --init-checkpoint "$INIT_CHECKPOINT")
   if [[ -n "$RESUME_CHECKPOINT" ]]; then
     config_args+=(--resume-checkpoint "$RESUME_CHECKPOINT")
   fi
@@ -75,7 +103,7 @@ import json
 import sys
 from pathlib import Path
 report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-expected = 17313
+expected = 5771
 if report.get("status") != "PASS" or report.get("optimizer_steps") != expected:
     raise SystemExit("training report did not confirm all required optimizer updates")
 print(f"[{sys.argv[2]}] PASS: {expected} optimizer updates; report={sys.argv[1]}")

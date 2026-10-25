@@ -20,6 +20,8 @@ from models.decoder import DecoderModel, downsample
 from optim import GradNormTracker, build_optimizer
 from stage_data import epoch_priorities, first_optimizer_rows
 from train import answer_loss
+from audio_memory import AudioAttention, AudioMemoryBuilder, temporal_encoding, ungroup_stage2
+from optim import configure_trainability
 
 
 class RuntimeChecks(unittest.TestCase):
@@ -27,8 +29,8 @@ class RuntimeChecks(unittest.TestCase):
         actual = geometry(1477492)
         self.assertEqual((WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, GLOBAL_BATCH_SIZE), (8, 8, 4, 256))
         self.assertEqual(actual["steps_per_epoch"], 5771)
-        self.assertEqual(actual["total_steps"], 17313)
-        self.assertEqual(actual["warmup_steps"], 866)
+        self.assertEqual(actual["total_steps"], 5771)
+        self.assertEqual(actual["warmup_steps"], 289)
         self.assertEqual(actual["dropped_rows_per_epoch"], 116)
 
     def test_fixed20_single_order_and_right_padding(self):
@@ -80,7 +82,7 @@ class RuntimeChecks(unittest.TestCase):
             self.assertEqual(list(sampler), indices[3 * RANK_UPDATE_SAMPLES:])
             self.assertEqual(len(sampler), 259 - 3 * RANK_UPDATE_SAMPLES)
             all_indices.extend(indices)
-        self.assertEqual(len(set(all_indices)), 1032)
+        self.assertEqual(len(set(all_indices)), 2072)
         priorities, _ = epoch_priorities(count, epoch=1, start_batch=7)
         for rank in range(WORLD_SIZE):
             sampler = CustomDistributedSampler(range(count), WORLD_SIZE, rank, seed=SEED, drop_last=True)
@@ -195,17 +197,35 @@ class RuntimeChecks(unittest.TestCase):
             model.audio_encoder.base.c2l = nn.Linear(3, 3)
             model.audio_encoder.projection = nn.Sequential(nn.Linear(3, 3), nn.LayerNorm(3))
             model.caption_decoder = nn.Module()
-            model.caption_decoder.lm = nn.Linear(3, 3)
+            model.caption_decoder.lm = nn.Module()
+            model.caption_decoder.lm.model = nn.Module()
+            mesh = model.caption_decoder.lm.model
+            mesh.layers = nn.ModuleList([nn.Linear(3, 3) for _ in range(20)])
+            mesh.embed_tokens = nn.Embedding(32, 3)
+            mesh.norm = nn.LayerNorm(3)
+            mesh.read_routers = nn.ModuleList([nn.Linear(3, 5) for _ in range(3)])
+            mesh.write_routers = nn.ModuleList([nn.Linear(3, 5) for _ in range(3)])
+            mesh.perceive_routers = nn.ModuleList([nn.Linear(3, 5) for _ in range(2)])
+            mesh.audio_memory_builder = nn.Linear(3, 3)
+            model.caption_decoder.lm.lm_head = nn.Linear(3, 32)
+            configure_trainability(model)
+            self.assertFalse(any(p.requires_grad for p in model.audio_encoder.parameters()))
+            self.assertTrue(all(p.requires_grad == (5 <= i < 15)
+                                for i, layer in enumerate(mesh.layers) for p in layer.parameters()))
+            self.assertFalse(any(p.requires_grad for p in mesh.embed_tokens.parameters()))
+            self.assertFalse(any(p.requires_grad for p in mesh.norm.parameters()))
+            self.assertFalse(any(p.requires_grad for p in model.caption_decoder.lm.lm_head.parameters()))
             return model
 
         model = make_model()
         optimizer, scheduler, audit = build_optimizer(model, 200)
-        self.assertEqual({x["base_lr"] for x in audit}, {3e-4, 6e-4})
+        self.assertEqual({x["base_lr"] for x in audit}, {5e-5})
+        self.assertEqual({x["min_lr"] for x in audit}, {5e-6})
         self.assertEqual({x["weight_decay"] for x in audit}, {0., .01})
         for group, description in zip(optimizer.param_groups, audit):
             self.assertAlmostEqual(group["lr"], description["base_lr"] * .1)
         for _ in range(3):
-            sum(p.square().sum() for p in model.parameters()).backward()
+            sum(p.square().sum() for p in model.parameters() if p.requires_grad).backward()
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             scheduler.step()
@@ -214,8 +234,15 @@ class RuntimeChecks(unittest.TestCase):
         restored.load_state_dict(model.state_dict())
         other_optimizer.load_state_dict(copy.deepcopy(optimizer.state_dict()))
         other_scheduler.load_state_dict(scheduler.state_dict())
+        from audits import assert_state_exact
+        assert_state_exact(optimizer.state_dict(), other_optimizer.state_dict(), "optimizer")
+        assert_state_exact(scheduler.state_dict(), other_scheduler.state_dict(), "scheduler")
+        with self.assertRaisesRegex(ValueError, "serialized state differs"):
+            bad = copy.deepcopy(other_optimizer.state_dict())
+            next(iter(bad["state"].values()))["exp_avg"].add_(1.)
+            assert_state_exact(optimizer.state_dict(), bad, "optimizer")
         for candidate, opt, sched in ((model, optimizer, scheduler), (restored, other_optimizer, other_scheduler)):
-            sum(p.square().sum() for p in candidate.parameters()).backward()
+            sum(p.square().sum() for p in candidate.parameters() if p.requires_grad).backward()
             opt.step()
             opt.zero_grad(set_to_none=True)
             sched.step()
@@ -225,11 +252,148 @@ class RuntimeChecks(unittest.TestCase):
         for group in optimizer.param_groups:
             self.assertAlmostEqual(group["lr"], group["initial_lr"] * lr_factor(4, 200))
 
+    def test_real_stage2_ungroup_and_both_chronological_halves(self):
+        packed = torch.arange(1024, dtype=torch.float32).view(1, 1024, 1).expand(1, 1024, 192)
+        grid = ungroup_stage2(packed)
+        self.assertEqual(tuple(grid.shape), (1, 8, 128, 192))
+        for frequency in range(8):
+            for time in range(128):
+                expected = ((time // 32) * 8 + frequency) * 32 + time % 32
+                self.assertEqual(grid[0, frequency, time, 0].item(), expected)
+        builder = AudioMemoryBuilder()
+        builder.reset_parameters()
+        observed = []
+        handle = builder.stage2_norm.register_forward_pre_hook(lambda _m, args: observed.append(args[0].clone()))
+        memory = builder(packed, packed + 10000)
+        handle.remove()
+        self.assertEqual(tuple(memory.shape), (1, 2048, 576))
+        self.assertTrue(torch.equal(observed[0][:, :, :128], grid))
+        self.assertTrue(torch.equal(observed[0][:, :, 128:], grid + 10000))
+        before = memory.detach().reshape(1, 8, 256, 576)
+        with torch.no_grad():
+            builder.frequency_embedding[3].fill_(1.)
+        after = builder(packed, packed + 10000).detach().reshape(1, 8, 256, 576)
+        delta = after - before
+        self.assertTrue(torch.allclose(delta[:, 3], torch.ones_like(delta[:, 3]), atol=1e-6))
+        self.assertEqual(int(delta[:, :3].count_nonzero()) + int(delta[:, 4:].count_nonzero()), 0)
+        time = temporal_encoding(device="cpu", dtype=torch.float32).reshape(256, 576)
+        self.assertAlmostEqual(time[0, 0].item(), __import__("math").sin(.5), places=6)
+        self.assertAlmostEqual(time[255, 0].item(), __import__("math").sin(255.5), places=6)
+
+    def test_htsat_stage2_tap_keeps_complete_final_embedding(self):
+        from models.htsat import HTSATWrapper
+        htsat = HTSATWrapper().eval()
+        stage_calls = [0, 0]
+        def count(index):
+            def hook(*_args):
+                stage_calls[index] += 1
+            return hook
+        handles = [htsat.htsat.layers[i].register_forward_hook(count(i - 2)) for i in (2, 3)]
+        waveform = torch.randn(1, HALF_SAMPLES)
+        try:
+            with torch.no_grad():
+                tapped = htsat(waveform, capture_stage2=True)
+                original = htsat(waveform, capture_stage2=False)
+            self.assertEqual(tuple(tapped["stage2"].shape), (1, 1024, 192))
+            self.assertEqual(tuple(tapped["embedding"].shape), (1, 1025, 768))
+            self.assertEqual(stage_calls, [2, 2])
+            self.assertTrue(torch.equal(tapped["embedding"], original["embedding"]))
+        finally:
+            for handle in handles:
+                handle.remove()
+
+    def test_real_mesh_zero_parity_queries_freeze_and_boundary_gradients(self):
+        """Exercise the actual 20-layer implementation with a small FFN/vocab."""
+        import importlib.util
+        from transformers import LlamaConfig
+        from recursive_model_audio_memory import RecursiveLlamaForCausalLM
+        from audits import assert_query_semantics, frozen_digest, gradient_audit
+        from initialization import NEW_PREFIXES, SOURCE_ROUTE, load_trained_initialization
+
+        config = LlamaConfig(hidden_size=576, intermediate_size=64, num_hidden_layers=30,
+                             num_attention_heads=9, num_key_value_heads=3, vocab_size=32,
+                             recursive_layer_count=20, recursive_loops=2, use_cache=False,
+                             tie_word_embeddings=False, attention_dropout=0.)
+        # An independent execution of the unchanged legacy model is the parity
+        # reference; toggling the new model alone would miss a legacy regression.
+        legacy_path = Path(__file__).resolve().parents[2] / "recursive_model_5_10x2_5_mesh.py"
+        spec = importlib.util.spec_from_file_location("legacy_mesh_runtime_reference", legacy_path)
+        legacy_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(legacy_module)
+        legacy = legacy_module.RecursiveLlamaForCausalLM(copy.deepcopy(config)).eval()
+        wrapper = nn.Module()
+        wrapper.audio_encoder = nn.Linear(2, 2)
+        wrapper.caption_decoder = nn.Module()
+        wrapper.caption_decoder.lm = RecursiveLlamaForCausalLM(copy.deepcopy(config))
+        source = {"caption_decoder.lm." + name: value for name, value in legacy.state_dict().items()}
+        source.update({"audio_encoder." + name: value for name, value in wrapper.audio_encoder.state_dict().items()})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.ckpt"
+            torch.save({"route_variant": SOURCE_ROUTE, "total_step": 17313, "state_dict": source}, path)
+            audit = load_trained_initialization(wrapper, path)
+            self.assertTrue(audit["legacy_tensors_exact"])
+            self.assertTrue(all(name.startswith(NEW_PREFIXES) for name in audit["new_parameter_tensors"]))
+            broken = dict(source)
+            broken.pop("caption_decoder.lm.model.layers.5.mlp.down_proj.weight")
+            torch.save({"route_variant": SOURCE_ROUTE, "total_step": 17313, "state_dict": broken}, path)
+            with self.assertRaisesRegex(ValueError, "legacy initialization mismatch"):
+                load_trained_initialization(wrapper, path)
+        configure_trainability(wrapper)
+        wrapper.eval()
+        lm = wrapper.caption_decoder.lm
+        mesh = lm.model
+        mesh.audit_mode = True
+        ids = torch.tensor([[2, 3, 4]])
+        first, second = torch.randn(1, 1024, 192), torch.randn(1, 1024, 192)
+        with torch.no_grad():
+            expected = legacy(input_ids=ids, use_cache=False).logits
+            actual = lm(input_ids=ids, audio_stage2_1=first, audio_stage2_2=second, use_cache=False).logits
+        self.assertTrue(torch.equal(actual, expected))
+        self.assertTrue(assert_query_semantics(mesh)["memory_recurrence"])
+        del legacy
+        frozen_before = frozen_digest(wrapper)
+        # Open both output projections to exercise every new upstream path.
+        with torch.no_grad():
+            for output in mesh.audio_attention.o_projs:
+                output.weight.normal_(0., .01)
+        mesh.gradient_audit_mode = True
+        result = lm(input_ids=ids, audio_stage2_1=first, audio_stage2_2=second, use_cache=False)
+        result.logits.square().mean().backward()
+        self.assertTrue(assert_query_semantics(mesh)["perceive1_H0"])
+        self.assertTrue(gradient_audit(wrapper)["all_trainable_grads_present_finite"])
+        self.assertGreater(mesh.audio_memory_builder.frequency_embedding.grad.norm().item(), 0.)
+        for router in mesh.perceive_routers:
+            self.assertGreater(router.weight.grad.norm().item(), 0.)
+        self.assertEqual(frozen_digest(wrapper), frozen_before)
+
+    def test_zero_output_projections_open_gradient_path_after_first_update(self):
+        torch.manual_seed(1234)
+        attention = AudioAttention()
+        attention.reset_parameters()
+        self.assertEqual((attention.heads, attention.head_dim), (9, 64))
+        self.assertIsNot(attention.q_projs[0].weight, attention.q_projs[1].weight)
+        self.assertIsNot(attention.o_projs[0].weight, attention.o_projs[1].weight)
+        query = torch.randn(1, 4, 576)
+        memory = torch.randn(1, 16, 576)
+        kv = attention.prepare_kv(memory)
+        outputs = [attention(query, kv, i) for i in range(2)]
+        self.assertTrue(all(x.count_nonzero() == 0 for x in outputs))
+        sum(x.sum() for x in outputs).backward()
+        for proj in attention.o_projs:
+            self.assertGreater(proj.weight.grad.abs().sum().item(), 0.)
+        self.assertEqual(attention.k_proj.weight.grad.count_nonzero().item(), 0)
+        with torch.no_grad():
+            for proj in attention.o_projs:
+                proj.weight.normal_(0., .01)
+        attention.zero_grad(set_to_none=True)
+        kv = attention.prepare_kv(memory)
+        sum(attention(query, kv, i).square().mean() for i in range(2)).backward()
+        for proj in list(attention.q_projs) + [attention.k_proj, attention.v_proj]:
+            self.assertGreater(proj.weight.grad.abs().sum().item(), 0.)
+
 
 if __name__ == "__main__":
     torch.set_num_threads(1)
-    if not torch.cuda.is_available() or torch.cuda.device_count() != WORLD_SIZE:
-        raise SystemExit("job preflight requires exactly eight visible CUDA GPUs")
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(RuntimeChecks))
     if not result.wasSuccessful():
         raise SystemExit(1)

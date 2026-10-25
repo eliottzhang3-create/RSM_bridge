@@ -27,7 +27,7 @@ try:
     from transformers.models.llama.configuration_llama import LlamaConfig
     from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaPreTrainedModel
 except ImportError as exc:  # pragma: no cover - static checkout without ML dependencies
-    raise ImportError("recursive_model_5_10x2_5_mesh requires torch and transformers") from exc
+    raise ImportError("recursive_model_audio_memory requires torch and transformers") from exc
 
 
 LOGICAL_LAYER_COUNT = 30
@@ -281,6 +281,7 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         self.last_cross_queries: list[torch.Tensor] = []
         self.last_audio_outputs: list[torch.Tensor] = []
         self.last_audio_write_norms: list[float] = []
+        self.last_suffix_input: torch.Tensor | None = None
         self.post_init()
         # post_init initializes all modules.  Restore the explicit router policy.
         for router in list(self.write_routers) + list(self.read_routers):
@@ -402,6 +403,7 @@ class MeshLlamaModel(LlamaPreTrainedModel):
         self.last_cross_queries = []
         self.last_audio_outputs = []
         self.last_audio_write_norms = []
+        self.last_suffix_input = None
         kv = None
         if self.audio_injection_enabled:
             if audio_stage2_1 is None or audio_stage2_2 is None:
@@ -459,6 +461,8 @@ class MeshLlamaModel(LlamaPreTrainedModel):
             hidden = self._read(memory, read)
             if output_hidden_states:
                 hidden_states.append(hidden)
+        if self.audit_mode:
+            self.last_suffix_input = hidden.detach().cpu()
         with record_function("mesh/suffix_5"):
             hidden = self._run_stack(hidden, range(15, 20), 25, attention_mask=mask, position_ids=position_ids, cache=cache, use_cache=use_cache, cache_position=cache_position, position_embeddings=position_embeddings, output_attentions=output_attentions, all_attentions=attentions)
         hidden = self.norm(hidden)
@@ -545,6 +549,9 @@ def parameter_audit(model: nn.Module) -> dict[str, Any]:
         "parameter_count_references": int(sum(p.numel() for _, p in names)),
         "logical_layer_count": 30, "physical_layer_count": 20, "logical_cache_slot_count": 30,
         "recursive_loops": 2, "memory_slots": 5, "router_count": 6,
+        "perceive_router_count": 2, "total_router_count": 8,
+        "cross_attention_rounds": 2, "cross_attention_heads": 9, "cross_attention_head_dim": 64,
+        "shared_kv_across_rounds": True, "independent_q_and_o": True,
         "schedule": list(LOGICAL_TO_PHYSICAL), "source_mapping_0based": list(SOURCE_LAYER_INDICES_0BASED),
         "router_parameter_names": router_names, "router_parameter_count": ROUTER_PARAMETER_COUNT, "router_parameter_tensor_count": len(router_names),
         "router_objects_independent": len({id(r) for r in list(getattr(getattr(model, "model", model), "write_routers", [])) + list(getattr(getattr(model, "model", model), "read_routers", []))}) == 6,

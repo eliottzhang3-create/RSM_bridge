@@ -14,7 +14,7 @@ import random
 from pathlib import Path
 from types import SimpleNamespace
 
-from contract import SOURCE_COUNTS, code_digest, geometry, lr_factor, write_json
+from contract import MAX_LR, MIN_LR, SOURCE_COUNTS, code_digest, geometry, lr_factor, write_json
 
 ROOT = Path(__file__).resolve().parent
 
@@ -105,7 +105,7 @@ def audit(reference):
                                  for value in ast.walk(node.test)))
     reference_lr = next(node for node in warmup_branch.body if isinstance(node, ast.FunctionDef))
     lr_scope = {"math": math, "warmup_steps": steps["warmup_steps"], "total_steps": steps["total_steps"],
-                "min_factor": 2.9999999999999997e-05 / .0003}
+                "min_factor": MIN_LR / MAX_LR}
     execute([reference_lr], lr_scope)
     lr_max_error = max(abs(lr_scope["lr_lambda"](step) - lr_factor(step, steps["total_steps"]))
                        for step in range(steps["total_steps"] + 1))
