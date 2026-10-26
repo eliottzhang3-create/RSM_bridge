@@ -1,5 +1,26 @@
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
+## 2026-10-26：非 MeSH 5+10×2+5 checkpoint 的 MMAU / MMAR 官方评测
+
+两个现有评测入口新增 `RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_5_10_5`，默认选择训练路线 `mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5`，加载以下 run 的 `formal/checkpoints/model--step-17313.ckpt` 和 `formal/runtime.json`：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_5_10_5_5090/formal_20261025_160348996763174
+```
+
+评测 adapter 按 route 选择 `recursive_model_5_10_5.py`，保留 checkpoint/runtime、训练源码 SHA、原始组件资产、词表和完整 state_dict 严格校验。完整音频权重加载后，再执行该训练路线真实的 `validate_loaded_model`：验证 30 logical / 20 独立 physical / middle-only 2 loops，以及参数和 buffer 中没有 router、memory-slot 或 MeSH 状态。MeSH 分支继续使用自己的实现及 5 memory slots / 6 routers 审计。
+
+经 GitHub 同步到远程后，在 `code/RSmol/` 直接提交两个完整评测作业：
+
+```bash
+RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_5_10_5 bash run_mizar_s1_mmau_eval_5090.sh
+RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_5_10_5 bash run_mizar_s1_mmar_eval_5090.sh
+```
+
+每个作业使用 `pdgpu-5090 / -c 8 -m 32G -g 1 -n 1`。两项评测共用此前的 fixed20 在线音频、`129+129+1+256` prefix、固定 answer 起点 515、FP32、可见 padding / `attention_mask=None`、无 KV cache 的确定性 argmax、EOS 停止和最多 300 new tokens。完整生成保留 EOS，不截取、不 trim、不提取选项，只交给各自官方 scorer；不执行额外 rescore，也不增加 smoke 前置门槛。
+
+结果分别写到上述 run 下的 `eval/mmau_test_mini_step17313/` 和 `eval/mmar_step17313/`，包含 `raw_generations.jsonl`、`evaluation_report.json` 和 `official_evaluation.txt`。本地 CPU 验证覆盖真实训练审计函数调用、错误模型状态拒绝、checkpoint 合同，以及两个 Bash 入口的四种 variant 与资源参数；远程真实权重加载和 GPU 生成仍由评测作业验证。
+
 ## 2026-10-26：Mizar S1 / 5-10x4-5 MeSH 因 OOM 调整为 GBS128
 
 现有隔离路线 [mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5/README.md) 在远程 GBS256 运行中发生 OOM，按用户要求改为 **8 GPU × microbatch 4 × accumulation 4 = GBS128**。减半 microbatch 以降低单次前向/反向激活显存；仅减半 accumulation 不能降低原 microbatch 的激活峰值。总显存还包含参数与优化器状态，不能保证总峰值减半。

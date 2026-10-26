@@ -19,6 +19,11 @@ TRAINING_LOSS_REDUCTIONS = {
     "htsat_mizar_s1_fixed20_v1": "rank_local_token_mean_then_DDP_mean",
     "htsat_mizar_s1_fixed20_gbs256_v1": "mean_of_rank_local_microbatch_token_means_then_DDP_mean",
     "htsat_mizar_s1_fixed20_gbs256_recursive_mesh_v1": "mean_of_rank_local_microbatch_token_means_then_DDP_mean",
+    "htsat_mizar_s1_fixed20_gbs256_recursive_5_10_5_v1": "mean_of_rank_local_microbatch_token_means_then_DDP_mean",
+}
+RECURSIVE_IMPLEMENTATIONS = {
+    "htsat_mizar_s1_fixed20_gbs256_recursive_mesh_v1": "recursive_model_5_10x2_5_mesh",
+    "htsat_mizar_s1_fixed20_gbs256_recursive_5_10_5_v1": "recursive_model_5_10_5",
 }
 PROTOCOL = {
     "version": "htsat_mizar_s1_fixed20_raw_greedy_v1",
@@ -158,6 +163,9 @@ def audit_recursive_route(route_contract, contract, model):
     """Recheck the recursive text artifact and loaded parameter geometry."""
     if not hasattr(route_contract, "recursive_checkpoint_contract"):
         return None
+    if route_contract.ROUTE not in RECURSIVE_IMPLEMENTATIONS:
+        raise ValueError(f"unsupported recursive evaluation route: {route_contract.ROUTE}")
+    implementation = RECURSIVE_IMPLEMENTATIONS[route_contract.ROUTE]
     text_root = Path(contract["text_model_dir"])
     expected = contract.get("recursive_text_checkpoint")
     actual = route_contract.recursive_checkpoint_contract(text_root)
@@ -167,22 +175,33 @@ def audit_recursive_route(route_contract, contract, model):
     # to contract.py.  Import it after the route has been isolated so a stale
     # contract module from another training route cannot be used.
     recursive_text = importlib.import_module("models.recursive_text")
+    expected_loader = Path(route_contract.__file__).resolve().parent / "models/recursive_text.py"
+    if Path(recursive_text.__file__).resolve() != expected_loader:
+        raise RuntimeError(f"recursive text loader escaped training route: {recursive_text.__file__}")
     recursive_text.validate_recursive_config(model.caption_decoder.lm.config)
-    recursive_impl = importlib.import_module("recursive_model_5_10x2_5_mesh")
+    recursive_impl = importlib.import_module(implementation)
+    if Path(recursive_impl.__file__).resolve() != (ROOT / f"{implementation}.py").resolve():
+        raise RuntimeError(f"recursive implementation escaped source root: {recursive_impl.__file__}")
     parameter_audit = recursive_impl.parameter_audit(model.caption_decoder.lm)
     required = {
         "logical_layer_count": 30,
         "physical_layer_count": 20,
         "logical_cache_slot_count": 30,
         "recursive_loops": 2,
-        "memory_slots": 5,
-        "router_count": 6,
     }
+    if implementation == "recursive_model_5_10x2_5_mesh":
+        required.update(memory_slots=5, router_count=6)
     if any(parameter_audit.get(key) != value for key, value in required.items()):
         raise ValueError(f"loaded recursive parameter audit mismatch: {parameter_audit}")
     if parameter_audit.get("schedule") != list(route_contract.TEXT_MODEL_SCHEDULE):
         raise ValueError("loaded recursive parameter schedule mismatch")
-    return {"checkpoint": actual, "parameters": parameter_audit}
+    if implementation == "recursive_model_5_10_5":
+        # Its parameter audit has no memory/router counters. Use the actual
+        # training validator to inspect physical modules and every named
+        # parameter/buffer, rather than treating absent counters as zeros.
+        recursive_text.validate_loaded_model(model.caption_decoder.lm, parameter_audit)
+    return {"checkpoint": actual, "parameters": parameter_audit,
+            "implementation": implementation}
 
 
 def load_runtime(args):

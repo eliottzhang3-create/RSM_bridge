@@ -145,6 +145,40 @@ Intermediate checkpoints are written at steps 2,886, 5,771, 8,656, 11,542,
 `htsat_mizar_s1_fixed20_gbs256_recursive_5_10_5_v1`; baseline and MeSH checkpoints are
 rejected by strict route and contract checks.
 
-The current repository has no verified evaluator for this new recursive route.
-Evaluation should be added only after a successful training report and must
-load this route's runtime contract and checkpoint identity.
+## MMAU test-mini and MMAR evaluation
+
+The shared official benchmark evaluator supports this route through
+`RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_5_10_5`. From `code/RSmol`, submit:
+
+```bash
+RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_5_10_5 bash run_mizar_s1_mmau_eval_5090.sh
+RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_5_10_5 bash run_mizar_s1_mmar_eval_5090.sh
+```
+
+The default run is:
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_5_10_5_5090/formal_20261025_160348996763174
+```
+
+Both wrappers use its `formal/checkpoints/model--step-17313.ckpt` and
+`formal/runtime.json`, validate training geometry `8,8,4`, and request
+`pdgpu-5090 / -c 8 -m 32G -g 1 -n 1`. No smoke report is required.
+Outputs are isolated under `eval/mmau_test_mini_step17313` and
+`eval/mmar_step17313` within that run.
+
+The evaluator loads the exact training model and tokenizer, checks the
+checkpoint/runtime and source hashes, strictly loads the complete audio
+checkpoint, and calls this route's actual loaded-model validator. It checks
+20 independent physical layers, the fixed middle-only schedule, and absence
+of MeSH parameters and buffers. Original text/tokenizer and HTSAT assets
+recorded in the runtime must remain available; training audio/staging
+directories are not opened for evaluation.
+
+Audio preprocessing, fixed prompt/choice order, visible prompt padding,
+`129+129+1+256` prefix and answer position 515 are shared with the existing
+baseline/MeSH evaluator. Both benchmarks use FP32, `attention_mask=None`,
+`use_cache=False`, pure greedy argmax, EOS stopping, and at most 300 new
+tokens. Generated text, including EOS, goes unchanged to each official
+scorer. CPU tests cover route dispatch and real training validators; actual
+checkpoint loading and GPU inference require the remote evaluation job.

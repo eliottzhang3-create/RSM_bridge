@@ -7,9 +7,11 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 
@@ -90,11 +92,12 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             "gbs32": "mizar_stage1_fixed20_3epochs",
             "gbs256": "mizar_stage1_fixed20_gbs256_3epochs",
             "recursive_mesh": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh",
+            "recursive_5_10_5": "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5",
         }[variant]
         route = load_module("test_contract_" + variant, ROOT / "code/RSmol" /
                             "mellow_official_training_c8204d8_adamw_cosine" / folder / "contract.py")
         contract = route.semantic_contract({
-            "rows": (1477492 if variant in {"gbs256", "recursive_mesh"} else 1311334), "source_rows": route.SOURCE_COUNTS,
+            "rows": (1311334 if variant == "gbs32" else 1477492), "source_rows": route.SOURCE_COUNTS,
             "rows_canonical_sha256": "manifest", "mapping_sha256": "mapping",
         }, "text-model", "htsat")
         identity = route.digest(contract)
@@ -105,16 +108,17 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             "num_epochs": 3,
             "loss_reduction": (
                 "mean_of_rank_local_microbatch_token_means_then_DDP_mean"
-                if variant in {"gbs256", "recursive_mesh"} else "rank_local_token_mean_then_DDP_mean"),
+                if variant != "gbs32" else "rank_local_token_mean_then_DDP_mean"),
         }
         runtime = {"contract": contract, "contract_sha256": identity,
                    "route": route.ROUTE, "mode": "formal"}
         return saved, runtime, route
 
-    def test_both_checkpoint_schemas_validate_and_cross_route_use_fails(self):
+    def test_checkpoint_schemas_validate_and_cross_route_use_fails(self):
         for variant, geometry, step in (("gbs32", (8, 4, 1), 122937),
                                         ("gbs256", (8, 8, 4), 17313),
-                                        ("recursive_mesh", (8, 8, 4), 17313)):
+                                        ("recursive_mesh", (8, 8, 4), 17313),
+                                        ("recursive_5_10_5", (8, 8, 4), 17313)):
             with self.subTest(variant=variant):
                 saved, runtime, route = self.checkpoint_fixture(variant)
                 contract = self.runtime.validate_checkpoint(saved, runtime, route, step, geometry)
@@ -128,17 +132,33 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "complete formal"):
                     self.runtime.validate_checkpoint(saved, runtime, other, step, geometry)
 
-    def test_recursive_mesh_contract_requires_text_architecture_and_source(self):
-        saved, runtime, route = self.checkpoint_fixture("recursive_mesh")
-        contract = self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
-        self.assertEqual(contract["text_model_contract"], route.TEXT_MODEL_CONTRACT)
-        self.assertEqual(contract["text_model_schedule"], list(route.TEXT_MODEL_SCHEDULE))
-        saved["contract"]["text_model_schedule"] = list(reversed(route.TEXT_MODEL_SCHEDULE))
-        saved["contract_sha256"] = route.digest(saved["contract"])
-        runtime["contract"] = saved["contract"]
-        runtime["contract_sha256"] = saved["contract_sha256"]
-        with self.assertRaisesRegex(ValueError, "recursive text training contract"):
-            self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
+    def test_recursive_contracts_require_text_architecture_schedule_and_source(self):
+        for variant in ("recursive_mesh", "recursive_5_10_5"):
+            with self.subTest(variant=variant):
+                saved, runtime, route = self.checkpoint_fixture(variant)
+                contract = self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
+                self.assertEqual(contract["text_model_contract"], route.TEXT_MODEL_CONTRACT)
+                self.assertEqual(contract["text_model_schedule"], list(route.TEXT_MODEL_SCHEDULE))
+                with patch.object(route, "recursive_model_source_sha256", return_value="changed"):
+                    with self.assertRaisesRegex(ValueError, "recursive model source differs"):
+                        self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
+                for field, value in (("text_model_architecture", "wrong-model"),
+                                     ("text_model_schedule", list(reversed(route.TEXT_MODEL_SCHEDULE)))):
+                    previous = saved["contract"][field]
+                    saved["contract"][field] = value
+                    saved["contract_sha256"] = route.digest(saved["contract"])
+                    runtime["contract_sha256"] = saved["contract_sha256"]
+                    with self.assertRaisesRegex(ValueError, "recursive text training contract"):
+                        self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
+                    saved["contract"][field] = previous
+
+    def test_recursive_mesh_and_non_mesh_checkpoints_are_not_interchangeable(self):
+        for variant, other_variant in (("recursive_mesh", "recursive_5_10_5"),
+                                       ("recursive_5_10_5", "recursive_mesh")):
+            saved, runtime, _ = self.checkpoint_fixture(variant)
+            other = self.checkpoint_fixture(other_variant)[2]
+            with self.assertRaisesRegex(ValueError, "complete formal"):
+                self.runtime.validate_checkpoint(saved, runtime, other, 17313, (8, 8, 4))
 
     def test_gbs256_keeps_source_runtime_and_loss_checks(self):
         saved, runtime, route = self.checkpoint_fixture("gbs256")
@@ -236,6 +256,139 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
         self.assertIn('importlib.import_module("models.recursive_text")', source)
         self.assertNotIn("route_contract.validate_recursive_config", source)
 
+    def recursive_audit_fixture(self, variant):
+        """Exercise real route validators with CPU stand-ins for Torch state."""
+        route = self.checkpoint_fixture(variant)[2]
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        config = {
+            "model_type": "llama", "architectures": ["RecursiveLlamaForCausalLM"],
+            "hidden_size": 576, "num_hidden_layers": 30, "recursive_layer_count": 20,
+            "recursive_loops": 2, "logical_to_physical": list(route.TEXT_MODEL_SCHEDULE),
+            "vocab_size": 49152, "eos_token_id": 0,
+        }
+        parameters = {
+            "logical_layer_count": 30, "physical_layer_count": 20,
+            "logical_cache_slot_count": 30, "recursive_loops": 2,
+            "schedule": list(route.TEXT_MODEL_SCHEDULE),
+        }
+        if variant == "recursive_mesh":
+            implementation = "recursive_model_5_10x2_5_mesh"
+            config.update(mesh_memory_slots=5, mesh_router_count=6,
+                          mesh_architecture_contract=route.TEXT_MODEL_CONTRACT)
+            parameters.update(memory_slots=5, router_count=6)
+        else:
+            implementation = "recursive_model_5_10_5"
+            config.update(
+                recursive_prefix_layer_count=5, recursive_middle_layer_count=10,
+                recursive_suffix_layer_count=5, recursive_loops_scope="middle_only",
+                recursive_source_layer_indices_0based=list(route.TEXT_MODEL_SOURCE_MAPPING))
+            parameters.update(recursive_layer_count=20, middle_recurrent_count=10,
+                              model_physical_module_count=20)
+        (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
+        (root / "model.safetensors").write_bytes(b"CPU fixture, not model weights")
+        (root / "tokenizer.json").write_text("{}", encoding="utf-8")
+        contract = {"text_model_dir": str(root),
+                    "recursive_text_checkpoint": route.recursive_checkpoint_contract(root)}
+        with patch.dict(sys.modules, {"contract": route}):
+            text = load_module("eval_text_" + variant,
+                               Path(route.__file__).parent / "models/recursive_text.py")
+        loaded_config = SimpleNamespace(**config)
+        loaded_config.to_dict = lambda: vars(loaded_config).copy()
+        lm = SimpleNamespace(
+            config=loaded_config,
+            model=SimpleNamespace(layers=[object() for _ in range(20)],
+                                  logical_to_physical=list(route.TEXT_MODEL_SCHEDULE)),
+            named_parameters=Mock(return_value=[("model.layers.0.weight", object())]),
+            named_buffers=Mock(return_value=[]))
+        model = SimpleNamespace(caption_decoder=SimpleNamespace(lm=lm))
+        backend = SimpleNamespace(
+            __file__=str(ROOT / "code/RSmol" / f"{implementation}.py"),
+            parameter_audit=Mock(return_value=parameters))
+        modules = {"models.recursive_text": text, implementation: backend}
+        return route, contract, model, modules
+
+    def test_non_mesh_audit_executes_training_validator_without_mesh_counters(self):
+        route, contract, model, modules = self.recursive_audit_fixture("recursive_5_10_5")
+        text = modules["models.recursive_text"]
+        backend = modules["recursive_model_5_10_5"]
+        with patch.object(self.runtime.importlib, "import_module", side_effect=modules.__getitem__) as importer:
+            with patch.object(text, "validate_loaded_model", wraps=text.validate_loaded_model) as validator:
+                result = self.runtime.audit_recursive_route(route, contract, model)
+                validator.assert_called_once_with(model.caption_decoder.lm, backend.parameter_audit.return_value)
+        self.assertEqual([call.args[0] for call in importer.call_args_list],
+                         ["models.recursive_text", "recursive_model_5_10_5"])
+        self.assertEqual(result["implementation"], "recursive_model_5_10_5")
+        self.assertNotIn("memory_slots", result["parameters"])
+        self.assertNotIn("router_count", result["parameters"])
+        self.assertEqual(result["checkpoint"]["config"]["memory_slots"], 0)
+        self.assertEqual(result["checkpoint"]["config"]["routers"], 0)
+        model.caption_decoder.lm.named_parameters.assert_called_once_with()
+        model.caption_decoder.lm.named_buffers.assert_called_once_with()
+
+    def test_mesh_audit_still_executes_its_real_config_validator_and_router_checks(self):
+        route, contract, model, modules = self.recursive_audit_fixture("recursive_mesh")
+        text = modules["models.recursive_text"]
+        with patch.object(self.runtime.importlib, "import_module", side_effect=modules.__getitem__):
+            with patch.object(text, "validate_recursive_config", wraps=text.validate_recursive_config) as validator:
+                result = self.runtime.audit_recursive_route(route, contract, model)
+                validator.assert_called_once_with(model.caption_decoder.lm.config)
+            self.assertEqual(result["parameters"]["memory_slots"], 5)
+            self.assertEqual(result["parameters"]["router_count"], 6)
+            modules["recursive_model_5_10x2_5_mesh"].parameter_audit.return_value["router_count"] = 0
+            with self.assertRaisesRegex(ValueError, "parameter audit mismatch"):
+                self.runtime.audit_recursive_route(route, contract, model)
+
+    def test_non_mesh_audit_rejects_router_memory_parameters_and_buffers(self):
+        for method, name in (("named_parameters", "model.routers.0.weight"),
+                              ("named_parameters", "model.memory_slots"),
+                              ("named_buffers", "model.mesh_memory")):
+            with self.subTest(method=method, name=name):
+                route, contract, model, modules = self.recursive_audit_fixture("recursive_5_10_5")
+                getattr(model.caption_decoder.lm, method).return_value = [(name, object())]
+                with patch.object(self.runtime.importlib, "import_module", side_effect=modules.__getitem__):
+                    with self.assertRaisesRegex(ValueError, "contains MeSH parameter/buffer"):
+                        self.runtime.audit_recursive_route(route, contract, model)
+
+    def test_non_mesh_audit_rejects_wrong_physical_layers_schedule_and_config(self):
+        for problem in ("shared_layers", "execution_schedule", "loop_scope", "source_mapping"):
+            with self.subTest(problem=problem):
+                route, contract, model, modules = self.recursive_audit_fixture("recursive_5_10_5")
+                lm = model.caption_decoder.lm
+                if problem == "shared_layers":
+                    lm.model.layers = [object()] * 20
+                    message = "20 independent physical layers"
+                elif problem == "execution_schedule":
+                    lm.model.logical_to_physical.reverse()
+                    message = "execution schedule mismatch"
+                elif problem == "loop_scope":
+                    lm.config.recursive_loops_scope = "entire_stack"
+                    message = "recursive_loops_scope must be middle_only"
+                else:
+                    lm.config.recursive_source_layer_indices_0based = list(range(20))
+                    message = "source-layer mapping mismatch"
+                with patch.object(self.runtime.importlib, "import_module", side_effect=modules.__getitem__):
+                    with self.assertRaisesRegex(ValueError, message):
+                        self.runtime.audit_recursive_route(route, contract, model)
+
+    def test_recursive_audit_rejects_changed_text_artifact_and_stale_imports(self):
+        for problem in ("text_artifact", "loader", "implementation"):
+            with self.subTest(problem=problem):
+                route, contract, model, modules = self.recursive_audit_fixture("recursive_5_10_5")
+                if problem == "text_artifact":
+                    contract["recursive_text_checkpoint"]["checkpoint"] = "another-initialization"
+                    error, message = ValueError, "recursive text checkpoint changed"
+                elif problem == "loader":
+                    modules["models.recursive_text"].__file__ = __file__
+                    error, message = RuntimeError, "loader escaped training route"
+                else:
+                    modules["recursive_model_5_10_5"].__file__ = __file__
+                    error, message = RuntimeError, "implementation escaped source root"
+                with patch.object(self.runtime.importlib, "import_module", side_effect=modules.__getitem__):
+                    with self.assertRaisesRegex(error, message):
+                        self.runtime.audit_recursive_route(route, contract, model)
+
     def test_submission_selects_checkpoint_runtime_route_and_geometry_together(self):
         bash = shutil.which("bash") or "C:/Program Files/Git/bin/bash.exe"
         if not Path(bash).is_file():
@@ -261,6 +414,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                 ("gbs32", "mizar_s1_htsat_5090/formal_async_v3", "122937", "8,4,1"),
                 ("gbs256", "mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1", "17313", "8,8,4"),
                 ("recursive_mesh", "mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_padfix_20261025_003124507033014", "17313", "8,8,4"),
+                ("recursive_5_10_5", "mizar_s1_htsat_gbs256_recursive_5_10_5_5090/formal_20261025_160348996763174", "17313", "8,8,4"),
             ):
                 with self.subTest(variant=variant):
                     capture = root / f"{variant}.args"
@@ -270,7 +424,8 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                     subprocess.run([bash, bash_path(submit)], env=env,
                                    capture_output=True, text=True, check=True)
                     submission = capture.read_text(encoding="utf-8").splitlines()
-                    self.assertEqual(submission[submission.index("-g") + 1], "1")
+                    for flag, value in (("-c", "8"), ("-m", "32G"), ("-g", "1"), ("-n", "1")):
+                        self.assertEqual(submission[submission.index(flag) + 1], value)
                     command = shlex.split(submission[submission.index("--cmd") + 1])
                     self.assertEqual(command[:2], ["bash", "scripts/evaluate_mizar_s1_benchmark.sh"])
                     options = dict(zip(command[2::2], command[3::2]))
@@ -282,6 +437,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                         "gbs32": "mizar_stage1_fixed20_3epochs",
                         "gbs256": "mizar_stage1_fixed20_gbs256_3epochs",
                         "recursive_mesh": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh",
+                        "recursive_5_10_5": "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5",
                     }[variant]
                     self.assertTrue(options["--route-root"].endswith(route))
                     self.assertEqual(options["--expected-step"], step)
@@ -312,6 +468,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                 ("gbs32", "mizar_s1_htsat_5090/formal_async_v3", "122937", "8,4,1"),
                 ("gbs256", "mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1", "17313", "8,8,4"),
                 ("recursive_mesh", "mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_padfix_20261025_003124507033014", "17313", "8,8,4"),
+                ("recursive_5_10_5", "mizar_s1_htsat_gbs256_recursive_5_10_5_5090/formal_20261025_160348996763174", "17313", "8,8,4"),
             ):
                 with self.subTest(variant=variant):
                     capture = root / f"mmar_{variant}.args"
@@ -321,7 +478,8 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                     subprocess.run([bash, bash_path(submit)], env=env,
                                    capture_output=True, text=True, check=True)
                     submission = capture.read_text(encoding="utf-8").splitlines()
-                    self.assertEqual(submission[submission.index("-g") + 1], "1")
+                    for flag, value in (("-c", "8"), ("-m", "32G"), ("-g", "1"), ("-n", "1")):
+                        self.assertEqual(submission[submission.index(flag) + 1], value)
                     command = shlex.split(submission[submission.index("--cmd") + 1])
                     self.assertEqual(command[:2], ["bash", "scripts/evaluate_mizar_s1_benchmark.sh"])
                     options = dict(zip(command[2::2], command[3::2]))
@@ -333,6 +491,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                         "gbs32": "mizar_stage1_fixed20_3epochs",
                         "gbs256": "mizar_stage1_fixed20_gbs256_3epochs",
                         "recursive_mesh": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh",
+                        "recursive_5_10_5": "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5",
                     }[variant]
                     self.assertTrue(options["--route-root"].endswith(route))
                     self.assertEqual(options["--expected-step"], step)
