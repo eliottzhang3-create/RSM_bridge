@@ -1,3 +1,33 @@
+## 2026-10-26：Mizar S1 / CED small + 官方 mapper / GBS256 正式训练
+
+新增独立路线 [mizar_stage1_fixed20_gbs256_3epochs_ced_small](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_ced_small/README.md)，完整复制隔离自 `mizar_stage1_fixed20_gbs256_3epochs`。音频侧替换为冻结且始终 eval 的 CED small，以及可训练的官方 `freq_merge_126` mapper；保留原始30层 SmolLM2 全量训练。CED 从 `/hpc_stor03/sjtu_home/jinwei.zhang/models/CED_small` 离线严格加载 `model.safetensors` 和目录内模型代码，不使用 ONNX。
+
+固定20秒波形先整段重采样、计算 mel 和冻结 BN，再按1012帧切分；正确保留 segment/frequency/time 顺序，mapper 输出126个576维音频 token。新的布局为 `126 audio + 1 SEP + 256 prompt + 300 answer = 683`，prefix383；采用逐样本 dB 截断，避免在线 batch 不同响度之间相互影响。官方 mapper 结构及初始化不变，在线 FP32 hidden 与官方 FP16 hidden cache 的差异已写入路线文档。
+
+hybrid 1,477,492行数据、fixed20读取策略、Mizar padding/answer-only CE、AdamW/LambdaLR/GradNorm、共享音频立即训练及后台复制切换、完整 checkpoint/resume 均继承母本。正式训练仍为8 GPU × microbatch8 × accumulation4 = GBS256，3 epochs / 17,313 updates / 866 warmup。原路线未修改；新路线使用独立输出、日志、index cache 和 tmpfs 目录。
+
+经 GitHub 同步代码至远程后，从远程登录节点提交（没有 smoke 前置任务）：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mizar_s1_ced_small_gbs256_5090.sh \
+  --ced-model-dir /hpc_stor03/sjtu_home/jinwei.zhang/models/CED_small \
+  --stage-workers 4 \
+  --output-dir "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_5090/formal_$(date +%Y%m%d_%H%M%S%N)"
+```
+
+资源保持 `pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`。本地新路线17项检查与母本18项回归检查通过，官方源码对齐审计通过；本地无 PyTorch/CUDA、远程权重或数据，真实 tensor、权重加载及 GPU 训练仍待远程执行，不能将 CPU 结果记为训练 PASS。恢复限制、产物路径和可选 tensor 检查见上述路线 README。
+
+## 2026-10-26: Non-MeSH 5-10-5 two-epoch Core SFT baseline
+
+New isolated route: [mizar_stage1_fixed20_gbs256_2epochs_recursive_5_10_5_core_sft](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_2epochs_recursive_5_10_5_core_sft/README.md). It initializes the complete audio model from `model--step-17313.ckpt` in the completed non-MeSH route, restarts all optimizer/scheduler/RNG/data state, freezes HTSAT, c2l, projection, embeddings, outer physical layers, final norm and lm_head, and trains only shared physical layers 5..14. The fixed `0..14, 5..14, 15..19` schedule executes the middle ten layers twice.
+
+The formal contract is 8 GPUs x microbatch 8 x accumulation 4, global batch 256, 2 epochs, 11,542 optimizer updates, max/min LR 5e-5/5e-6, Mizar padding with `attention_mask=None`, and answer-only CE including answer EOS while masking answer PAD. Submit from `code/RSmol`:
+
+```bash
+bash run_mizar_s1_recursive_5_10_5_core_sft_gbs256_5090.sh --stage-workers 4 --output-dir "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_recursive_5_10_5_core_sft_gbs256_5090/formal_$(date +%Y%m%d_%H%M%S%N)"
+```
+
 # RSM_bridge：Recursive SmolLM / Audio MeSH 项目交接
 
 ## 2026-10-26：非 MeSH 5+10×2+5 checkpoint 的 MMAU / MMAR 官方评测

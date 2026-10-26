@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-[[ $# == 9 ]] || { echo "run via code/RSmol/run_mizar_s1_core_router_baseline_gbs256_5090.sh" >&2; exit 2; }
+[[ $# == 9 ]] || { echo "run via code/RSmol/run_mizar_s1_recursive_5_10_5_core_sft_gbs256_5090.sh" >&2; exit 2; }
 MODE=$1
 RESOLVED_PATHS=$(readlink -f "$2")
 OUTPUT_ROOT=$(readlink -m "$3")
@@ -52,7 +52,7 @@ run_one() {
     return 2
   fi
   STAGE_TOKEN="${run_mode}_${RUN_ID}"
-  STAGE_ROOT="/dev/shm/mizar_s1_gbs256_core_router_baseline_${STAGE_TOKEN}"
+  STAGE_ROOT="/dev/shm/mizar_s1_gbs256_recursive_5_10_5_core_sft_${STAGE_TOKEN}"
   local stage_args=(--manifest "$MANIFEST" --resolved-paths "$RESOLVED_PATHS" --prepared-index "$PREPARED_INDEX" \
     --stage-root "$STAGE_ROOT" --token "$STAGE_TOKEN" --mode "$run_mode" --output "$run_dir/staging_report.json" \
     --background --workers "$STAGE_WORKERS")
@@ -77,7 +77,7 @@ import json
 import sys
 from pathlib import Path
 report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-expected = 5771
+expected = 11542
 if report.get("status") != "PASS" or report.get("optimizer_steps") != expected:
     raise SystemExit("training report did not confirm all required optimizer updates")
 print(f"[{sys.argv[2]}] PASS: {expected} optimizer updates; report={sys.argv[1]}")

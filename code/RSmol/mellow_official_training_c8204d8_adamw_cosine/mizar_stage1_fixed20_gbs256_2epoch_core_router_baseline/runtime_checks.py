@@ -27,8 +27,8 @@ class RuntimeChecks(unittest.TestCase):
         actual = geometry(1477492)
         self.assertEqual((WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, GLOBAL_BATCH_SIZE), (8, 8, 4, 256))
         self.assertEqual(actual["steps_per_epoch"], 5771)
-        self.assertEqual(actual["total_steps"], 5771)
-        self.assertEqual(actual["warmup_steps"], 289)
+        self.assertEqual(actual["total_steps"], 11542)
+        self.assertEqual(actual["warmup_steps"], 577)
         self.assertEqual(actual["dropped_rows_per_epoch"], 116)
 
     def test_fixed20_single_order_and_right_padding(self):

@@ -82,7 +82,7 @@ def main():
                   "initialize the unchanged recursive MeSH/HTSAT model from completed step-17313 tensors; restart optimizer/scheduler/RNG",
                   "freeze HTSAT, c2l, projection, embed_tokens, Prelude, Coda, final norm and lm_head",
                   "train only shared physical Core layers 5..14 and the original six read/write routers",
-                  "one epoch with every trainable group at 5e-5 max LR and 5e-6 cosine floor",
+                  "two epochs with every trainable group at 5e-5 max LR and 5e-6 cosine floor",
                   "HTSAT(129+129) plus existing c2l/projection; no stage2 tap or audio-memory modules",
                   "shared raw audio decoded online, collective switch to staged bytes after full copy; no CED cache",
                   "8 GPUs x microbatch8 x accumulation4; global batch256 ablation",

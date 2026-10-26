@@ -7,7 +7,7 @@ usage() {
 }
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-ROUTE=mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_1epoch_core_router_baseline
+ROUTE=mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_2epoch_core_router_baseline
 RESOLVED_PATHS=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_20261024_170403/resolved_paths.tsv
 TEXT_MODEL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244
 HTSAT_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/models/HTSAT
@@ -60,4 +60,4 @@ vc submit \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$SCRIPT_DIR/log/mizar_s1_core_router_baseline.${RUN_TAG}.JOB.log" \
   --cmd "bash $ROUTE/run.sh $CMD_ARGS"
-echo "Submitted formal Core/router baseline: 8 GPUs, global batch 256, one epoch / 5771 updates; output=$OUTPUT_DIR"
+echo "Submitted formal Core/router baseline: 8 GPUs, global batch 256, two epochs / 11542 updates; max_lr=5e-5 min_lr=5e-6; output=$OUTPUT_DIR"

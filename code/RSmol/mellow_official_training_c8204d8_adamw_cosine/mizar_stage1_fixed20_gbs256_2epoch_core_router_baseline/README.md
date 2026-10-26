@@ -1,6 +1,6 @@
 # Core/router frozen baseline
 
-This route is an isolated one-epoch comparison baseline copied from
+This route is an isolated two-epoch comparison baseline copied from
 `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh`. The recursive MeSH
 architecture and original audio path are unchanged. It starts from the
 completed model-only checkpoint:
@@ -12,7 +12,7 @@ completed model-only checkpoint:
 The initialization loader requires the source route and step `17313`, checks
 the complete state-dict key set and shapes, and compares every loaded tensor
 exactly. Source optimizer, scheduler, scaler, GradNorm and RNG state are not
-continued; formal training starts a fresh one-epoch schedule.
+continued; formal training starts a fresh two-epoch schedule.
 
 ## Model and freeze contract
 
@@ -41,7 +41,7 @@ mode and under `no_grad`, including projection dropout.
 
 - 8 GPUs x microbatch 8 x gradient accumulation 4 = global batch 256;
 - original 1,477,492-row data mixture and fixed20 audio policy;
-- one epoch, 5,771 optimizer updates, 289 warmup updates;
+- two epochs, 11,542 optimizer updates, 577 warmup updates;
 - every trainable group uses AdamW max LR `5e-5`, cosine floor `5e-6`;
 - original AdamW betas, weight decay, GradNorm, FP32 forward, and disabled
   autocast/TF32 behavior.
@@ -64,7 +64,7 @@ Optional overrides include `--output-dir`, `--init-checkpoint`,
 The final checkpoint is:
 
 ```text
-<output-dir>/formal/checkpoints/model--epo-1.ckpt
+<output-dir>/formal/checkpoints/model--epo-2.ckpt
 ```
 
 The formal report verifies strict initialization, the exact trainable

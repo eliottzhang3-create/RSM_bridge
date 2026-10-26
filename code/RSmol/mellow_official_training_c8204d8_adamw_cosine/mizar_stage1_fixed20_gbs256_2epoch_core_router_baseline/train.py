@@ -437,7 +437,7 @@ def train(config, rank, device):
         metrics.close()
     staging.wait_complete()
     collective_require(step == max_steps, "training ended before the requested real optimizer updates", device)
-    last_checkpoint = checkpoint_dir / "model--epo-1.ckpt"
+    last_checkpoint = checkpoint_dir / "model--epo-2.ckpt"
     save_checkpoint(last_checkpoint, model, optimizer, scheduler, scaler, tracker,
                     config, step, cursor_epoch, cursor_batch, device)
     changed = changed_parameters(model, before)
