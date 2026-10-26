@@ -1,5 +1,15 @@
 # Mizar S1 / CED small / fixed20 / GBS256 / 3 epochs
 
+## 2026-10-26 离线配置错误修复
+
+远程 `LocalEntryNotFoundError` / `OSError` 出现在权重加载前的 CED 配置构造阶段。上游 [configuration_ced.py](https://huggingface.co/mispeech/ced-small/blob/main/configuration_ced.py) 在 outputdim=527 时无条件读取另一个仓库的 `class_labels_indices.csv`；`local_files_only=True` 并不能为这张缺失的外部标签表提供内容。官方 [config.json](https://huggingface.co/mispeech/ced-small/blob/main/config.json) 本身已包含完整标签映射。
+
+`models/ced_offline.py` 直接复用本地 JSON 的真实标签生成临时 CSV，在原版 CED 配置和模型加载期间，仅调整配置模块内导入的 `cached_file` 绑定，提供这张表。使用原版配置类并显式传入 AutoModel，保留所有网络结构、527维原始分类头和严格权重检查。结束或异常均删除临时文件并恢复函数绑定；不改写远程资产、HF缓存源码或全局Hub函数。
+
+预检查现在要求 `id2label` 完整覆盖0..526，并校验已提供的 `label2id`。真实标签允许重复显示名称，恢复完整 JSON 索引；官方发布配置有527项 id2label、524项 label2id。不会为缺失元数据编造标签，也不允许退回网络下载。远程应保持原来的 CED 六文件目录，无需额外下载 CSV。
+
+本次失败尚未进入 optimizer update。同步修复后，用下面命令生成新的输出目录重新提交，不带 resume；旧输出目录和旧缓存可以保留。新代码SHA会选择新CPU索引缓存。新增6项离线回归及既有17项检查通过；另使用真实上游 CedConfig 类和官方配置执行 stdlib 回归，确认原错误复现且修复后额外 Hub 标签请求为0。该回归使用 PretrainedConfig stand-in，不涉及真实权重/tensor；GPU重跑仍待远程确认。
+
 本路线完整复制隔离自相邻的 `mizar_stage1_fixed20_gbs256_3epochs`，将音频侧替换为 Mizar 官方 S1 的 **CED small + freq_merge_126 mapper**。原路线保持不变。本地只维护代码，经 GitHub 同步至远程 Linux；权重、数据和训练产物均留在远程。正式提交入口为上两级的 `run_mizar_s1_ced_small_gbs256_5090.sh`。
 
 ## 固定训练实现
@@ -82,7 +92,7 @@ bash run_mizar_s1_ced_small_gbs256_5090.sh \
 
 ## 已完成与待远程验证
 
-本地通过17项 stdlib/CPU测试，包括真实 Bash 提交入口的 mock、资源参数与含空格路径、资产失败拒绝、后台复制/训练并行和退出清理。Python 编译与 Bash 语法检查通过。`reference_audit.json` 记录本地官方源码对齐：两个 mapper 类 AST 完全一致；母本数据文件与关键训练函数不变；1,344组文本/RNG、8组 tokenizer 参数、17,314个 LR 位置和10,000组 GradNorm 标量比较通过。
+本地通过23项 stdlib/CPU测试，包括 CED 离线标签回归、真实 Bash 提交入口的 mock、资源参数与含空格路径、资产失败拒绝、后台复制/训练并行和退出清理。Python 编译与 Bash 语法检查通过。`reference_audit.json` 记录本地官方源码对齐：两个 mapper 类 AST 完全一致；母本数据文件与关键训练函数不变；1,344组文本/RNG、8组 tokenizer 参数、17,314个 LR 位置和10,000组 GradNorm 标量比较通过。
 
 本机没有 PyTorch/CUDA、远程权重和数据，因此没有执行真实 CED tensor 推理、梯度测试或 GPU 训练。`runtime_checks.py` 提供可选的远程 CPU tensor 测试（toy encoder，不读取真实权重），覆盖时间/频率顺序、逐样本 dB、完整20秒拼接、冻结与 mapper 梯度、严格离线加载参数、CE 对齐和 optimizer 恢复。它不自动运行，也不是提交前置条件。正式作业的资产加载、真实数据 source probes、首次梯度及完整训练报告才验证远程实际执行。
 
@@ -91,6 +101,7 @@ bash run_mizar_s1_ced_small_gbs256_5090.sh \
 ```bash
 python tests/test_mizar_s1_ced_small_route.py -v
 python tests/test_mizar_s1_ced_small_shared_start.py -v
+python tests/test_mizar_s1_ced_offline_config.py -v
 ```
 
 可选 tensor 检查：在远程对应环境中进入本路线目录后运行 `python runtime_checks.py`。它无需 CUDA；不能将该结果视为真实权重加载或正式训练 PASS。

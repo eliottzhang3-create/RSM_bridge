@@ -1,5 +1,6 @@
 """Small CPU contract checks inside the existing GPU-job environment (no downloads)."""
 import copy
+from contextlib import nullcontext
 import json
 import tempfile
 import unittest
@@ -28,7 +29,8 @@ from train import answer_loss
 
 class RuntimeChecks(unittest.TestCase):
     def test_loader_is_offline_strict_and_keeps_only_frozen_encoder(self):
-        cfg = dict(CED_EXPECTED_CONFIG, model_type="ced", auto_map={
+        cfg = dict(CED_EXPECTED_CONFIG, model_type="ced",
+                   id2label={str(i): f"synthetic_test_label_{i}" for i in range(527)}, auto_map={
             "AutoConfig": "configuration_ced.CedConfig",
             "AutoModelForAudioClassification": "modeling_ced.CedForAudioClassification"})
         with tempfile.TemporaryDirectory() as directory:
@@ -42,6 +44,7 @@ class RuntimeChecks(unittest.TestCase):
             loaded.encoder = encoder
             for failure in (None, "missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs"):
                 with self.subTest(failure=failure), patch(
+                        "models.ced.local_ced_config", return_value=nullcontext(encoder.config)), patch(
                         "models.ced.AutoModelForAudioClassification.from_pretrained",
                         return_value=(loaded, {} if failure is None else {failure: ["synthetic mismatch"]})) as loader:
                     if failure:
@@ -56,6 +59,7 @@ class RuntimeChecks(unittest.TestCase):
                     self.assertTrue(kwargs["local_files_only"] and kwargs["use_safetensors"])
                     self.assertTrue(kwargs["trust_remote_code"] and kwargs["output_loading_info"])
                     self.assertEqual(kwargs["torch_dtype"], torch.float32)
+                    self.assertIs(kwargs["config"], encoder.config)
 
     def test_mellow_rejoins_both_halves_before_encoding(self):
         class CaptureAudio(nn.Module):

@@ -1,3 +1,11 @@
+## 2026-10-26：CED small 离线配置加载修复
+
+远程报错停在 CED 初始化：上游 `configuration_ced.py` 的 `CedConfig.__init__` 在 outputdim=527 时，无条件调用 `cached_file("topel/ConvNeXt-Tiny-AT", "class_labels_indices.csv")`；即使权重和代码都已在本地，离线环境仍会因缺少这张外部 CSV 失败。此前仅检查本地六个资产文件没有覆盖这一隐藏依赖。
+
+CED 隔离路线新增 `models/ced_offline.py`：复用本地 `config.json` 中完整527项 `id2label` 生成临时标签表，仅在原版配置及模型加载期间，将 CED 配置模块内的 CSV 解析指向该表，再显式将原版配置实例交给 AutoModel。完成或异常时恢复模块函数绑定并删除临时文件；不修改权重目录、HF缓存源码、全局Hub函数或训练参数。保留重复显示名称的真实索引和原始 label2id；提交前增加标签完整性检查，不需要另行下载 CSV。
+
+23项本地检查通过，另用真实上游 CedConfig 类和官方发布的 config.json 执行 stdlib 配置回归：原错误可复现，修复后额外 Hub 标签请求为0，保留527项 id2label / 524项 label2id。该回归使用 PretrainedConfig stand-in，不加载真实权重或 tensor，远程 GPU 仍需重跑确认。经 GitHub 同步后使用下方正式提交命令的新时间戳输出目录重新开始；本次错误发生在模型初始化，无需 resume，旧目录和缓存无需删除。代码SHA变化会正常选择新 CPU index cache。详细说明见 [CED路线 README](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_ced_small/README.md)。
+
 ## 2026-10-26：Mizar S1 / CED small + 官方 mapper / GBS256 正式训练
 
 新增独立路线 [mizar_stage1_fixed20_gbs256_3epochs_ced_small](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_ced_small/README.md)，完整复制隔离自 `mizar_stage1_fixed20_gbs256_3epochs`。音频侧替换为冻结且始终 eval 的 CED small，以及可训练的官方 `freq_merge_126` mapper；保留原始30层 SmolLM2 全量训练。CED 从 `/hpc_stor03/sjtu_home/jinwei.zhang/models/CED_small` 离线严格加载 `model.safetensors` 和目录内模型代码，不使用 ONNX。

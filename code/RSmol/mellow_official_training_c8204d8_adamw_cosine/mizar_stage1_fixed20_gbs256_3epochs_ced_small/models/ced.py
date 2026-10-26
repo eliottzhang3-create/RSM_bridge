@@ -12,6 +12,7 @@ import torchaudio
 from transformers import AutoModelForAudioClassification
 
 from contract import AUDIO_TOKENS, validate_ced_assets, validate_ced_config
+from models.ced_offline import local_ced_config
 
 
 class CEDFrequencyMerger(nn.Module):
@@ -101,10 +102,11 @@ class CEDSmallWrapper(nn.Module):
             raise ValueError("CED mapper requires the unchanged SmolLM2 hidden size 576")
         model_dir = Path(encoder_config["pretrained_audioencoder_path"]).resolve()
         validate_ced_assets(model_dir)
-        model, loading = AutoModelForAudioClassification.from_pretrained(
-            str(model_dir), trust_remote_code=True, local_files_only=True,
-            torch_dtype=torch.float32, use_safetensors=True, output_loading_info=True,
-        )
+        with local_ced_config(model_dir) as config:
+            model, loading = AutoModelForAudioClassification.from_pretrained(
+                str(model_dir), config=config, trust_remote_code=True, local_files_only=True,
+                torch_dtype=torch.float32, use_safetensors=True, output_loading_info=True,
+            )
         problems = {key: loading[key] for key in
                     ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs") if loading.get(key)}
         if problems:

@@ -18,7 +18,8 @@ import contract
 
 
 def config():
-    return dict(contract.CED_EXPECTED_CONFIG, model_type="ced", auto_map={
+    return dict(contract.CED_EXPECTED_CONFIG, model_type="ced",
+                id2label={str(i): f"synthetic_test_label_{i}" for i in range(527)}, auto_map={
         "AutoConfig": "configuration_ced.CedConfig",
         "AutoModelForAudioClassification": "modeling_ced.CedForAudioClassification"})
 

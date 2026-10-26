@@ -252,7 +252,8 @@ class CEDSharedStartTests(unittest.TestCase):
             (text / "model.safetensors").write_bytes(b"weights")
             for name in CED_ASSET_FILES:
                 (ced / name).write_bytes(b"fixture-not-real-weights")
-            write_json(ced / "config.json", dict(CED_EXPECTED_CONFIG, model_type="ced", auto_map={
+            write_json(ced / "config.json", dict(CED_EXPECTED_CONFIG, model_type="ced",
+                id2label={str(i): f"synthetic_test_label_{i}" for i in range(527)}, auto_map={
                 "AutoConfig": "configuration_ced.CedConfig",
                 "AutoModelForAudioClassification": "modeling_ced.CedForAudioClassification"}))
             report, output = root / "report.json", root / "runtime.json"
