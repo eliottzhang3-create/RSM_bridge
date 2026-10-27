@@ -1,3 +1,11 @@
+## 2026-10-27：USAD2-Small + 两次循环 MeSH / Mizar S1 / GBS256
+
+新增 [USAD2-Small + MeSH 正式训练路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_usad2_small/README.md)，复制隔离自原 `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh`。音频、mapper、数据及 staging 等 16 个文件与普通 USAD2 路线逐字节一致：整段 fixed20 波形一次编码，999 帧前加均值摘要，经原 Mellow projection 后仅对时间帧做相邻 4 帧均值，输出 251 audio tokens，prefix 508，完整序列 808。
+
+文本端从既有 `checkpoint-009244` 初始化全量 MeSH：hidden 576、20 个物理层、30 个逻辑层、5+10×2+5、5 个临时 memory slots、6 个独立 routers；共享 MeSH 实现未修改。S1 optimizer/scheduler/RNG 重新开始，USAD2 冻结。保留 hybrid 1,477,492 行、8 GPU × microbatch 8 × accumulation 4、3 epochs / 17,313 updates / 866 warmup，以及普通 USAD2 的全部公共训练设置、保存步数和完整状态恢复。比较结果同时包含文本结构与初始化差异。
+
+新入口为 `code/RSmol/run_mizar_s1_gbs256_recursive_mesh_usad2_small_5090.sh`，默认使用 `mellow_c8204d8`、远程 USAD2、MeSH checkpoint 和普通 SmolLM2 tokenizer；输出、日志、tmpfs、index cache 和 resume 身份隔离。启动时检查严格权重加载、tokenizer 一致性、真实循环调度与六个 routers 的梯度。详细提交、恢复和验证命令见上方路线 README。新增 32 项 stdlib 回归检查及官方/母版对照审计；远程 CPU tensor 检查与真实 8 GPU 训练仍须在服务器执行，本地未宣称通过。
+
 ## 2026-10-27：USAD2-Small / Mizar S1 / GBS256 独立训练路线
 
 新增 [USAD2-Small 路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_usad2_small/README.md)，完整复制隔离自 `mizar_stage1_fixed20_gbs256_3epochs`。保留原始 fixed20 音频构造，整段 20 秒波形从 32 kHz 重采样至 16 kHz，再一次输入冻结且始终 eval 的 USAD2-Small。本地包从远程 `/hpc_stor03/sjtu_home/jinwei.zhang/models/USAD2` 显式导入，严格加载 safetensors，避开 HF 动态模块缓存缺失传递依赖的问题；沿用已验证的 `mellow_c8204d8` 环境，无需升级依赖。
