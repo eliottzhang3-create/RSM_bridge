@@ -1,3 +1,23 @@
+## 2026-10-27：USAD2-Small / Mizar S1 / GBS256 独立训练路线
+
+新增 [USAD2-Small 路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_usad2_small/README.md)，完整复制隔离自 `mizar_stage1_fixed20_gbs256_3epochs`。保留原始 fixed20 音频构造，整段 20 秒波形从 32 kHz 重采样至 16 kHz，再一次输入冻结且始终 eval 的 USAD2-Small。本地包从远程 `/hpc_stor03/sjtu_home/jinwei.zhang/models/USAD2` 显式导入，严格加载 safetensors，避开 HF 动态模块缓存缺失传递依赖的问题；沿用已验证的 `mellow_c8204d8` 环境，无需升级依赖。
+
+用户已实测 20s 输出 `x=(1,999,384)`、`x_lengths=[999]`、`mel=(1,1998,128)`。mapper 在原始特征前加一枚有效帧均值作为全局摘要，使用母版 Mellow `384→576` projection，再仅对时间帧做相邻 4 帧均值；最后 3 帧按 3 帧平均。输出 `1+250=251` 个音频 token；完整布局为 `251 audio + 1 SEP + 256 prompt + 300 answer = 808`，prefix 为 508，无卷积或额外可训练 CLS。
+
+其余设置与 HTSAT 母版对齐：hybrid 1,477,492 行、8 GPU × microbatch 8 × accumulation 4、3 epochs / 17,313 updates / 866 warmup、FP32、全量 base SmolLM2、mapper LR 6e-4 / LM LR 3e-4、原 AdamW/LambdaLR/GradNorm、answer-only CE、共享音频立即训练与后台复制切换，以及完整 checkpoint/resume。原路线未修改；新输出、日志、index cache、tmpfs 和 resume 身份均隔离。
+
+GitHub 同步后，在远程登录节点提交正式训练：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mizar_s1_usad2_small_gbs256_5090.sh \
+  --usad2-model-dir /hpc_stor03/sjtu_home/jinwei.zhang/models/USAD2 \
+  --stage-workers 4 \
+  --output-dir "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_usad2_small_gbs256_5090/formal_$(date +%Y%m%d_%H%M%S%N)"
+```
+
+资源为 `pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`。本地新增 24 项检查及母版 18 项回归检查通过，官方文本/RNG、LR、GradNorm 与母版 AST 审计通过；本地无 PyTorch、真实权重和数据，额外 11 项 CPU tensor 检查及真实 GPU 集成训练待远程执行，不能记录为训练 PASS。正式任务内含真实来源探针、首次梯度检查及冻结 USAD2 状态不变校验。交付、可选 tensor 检查、resume 和产物路径见路线 README；现有 HTSAT 评测入口尚未接入此路线。
+
 ## 2026-10-27：CED small checkpoint 的 MMAU / MMAR 对齐评测
 
 新增两条独立的 CED-Small Mizar S1 评测入口，不改动原有 HTSAT 评测脚本：

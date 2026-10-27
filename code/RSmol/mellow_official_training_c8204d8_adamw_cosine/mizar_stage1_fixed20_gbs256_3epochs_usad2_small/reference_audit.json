@@ -1,0 +1,71 @@
+{
+  "status": "PASS",
+  "route_code_sha256": "6b2ec1c9c75c95e1a492f23f8e482581b638435cddcc50459053cf6e0e438299",
+  "reference": "kaiyangli-ml/Mizar_159M local official download",
+  "parent_route_audit": {
+    "byte_identical_files": [
+      "prepare_index.py",
+      "stage_data.py",
+      "utils/audio_io.py",
+      "data/audio_paths.py",
+      "data/indexed_jsonl.py",
+      "data/prepared_index.py",
+      "data/sampler.py",
+      "data/staging.py",
+      "data/template.py"
+    ],
+    "identical_function_asts": {
+      "train.py": [
+        "answer_loss",
+        "rng_state",
+        "restore_rng",
+        "save_checkpoint",
+        "reload_audit",
+        "inspect_tokenizer",
+        "collective_require"
+      ],
+      "contract.py": [
+        "geometry",
+        "lr_factor",
+        "data_order",
+        "rank_seed",
+        "raw_references",
+        "validate_tokenizer_contract"
+      ],
+      "optim.py": [
+        "_clip_grad",
+        "track_and_clip_",
+        "state_dict",
+        "load_state_dict"
+      ],
+      "data/fixed20.py": [
+        "fixed_len",
+        "load_mono"
+      ],
+      "data/audiotext_dataset.py": [
+        "__init__",
+        "__len__",
+        "tokenize",
+        "text_pair",
+        "__getitem__"
+      ]
+    },
+    "optimizer_epoch_loop": "identical except one-time gradient diagnostic",
+    "mellow_projection_class_ast": "identical; instantiated with 384 input dimensions",
+    "fixed20_construction_ast": "identical; whole waveform returned"
+  },
+  "reference_file_sha256": {
+    "configs/s1.yaml.in": "1823903831e18b504cef1442b80a845aae7d5f04bd3f6772058ef85ca90b4b8b",
+    "runtime/stage1/training/trainer.py": "ab93faca9b180a6b8237564b3018d11567ccd1cefd47cc551b1946ca3525b39e",
+    "runtime/stage1/data/audiotext_dataset.py": "c791a13f0d64de409006b5bc3a0b6e336cd63cb98faa98800ac70fba4624b860",
+    "runtime/stage1/data/template.py": "0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2",
+    "runtime/stage1/utils/utils.py": "43be6ba97163969f8787c39fd14e10921edeeb72524d9b4cb5a9eace0b74741b",
+    "pipeline/build_ced_cache.py": "500d1b5c15f702c6e4508bcb76dfeb4a0aa49acfed7d541525b1ea384a65fd87"
+  },
+  "text_and_rng_comparisons": 1344,
+  "tokenizer_argument_comparisons": 8,
+  "scheduler_positions": 17314,
+  "scheduler_max_abs_error": 0.0,
+  "gradnorm_scalar_comparisons": 10000,
+  "scope": "stdlib extracted functions only; decoding/tensor/optimizer/DDP checks require the GPU-job environment"
+}
