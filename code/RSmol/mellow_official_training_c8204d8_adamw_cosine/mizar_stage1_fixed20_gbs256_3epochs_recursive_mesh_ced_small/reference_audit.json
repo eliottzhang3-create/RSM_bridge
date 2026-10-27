@@ -1,0 +1,145 @@
+{
+  "status": "PASS",
+  "route_code_sha256": "87837e9ffafafcd58f54101d72f4763f422b894d6f2b70f839b7a6056475f976",
+  "reference": "kaiyangli-ml/Mizar_159M local official download",
+  "parent_route_audit": {
+    "byte_identical_files": [
+      "prepare_index.py",
+      "stage_data.py",
+      "utils/audio_io.py",
+      "data/audio_paths.py",
+      "data/audiotext_dataset.py",
+      "data/fixed20.py",
+      "data/indexed_jsonl.py",
+      "data/prepared_index.py",
+      "data/sampler.py",
+      "data/staging.py",
+      "data/template.py"
+    ],
+    "identical_function_asts": {
+      "train.py": [
+        "answer_loss",
+        "move_batch",
+        "rng_state",
+        "restore_rng",
+        "save_checkpoint",
+        "reload_audit"
+      ],
+      "contract.py": [
+        "geometry",
+        "data_order",
+        "rank_seed",
+        "raw_references",
+        "lr_factor"
+      ],
+      "optim.py": [
+        "_clip_grad",
+        "track_and_clip_",
+        "state_dict",
+        "load_state_dict"
+      ]
+    },
+    "optimizer_epoch_loop": "identical except one-time gradient diagnostic"
+  },
+  "ced_baseline_audit": {
+    "identical_files_normalized_lf": [
+      "prepare_index.py",
+      "stage_data.py",
+      "utils/audio_io.py",
+      "optim.py",
+      "models/audio.py",
+      "models/ced.py",
+      "models/ced_offline.py",
+      "models/mellow.py",
+      "data/audio_paths.py",
+      "data/audiotext_dataset.py",
+      "data/fixed20.py",
+      "data/indexed_jsonl.py",
+      "data/prepared_index.py",
+      "data/sampler.py",
+      "data/staging.py",
+      "data/template.py"
+    ],
+    "identical_function_asts": {
+      "models/decoder.py": [
+        "_make_prefix",
+        "generate_prefix_inference",
+        "forward"
+      ],
+      "contract.py": [
+        "geometry",
+        "data_order",
+        "rank_seed",
+        "raw_references",
+        "lr_factor",
+        "ced_label_metadata",
+        "validate_ced_config",
+        "validate_ced_assets"
+      ],
+      "train.py": [
+        "move_batch",
+        "rng_state",
+        "restore_rng",
+        "save_checkpoint",
+        "reload_audit",
+        "validate_trainable_model",
+        "first_gradient_audit",
+        "role_snapshots"
+      ]
+    },
+    "identical_common_contract_fields": [
+      "adamw",
+      "answer_tokens",
+      "attention_mask",
+      "audio_encoder",
+      "audio_policy",
+      "audio_read_policy",
+      "autocast",
+      "ced_model_dir",
+      "eos_suffix",
+      "forward_dtype",
+      "geometry",
+      "grad_scaler",
+      "gradient_accumulation",
+      "gradient_clip",
+      "loss",
+      "mapper",
+      "mapping_sha256",
+      "order",
+      "pad_token",
+      "prefix",
+      "rank_rng",
+      "rows_canonical_sha256",
+      "sample_rate",
+      "scheduler",
+      "seed",
+      "source_rows",
+      "sync_batchnorm",
+      "text_model_dir",
+      "workers"
+    ],
+    "optimizer_epoch_loop": "identical including gradient diagnostic",
+    "loss": "parent MeSH masked CE retained; same non-PAD targets with tokenizer-produced masks"
+  },
+  "official_mapper_class_asts_equal": [
+    "CEDFrequencyMerger",
+    "CEDTemporalMapper"
+  ],
+  "reference_file_sha256": {
+    "configs/s1.yaml.in": "1823903831e18b504cef1442b80a845aae7d5f04bd3f6772058ef85ca90b4b8b",
+    "runtime/stage1/training/trainer.py": "ab93faca9b180a6b8237564b3018d11567ccd1cefd47cc551b1946ca3525b39e",
+    "runtime/stage1/data/audiotext_dataset.py": "c791a13f0d64de409006b5bc3a0b6e336cd63cb98faa98800ac70fba4624b860",
+    "runtime/stage1/data/template.py": "0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2",
+    "runtime/stage1/utils/utils.py": "43be6ba97163969f8787c39fd14e10921edeeb72524d9b4cb5a9eace0b74741b",
+    "pipeline/build_ced_cache.py": "500d1b5c15f702c6e4508bcb76dfeb4a0aa49acfed7d541525b1ea384a65fd87",
+    "runtime/stage1/models/ced.py": "24c34dc1dc5c7aadbac97e6611de3c5c52a7af5a98e8c452ec38c2de83f19015",
+    "runtime/stage1/models/decoder.py": "f652c20a7c3aa5625295a222dc2b1dc4d58c54c2cb64723bbb477ae11cb19bca",
+    "runtime/stage1/models/mellow.py": "bb0886114a3857eaed0e47c73bb0e96f0a0e95398265e40cf7238a57dba6dbaa"
+  },
+  "text_and_rng_comparisons": 1344,
+  "tokenizer_argument_comparisons": 8,
+  "scheduler_positions": 17314,
+  "scheduler_max_abs_error": 0.0,
+  "gradnorm_scalar_comparisons": 10000,
+  "scope": "stdlib extracted functions only; decoding/tensor/optimizer/DDP checks require the GPU-job environment"
+}

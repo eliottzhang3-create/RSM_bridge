@@ -1,3 +1,23 @@
+## 2026-10-27：CED small + MeSH 5+10×2+5 的隔离训练路线
+
+新增 [MeSH CED 路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small/README.md)，从原 `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh` 完整复制隔离。保留 `checkpoint-009244` 的20物理层/30逻辑层、2 loops、5 memory slots、6 routers，以及原 tokenizer/checkpoint 校验；音频侧统一为与 `run_mizar_s1_ced_small_gbs256_5090.sh` 相同的冻结 CED small、官方 `freq_merge_126` mapper 和 `126+1+256+300=683` 单音频布局。原MeSH、标准CED及非MeSH 5-10-5路线均未修改。
+
+两条CED路线的16个音频/数据/优化文件一致，prefix/forward、共同训练合同和完整optimizer循环通过AST/配置对照；原MeSH的11个数据/staging文件、answer-only CE和checkpoint游标保持一致。MeSH保留按answer mask与非PAD共同选目标的原CE，实际tokenizer padding条件下与标准CED的ignore-PAD CE选取相同目标。正式配置仍为hybrid 1,477,492行、8 GPU × microbatch8 × accumulation4、3 epochs / 17,313 updates / 866 warmup，FP32、LM LR3e-4、mapper LR6e-4；独立输出、日志、index cache、tmpfs与resume身份。
+
+本地新增21项stdlib测试、现有CED/离线loader/MeSH的36项回归检查通过；官方mapper类AST、文本/RNG、LR和GradNorm审计通过。Python编译与Bash语法检查另行执行。本地没有torch/torchaudio/transformers、真实权重或数据；tensor检查和真实GPU训练仍需远程执行，未登记训练PASS。
+
+经GitHub同步后，在远程登录节点提交（只提交formal，没有smoke前置任务）：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mizar_s1_gbs256_recursive_mesh_ced_small_5090.sh \
+  --ced-model-dir /hpc_stor03/sjtu_home/jinwei.zhang/models/CED_small \
+  --stage-workers 4 \
+  --output-dir "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_5090/formal_$(date +%Y%m%d_%H%M%S%N)"
+```
+
+资源为 `pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`。最终产物位于输出root的 `formal/checkpoints/model--epo-3.ckpt`，也保存 `model--step-17313.ckpt`。详细流程、对比边界、resume及可选tensor检查见路线README。现有HTSAT评测入口尚未接入此新CED路线。
+
 ## 2026-10-26：CED small 离线配置加载修复
 
 远程报错停在 CED 初始化：上游 `configuration_ced.py` 的 `CedConfig.__init__` 在 outputdim=527 时，无条件调用 `cached_file("topel/ConvNeXt-Tiny-AT", "class_labels_indices.csv")`；即使权重和代码都已在本地，离线环境仍会因缺少这张外部 CSV 失败。此前仅检查本地六个资产文件没有覆盖这一隐藏依赖。
