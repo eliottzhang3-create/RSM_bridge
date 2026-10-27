@@ -1,3 +1,27 @@
+## 2026-10-27：两次循环、六记忆槽 MeSH 文本完整一轮训练
+
+新增 [六槽隔离文本路线](code/RSmol/text_5_10x2_5_mesh_6slot/README.md)。模型与转换器复制自 `text_5_10x2_5_mesh_7slot`，保留 20 个物理层、30 次逻辑执行、`5+10×2+5` 和三组独立 write/read routers；仅将 memory slots 和 router 输出维度改为六，router 初始化按原公式使用 `sqrt(2/(6×hidden_size))`。从干净的 `models/SmolLM2-5-10-5` 或原始 SmolLM2 转换，逐 tensor 检查继承权重；不用已有五槽/七槽训练 checkpoint 初始化。
+
+训练结合五槽 FP32 实现：8 GPU × microbatch 8 × accumulation 16 = GBS1024、context 1024、完整 1 epoch / 9,244 updates、463 warmup、max LR `8e-4` / min LR `8e-5`，保留原 AdamW 分组、全局有效 token 加权文本 NTP loss、clip 1.0、persistent Parquet 分片/首轮顺序、每 500 步及最终步保存并保留最近三份。采用五槽已有的实际跳行恢复，补齐各 rank Python/CPU/CUDA RNG，拒绝跨槽位/精度/调度合同 resume。五槽、七槽和音频路线代码未改。
+
+GitHub 同步后在远程登录节点 CPU-only 转换：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+bash code/RSmol/scripts/convert_stepwise_5_10x2_5_mesh_6slot.sh
+```
+
+随后直接提交正式训练（无 smoke 报告前置门槛）：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_stage4_5_10x2_5_mesh_6slot_formal_3090.sh
+```
+
+使用 `rsmol` 和 `pdgpu-3090 / 32 CPU / 256G / 8 GPU / 1 node`。转换默认输出 `models/SmolLM2-5-10x2-5-mesh-6slot`，训练默认写入 `outputs/RSmol/stage4_5_10x2_5_mesh_6slot/formal_1epoch_fp32_<timestamp>/`，最终为其中的 `checkpoint-009244/` 与 `stage4_gate_FORMAL_audit.json`。另保留独立 10+2 短验证入口和显式 formal resume，详细命令见路线 README。
+
+本地新增 23 项依赖轻量行为/合同/Bash mock 检查和现有 23 项五槽/七槽回归通过；另提供 3 项真实小模型 CPU tensor 检查，本地缺少 Torch/Transformers，均跳过，留待远程 `rsmol` 执行。转换权重和真实 8 GPU 训练尚无远程执行证据，不登记为远程 PASS。
+
 ## 2026-10-27：Mizar S1 / MeSH 改用 2026-09-07 checkpoint 初始化
 
 新增 [MeSH init0907 隔离训练路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_init0907/README.md)，完整复制自 `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh`。仅将默认文本初始化改为：
@@ -44,6 +68,24 @@ bash run_mizar_s1_usad2_small_gbs256_5090.sh \
 ```
 
 资源为 `pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`。本地新增 24 项检查及母版 18 项回归检查通过，官方文本/RNG、LR、GradNorm 与母版 AST 审计通过；本地无 PyTorch、真实权重和数据，额外 11 项 CPU tensor 检查及真实 GPU 集成训练待远程执行，不能记录为训练 PASS。正式任务内含真实来源探针、首次梯度检查及冻结 USAD2 状态不变校验。交付、可选 tensor 检查、resume 和产物路径见路线 README；现有 HTSAT 评测入口尚未接入此路线。
+
+## CED-Small / 两次循环 MeSH checkpoint 的 MMAU / MMAR 对齐评测
+
+现有 `run_mizar_s1_ced_small_mmau_eval_5090.sh`、`run_mizar_s1_ced_small_mmar_eval_5090.sh` 新增 `RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_mesh`，默认加载 `mizar_s1_ced_small_gbs256_recursive_mesh_5090/formal_20261027_081123150934256` 的 `formal/checkpoints/model--step-17313.ckpt` 与配套 `formal/runtime.json`。未设置 variant 或使用 `base` 时仍走原普通 CED 路线。详细说明见 [MeSH CED 评测交付](code/RSmol/scripts/README_mizar_s1_ced_recursive_mesh_eval.md)。
+
+使用独立 MeSH runner、adapter 和 Bash wrapper；原 CED Python runner、adapter、运行脚本，以及两条 CED 训练路线和共享 MeSH 实现均未修改。完整音频 checkpoint 严格覆盖 CED、mapper、LM 和 routers；启动核对训练/runtime/资产/源码身份、hidden576、20物理层/30逻辑执行、两次循环、5个临时memory slots、6个独立routers，每次真实forward只读核对固定调度与无KV cache。
+
+原评测设置保持一致：各完整1000条、固定官方选项和prompt、fixed20、CED small + freq_merge_126、prefix383、FP32/eval/TF32关闭、argmax完整重算/无cache/最多300新tokens/首次EOS停止、原始输出及EOS保留、原官方评分与续跑身份。每项仍为 `pdgpu-5090 / 8 CPU / 32G / 1 GPU / 1 node`，沿用原容器与 `mellow_c8204d8`。
+
+GitHub同步后在远程登录节点提交：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_mesh bash run_mizar_s1_ced_small_mmau_eval_5090.sh
+RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_mesh bash run_mizar_s1_ced_small_mmar_eval_5090.sh
+```
+
+结果分别位于上述MeSH run下的 `eval/mmau_test_mini_step17313/`、`eval/mmar_step17313/`。本地新增25项检查和原CED评测12项回归通过，18个runner函数AST、greedy_decode及生成协议一致，Python/Bash语法通过；两项真实小模型CPU检查因本地缺少Torch/Transformers跳过，真实权重加载、GPU生成与官方评分待远程作业验证。
 
 ## 2026-10-27：CED small checkpoint 的 MMAU / MMAR 对齐评测
 

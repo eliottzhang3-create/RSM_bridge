@@ -6,15 +6,36 @@ cd "$SCRIPT_DIR"
 mkdir -p log
 
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
-RUN_ROOT="${RSMOL_MIZAR_CED_RUN_ROOT:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_5090/formal_20261026_193830617147305}"
+EVAL_VARIANT="${RSMOL_MIZAR_CED_EVAL_VARIANT:-base}"
+case "$EVAL_VARIANT" in
+  base)
+    DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_5090/formal_20261026_193830617147305
+    DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_ced_small"
+    EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_benchmark.sh
+    JOB_NAME_PREFIX=mizar-s1-ced-mmau
+    JOB_LOG_PREFIX=mizar_s1_ced_small_mmau_5090
+    ;;
+  recursive_mesh)
+    DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_5090/formal_20261027_081123150934256
+    DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small"
+    EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_recursive_mesh_benchmark.sh
+    JOB_NAME_PREFIX=mizar-s1-ced-mesh-mmau
+    JOB_LOG_PREFIX=mizar_s1_ced_small_recursive_mesh_mmau_5090
+    ;;
+  *)
+    echo "unsupported RSMOL_MIZAR_CED_EVAL_VARIANT: $EVAL_VARIANT (expected base or recursive_mesh)" >&2
+    exit 2
+    ;;
+esac
+RUN_ROOT="${RSMOL_MIZAR_CED_RUN_ROOT:-$DEFAULT_RUN_ROOT}"
 EXPECTED_STEP="${RSMOL_MIZAR_CED_EXPECTED_STEP:-17313}"
 EXPECTED_GEOMETRY="${RSMOL_MIZAR_CED_EXPECTED_GEOMETRY:-8,8,4}"
 CHECKPOINT="${RSMOL_MIZAR_CED_CHECKPOINT:-$RUN_ROOT/formal/checkpoints/model--step-$EXPECTED_STEP.ckpt}"
 RUNTIME_CONFIG="${RSMOL_MIZAR_CED_RUNTIME_CONFIG:-$RUN_ROOT/formal/runtime.json}"
-ROUTE_ROOT="${RSMOL_MIZAR_CED_ROUTE_ROOT:-$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_ced_small}"
+ROUTE_ROOT="${RSMOL_MIZAR_CED_ROUTE_ROOT:-$DEFAULT_ROUTE_ROOT}"
 DATASET_DIR="${RSMOL_MMAU_DATASET_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/MMAU_test_mini}"
 OUTPUT_DIR="${RSMOL_MIZAR_CED_MMAU_OUTPUT_DIR:-$RUN_ROOT/eval/mmau_test_mini_step$EXPECTED_STEP}"
-JOB_LOG="$SCRIPT_DIR/log/mizar_s1_ced_small_mmau_5090.${RUN_TAG}.JOB.log"
+JOB_LOG="$SCRIPT_DIR/log/${JOB_LOG_PREFIX}.${RUN_TAG}.JOB.log"
 
 ARGS=(--benchmark mmau --checkpoint "$CHECKPOINT" --runtime-config "$RUNTIME_CONFIG"
       --route-root "$ROUTE_ROOT" --dataset-dir "$DATASET_DIR" --output-dir "$OUTPUT_DIR"
@@ -27,9 +48,10 @@ vc submit \
   -p pdgpu-5090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 8 -m 32G -g 1 -n 1 \
-  -j "mizar-s1-ced-mmau-${RUN_TAG}" \
+  -j "${JOB_NAME_PREFIX}-${RUN_TAG}" \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$JOB_LOG" \
-  --cmd "bash scripts/evaluate_mizar_s1_ced_benchmark.sh $CMD_ARGS"
+  --cmd "bash $EVAL_SCRIPT $CMD_ARGS"
 
 echo "Submitted full CED-Small MMAU test-mini evaluation; output=$OUTPUT_DIR"
+echo "Evaluation variant=$EVAL_VARIANT; checkpoint=$CHECKPOINT; runtime=$RUNTIME_CONFIG"
