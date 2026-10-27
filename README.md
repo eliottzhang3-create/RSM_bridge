@@ -1,3 +1,22 @@
+## 2026-10-27：Mizar S1 / MeSH 改用 2026-09-07 checkpoint 初始化
+
+新增 [MeSH init0907 隔离训练路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_init0907/README.md)，完整复制自 `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh`。仅将默认文本初始化改为：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh/formal_resume_000500_nonfatal_router_20260907_115533/checkpoint-009244
+```
+
+其余模型、HTSAT/c2l/projection、hybrid 1,477,492 行数据、fixed20、815-token 序列、padding/loss、FP32、优化器、LR、GradNorm、staging 和保存/恢复实现均沿用母本。仍为 8 GPU × microbatch 8 × accumulation 4、3 epochs、17,313 updates、866 warmup。只加载文本模型和 tokenizer 开始新的音频训练，optimizer/scheduler/RNG/数据游标从头开始；原路线及共享 MeSH 实现未修改。
+
+新入口与输出、日志、index cache、tmpfs、resume 身份独立；直接提交 formal，不增加 smoke 或审计前置任务。GitHub 同步后，在远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mizar_s1_gbs256_recursive_mesh_init0907_5090.sh --stage-workers 4
+```
+
+资源保持 `pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`、`mellow_c8204d8`。默认输出为 `outputs/RSmol/mizar_s1_htsat_gbs256_recursive_mesh_init0907_5090/formal_<timestamp>/`，最终产物为其下的 `formal/checkpoints/model--epo-3.ckpt`，同时保存 `model--step-17313.ckpt`。详细提交和恢复命令见路线 README。本地 Python 编译、两份 Bash 语法检查及 31 项现有回归检查通过。继承的 `reference_audit.json` 仅为母本历史记录；本地不据此声明新 checkpoint 的权重加载或 GPU 训练 PASS，真实执行以远程作业为准。
+
 ## 2026-10-27：USAD2-Small + 两次循环 MeSH / Mizar S1 / GBS256
 
 新增 [USAD2-Small + MeSH 正式训练路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_usad2_small/README.md)，复制隔离自原 `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh`。音频、mapper、数据及 staging 等 16 个文件与普通 USAD2 路线逐字节一致：整段 fixed20 波形一次编码，999 帧前加均值摘要，经原 Mellow projection 后仅对时间帧做相邻 4 帧均值，输出 251 audio tokens，prefix 508，完整序列 808。
