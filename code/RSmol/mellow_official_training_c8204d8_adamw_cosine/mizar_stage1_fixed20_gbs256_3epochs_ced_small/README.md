@@ -12,6 +12,22 @@
 
 本路线完整复制隔离自相邻的 `mizar_stage1_fixed20_gbs256_3epochs`，将音频侧替换为 Mizar 官方 S1 的 **CED small + freq_merge_126 mapper**。原路线保持不变。本地只维护代码，经 GitHub 同步至远程 Linux；权重、数据和训练产物均留在远程。正式提交入口为上两级的 `run_mizar_s1_ced_small_gbs256_5090.sh`。
 
+## 2026-10-27 MMAU / MMAR 对齐评测
+
+正式 checkpoint 生成后，使用上级 `code/RSmol` 目录中的两个独立入口：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mizar_s1_ced_small_mmau_eval_5090.sh
+bash run_mizar_s1_ced_small_mmar_eval_5090.sh
+```
+
+默认入口绑定 `formal_20261026_193830617147305/formal`、`model--step-17313.ckpt`、`runtime.json` 和本隔离训练路线。远程路径或输出路径变化时，可通过 `RSMOL_MIZAR_CED_RUN_ROOT`、`RSMOL_MIZAR_CED_CHECKPOINT`、`RSMOL_MIZAR_CED_RUNTIME_CONFIG`、`RSMOL_MIZAR_CED_ROUTE_ROOT`、`RSMOL_MIZAR_CED_MMAU_OUTPUT_DIR` 或 `RSMOL_MIZAR_CED_MMAR_OUTPUT_DIR` 覆盖。
+
+`RSMOL_MIZAR_CED_RUN_ROOT` 指向包含 `formal/` 与 `eval/` 的外层 run 目录。两个提交入口与原评测使用相同容器、`mellow_c8204d8` 环境和 `pdgpu-5090 / 8 CPU / 32G / 1 GPU / 1 node` 资源。MMAU 与 MMAR 各完整生成1000条，不附加smoke前置任务；本地仅验证代码与控制流，真实权重加载和官方分数需在远程运行确认。
+
+评测 runner 复用原 MMAU/MMAR 官方 metadata、parquet/audio 读取、固定 choice prompt、官方输出 key 识别、断点 raw JSONL store 和官方 `evaluation.py` scorer。CED 评测 adapter 严格验证 checkpoint 的 route、step、GBS256 geometry、训练 source SHA、CED 六个资产文件及 mapper contract，然后在线 FP32 计算固定20秒音频的 CED hidden 和 `freq_merge_126`。推理协议为 `126+1+256=383` prefix、`attention_mask=None`、全量重算 greedy argmax、无 cache、最多300 new tokens；EOS 保留在原始输出中，不做 trim、split、选项抽取或二次 rescoring。结果目录包含 `raw_generations.jsonl`、官方顺序 prediction JSON、`evaluation_report.json` 和 `official_evaluation.txt`。
+
 ## 固定训练实现
 
 | 项目 | 本路线 |

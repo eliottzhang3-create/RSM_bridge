@@ -1,3 +1,25 @@
+## 2026-10-27：CED small checkpoint 的 MMAU / MMAR 对齐评测
+
+新增两条独立的 CED-Small Mizar S1 评测入口，不改动原有 HTSAT 评测脚本：
+`run_mizar_s1_ced_small_mmau_eval_5090.sh` 和 `run_mizar_s1_ced_small_mmar_eval_5090.sh`。
+它们默认加载正式 checkpoint
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_5090/formal_20261026_193830617147305/formal/checkpoints/model--step-17313.ckpt`
+及该 run 的 `formal/runtime.json`，使用隔离的 `evaluate_mizar_s1_ced_benchmark.py` 和
+`mizar_s1_ced_eval_runtime.py`。
+
+评测保持原 MMAU/MMAR 数据遍历、固定 choice 顺序、fixed20 音频处理、原始生成文本保存和官方 scorer 不变；仅按训练合同切换到 CED-Small 在线 FP32 encoder 与 `freq_merge_126` mapper：
+`126 audio + 1 SEP + 256 prompt = 383 prefix`，`attention_mask=None`，全量重算、无 KV cache、argmax、最多300个新 token，首个 answer logit 位于382。运行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mizar_s1_ced_small_mmau_eval_5090.sh
+bash run_mizar_s1_ced_small_mmar_eval_5090.sh
+```
+
+默认结果分别写入该 run 下的 `eval/mmau_test_mini_step17313/` 与 `eval/mmar_step17313/`，包含 `raw_generations.jsonl`、`predictions_*.json`、`evaluation_report.json` 和 `official_evaluation.txt`。入口支持 `RSMOL_MIZAR_CED_RUN_ROOT`、`RSMOL_MIZAR_CED_CHECKPOINT`、`RSMOL_MIZAR_CED_RUNTIME_CONFIG`、`RSMOL_MIZAR_CED_ROUTE_ROOT` 与对应数据集/输出目录变量覆盖路径。
+
+每项评测提交一个 `pdgpu-5090 / 8 CPU / 32G / 1 GPU / 1 node` 作业，使用与原入口相同的容器和 `mellow_c8204d8` 环境。新增12项CPU合同/控制流测试及现有35项评测、CED路线、离线配置回归通过，Python编译、Bash语法和diff检查通过；本地没有真实权重、数据或PyTorch，真实GPU加载、1000条生成和官方评分尚需远程作业验证。
+
 ## 2026-10-27：CED small + MeSH 5+10×2+5 的隔离训练路线
 
 新增 [MeSH CED 路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small/README.md)，从原 `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh` 完整复制隔离。保留 `checkpoint-009244` 的20物理层/30逻辑层、2 loops、5 memory slots、6 routers，以及原 tokenizer/checkpoint 校验；音频侧统一为与 `run_mizar_s1_ced_small_gbs256_5090.sh` 相同的冻结 CED small、官方 `freq_merge_126` mapper 和 `126+1+256+300=683` 单音频布局。原MeSH、标准CED及非MeSH 5-10-5路线均未修改。
@@ -92,6 +114,57 @@ bash run_mizar_s1_gbs256_recursive_mesh_5_10x4_5_5090.sh --stage-workers 4
 ```
 
 默认写入新的 `outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_<时间戳>/`，从指定文本 checkpoint 重新初始化，不使用 OOM 任务的音频 checkpoint resume。真实 GPU 显存和训练仍需远程运行确认。
+
+## 2026-10-27：GBS128 5-10x4-5 MeSH checkpoint 的 MMAU / MMAR 官方评测
+
+已将两个既有 Mizar S1 官方评测入口扩展为独立的
+`RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_mesh_gbs128` 变体。原有的
+`gbs32`、`gbs256`、`recursive_mesh` 和 `recursive_5_10_5` 变体保持不变。
+
+新变体固定选择：
+
+```text
+checkpoint:
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_20261026_003638413364331/formal/checkpoints/model--step-34626.ckpt
+
+runtime:
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_20261026_003638413364331/formal/runtime.json
+
+route:
+mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5
+
+step / geometry:
+34626 / 8,4,4
+```
+
+推理和评分协议保持原评测实现：fixed20 音频、`129+129+1+256` prefix、
+`attention_mask=None`、FP32、关闭 TF32、纯 argmax、`use_cache=False`、
+最多 300 个新 token、保留 EOS，以及官方 MMAU/MMAR scorer。x4 loader 额外
+校验 50 logical / 20 physical / 4 loops / 7 memory slots / 10 routers、
+router 独立对象、瞬时 MeSH memory、strict state_dict、tokenizer 和训练
+contract。GBS128 的训练 geometry 只用于 checkpoint 身份校验，不改变推理
+batch 或评分设置。
+
+远程同步后，在 `code/RSmol/` 分别提交两个独立的单卡评测作业：
+
+```bash
+RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_mesh_gbs128 \
+bash run_mizar_s1_mmau_eval_5090.sh
+
+RSMOL_MIZAR_S1_EVAL_VARIANT=recursive_mesh_gbs128 \
+bash run_mizar_s1_mmar_eval_5090.sh
+```
+
+结果分别写入：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_20261026_003638413364331/eval/mmau_test_mini_step34626/
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_20261026_003638413364331/eval/mmar_step34626/
+```
+
+两项评测继续提交到 `pdgpu-5090` 的单 GPU、8 CPU、32G 作业；输出目录
+与旧 step-17313 结果隔离。评测链路本地 CPU 合同测试共 23 项通过，真实
+checkpoint 加载、GPU 推理和官方评分仍需远程执行确认。
 
 ## 2026-10-25：Mizar S1 / GBS256 非 MeSH 5+10×2+5 文本初始化消融
 

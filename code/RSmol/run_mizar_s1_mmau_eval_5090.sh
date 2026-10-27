@@ -33,6 +33,14 @@ case "$VARIANT" in
     EXPECTED_GEOMETRY="8,8,4"
     DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_padfix_20261025_003124507033014/eval/mmau_test_mini_step17313"
     ;;
+  recursive_mesh_gbs128)
+    DEFAULT_RUN_ROOT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_20261026_003638413364331/formal"
+    DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5"
+    DEFAULT_CHECKPOINT_NAME="model--step-34626.ckpt"
+    EXPECTED_STEP="34626"
+    EXPECTED_GEOMETRY="8,4,4"
+    DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_20261026_003638413364331/eval/mmau_test_mini_step34626"
+    ;;
   recursive_5_10_5)
     DEFAULT_RUN_ROOT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_5_10_5_5090/formal_20261025_160348996763174/formal"
     DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5"
@@ -42,7 +50,7 @@ case "$VARIANT" in
     DEFAULT_OUTPUT_DIR="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_htsat_gbs256_recursive_5_10_5_5090/formal_20261025_160348996763174/eval/mmau_test_mini_step17313"
     ;;
   *)
-    echo "unsupported RSMOL_MIZAR_S1_EVAL_VARIANT=$VARIANT (use gbs32, gbs256, recursive_mesh, or recursive_5_10_5)" >&2
+    echo "unsupported RSMOL_MIZAR_S1_EVAL_VARIANT=$VARIANT (use gbs32, gbs256, recursive_mesh, recursive_mesh_gbs128, or recursive_5_10_5)" >&2
     exit 2
     ;;
 esac

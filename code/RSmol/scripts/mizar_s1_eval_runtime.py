@@ -19,10 +19,12 @@ TRAINING_LOSS_REDUCTIONS = {
     "htsat_mizar_s1_fixed20_v1": "rank_local_token_mean_then_DDP_mean",
     "htsat_mizar_s1_fixed20_gbs256_v1": "mean_of_rank_local_microbatch_token_means_then_DDP_mean",
     "htsat_mizar_s1_fixed20_gbs256_recursive_mesh_v1": "mean_of_rank_local_microbatch_token_means_then_DDP_mean",
+    "htsat_mizar_s1_fixed20_gbs128_recursive_mesh_5_10x4_5_v1": "mean_of_rank_local_microbatch_token_means_then_DDP_mean",
     "htsat_mizar_s1_fixed20_gbs256_recursive_5_10_5_v1": "mean_of_rank_local_microbatch_token_means_then_DDP_mean",
 }
 RECURSIVE_IMPLEMENTATIONS = {
     "htsat_mizar_s1_fixed20_gbs256_recursive_mesh_v1": "recursive_model_5_10x2_5_mesh",
+    "htsat_mizar_s1_fixed20_gbs128_recursive_mesh_5_10x4_5_v1": "recursive_model_5_10x4_5_mesh",
     "htsat_mizar_s1_fixed20_gbs256_recursive_5_10_5_v1": "recursive_model_5_10_5",
 }
 PROTOCOL = {
@@ -183,14 +185,26 @@ def audit_recursive_route(route_contract, contract, model):
     if Path(recursive_impl.__file__).resolve() != (ROOT / f"{implementation}.py").resolve():
         raise RuntimeError(f"recursive implementation escaped source root: {recursive_impl.__file__}")
     parameter_audit = recursive_impl.parameter_audit(model.caption_decoder.lm)
-    required = {
-        "logical_layer_count": 30,
-        "physical_layer_count": 20,
-        "logical_cache_slot_count": 30,
-        "recursive_loops": 2,
-    }
-    if implementation == "recursive_model_5_10x2_5_mesh":
-        required.update(memory_slots=5, router_count=6)
+    if implementation == "recursive_model_5_10x4_5_mesh":
+        required = {
+            "logical_layer_count": 50,
+            "physical_layer_count": 20,
+            "recursive_loops": 4,
+            "logical_cache_slot_count": 50,
+            "memory_slots": 7,
+            "router_count": 10,
+            "router_objects_independent": True,
+            "memory_persistent": False,
+        }
+    else:
+        required = {
+            "logical_layer_count": 30,
+            "physical_layer_count": 20,
+            "logical_cache_slot_count": 30,
+            "recursive_loops": 2,
+        }
+        if implementation == "recursive_model_5_10x2_5_mesh":
+            required.update(memory_slots=5, router_count=6)
     if any(parameter_audit.get(key) != value for key, value in required.items()):
         raise ValueError(f"loaded recursive parameter audit mismatch: {parameter_audit}")
     if parameter_audit.get("schedule") != list(route_contract.TEXT_MODEL_SCHEDULE):

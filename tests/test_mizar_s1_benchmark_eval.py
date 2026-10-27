@@ -92,6 +92,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             "gbs32": "mizar_stage1_fixed20_3epochs",
             "gbs256": "mizar_stage1_fixed20_gbs256_3epochs",
             "recursive_mesh": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh",
+            "recursive_mesh_gbs128": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5",
             "recursive_5_10_5": "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5",
         }[variant]
         route = load_module("test_contract_" + variant, ROOT / "code/RSmol" /
@@ -118,6 +119,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
         for variant, geometry, step in (("gbs32", (8, 4, 1), 122937),
                                         ("gbs256", (8, 8, 4), 17313),
                                         ("recursive_mesh", (8, 8, 4), 17313),
+                                        ("recursive_mesh_gbs128", (8, 4, 4), 34626),
                                         ("recursive_5_10_5", (8, 8, 4), 17313)):
             with self.subTest(variant=variant):
                 saved, runtime, route = self.checkpoint_fixture(variant)
@@ -133,15 +135,17 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                     self.runtime.validate_checkpoint(saved, runtime, other, step, geometry)
 
     def test_recursive_contracts_require_text_architecture_schedule_and_source(self):
-        for variant in ("recursive_mesh", "recursive_5_10_5"):
+        for variant in ("recursive_mesh", "recursive_mesh_gbs128", "recursive_5_10_5"):
             with self.subTest(variant=variant):
                 saved, runtime, route = self.checkpoint_fixture(variant)
-                contract = self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
+                step = 34626 if variant == "recursive_mesh_gbs128" else 17313
+                geometry = (8, 4, 4) if variant == "recursive_mesh_gbs128" else (8, 8, 4)
+                contract = self.runtime.validate_checkpoint(saved, runtime, route, step, geometry)
                 self.assertEqual(contract["text_model_contract"], route.TEXT_MODEL_CONTRACT)
                 self.assertEqual(contract["text_model_schedule"], list(route.TEXT_MODEL_SCHEDULE))
                 with patch.object(route, "recursive_model_source_sha256", return_value="changed"):
                     with self.assertRaisesRegex(ValueError, "recursive model source differs"):
-                        self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
+                        self.runtime.validate_checkpoint(saved, runtime, route, step, geometry)
                 for field, value in (("text_model_architecture", "wrong-model"),
                                      ("text_model_schedule", list(reversed(route.TEXT_MODEL_SCHEDULE)))):
                     previous = saved["contract"][field]
@@ -149,16 +153,20 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                     saved["contract_sha256"] = route.digest(saved["contract"])
                     runtime["contract_sha256"] = saved["contract_sha256"]
                     with self.assertRaisesRegex(ValueError, "recursive text training contract"):
-                        self.runtime.validate_checkpoint(saved, runtime, route, 17313, (8, 8, 4))
+                        self.runtime.validate_checkpoint(saved, runtime, route, step, geometry)
                     saved["contract"][field] = previous
 
     def test_recursive_mesh_and_non_mesh_checkpoints_are_not_interchangeable(self):
         for variant, other_variant in (("recursive_mesh", "recursive_5_10_5"),
+                                       ("recursive_mesh_gbs128", "recursive_mesh"),
+                                       ("recursive_mesh", "recursive_mesh_gbs128"),
                                        ("recursive_5_10_5", "recursive_mesh")):
             saved, runtime, _ = self.checkpoint_fixture(variant)
             other = self.checkpoint_fixture(other_variant)[2]
+            step = 34626 if variant == "recursive_mesh_gbs128" else 17313
+            geometry = (8, 4, 4) if variant == "recursive_mesh_gbs128" else (8, 8, 4)
             with self.assertRaisesRegex(ValueError, "complete formal"):
-                self.runtime.validate_checkpoint(saved, runtime, other, 17313, (8, 8, 4))
+                self.runtime.validate_checkpoint(saved, runtime, other, step, geometry)
 
     def test_gbs256_keeps_source_runtime_and_loss_checks(self):
         saved, runtime, route = self.checkpoint_fixture("gbs256")
@@ -247,8 +255,10 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             self.assertIn("vc submit", content)
         self.assertIn("RSMOL_MIZAR_S1_EVAL_VARIANT", mmau_submit)
         self.assertIn("model--step-17313.ckpt", mmau_submit)
+        self.assertIn("recursive_mesh_gbs128", mmau_submit)
         self.assertIn("RSMOL_MIZAR_S1_EVAL_VARIANT", mmar_submit)
         self.assertIn("model--step-17313.ckpt", mmar_submit)
+        self.assertIn("recursive_mesh_gbs128", mmar_submit)
         self.assertIn("conda activate mellow_c8204d8", inner)
 
     def test_recursive_loader_uses_text_module_validator(self):
@@ -278,6 +288,14 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             config.update(mesh_memory_slots=5, mesh_router_count=6,
                           mesh_architecture_contract=route.TEXT_MODEL_CONTRACT)
             parameters.update(memory_slots=5, router_count=6)
+        elif variant == "recursive_mesh_gbs128":
+            implementation = "recursive_model_5_10x4_5_mesh"
+            config.update(num_hidden_layers=50, recursive_loops=4,
+                          mesh_memory_slots=7, mesh_router_count=10,
+                          mesh_architecture_contract=route.TEXT_MODEL_CONTRACT)
+            parameters.update(logical_layer_count=50, logical_cache_slot_count=50,
+                              recursive_loops=4, memory_slots=7, router_count=10,
+                              router_objects_independent=True, memory_persistent=False)
         else:
             implementation = "recursive_model_5_10_5"
             config.update(
@@ -291,7 +309,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
         (root / "tokenizer.json").write_text("{}", encoding="utf-8")
         contract = {"text_model_dir": str(root),
                     "recursive_text_checkpoint": route.recursive_checkpoint_contract(root)}
-        with patch.dict(sys.modules, {"contract": route}):
+        with patch.dict(sys.modules, {"contract": route, "torch": SimpleNamespace(float32="float32")}):
             text = load_module("eval_text_" + variant,
                                Path(route.__file__).parent / "models/recursive_text.py")
         loaded_config = SimpleNamespace(**config)
@@ -338,6 +356,33 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
             self.assertEqual(result["parameters"]["router_count"], 6)
             modules["recursive_model_5_10x2_5_mesh"].parameter_audit.return_value["router_count"] = 0
             with self.assertRaisesRegex(ValueError, "parameter audit mismatch"):
+                self.runtime.audit_recursive_route(route, contract, model)
+
+    def test_x4_mesh_audit_requires_four_loops_seven_slots_and_ten_routers(self):
+        route, contract, model, modules = self.recursive_audit_fixture("recursive_mesh_gbs128")
+        text = modules["models.recursive_text"]
+        backend = modules["recursive_model_5_10x4_5_mesh"]
+        with patch.object(self.runtime.importlib, "import_module", side_effect=modules.__getitem__):
+            with patch.object(text, "validate_recursive_config", wraps=text.validate_recursive_config) as validator:
+                result = self.runtime.audit_recursive_route(route, contract, model)
+                validator.assert_called_once_with(model.caption_decoder.lm.config)
+            self.assertEqual(result["implementation"], "recursive_model_5_10x4_5_mesh")
+            self.assertEqual(result["parameters"]["logical_layer_count"], 50)
+            self.assertEqual(result["parameters"]["physical_layer_count"], 20)
+            self.assertEqual(result["parameters"]["recursive_loops"], 4)
+            self.assertEqual(result["parameters"]["memory_slots"], 7)
+            self.assertEqual(result["parameters"]["router_count"], 10)
+            self.assertTrue(result["parameters"]["router_objects_independent"])
+            self.assertFalse(result["parameters"]["memory_persistent"])
+            for field, wrong in (("logical_layer_count", 30), ("recursive_loops", 2),
+                                 ("memory_slots", 5), ("router_count", 6)):
+                original = backend.parameter_audit.return_value[field]
+                backend.parameter_audit.return_value[field] = wrong
+                with self.assertRaisesRegex(ValueError, "parameter audit mismatch"):
+                    self.runtime.audit_recursive_route(route, contract, model)
+                backend.parameter_audit.return_value[field] = original
+            model.caption_decoder.lm.config.mesh_memory_slots = 5
+            with self.assertRaisesRegex(ValueError, "geometry mismatch"):
                 self.runtime.audit_recursive_route(route, contract, model)
 
     def test_non_mesh_audit_rejects_router_memory_parameters_and_buffers(self):
@@ -414,6 +459,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                 ("gbs32", "mizar_s1_htsat_5090/formal_async_v3", "122937", "8,4,1"),
                 ("gbs256", "mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1", "17313", "8,8,4"),
                 ("recursive_mesh", "mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_padfix_20261025_003124507033014", "17313", "8,8,4"),
+                ("recursive_mesh_gbs128", "mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_20261026_003638413364331", "34626", "8,4,4"),
                 ("recursive_5_10_5", "mizar_s1_htsat_gbs256_recursive_5_10_5_5090/formal_20261025_160348996763174", "17313", "8,8,4"),
             ):
                 with self.subTest(variant=variant):
@@ -437,6 +483,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                         "gbs32": "mizar_stage1_fixed20_3epochs",
                         "gbs256": "mizar_stage1_fixed20_gbs256_3epochs",
                         "recursive_mesh": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh",
+                        "recursive_mesh_gbs128": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5",
                         "recursive_5_10_5": "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5",
                     }[variant]
                     self.assertTrue(options["--route-root"].endswith(route))
@@ -468,6 +515,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                 ("gbs32", "mizar_s1_htsat_5090/formal_async_v3", "122937", "8,4,1"),
                 ("gbs256", "mizar_s1_htsat_gbs256_5090/formal_hybrid_gbs256_v1", "17313", "8,8,4"),
                 ("recursive_mesh", "mizar_s1_htsat_gbs256_recursive_mesh_5090/formal_recursive_mesh_padfix_20261025_003124507033014", "17313", "8,8,4"),
+                ("recursive_mesh_gbs128", "mizar_s1_htsat_gbs128_recursive_mesh_5_10x4_5_3090/formal_20261026_003638413364331", "34626", "8,4,4"),
                 ("recursive_5_10_5", "mizar_s1_htsat_gbs256_recursive_5_10_5_5090/formal_20261025_160348996763174", "17313", "8,8,4"),
             ):
                 with self.subTest(variant=variant):
@@ -491,6 +539,7 @@ class MizarS1BenchmarkEvalTest(unittest.TestCase):
                         "gbs32": "mizar_stage1_fixed20_3epochs",
                         "gbs256": "mizar_stage1_fixed20_gbs256_3epochs",
                         "recursive_mesh": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh",
+                        "recursive_mesh_gbs128": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_5_10x4_5",
                         "recursive_5_10_5": "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5",
                     }[variant]
                     self.assertTrue(options["--route-root"].endswith(route))
