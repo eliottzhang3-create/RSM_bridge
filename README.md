@@ -1,3 +1,20 @@
+## 2026-10-28：CED 非 MeSH 5+10×2+5 的两次循环前音频残差注入
+
+新增 [audio_reinject 隔离路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_audio_reinject/README.md)，完整复制自非 MeSH CED 朴素循环母本。原20个物理层、30次逻辑执行和 `0..14,5..14,15..19` 轨迹不变。原 mapper 输出的 `[B,126,576]` 音频 embeddings 额外经一个共享 `Linear(576,576)` 得到 A；分别在前五层后、第一次中段循环后，用同一个 `tanh(Linear(576,1)(h_audio))` 逐音频 token 标量门控乘 A，残差加回前126个音频位置，再进入对应中段循环。A 每次 forward 只计算一次，SEP/文本位置不直接注入，第二次循环后不注入；不加额外归一化、dropout 或 detach。
+
+投影权重随机初始化、bias为零，gate weight/bias全零，共新增332,929个参数；初始化隔离CPU RNG，先严格加载原文本权重再注册新模块。新增两组参数采用mapper的LR6e-4，原LM LR3e-4及所有原参数分组规则不变。保持冻结CED、官方freq_merge_126、683-token布局、原answer-only loss、hybrid 1,477,492行、FP32、8 GPU × microbatch8 × accumulation4、3epochs / 17,313updates / 866warmup，以及原优化器、调度、GradNorm、数据顺序、后台staging、保存节点和完整恢复行为。母本和共享递归模型未修改。
+
+经GitHub同步后，从远程登录节点直接提交formal，无smoke前置任务：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_audio_reinject_5090.sh --stage-workers 4
+```
+
+使用 `mellow_c8204d8`、`pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`。输出、日志、index cache、tmpfs与resume身份独立，默认输出根为 `outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_audio_reinject_5090/`，最终产物为run下的 `formal/checkpoints/model--epo-3.ckpt`，也保留 `model--step-17313.ckpt`。
+
+本地49项行为/合同/NumPy数值/Bash mock及母本回归检查、Python编译和Bash语法检查通过；7项新路线及3项母本真实CPU tensor测试因依赖缺失跳过，继承的16项runtime checks未执行。汇总入口为 `python tests/validate_mizar_s1_ced_audio_reinject.py`；远程可加 `--require-tensors` 禁止依赖缺失或跳过被误判为张量验收通过。真实权重加载和8GPU训练尚未验证，未登记远程PASS；原有评测入口尚未适配新架构。详细结构、梯度预期、对齐审计、正式提交和恢复命令见路线README。
+
 ## 2026-10-28?CED-Small / ? MeSH 5+10?2+5 / Mizar S1 GBS256 ????
 
 ??[? MeSH CED ????](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small/README.md)?????? MeSH CED ??????? MeSH ??? loader?????????????????? `stage4_5_10_5/formal-epoch2-continue-20260902_184936/checkpoint-step-009244`?20 ???????30 ???????? `0..14,5..14,15..19`?? router / memory slots??? mapper ? LM ???????? CED ???? HTSAT ? MeSH ?????????????
