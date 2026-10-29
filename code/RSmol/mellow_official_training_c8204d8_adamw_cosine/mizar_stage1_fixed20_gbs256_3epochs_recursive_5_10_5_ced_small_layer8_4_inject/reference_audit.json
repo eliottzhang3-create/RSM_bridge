@@ -1,0 +1,158 @@
+{
+  "status": "PASS",
+  "scope": "stdlib source audit; not tensor or remote GPU validation",
+  "route_code_sha256": "b6010f81ec049c4b6ff4efe2b8189f76b4747205da0b528f172be4d7fbc99042",
+  "parent_parity": {
+    "identical_files_normalized_lf": [
+      "prepare_index.py",
+      "stage_data.py",
+      "check_ced_assets.py",
+      "utils/audio_io.py",
+      "models/audio.py",
+      "models/ced_offline.py",
+      "data/audio_paths.py",
+      "data/audiotext_dataset.py",
+      "data/fixed20.py",
+      "data/indexed_jsonl.py",
+      "data/prepared_index.py",
+      "data/sampler.py",
+      "data/staging.py",
+      "data/template.py"
+    ],
+    "identical_function_asts": {
+      "train.py": [
+        "answer_loss",
+        "move_batch",
+        "rng_state",
+        "restore_rng",
+        "save_checkpoint",
+        "reload_audit",
+        "inspect_tokenizer",
+        "audit_checkpoint_tokenizer",
+        "main"
+      ],
+      "contract.py": [
+        "geometry",
+        "data_order",
+        "rank_seed",
+        "raw_references",
+        "lr_factor",
+        "validate_recursive_config_values",
+        "recursive_checkpoint_contract",
+        "validate_tokenizer_contract",
+        "validate_checkpoint_tokenizer",
+        "validate_ced_assets"
+      ],
+      "optim.py": [
+        "_clip_grad",
+        "track_and_clip_",
+        "state_dict",
+        "load_state_dict"
+      ],
+      "models/ced.py": [
+        "_waveform_to_mel",
+        "_prepare_ced_input",
+        "_hidden_to_temporal_grid",
+        "train"
+      ],
+      "models/recursive_text.py": [
+        "validate_recursive_config",
+        "validate_loaded_model"
+      ],
+      "models/decoder.py": [
+        "_make_prefix",
+        "generate_prefix_inference"
+      ]
+    },
+    "optimizer_epoch_loop": "identical except explicit diagnostic additions"
+  },
+  "backbone_parity": {
+    "entire_backbone_ast_equal_after_explicit_additions": true,
+    "added_nodes": {
+      "assign": 3,
+      "guard": 5,
+      "for": 1
+    }
+  },
+  "order_swap_parity": {
+    "parent_route": "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer4_8_inject",
+    "compared_source_files": [
+      "audit_reference.py",
+      "check_ced_assets.py",
+      "contract.py",
+      "data/audio_paths.py",
+      "data/audiotext_dataset.py",
+      "data/fixed20.py",
+      "data/indexed_jsonl.py",
+      "data/prepared_index.py",
+      "data/sampler.py",
+      "data/staging.py",
+      "data/template.py",
+      "models/audio.py",
+      "models/ced.py",
+      "models/ced_offline.py",
+      "models/decoder.py",
+      "models/mellow.py",
+      "models/recursive_layer_inject.py",
+      "models/recursive_text.py",
+      "optim.py",
+      "prepare_index.py",
+      "run.sh",
+      "runtime_checks.py",
+      "stage_data.py",
+      "train.py",
+      "utils/audio_io.py",
+      "write_config.py"
+    ],
+    "allowed_semantic_changes": [
+      "contract.py",
+      "models/recursive_layer_inject.py",
+      "models/recursive_text.py",
+      "train.py",
+      "write_config.py"
+    ],
+    "injection_trace": [
+      [
+        5,
+        8
+      ],
+      [
+        15,
+        4
+      ]
+    ],
+    "feature_pair": [
+      "A4",
+      "A8"
+    ],
+    "module_registration_order_unchanged": true
+  },
+  "parent_file_sha256": {
+    "audit_reference.py": "21cbf5f8f943eb81b898e69c46d6a1addae24abdf7a694d83994d4d41c295172",
+    "check_ced_assets.py": "075b49dc02eca6d5293f1abaadce736fece46a2fc67661324ac9b45913466367",
+    "contract.py": "8e5df2a783d89cce97207046d96ece560a305544d0e527ea9184efeddf38350c",
+    "data/audio_paths.py": "f65433f8db88a59bf1d7701ce9b0bfe85e8c00affa673b69246684ae34596685",
+    "data/audiotext_dataset.py": "f41bbd8edf863c906d8ef996da87b726edaedae7987fa5507416e03113b5bf8b",
+    "data/fixed20.py": "f4580fdaf1b75acd54bbd12dbfc72f18e2906e1dbcebd8ff8e5d1ff355ac6a5c",
+    "data/indexed_jsonl.py": "1fac5952ad67609cc050d9b05cfac8c9cb16f4bf520b9eabbcfb0dee3af82e8a",
+    "data/prepared_index.py": "9852107e00223c91bb07a4bf05347089884bbfcff9d5075cc60ef53086af57e3",
+    "data/sampler.py": "66be929c5f5458816c64b12bec058791a173698290ea1e7a5ef80a730aa02525",
+    "data/staging.py": "db7a465e90deb6be5aa0342afbb6cb56279fbea20081cd09f79c42db2fac4515",
+    "data/template.py": "0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2",
+    "models/audio.py": "de8394e231c4ee67d6a9baaad864032e2825c717f7e5c6c838543a613619ebb4",
+    "models/ced.py": "67c101680a14ee8391568f892cf33f1748443af4c182ba5b3270707e210d3517",
+    "models/ced_offline.py": "94a0d5ede90337b4b88b112dfaad3db0144e644458dcc1a744096c6f19f248af",
+    "models/decoder.py": "4fd99542941d7a05277a2ac005aa123128798f245b19fc1ffaf3ccd13d39e237",
+    "models/mellow.py": "1990fe5eacd412a027fabd76f193975ddd5e22c9e02e7c371dc077030e07bdcf",
+    "models/recursive_text.py": "5073dc131cba9b22b0d14150f08dfce892a061d7140a7617d9fa8b56486893ef",
+    "optim.py": "e0bd421eb5edf6dfc60a4e6e14e3d221de450ad94c4829c234e7c6058319036e",
+    "prepare_index.py": "daf059301ff5cb2550a11e6f35cb53fe655b17b6b92cb0974da8f3da55f337e2",
+    "README.md": "6179c3ce00240567e862e910820dc62076ffeb327c320b5fd31830bfecb6ee5c",
+    "run.sh": "7387da4a130303df3e5d14599813586e53076f7317cc09559ad760ee2e6608bf",
+    "runtime_checks.py": "939e6d9f24ab8359499dbb00e1d13434e3996929f68c0ad4ef2a0342632dd7d2",
+    "stage_data.py": "83925428208c0b5e1859b3ccd9f41670235720a07c76c514bd1453c5eee205cf",
+    "train.py": "6a01a92475a9d4206e13c08cb4a035ddc63fa593636de27cbd5a0ee0ab6bc82b",
+    "utils/audio_io.py": "67f3680af4b8bb5cbc30426c54d71155d2b65f8cdd5c4fb89af08a374e63f311",
+    "write_config.py": "56be1b94c0ac856a2cef69a4f55edc04944b216b62e9300fa2cbf320dc37f528"
+  }
+}

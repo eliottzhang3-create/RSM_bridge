@@ -1,3 +1,133 @@
+## 2026-10-29：CED 第 3/6/9/12 层选择与两轮共享 cross attention
+
+已接续完成从非 MeSH CED 母本复制隔离的
+[四层 cross attention 路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer36912_crossattn/README.md)。
+冻结 CED，在同一次编码中提取第 3/6/9/12 个 block 最终 LayerNorm 之前的输出，
+分别按 segment/time/frequency 顺序整理为 `[B,126,1536]`，经四个独立 Linear 得到 `[B,126,576]`。
+原最终层 mapper 和音频 prefix 主路径保留。
+
+prelude 五层后及第一次中段循环后（零基逻辑索引 5、15），
+共享 Gate1 对有效 prompt 的 masked mean 产生四层 softmax 权重，混合音频作为 K/V；
+当前全部文本位置作为 Q 输入，共享 hidden576 / 9-head / dropout0 cross attention。
+两个独立零初值轮次偏置仅加到 Q 输入；共享逐文本 token 的 tanh Gate2 零初始化，
+将 cross attention 输出残差加到文本位置，audio/SEP 不直接注入。
+Gate1 不读取 answer，LM 保留 `attention_mask=None`，推理要求完整 prefix 重算、无 KV cache。
+共新增 4,874,693 个参数；新增参数及原 mapper max LR6e-4，原 LM max LR3e-4。
+
+保持母本 hybrid 1,477,492 行、683-token 布局、FP32、GBS256（8×8×4）、
+3 epochs / 17,313 updates / 866 warmup、原 loss/AdamW/LambdaLR/GradNorm、
+后台 staging 和完整恢复。新代码、入口、输出、日志、index cache、tmpfs 与 resume 身份隔离；
+母本及共享递归实现未修改。现有普通 CED evaluator 尚未适配本架构。
+
+经 GitHub 同步后，在远程登录节点直接提交 formal，无 smoke 前置任务：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer36912_crossattn_5090.sh --stage-workers 4
+```
+
+沿用 `mellow_c8204d8`、`pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`。
+默认输出为 `outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer36912_crossattn_5090/formal_<timestamp>/`；
+最终产物为其中 `formal/checkpoints/model--epo-3.ckpt`，同时保留 `model--step-17313.ckpt`。
+
+本地汇总入口：`python tests/validate_mizar_s1_ced_multilayer_crossattn.py`。
+56 项实际检查通过，14 项真实 CPU tensor 检查因缺少依赖跳过；
+包括 Python/Bash 语法、NumPy 行为/因果性、strict loader、参数/LR、Bash 模拟提交、
+共享启动及退出清理、母本源码/AST 对齐和母本回归。
+收尾修正了未执行 tensor 测试对首步 LR 的错误假设：母本实际从 0.1 倍 max LR 起步，
+Gate2 首次更新后即可在下一次反向传递上游梯度；修正不代表 tensor 测试已通过。
+真实权重加载及 8 GPU 训练/恢复待远程确认，不登记远程 PASS。
+远程可手动执行 `python tests/validate_mizar_s1_ced_multilayer_crossattn.py --require-tensors`，
+不下载资产、不运行 CUDA、不提交训练，不作为 formal 自动前置任务。
+
+## 2026-10-29：CED 第 8→4 层递归注入独立训练路线
+
+完整复制隔离自 `mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer4_8_inject`，
+新路线为 `mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject`。
+唯一训练语义变化：prelude 五层输出 h0 后、第一次中段循环前注入 CED 第 8 层 A8；
+第一次中段循环输出 h1 后、第二次循环前注入 CED 第 4 层 A4。
+对应零基逻辑索引为 5、15，实际审计轨迹为 `[[5,8],[15,4]]`。
+特征接口仍为 `(A4,A8)`；A8 使用第 8 层独立 MLP/gate，A4 使用第 4 层独立 MLP/gate。
+两套模块的注册、初始化顺序保持 4、8，零初始化 gate、参数量及原 CPU RNG 行为不变。
+
+冻结 CED、原 final-layer mapper、683-token 布局、非 MeSH `5+10×2+5`、hybrid 1,477,492 行、
+FP32、GBS256（8×8×4）、3 epochs / 17,313 updates / 866 warmup、LM LR3e-4、
+mapper/MLP/gate LR6e-4、loss、优化器、调度、GradNorm、后台 staging 和完整恢复均保留母本。
+新 route、输出、日志、index cache、tmpfs 和 checkpoint resume 身份隔离，拒绝原 4→8 路线 checkpoint。
+原 4→8 路线及共享递归实现未修改；现有评测入口尚未适配新路线。
+
+经 GitHub 同步后，在远程登录节点提交 formal，无 smoke 前置任务：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+git pull --ff-only
+bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer8_4_inject_5090.sh --stage-workers 4
+```
+
+资源为 `pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`，沿用 `mellow_c8204d8`。
+默认输出根为 `outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_5090/formal_<timestamp>/`，
+最终产物为该 run 内的 `formal/checkpoints/model--epo-3.ckpt`，同时保留 `model--step-17313.ckpt`。
+完整结构、恢复和可选验证命令见
+[8→4 路线 README](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject/README.md)。
+
+本地验证：`python tests/validate_mizar_s1_ced_layer84.py --output audit_reports/mizar_s1_ced_layer84_validation.json`，
+共 67 项实际执行通过（含原 4→8 及普通 CED 母本回归），18 项真实 CPU tensor 检查因缺少依赖跳过；
+Python 编译、两份 Bash 语法、模拟提交和 4→8 母本完整源码语义对照审计通过。
+真实远程权重加载与 8 GPU 训练尚未验证，不登记远程 PASS。
+可在远程仓库根目录手动执行 `python tests/validate_mizar_s1_ced_layer84.py --require-tensors`，
+该命令不下载资产、不运行 CUDA、不提交训练，也不会在 formal 前自动执行。
+
+### 2026-10-29：CED 第 4、8 层递归注入路线
+
+已基于 `run_mizar_s1_gbs256_recursive_5_10_5_ced_small_5090.sh`
+复制建立独立训练路线，实现代码、输出目录及 checkpoint 身份校验均已隔离。
+
+正式训练入口：
+`code/RSmol/run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer4_8_inject_5090.sh`
+
+架构与训练配置：
+
+- 保留原有 CED 最终层、mapper 和 LM 主干前向流程。
+- 冻结 CED-small，额外提取第 4、8 层潜状态。
+- 中间状态从 `[2B,252,384]` 按原 mapper 的时间顺序整理为
+  `[B,126,1536]`，分别经独立 MLP 转换为 `[B,126,576]`。
+- prelude 五层输出 h0，在第一次循环前注入 A4；
+  第一次循环输出 h1，在第二次循环前注入 A8。
+- 注入公式为 `h_audio += tanh(Linear(h_audio)) * A`。
+  每个 audio token 使用一个标量门控，文本及 SEP 位置保持原有流程。
+- 两个 gate 的权重和偏置均初始化为零。
+- mapper、新增 MLP 和 gate 的 max LR 均为 `6e-4`；
+  LM 的 max LR 为 `3e-4`。
+- 沿用母本 GBS 256、3 epochs 和学习率调度。
+
+验证状态：
+
+- 本地验证结果：49 项通过，10 项因缺少 PyTorch 等依赖而跳过。
+- 真实张量、远程权重及 GPU 训练尚未验证。
+- 尚未执行 Git commit、push 或远程训练提交。
+- 当前不包含这条新增架构的独立评测入口。
+
+本地只维护核心代码；模型权重、数据集和正式训练环境位于远程
+Linux 服务器，继续通过 GitHub 同步代码。
+
+远程仓库更新后，正式提交命令：
+
+```bash
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer4_8_inject_5090.sh
+```
+
+入口通过现有作业包装器申请单节点 8 张 5090。
+
+如需先补齐依赖实际张量计算的验证，可在具备项目依赖的服务器环境执行：
+
+```bash
+python tests/validate_mizar_s1_ced_layer48.py --require-tensors
+```
+
+
 ## 2026-10-28：CED 非 MeSH 5+10×2+5 的两次循环前音频残差注入
 
 新增 [audio_reinject 隔离路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_audio_reinject/README.md)，完整复制自非 MeSH CED 朴素循环母本。原20个物理层、30次逻辑执行和 `0..14,5..14,15..19` 轨迹不变。原 mapper 输出的 `[B,126,576]` 音频 embeddings 额外经一个共享 `Linear(576,576)` 得到 A；分别在前五层后、第一次中段循环后，用同一个 `tanh(Linear(576,1)(h_audio))` 逐音频 token 标量门控乘 A，残差加回前126个音频位置，再进入对应中段循环。A 每次 forward 只计算一次，SEP/文本位置不直接注入，第二次循环后不注入；不加额外归一化、dropout 或 detach。
