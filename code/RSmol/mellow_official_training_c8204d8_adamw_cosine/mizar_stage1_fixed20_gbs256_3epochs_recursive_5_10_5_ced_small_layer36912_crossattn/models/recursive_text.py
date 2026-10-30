@@ -90,8 +90,8 @@ def validate_audio_cross_attention(model):
             or adapter.prompt_tokens != 256 or adapter.cross_attention.num_heads != 9
             or adapter.cross_attention.dropout != 0. or not adapter.cross_attention.batch_first):
         raise ValueError("cross attention geometry/heads/dropout contract mismatch")
-    if type(adapter.residual_scale) is not float or adapter.residual_scale != 0.1:
-        raise ValueError("cross attention residual scale must be the fixed float 0.1")
+    if type(adapter.residual_scale) is not float or adapter.residual_scale != 0.3:
+        raise ValueError("cross attention residual scale must be the fixed float 0.3")
     if len(adapter.audio_input_norms) != 4 or len(adapter.audio_output_norms) != 4:
         raise ValueError("each of the four audio branches requires independent pre/post LayerNorm")
     norms = [(norm, 1536, True) for norm in adapter.audio_input_norms]

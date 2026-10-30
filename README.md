@@ -1,14 +1,44 @@
+## 2026-10-30：四条非 MeSH CED checkpoint 的 MMAU / MMAR 评测扩展
+
+两个既有入口 `run_mizar_s1_ced_small_mmau_eval_5090.sh`、
+`run_mizar_s1_ced_small_mmar_eval_5090.sh` 新增四个
+`RSMOL_MIZAR_CED_EVAL_VARIANT`：`recursive_5_10_5`、
+`recursive_5_10_5_layer8_4_inject`、`recursive_5_10_5_layer4_8_inject`、
+`recursive_5_10_5_audio_reinject`。分别绑定用户指定的四个step17313 checkpoint及同run的
+`formal/runtime.json`；默认base和已有recursive_mesh仍走原实现。
+新增runner/adapter/compute wrapper位于训练目录之外，四条训练路线与共享递归实现未改。
+
+保持原CED的fixed20、126+1+256 prefix383、FP32/eval/TF32关闭、
+attention_mask=None、逐token完整重算/无KV cache/纯argmax、最多300新tokens/首次EOS停止，
+保留完整生成原样评分，MMAU/MMAR各1000条及原官方scorer。
+两条层注入路线每样本编码一次，始终传原顺序(A4,A8)；8→4选择由模型内部完成。
+strict加载完整音频权重，并核对训练/runtime/源码/资产身份和实际30层轨迹、注入顺序。
+资源仍为pdgpu-5090 / 8 CPU / 32G / 1 GPU / 1 node、mellow_c8204d8；
+直接full评测，无smoke前置任务。四层cross attention不在本次评测适配范围。
+
+八条提交命令、四个完整run路径、结果目录、续跑与覆盖参数见
+[非MeSH CED评测交付](code/RSmol/scripts/README_mizar_s1_ced_recursive_eval.md)。
+本地汇总 `python -B tests/validate_mizar_s1_ced_recursive_eval.py`：
+65项实际检查通过（新增28项、原CED/MeSH37项），9项真实CPU tensor检查因缺依赖跳过，
+Python及Bash语法通过。报告为 `audit_reports/mizar_s1_ced_recursive_eval_validation.json`。
+远程可手动加`--require-tensors`要求tensor实际运行；不下载、不用CUDA、不提交作业，
+不作为full自动前置任务。真实checkpoint/配套runtime/资产一致性、GPU推理与官方分数待远程确认，
+不登记远程PASS。
+
 ## 2026-10-30：四层 CED cross attention 的分支归一化与固定注入尺度 v2
+
+同日最新调整：按用户要求将固定 γ 从0.1改为 **0.3**，以下描述已同步。
+其余架构与训练配置不变；旧γ=0.1 checkpoint因合同/源码身份不同，不能直接full resume。
 
 用户反馈原四层 cross attention 训练可以运行，但出现注意力残差放大及梯度爆炸。
 已在[现有隔离路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer36912_crossattn/README.md)落实两项架构调整：
 四个深度各自采用 `LN1536 -> Linear(1536,576) -> LN576`；
 共享 `LN_text(T)` 仅供有效prompt的Gate1池化、Gate2和CA query使用，原T仍作为残差基底。
 CA输出经过共享且 `elementwise_affine=False` 的LN，按
-`T_new = T + 0.1 * tanh(Gate2(LN_text(T))) * LN_out(CA(...))` 注入。
+`T_new = T + 0.3 * tanh(Gate2(LN_text(T))) * LN_out(CA(...))` 注入。
 轮次偏置仍只在文本LN之后加入query，Gate2仍全零初始化，CA输出投影保持原随机初始化。
 所有LN的eps为1e-5，其余LN可训练weight=1/bias=0；两轮共享文本/输出LN、CA及两个gate。
-每个token的实际注入RMS在数值有限时不超过约0.1，不代表主路径的10%或全部梯度稳定性证明。
+每个token的实际注入RMS在数值有限时不超过约0.3，不代表主路径的30%或全部梯度稳定性证明。
 
 新增18,048个LN参数，交互模块共4,892,741个参数；新增LN沿用分支max LR6e-4、
 一维参数不衰减。原LM LR3e-4、mapper LR6e-4、AdamW/LambdaLR/GradNormTracker、
@@ -28,7 +58,7 @@ bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer36912_crossattn_5090.sh
 
 默认新时间戳run中的最终产物仍为 `formal/checkpoints/model--epo-3.ckpt` 和
 `model--step-17313.ckpt`。metrics区分原始CA输出RMS、归一化后RMS、实际残差RMS，
-并记录 `residual_token_rms_max` 与固定 `residual_scale=0.1`。
+并记录 `residual_token_rms_max` 与固定 `residual_scale=0.3`。
 本地58项实际检查通过、15项真实CPU tensor检查因缺少依赖跳过，汇总入口仍为
 `python tests/validate_mizar_s1_ced_multilayer_crossattn.py`。
 v2真实tensor、远程权重加载、8 GPU训练稳定性与完整恢复待远程确认，不登记远程PASS。

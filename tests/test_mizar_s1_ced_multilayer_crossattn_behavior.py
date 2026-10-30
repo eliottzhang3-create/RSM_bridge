@@ -115,7 +115,7 @@ class ActualMethodsTests(unittest.TestCase):
             def __call__(candidate, *args):
                 return self.actual["forward"](candidate, *args)
         adapter = Adapter(width=4, audio_tokens=2, prompt_tokens=3, text_start=3,
-                          collect_diagnostics=False, last_diagnostics=[], residual_scale=.1)
+                          collect_diagnostics=False, last_diagnostics=[], residual_scale=.3)
         adapter.pool_prompt = types.MethodType(self.actual["pool_prompt"], adapter)
         adapter.project_audio = types.MethodType(self.actual["project_audio"], adapter)
         adapter.projections = [Linear(1536, 4) for _ in range(4)]
@@ -199,8 +199,8 @@ class ActualMethodsTests(unittest.TestCase):
             residual = self.np.asarray(output[:, 3:] - h[:, 3:])
             per_token = self.np.sqrt((residual**2).mean(axis=-1))
             self.assertTrue(self.np.isfinite(output).all())
-            self.assertLessEqual(float(per_token.max()), .1 + 1e-12)
-            self.assertGreater(float(per_token.max()), .099)
+            self.assertLessEqual(float(per_token.max()), .3 + 1e-12)
+            self.assertGreater(float(per_token.max()), .299)
             self.np.testing.assert_array_equal(output[:, :3], h[:, :3])
             values = a.last_diagnostics[-1][1]
             self.assertGreater(float(values[6]), 1000.)
@@ -213,7 +213,7 @@ class ActualMethodsTests(unittest.TestCase):
         h = self.tensor(self.np.asarray(h)*100 + 500)
         output = a(h, bank, mask, 0)
         self.assertGreater(float(self.np.asarray(h[:, 3:]).mean()), 100.)
-        self.assertLess(float(self.np.abs(self.np.asarray(output[:, 3:] - h[:, 3:])).max()), .21)
+        self.assertLess(float(self.np.abs(self.np.asarray(output[:, 3:] - h[:, 3:])).max()), .61)
         u = a.text_norm(h[:, 3:])
         self.np.testing.assert_allclose(self.np.asarray(u).mean(axis=-1), 0., atol=1e-14)
         self.np.testing.assert_array_equal(a.gate2.last, u)

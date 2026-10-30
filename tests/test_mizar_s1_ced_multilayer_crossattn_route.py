@@ -64,7 +64,7 @@ class RouteTests(unittest.TestCase):
         self.assertTrue(contract.ROUTE.endswith("_v2"))
         self.assertEqual(arch["normalization"]["eps"], 1e-5)
         self.assertFalse(arch["normalization"]["output"]["elementwise_affine"])
-        self.assertEqual(arch["residual_scale"], .1)
+        self.assertEqual(arch["residual_scale"], .3)
         self.assertFalse(arch["residual_scale_trainable"])
         self.assertEqual(arch["residual_base"], "original_unnormalized_text")
         self.assertFalse(arch["cross_attention"]["out_proj_zero_init"])
@@ -177,7 +177,7 @@ class RouteTests(unittest.TestCase):
         prefix="caption_decoder.lm.model.audio_crossattn."
         params={n[len(prefix):]:p for n,p in self.parameter_inventory() if n.startswith(prefix)}
         adapter=SimpleNamespace(width=576,text_start=127,audio_tokens=126,prompt_tokens=256,
-            residual_scale=.1, cross_attention=SimpleNamespace(num_heads=9,dropout=0.,batch_first=True),
+            residual_scale=.3, cross_attention=SimpleNamespace(num_heads=9,dropout=0.,batch_first=True),
             named_parameters=lambda:iter(params.items()))
         def norm(width, affine=True):
             return SimpleNamespace(normalized_shape=(width,),eps=1e-5,elementwise_affine=affine)
@@ -186,7 +186,7 @@ class RouteTests(unittest.TestCase):
         adapter.text_norm,adapter.output_norm=norm(576),norm(576,False)
         model=SimpleNamespace(model=SimpleNamespace(audio_crossattn=adapter,layers=list(range(20)),logical_to_physical=contract.TEXT_MODEL_SCHEDULE))
         self.assertEqual(recursive_text.validate_audio_cross_attention(model)["actual_parameters"],4892741)
-        for attribute,bad_value in (("residual_scale",1.),("residual_scale",Param(())),
+        for attribute,bad_value in (("residual_scale",1.),("residual_scale",.1),("residual_scale",Param(())),
                                     ("output_norm",norm(576)),("text_norm",norm(1536)),
                                     ("audio_input_norms",[norm(1536)]*4),
                                     ("audio_output_norms",[norm(576)]*3)):

@@ -132,7 +132,7 @@ class TensorTests(unittest.TestCase):
             self.assertFalse(norm.bias.ne(0).any())
         self.assertFalse(adapter.output_norm.elementwise_affine)
         self.assertEqual(list(adapter.output_norm.parameters()),[])
-        self.assertEqual(adapter.residual_scale,.1)
+        self.assertEqual(adapter.residual_scale,.3)
         self.assertNotIn("residual_scale",dict(adapter.named_parameters()))
         self.assertTrue(adapter.cross_attention.out_proj.weight.ne(0).any())
         for layer in (adapter.gate1,adapter.gate2):
@@ -258,13 +258,13 @@ class TensorTests(unittest.TestCase):
                 self.assertTrue(torch.isfinite(output).all())
                 torch.testing.assert_close(output[:,:127],x[:,:127],rtol=0,atol=0)
                 token_rms = (output[:,127:]-x[:,127:]).square().mean(dim=-1).sqrt()
-                self.assertLessEqual(token_rms.max().item(),.1+1e-6)
-                self.assertGreater(token_rms.max().item(),.099)
+                self.assertLessEqual(token_rms.max().item(),.3+1e-6)
+                self.assertGreater(token_rms.max().item(),.299)
         for entry in adapter.diagnostics():
             self.assertGreater(entry["cross_attention_rms"],1000.)
             self.assertLessEqual(entry["normalized_cross_attention_rms"],1.+1e-6)
-            self.assertLessEqual(entry["residual_token_rms_max"],.1+1e-6)
-            self.assertEqual(entry["residual_scale"],.1)
+            self.assertLessEqual(entry["residual_token_rms_max"],.3+1e-6)
+            self.assertEqual(entry["residual_scale"],.3)
 
     def test_gate2_opens_before_each_upstream_branch_receives_gradients(self):
         torch = self.torch

@@ -76,7 +76,7 @@ def main():
               "intentional_differences": [
                   "CED raw blocks3/6/9/12 -> temporal flatten -> independent LN1536/Linear(1536,576)/LN576 branches",
                   "shared text LN feeds valid-prompt masked-mean Gate1, Gate2 and cross attention Q; residual base unchanged",
-                  "shared cross attention before each middle loop; Q-only round biases; non-affine output LN and fixed residual scale0.1",
+                  "shared cross attention before each middle loop; Q-only round biases; non-affine output LN and fixed residual scale0.3",
                   "all added parameters and original mapper max LR6e-4; original LM max LR3e-4",
                   "non-MeSH recursive 5-10-5 text checkpoint and architecture retained; audio uses online CED-Small plus official freq_merge_126 mapper",
                   "single audio126 + SEP1 + prompt256 + answer300; full fixed20 waveform processed before mapping",

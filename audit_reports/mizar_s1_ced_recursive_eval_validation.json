@@ -1,0 +1,98 @@
+{
+  "status": "PASS",
+  "scope": "local code validation only; no remote assets or GPU evaluation",
+  "require_tensors": false,
+  "tensor_dependencies_available": false,
+  "missing_dependencies": [
+    "torch",
+    "transformers"
+  ],
+  "executed_tests": 65,
+  "skipped_tests": 9,
+  "checks": [
+    {
+      "check": "python_syntax",
+      "status": "PASS",
+      "files": 11
+    },
+    {
+      "check": "run_mizar_s1_ced_small_mmau_eval_5090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "run_mizar_s1_ced_small_mmar_eval_5090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "evaluate_mizar_s1_ced_recursive_benchmark.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "test_mizar_s1_ced_recursive_eval.py",
+      "status": "PASS",
+      "tests": 17,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_300_token_limit_prefix_and_finite_logits (__main__.RecursiveCedEvaluationTests.test_300_token_limit_prefix_and_finite_logits) ... ok\ntest_all_cross_route_pairings_are_rejected (__main__.RecursiveCedEvaluationTests.test_all_cross_route_pairings_are_rejected) ... ok\ntest_all_four_contracts_and_eight_default_paths (__main__.RecursiveCedEvaluationTests.test_all_four_contracts_and_eight_default_paths) ... ok\ntest_architecture_audio_mapper_and_injection_contracts_are_enforced (__main__.RecursiveCedEvaluationTests.test_architecture_audio_mapper_and_injection_contracts_are_enforced) ... ok\ntest_asset_hashes_are_strict (__main__.RecursiveCedEvaluationTests.test_asset_hashes_are_strict) ... ok\ntest_changed_recursive_assets_and_stale_imports_are_rejected (__main__.RecursiveCedEvaluationTests.test_changed_recursive_assets_and_stale_imports_are_rejected) ... ok\ntest_checkpoint_runtime_source_and_geometry_checks (__main__.RecursiveCedEvaluationTests.test_checkpoint_runtime_source_and_geometry_checks) ... ok\ntest_full_audio_state_loads_strictly_in_fp32_and_tokenizer_has_no_growth (__main__.RecursiveCedEvaluationTests.test_full_audio_state_loads_strictly_in_fp32_and_tokenizer_has_no_growth) ... ok\ntest_generate_encodes_once_and_passes_each_samples_features (__main__.RecursiveCedEvaluationTests.test_generate_encodes_once_and_passes_each_samples_features) ... ok\ntest_greedy_eos_recompute_raw_text_and_feature_order_for_all_variants (__main__.RecursiveCedEvaluationTests.test_greedy_eos_recompute_raw_text_and_feature_order_for_all_variants) ... ok\ntest_hooks_observe_physical_calls_injection_order_and_cache (__main__.RecursiveCedEvaluationTests.test_hooks_observe_physical_calls_injection_order_and_cache) ... ok\ntest_loader_does_not_suppress_missing_keys_mixed_ddp_or_bad_model_state (__main__.RecursiveCedEvaluationTests.test_loader_does_not_suppress_missing_keys_mixed_ddp_or_bad_model_state) ... ok\ntest_missing_wrong_or_unexpected_sample_features_are_rejected (__main__.RecursiveCedEvaluationTests.test_missing_wrong_or_unexpected_sample_features_are_rejected) ... ok\ntest_protocol_and_fifteen_common_runner_functions_match_base (__main__.RecursiveCedEvaluationTests.test_protocol_and_fifteen_common_runner_functions_match_base) ... ok\ntest_raw_predictions_preserve_eos_and_order (__main__.RecursiveCedEvaluationTests.test_raw_predictions_preserve_eos_and_order) ... ok\ntest_real_training_validators_accept_each_structure_and_trained_gates (__main__.RecursiveCedEvaluationTests.test_real_training_validators_accept_each_structure_and_trained_gates) ... ok\ntest_real_training_validators_reject_aliases_mesh_state_and_bad_geometry (__main__.RecursiveCedEvaluationTests.test_real_training_validators_reject_aliases_mesh_state_and_bad_geometry) ... ok\n\n----------------------------------------------------------------------\nRan 17 tests in 1.584s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_recursive_eval_workflow.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_full_1000_rows_for_both_benchmarks_preserve_raw_predictions (__main__.WorkflowTests.test_full_1000_rows_for_both_benchmarks_preserve_raw_predictions) ... ok\ntest_incomplete_traversal_or_wrong_loaded_step_blocks_scoring (__main__.WorkflowTests.test_incomplete_traversal_or_wrong_loaded_step_blocks_scoring) ... ok\ntest_interrupted_run_resumes_without_repeating_completed_samples (__main__.WorkflowTests.test_interrupted_run_resumes_without_repeating_completed_samples) ... ok\ntest_official_scorer_must_succeed_and_confirm_full_denominator (__main__.WorkflowTests.test_official_scorer_must_succeed_and_confirm_full_denominator) ... ok\ntest_output_identity_rejects_other_variant_checkpoint_protocol_and_unowned_files (__main__.WorkflowTests.test_output_identity_rejects_other_variant_checkpoint_protocol_and_unowned_files) ... ok\ntest_skipped_record_blocks_successful_scoring (__main__.WorkflowTests.test_skipped_record_blocks_successful_scoring) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.701s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_recursive_eval_shell.py",
+      "status": "PASS",
+      "tests": 5,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_compute_wrapper_environment_arguments_and_exit_code (__main__.RecursiveCedShellTests.test_compute_wrapper_environment_arguments_and_exit_code) ... ok\ntest_eight_submissions_bind_variant_checkpoint_runtime_route_and_resources (__main__.RecursiveCedShellTests.test_eight_submissions_bind_variant_checkpoint_runtime_route_and_resources) ... ok\ntest_path_overrides_and_spaces_survive_for_each_variant (__main__.RecursiveCedShellTests.test_path_overrides_and_spaces_survive_for_each_variant) ... ok\ntest_run_root_override_derives_all_three_paths (__main__.RecursiveCedShellTests.test_run_root_override_derives_all_three_paths) ... ok\ntest_unknown_variant_never_calls_vc (__main__.RecursiveCedShellTests.test_unknown_variant_never_calls_vc) ... ok\n\n----------------------------------------------------------------------\nRan 5 tests in 7.511s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_recursive_eval_tensor.py",
+      "status": "SKIPPED",
+      "tests": 7,
+      "skipped": 7,
+      "exit_code": 0,
+      "output": "test_adapter_logits_and_tokens_match_direct_model_calls_at_each_generation_step (__main__.RecursiveCedTensorTests.test_adapter_logits_and_tokens_match_direct_model_calls_at_each_generation_step) ... skipped 'requires torch and transformers in mellow_c8204d8'\ntest_audio_reinjection_projects_original_prefix_once_and_shares_gate_twice (__main__.RecursiveCedTensorTests.test_audio_reinjection_projects_original_prefix_once_and_shares_gate_twice) ... skipped 'requires torch and transformers in mellow_c8204d8'\ntest_different_samples_do_not_reuse_features_or_mutate_input_prefix (__main__.RecursiveCedTensorTests.test_different_samples_do_not_reuse_features_or_mutate_input_prefix) ... skipped 'requires torch and transformers in mellow_c8204d8'\ntest_nonzero_layer_gates_use_original_A4_A8_pair_in_correct_order (__main__.RecursiveCedTensorTests.test_nonzero_layer_gates_use_original_A4_A8_pair_in_correct_order) ... skipped 'requires torch and transformers in mellow_c8204d8'\ntest_strict_state_roundtrip_keeps_trained_gate_values_and_missing_keys_fail (__main__.RecursiveCedTensorTests.test_strict_state_roundtrip_keeps_trained_gate_values_and_missing_keys_fail) ... skipped 'requires torch and transformers in mellow_c8204d8'\ntest_trace_hooks_preserve_real_logits_and_all_state_for_four_routes (__main__.RecursiveCedTensorTests.test_trace_hooks_preserve_real_logits_and_all_state_for_four_routes) ... skipped 'requires torch and transformers in mellow_c8204d8'\ntest_training_decoder_first_answer_logits_match_full_prefix_evaluation (__main__.RecursiveCedTensorTests.test_training_decoder_first_answer_logits_match_full_prefix_evaluation) ... skipped 'requires torch and transformers in mellow_c8204d8'\n\n----------------------------------------------------------------------\nRan 7 tests in 0.000s\n\nOK (skipped=7)\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_benchmark_eval.py",
+      "status": "PASS",
+      "tests": 12,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_asset_audit_checks_all_six_local_ced_files (__main__.CedBenchmarkEvaluationTest.test_asset_audit_checks_all_six_local_ced_files) ... ok\ntest_checkpoint_validates_and_rejects_wrong_route_step_and_geometry (__main__.CedBenchmarkEvaluationTest.test_checkpoint_validates_and_rejects_wrong_route_step_and_geometry) ... ok\ntest_dataset_scorer_resume_and_audio_functions_are_exact_copies (__main__.CedBenchmarkEvaluationTest.test_dataset_scorer_resume_and_audio_functions_are_exact_copies) ... ok\ntest_defaults_point_to_completed_ced_training_run (__main__.CedBenchmarkEvaluationTest.test_defaults_point_to_completed_ced_training_run) ... ok\ntest_generation_preserves_two_halves_and_uses_training_tokenizer (__main__.CedBenchmarkEvaluationTest.test_generation_preserves_two_halves_and_uses_training_tokenizer) ... ok\ntest_generation_settings_match_reference_except_architecture (__main__.CedBenchmarkEvaluationTest.test_generation_settings_match_reference_except_architecture) ... ok\ntest_greedy_enforces_300_horizon_prefix_and_finite_logits (__main__.CedBenchmarkEvaluationTest.test_greedy_enforces_300_horizon_prefix_and_finite_logits) ... ok\ntest_greedy_stops_on_first_eos_and_recomputes_without_cache (__main__.CedBenchmarkEvaluationTest.test_greedy_stops_on_first_eos_and_recomputes_without_cache) ... ok\ntest_materialized_predictions_keep_raw_eos_and_official_order (__main__.CedBenchmarkEvaluationTest.test_materialized_predictions_keep_raw_eos_and_official_order) ... ok\ntest_source_runtime_and_loss_identity_remain_strict (__main__.CedBenchmarkEvaluationTest.test_source_runtime_and_loss_identity_remain_strict) ... ok\ntest_submission_defaults_and_overrides_use_isolated_runner (__main__.CedBenchmarkEvaluationTest.test_submission_defaults_and_overrides_use_isolated_runner) ... ok\ntest_training_audio_and_mapper_contracts_are_enforced (__main__.CedBenchmarkEvaluationTest.test_training_audio_and_mapper_contracts_are_enforced) ... ok\n\n----------------------------------------------------------------------\nRan 12 tests in 1.574s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_recursive_mesh_eval.py",
+      "status": "PASS",
+      "tests": 20,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_300_tokens_prefix_and_finite_logits (__main__.MeshCedEvaluationTests.test_300_tokens_prefix_and_finite_logits) ... ok\ntest_actual_layer_router_geometry_and_transient_memory (__main__.MeshCedEvaluationTests.test_actual_layer_router_geometry_and_transient_memory) ... ok\ntest_all_six_ced_asset_identities (__main__.MeshCedEvaluationTests.test_all_six_ced_asset_identities) ... ok\ntest_checkpoint_route_step_geometry (__main__.MeshCedEvaluationTests.test_checkpoint_route_step_geometry) ... ok\ntest_complete_checkpoint_is_loaded_strictly_then_audited (__main__.MeshCedEvaluationTests.test_complete_checkpoint_is_loaded_strictly_then_audited) ... ok\ntest_defaults_point_to_completed_mesh_run (__main__.MeshCedEvaluationTests.test_defaults_point_to_completed_mesh_run) ... ok\ntest_entire_runner_greedy_and_protocol_are_identical_to_ced (__main__.MeshCedEvaluationTests.test_entire_runner_greedy_and_protocol_are_identical_to_ced) ... ok\ntest_first_eos_and_full_recompute (__main__.MeshCedEvaluationTests.test_first_eos_and_full_recompute) ... ok\ntest_forward_hook_observes_every_schedule_without_changing_output (__main__.MeshCedEvaluationTests.test_forward_hook_observes_every_schedule_without_changing_output) ... ok\ntest_forward_hook_rejects_wrong_loops_logical_indices_and_cache (__main__.MeshCedEvaluationTests.test_forward_hook_rejects_wrong_loops_logical_indices_and_cache) ... ok\ntest_generation_audio_prompt_and_raw_text (__main__.MeshCedEvaluationTests.test_generation_audio_prompt_and_raw_text) ... ok\ntest_mixed_ddp_namespaces_and_strict_load_errors_are_not_suppressed (__main__.MeshCedEvaluationTests.test_mixed_ddp_namespaces_and_strict_load_errors_are_not_suppressed) ... ok\ntest_non_eval_or_non_float32_models_are_rejected (__main__.MeshCedEvaluationTests.test_non_eval_or_non_float32_models_are_rejected) ... ok\ntest_output_claim_preserves_resume_and_rejects_other_model_or_protocol (__main__.MeshCedEvaluationTests.test_output_claim_preserves_resume_and_rejects_other_model_or_protocol) ... ok\ntest_raw_eos_and_prediction_order (__main__.MeshCedEvaluationTests.test_raw_eos_and_prediction_order) ... ok\ntest_recursive_asset_and_import_origin_changes_are_rejected (__main__.MeshCedEvaluationTests.test_recursive_asset_and_import_origin_changes_are_rejected) ... ok\ntest_runtime_contract_and_embedded_hash_cannot_be_substituted (__main__.MeshCedEvaluationTests.test_runtime_contract_and_embedded_hash_cannot_be_substituted) ... ok\ntest_shared_source_and_recursive_contract_mismatches_are_rejected (__main__.MeshCedEvaluationTests.test_shared_source_and_recursive_contract_mismatches_are_rejected) ... ok\ntest_source_runtime_loss_identity (__main__.MeshCedEvaluationTests.test_source_runtime_loss_identity) ... ok\ntest_training_audio_mapper_contract (__main__.MeshCedEvaluationTests.test_training_audio_mapper_contract) ... ok\n\n----------------------------------------------------------------------\nRan 20 tests in 0.650s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_recursive_mesh_eval_shell.py",
+      "status": "PASS",
+      "tests": 5,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_both_benchmarks_keep_base_defaults_and_select_mesh_explicitly (__main__.MeshCedEvaluationShellTests.test_both_benchmarks_keep_base_defaults_and_select_mesh_explicitly) ... ok\ntest_compute_wrapper_activates_same_environment_and_propagates_exit (__main__.MeshCedEvaluationShellTests.test_compute_wrapper_activates_same_environment_and_propagates_exit) ... ok\ntest_mesh_all_path_overrides_and_extra_arguments_survive_shell_quoting (__main__.MeshCedEvaluationShellTests.test_mesh_all_path_overrides_and_extra_arguments_survive_shell_quoting) ... ok\ntest_mesh_run_root_override_derives_matching_checkpoint_runtime_and_output (__main__.MeshCedEvaluationShellTests.test_mesh_run_root_override_derives_matching_checkpoint_runtime_and_output) ... ok\ntest_unknown_variant_is_rejected_before_vc (__main__.MeshCedEvaluationShellTests.test_unknown_variant_is_rejected_before_vc) ... ok\n\n----------------------------------------------------------------------\nRan 5 tests in 4.901s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_recursive_mesh_eval_tensor.py",
+      "status": "SKIPPED",
+      "tests": 2,
+      "skipped": 2,
+      "exit_code": 0,
+      "output": "test_each_full_forward_starts_with_fresh_five_slot_memory (__main__.MeshCedEvaluationTensorTests.test_each_full_forward_starts_with_fresh_five_slot_memory) ... skipped 'requires torch and transformers in mellow_c8204d8'\ntest_trace_hook_preserves_real_logits_and_parameter_values (__main__.MeshCedEvaluationTensorTests.test_trace_hook_preserves_real_logits_and_parameter_values) ... skipped 'requires torch and transformers in mellow_c8204d8'\n\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK (skipped=2)\n"
+    }
+  ]
+}

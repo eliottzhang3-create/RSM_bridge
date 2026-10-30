@@ -22,8 +22,21 @@ case "$EVAL_VARIANT" in
     JOB_NAME_PREFIX=mizar-s1-ced-mesh-mmar
     JOB_LOG_PREFIX=mizar_s1_ced_small_recursive_mesh_mmar_5090
     ;;
+  recursive_5_10_5|recursive_5_10_5_layer8_4_inject|recursive_5_10_5_layer4_8_inject|recursive_5_10_5_audio_reinject)
+    case "$EVAL_VARIANT" in
+      recursive_5_10_5) ROUTE_SUFFIX=; RUN_STAMP=20261028_160823559722647; JOB_TAG=plain ;;
+      recursive_5_10_5_layer8_4_inject) ROUTE_SUFFIX=_layer8_4_inject; RUN_STAMP=20261030_000807991327585; JOB_TAG=layer84 ;;
+      recursive_5_10_5_layer4_8_inject) ROUTE_SUFFIX=_layer4_8_inject; RUN_STAMP=20261029_210116592758429; JOB_TAG=layer48 ;;
+      recursive_5_10_5_audio_reinject) ROUTE_SUFFIX=_audio_reinject; RUN_STAMP=20261029_110929631468450; JOB_TAG=reinject ;;
+    esac
+    DEFAULT_RUN_ROOT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5${ROUTE_SUFFIX}_5090/formal_${RUN_STAMP}"
+    DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small${ROUTE_SUFFIX}"
+    EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_recursive_benchmark.sh
+    JOB_NAME_PREFIX="mizar-ced-r515-${JOB_TAG}-mmar"
+    JOB_LOG_PREFIX="mizar_s1_ced_small_${EVAL_VARIANT}_mmar_5090"
+    ;;
   *)
-    echo "unsupported RSMOL_MIZAR_CED_EVAL_VARIANT: $EVAL_VARIANT (expected base or recursive_mesh)" >&2
+    echo "unsupported RSMOL_MIZAR_CED_EVAL_VARIANT: $EVAL_VARIANT (expected base, recursive_mesh, or a supported recursive_5_10_5 variant)" >&2
     exit 2
     ;;
 esac
@@ -40,6 +53,7 @@ JOB_LOG="$SCRIPT_DIR/log/${JOB_LOG_PREFIX}.${RUN_TAG}.JOB.log"
 ARGS=(--benchmark mmar --checkpoint "$CHECKPOINT" --runtime-config "$RUNTIME_CONFIG"
       --route-root "$ROUTE_ROOT" --dataset-dir "$DATASET_DIR" --output-dir "$OUTPUT_DIR"
       --expected-step "$EXPECTED_STEP" --expected-geometry "$EXPECTED_GEOMETRY")
+if [[ "$EVAL_VARIANT" == recursive_5_10_5* ]]; then ARGS+=(--eval-variant "$EVAL_VARIANT"); fi
 if (($#)); then ARGS+=("$@"); fi
 printf -v CMD_ARGS '%q ' "${ARGS[@]}"
 

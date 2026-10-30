@@ -17,7 +17,7 @@ class MultilayerAudioCrossAttention(nn.Module):
         self.audio_tokens = audio_tokens
         self.prompt_tokens = prompt_tokens
         self.text_start = audio_tokens + 1
-        self.residual_scale = 0.1
+        self.residual_scale = 0.3
         # All new modules initialize on CPU without advancing the caller's RNG.
         # Registration happens after strict loading of every original LM tensor.
         with torch.random.fork_rng(devices=[]):

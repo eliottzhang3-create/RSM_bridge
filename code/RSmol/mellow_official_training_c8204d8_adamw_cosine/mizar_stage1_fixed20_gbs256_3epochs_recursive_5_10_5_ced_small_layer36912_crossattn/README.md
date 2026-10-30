@@ -1,6 +1,8 @@
 # CED 第 3/6/9/12 层选择与两轮共享 cross attention
 
-2026-10-30：当前为 **v2 分支归一化与固定 0.1 注入尺度版本**。
+2026-10-30：当前为 **v2 分支归一化与固定 0.3 注入尺度版本**。
+按用户最新要求将 γ 从0.1调至0.3；其余架构、初始化和训练超参数保持不变。
+γ=0.1 的历史 checkpoint 因架构合同及源码身份不同，不能直接 full resume 到当前版本。
 用户反馈 v1 真实训练可以启动，但观察到注意力残差放大、梯度爆炸。
 本次仅修改交互分支架构，保留原训练配方；新版本远程稳定性尚待验证。
 v1 音频 checkpoint 不能直接作为 v2 的 full resume；从原文本初始化重新训练，使用新的空输出目录。
@@ -57,7 +59,7 @@ A = sum_i alpha_i * ai                             # [B,126,576]
 Z = CrossAttention(Q_input=U+b_round, K_input=A, V_input=A)
 Z_hat = LN_out(Z)                                 # elementwise_affine=False
 g = tanh(Gate2(U))                                # [B,text_length,1]
-residual = 0.1 * g * Z_hat                         # fixed, non-trainable scale
+residual = 0.3 * g * Z_hat                         # fixed, non-trainable scale
 T_new = T + residual                              # original T is the residual base
 ```
 
@@ -74,12 +76,12 @@ T_new = T + residual                              # original T is the residual b
 
 Cross attention 权重按 PyTorch MultiheadAttention 初始化，bias全零；输出投影 weight 不做零初始化。
 轮次偏置在文本 LN 之后加入，不进入 Gate1、Gate2、K、V 或残差基底。
-固定 γ=0.1，不加入 optimizer。v2 交互模块共 **4,892,741** 个参数，较 v1 多 **18,048** 个 LN 参数。
+固定 γ=0.3，不加入 optimizer。v2 交互模块共 **4,892,741** 个参数，较 v1 多 **18,048** 个 LN 参数。
 
 LN 仅沿每个 token 的最后一维计算，不混合 token/batch；不将 U 写回主路径。
 在数值有限时，非仿射输出 LN 使每 token 的输出 RMS 不超过约1，结合逐 token 标量
-`|g|≤1`，单次实际注入残差每 token RMS 不超过约0.1（允许浮点误差）。
-这是绝对幅度约束，不表示主路径的10%，也不是对全部训练梯度的稳定性证明。
+`|g|≤1`，单次实际注入残差每 token RMS 不超过约0.3（允许浮点误差）。
+这是绝对幅度约束，不表示主路径的30%，也不是对全部训练梯度的稳定性证明。
 
 残差覆盖 prompt、answer 和母本原有的可见 PAD；前126个音频位置及SEP不直接注入。
 Gate1 只汇总 tokenizer prompt attention_mask 标记的有效位置，排除 answer 和直接池化的PAD，
@@ -191,9 +193,9 @@ metrics按指定记录步保存rank0最后一个microbatch的两轮层权重、g
 
 - `cross_attention_rms`：输出LN之前的原始CA输出RMS。
 - `normalized_cross_attention_rms`：非仿射输出LN之后的RMS。
-- `residual_rms`：包含γ=0.1和gate的实际注入RMS。
-- `residual_token_rms_max`：所有文本token实际注入RMS的最大值，应不超过约0.1。
-- `residual_scale`：固定0.1。
+- `residual_rms`：包含γ=0.3和gate的实际注入RMS。
+- `residual_token_rms_max`：所有文本token实际注入RMS的最大值，应不超过约0.3。
+- `residual_scale`：固定0.3。
 
 这些是rank0最后一个microbatch的训练诊断，不是所有rank的稳定性或验证集指标。
 

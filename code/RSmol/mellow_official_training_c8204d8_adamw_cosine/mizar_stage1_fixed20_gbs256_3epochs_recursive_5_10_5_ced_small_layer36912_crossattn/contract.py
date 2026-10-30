@@ -527,7 +527,7 @@ def cross_attention_contract():
             "text": {"width": 576, "elementwise_affine": True, "shared_across_rounds": True},
             "output": {"width": 576, "elementwise_affine": False, "shared_across_rounds": True},
             "affine_initialization": {"weight": 1., "bias": 0.}},
-        "residual_scale": 0.1, "residual_scale_trainable": False,
+        "residual_scale": 0.3, "residual_scale_trainable": False,
         "residual_base": "original_unnormalized_text",
         "extra_norm": True, "extra_FFN": False, "use_cache": False,
         "new_parameters": 4892741, "max_lr": 6e-4,
