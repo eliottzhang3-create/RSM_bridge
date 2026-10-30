@@ -1,0 +1,41 @@
+{
+  "status": "PASS",
+  "scope": "source/AST parity only; not tensor, weight-loading or GPU evidence",
+  "parent": "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small",
+  "route_code_sha256": "0b6bdb3fac0556ba0fe15d6be7c02de365e9d97b460cda144f2463929663625a",
+  "identical_files": {
+    "check_ced_assets.py": "075b49dc02eca6d5293f1abaadce736fece46a2fc67661324ac9b45913466367",
+    "data/audio_paths.py": "f65433f8db88a59bf1d7701ce9b0bfe85e8c00affa673b69246684ae34596685",
+    "data/audiotext_dataset.py": "f41bbd8edf863c906d8ef996da87b726edaedae7987fa5507416e03113b5bf8b",
+    "data/fixed20.py": "f4580fdaf1b75acd54bbd12dbfc72f18e2906e1dbcebd8ff8e5d1ff355ac6a5c",
+    "data/indexed_jsonl.py": "1fac5952ad67609cc050d9b05cfac8c9cb16f4bf520b9eabbcfb0dee3af82e8a",
+    "data/prepared_index.py": "9852107e00223c91bb07a4bf05347089884bbfcff9d5075cc60ef53086af57e3",
+    "data/sampler.py": "66be929c5f5458816c64b12bec058791a173698290ea1e7a5ef80a730aa02525",
+    "data/staging.py": "db7a465e90deb6be5aa0342afbb6cb56279fbea20081cd09f79c42db2fac4515",
+    "data/template.py": "0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2",
+    "models/audio.py": "de8394e231c4ee67d6a9baaad864032e2825c717f7e5c6c838543a613619ebb4",
+    "models/ced_offline.py": "94a0d5ede90337b4b88b112dfaad3db0144e644458dcc1a744096c6f19f248af",
+    "prepare_index.py": "daf059301ff5cb2550a11e6f35cb53fe655b17b6b92cb0974da8f3da55f337e2",
+    "stage_data.py": "83925428208c0b5e1859b3ccd9f41670235720a07c76c514bd1453c5eee205cf",
+    "utils/audio_io.py": "67f3680af4b8bb5cbc30426c54d71155d2b65f8cdd5c4fb89af08a374e63f311"
+  },
+  "backbone_classes_ast_equal_after_additions": true,
+  "complete_epoch_update_loop_ast_equal_after_diagnostics": true,
+  "unchanged_training_helpers": [
+    "collective_require",
+    "rng_state",
+    "restore_rng",
+    "tensor_digest",
+    "weights_changed",
+    "move_batch",
+    "answer_loss",
+    "inspect_tokenizer",
+    "audit_checkpoint_tokenizer",
+    "probe_sources",
+    "save_checkpoint",
+    "reload_audit",
+    "main"
+  ],
+  "original_mapper_ast_equal": true,
+  "original_preprocessing_and_gradnorm_ast_equal": true
+}

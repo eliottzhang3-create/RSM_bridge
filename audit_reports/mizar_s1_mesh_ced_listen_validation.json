@@ -1,0 +1,90 @@
+{
+  "status": "PASS_WITH_SKIPS",
+  "scope": "local code/CPU validation only; no real assets, remote data, CUDA or eight-rank integration",
+  "route": "mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer36912_listen",
+  "require_tensors": false,
+  "missing_dependencies": [
+    "torch",
+    "torchaudio",
+    "transformers",
+    "soundfile"
+  ],
+  "real_cpu_tensor_checks_passed": false,
+  "executed_tests": 46,
+  "skipped_tests": 29,
+  "checks": [
+    {
+      "check": "python_compile_in_memory",
+      "status": "PASS",
+      "files": 34
+    },
+    {
+      "check": "run_mizar_s1_gbs256_recursive_mesh_ced_small_layer36912_listen_5090.sh",
+      "status": "PASS",
+      "scope": "bash syntax",
+      "output": ""
+    },
+    {
+      "check": "run.sh",
+      "status": "PASS",
+      "scope": "bash syntax",
+      "output": ""
+    },
+    {
+      "check": "test_mizar_s1_mesh_ced_listen_behavior.py",
+      "status": "PASS",
+      "tests": 8,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_actual_math_has_beta_gradient_at_zero_and_upstream_unlocks_after_opening (__main__.ProductionMathTests.test_actual_math_has_beta_gradient_at_zero_and_upstream_unlocks_after_opening) ... ok\ntest_invalid_context_and_empty_or_nonbinary_masks_fail (__main__.ProductionMathTests.test_invalid_context_and_empty_or_nonbinary_masks_fail) ... ok\ntest_only_audio_memory_positions_change_when_open (__main__.ProductionMathTests.test_only_audio_memory_positions_change_when_open) ... ok\ntest_original_write_read_remain_slot_weighted_operations (__main__.ProductionMathTests.test_original_write_read_remain_slot_weighted_operations) ... ok\ntest_prompt_pool_excludes_pad_answer_sep_and_audio (__main__.ProductionMathTests.test_prompt_pool_excludes_pad_answer_sep_and_audio) ... ok\ntest_sigmoid_selects_depths_independently_and_gates_are_round_specific (__main__.ProductionMathTests.test_sigmoid_selects_depths_independently_and_gates_are_round_specific) ... ok\ntest_stress_aligned_depths_and_concentrated_routes_obey_gamma_bound (__main__.ProductionMathTests.test_stress_aligned_depths_and_concentrated_routes_obey_gamma_bound) ... ok\ntest_zero_amplitudes_produce_exactly_zero_writes_both_rounds (__main__.ProductionMathTests.test_zero_amplitudes_produce_exactly_zero_writes_both_rounds) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.416s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_ced_listen_route.py",
+      "status": "PASS",
+      "tests": 15,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_assets_validate_geometry_without_onnx_and_reject_incompatible_config (__main__.InheritedRouteTests.test_assets_validate_geometry_without_onnx_and_reject_incompatible_config) ... ok\ntest_launcher_resources_arguments_and_rejections_before_submit (__main__.InheritedRouteTests.test_launcher_resources_arguments_and_rejections_before_submit) ... ok\ntest_added_parameter_roles_and_original_roles (__main__.ListenRouteTests.test_added_parameter_roles_and_original_roles) ... ok\ntest_completed_checkpoint_is_auditable_but_not_resumable (__main__.ListenRouteTests.test_completed_checkpoint_is_auditable_but_not_resumable) ... ok\ntest_cross_route_gamma_and_code_changes_rejected (__main__.ListenRouteTests.test_cross_route_gamma_and_code_changes_rejected) ... ok\ntest_entire_mother_semantics_and_original_mesh_match (__main__.ListenRouteTests.test_entire_mother_semantics_and_original_mesh_match) ... ok\ntest_geometry_and_architecture_contract (__main__.ListenRouteTests.test_geometry_and_architecture_contract) ... ok\ntest_gradient_unlock_state_cannot_be_faked_or_reset (__main__.ListenRouteTests.test_gradient_unlock_state_cannot_be_faked_or_reset) ... ok\ntest_missing_full_state_rejected (__main__.ListenRouteTests.test_missing_full_state_rejected) ... ok\ntest_mother_and_shared_sources_unchanged_since_handoff (__main__.ListenRouteTests.test_mother_and_shared_sources_unchanged_since_handoff) ... ok\ntest_real_training_audit_accepts_zero_upstream_then_requires_unlock (__main__.ListenRouteTests.test_real_training_audit_accepts_zero_upstream_then_requires_unlock) ... ok\ntest_real_training_audit_rejects_nonfinite_or_permanently_closed_branch (__main__.ListenRouteTests.test_real_training_audit_rejects_nonfinite_or_permanently_closed_branch) ... ok\ntest_staging_paths_are_not_resume_identity (__main__.ListenRouteTests.test_staging_paths_are_not_resume_identity) ... ok\ntest_valid_interrupted_and_early_closed_resume (__main__.ListenRouteTests.test_valid_interrupted_and_early_closed_resume) ... ok\ntest_wrong_loss_batch_schedule_and_rng_rejected (__main__.ListenRouteTests.test_wrong_loss_batch_schedule_and_rng_rejected) ... ok\n\n----------------------------------------------------------------------\nRan 15 tests in 3.166s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_ced_listen_shared_start.py",
+      "status": "PASS",
+      "tests": 2,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_formal_config_is_created_with_zero_staged_files (__main__.ListenSharedStartTests.test_formal_config_is_created_with_zero_staged_files) ... ok\ntest_runner_starts_real_training_during_copy_and_cleans_on_failure (__main__.ListenSharedStartTests.test_runner_starts_real_training_during_copy_and_cleans_on_failure) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 2.479s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_ced_listen_tensor.py",
+      "status": "PASS",
+      "tests": 29,
+      "skipped": 29,
+      "exit_code": 0,
+      "output": "test_accumulated_gradient_is_mean_of_microbatch_means (__main__.InheritedRuntimeChecks.test_accumulated_gradient_is_mean_of_microbatch_means) ... skipped 'requires real CPU tensor dependencies'\ntest_ced_frozen_eval_and_mapper_gradient_with_whole20_splits (__main__.InheritedRuntimeChecks.test_ced_frozen_eval_and_mapper_gradient_with_whole20_splits) ... skipped 'requires real CPU tensor dependencies'\ntest_ced_temporal_grid_preserves_chunk_frequency_time_order (__main__.InheritedRuntimeChecks.test_ced_temporal_grid_preserves_chunk_frequency_time_order) ... skipped 'requires real CPU tensor dependencies'\ntest_decode_averages_every_channel_then_resamples (__main__.InheritedRuntimeChecks.test_decode_averages_every_channel_then_resamples) ... skipped 'requires real CPU tensor dependencies'\ntest_fixed20_single_order_and_right_padding (__main__.InheritedRuntimeChecks.test_fixed20_single_order_and_right_padding) ... skipped 'requires real CPU tensor dependencies'\ntest_fixed20_true_pair_is_independent (__main__.InheritedRuntimeChecks.test_fixed20_true_pair_is_independent) ... skipped 'requires real CPU tensor dependencies'\ntest_gbs256_optimizer_geometry (__main__.InheritedRuntimeChecks.test_gbs256_optimizer_geometry) ... skipped 'requires real CPU tensor dependencies'\ntest_gradnorm_ema_common_scale_and_restore (__main__.InheritedRuntimeChecks.test_gradnorm_ema_common_scale_and_restore) ... skipped 'requires real CPU tensor dependencies'\ntest_loader_is_offline_strict_and_keeps_only_frozen_encoder (__main__.InheritedRuntimeChecks.test_loader_is_offline_strict_and_keeps_only_frozen_encoder) ... skipped 'requires real CPU tensor dependencies'\ntest_mellow_rejoins_both_halves_before_encoding (__main__.InheritedRuntimeChecks.test_mellow_rejoins_both_halves_before_encoding) ... skipped 'requires real CPU tensor dependencies'\ntest_mesh_loss_matches_ced_baseline_with_tokenizer_masks (__main__.InheritedRuntimeChecks.test_mesh_loss_matches_ced_baseline_with_tokenizer_masks) ... skipped 'requires real CPU tensor dependencies'\ntest_one_separator_padding_visibility_and_next_token_ce (__main__.InheritedRuntimeChecks.test_one_separator_padding_visibility_and_next_token_ce) ... skipped 'requires real CPU tensor dependencies'\ntest_online_db_matches_individual_cache_extraction (__main__.InheritedRuntimeChecks.test_online_db_matches_individual_cache_extraction) ... skipped 'requires real CPU tensor dependencies'\ntest_optimizer_groups_scheduler_step_order_and_full_resume (__main__.InheritedRuntimeChecks.test_optimizer_groups_scheduler_step_order_and_full_resume) ... skipped 'requires real CPU tensor dependencies'\ntest_sampler_staging_and_consumed_cursor_agree (__main__.InheritedRuntimeChecks.test_sampler_staging_and_consumed_cursor_agree) ... skipped 'requires real CPU tensor dependencies'\ntest_text_metadata_fallback_and_cot_preservation (__main__.InheritedRuntimeChecks.test_text_metadata_fallback_and_cot_preservation) ... skipped 'requires real CPU tensor dependencies'\ntest_answer_perturbation_does_not_change_gates_or_earlier_answer_logits (__main__.TensorTests.test_answer_perturbation_does_not_change_gates_or_earlier_answer_logits) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_ced_frozen_and_four_projections_outside_no_grad (__main__.TensorTests.test_ced_frozen_and_four_projections_outside_no_grad) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_extreme_write_and_direct_read_bounds_and_diagnostics (__main__.TensorTests.test_extreme_write_and_direct_read_bounds_and_diagnostics) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_full_checkpoint_cpu_continuation_matches_uninterrupted_and_final_reload (__main__.TensorTests.test_full_checkpoint_cpu_continuation_matches_uninterrupted_and_final_reload) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_gate_pool_masks_pad_and_only_reads_prompt (__main__.TensorTests.test_gate_pool_masks_pad_and_only_reads_prompt) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_listen_rejects_cache_attention_mask_and_invalid_context (__main__.TensorTests.test_listen_rejects_cache_attention_mask_and_invalid_context) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_original_parameter_optimizer_groups_keep_lr_and_decay (__main__.TensorTests.test_original_parameter_optimizer_groups_keep_lr_and_decay) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_production_parameter_inventory_rng_and_normalization (__main__.TensorTests.test_production_parameter_inventory_rng_and_normalization) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_schedule_two_writes_original_router_queries_and_single_projection (__main__.TensorTests.test_schedule_two_writes_original_router_queries_and_single_projection) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_single_ced_forward_tap_values_temporal_order_and_hook_cleanup (__main__.TensorTests.test_single_ced_forward_tap_values_temporal_order_and_hook_cleanup) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_text_loader_rejects_every_partial_loading_category (__main__.TensorTests.test_text_loader_rejects_every_partial_loading_category) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_true_autograd_zero_start_and_unlock_after_first_optimizer_update (__main__.TensorTests.test_true_autograd_zero_start_and_unlock_after_first_optimizer_update) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\ntest_zero_beta_logits_loss_and_original_gradients_equal_mother (__main__.TensorTests.test_zero_beta_logits_loss_and_original_gradients_equal_mother) ... skipped 'requires torch/torchaudio/transformers/soundfile/numpy'\n\n----------------------------------------------------------------------\nRan 29 tests in 0.001s\n\nOK (skipped=29)\n"
+    },
+    {
+      "check": "test_mizar_s1_recursive_mesh_ced_small_route.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_assets_validate_geometry_without_onnx_and_reject_incompatible_config (__main__.CEDRouteTests.test_assets_validate_geometry_without_onnx_and_reject_incompatible_config) ... ok\ntest_formal_schedule_and_shorter_sequence (__main__.CEDRouteTests.test_formal_schedule_and_shorter_sequence) ... ok\ntest_launcher_resources_arguments_and_rejections_before_submit (__main__.CEDRouteTests.test_launcher_resources_arguments_and_rejections_before_submit) ... ok\ntest_optimizer_classifies_only_mapper_and_full_lm (__main__.CEDRouteTests.test_optimizer_classifies_only_mapper_and_full_lm) ... ok\ntest_parent_data_and_real_update_loop_preserved (__main__.CEDRouteTests.test_parent_data_and_real_update_loop_preserved) ... ok\ntest_resume_contract_separates_routes_and_is_independent_of_staging_root (__main__.CEDRouteTests.test_resume_contract_separates_routes_and_is_independent_of_staging_root) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 2.788s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_recursive_mesh_ced_small_parity.py",
+      "status": "PASS",
+      "tests": 4,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_mesh_loader_and_checkpoint_contract_preserved (__main__.MeSHCEDParityTests.test_mesh_loader_and_checkpoint_contract_preserved) ... ok\ntest_model_build_order_preserves_mapper_initialization (__main__.MeSHCEDParityTests.test_model_build_order_preserves_mapper_initialization) ... ok\ntest_official_mapper_and_report_identity (__main__.MeSHCEDParityTests.test_official_mapper_and_report_identity) ... ok\ntest_original_mesh_semantics_and_ced_baseline_match (__main__.MeSHCEDParityTests.test_original_mesh_semantics_and_ced_baseline_match) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.895s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_recursive_mesh_ced_small_shared_start.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[cpu-index] verifying manifest/audit TSV SHA256; no raw audio scan\n[cpu-index] manifest/audit TSV contents verified\n[staging] phase=COPYING staged 0/1 files (0.00/0.00 GiB) ready_through_batch=0 MiB_per_second=0.0 cgroup_remaining_bytes=None\n[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues\n[staging] training can start: read_policy=shared_until_complete prefill_steps=0 ready_through_batch=0 report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmp5wy8wh53\\report.json\n[staging] phase=COMPLETE staged 1/1 files (0.00/0.00 GiB) ready_through_batch=5771 MiB_per_second=0.0 cgroup_remaining_bytes=None\ntest_content_check_identifies_size_change_and_keeps_expected_paths (__main__.CEDSharedStartTests.test_content_check_identifies_size_change_and_keeps_expected_paths) ... ok\ntest_copy_failure_dead_process_and_stale_heartbeat_still_abort (__main__.CEDSharedStartTests.test_copy_failure_dead_process_and_stale_heartbeat_still_abort) ... ok\ntest_cpu_index_reuses_mapping_and_rejects_changed_inputs (__main__.CEDSharedStartTests.test_cpu_index_reuses_mapping_and_rejects_changed_inputs) ... ok\ntest_final_report_requires_full_copy_even_in_shared_mode (__main__.CEDSharedStartTests.test_final_report_requires_full_copy_even_in_shared_mode) ... ok\ntest_formal_config_is_created_with_zero_staged_files (__main__.CEDSharedStartTests.test_formal_config_is_created_with_zero_staged_files) ... ok\ntest_legacy_timestamp_only_identity_requires_rebuild (__main__.CEDSharedStartTests.test_legacy_timestamp_only_identity_requires_rebuild) ... ok\ntest_runner_starts_real_training_during_copy_and_cleans_on_failure (__main__.CEDSharedStartTests.test_runner_starts_real_training_during_copy_and_cleans_on_failure) ... ok\ntest_shared_path_remains_selected_until_explicit_boundary_switch (__main__.CEDSharedStartTests.test_shared_path_remains_selected_until_explicit_boundary_switch) ... ok\ntest_source_identity_change_is_rejected_and_partial_copy_removed (__main__.CEDSharedStartTests.test_source_identity_change_is_rejected_and_partial_copy_removed) ... ok\ntest_switch_is_collective_before_loading_all_four_microbatches (__main__.CEDSharedStartTests.test_switch_is_collective_before_loading_all_four_microbatches) ... ok\ntest_training_starts_before_first_copy_and_crosses_epoch_without_waiting (__main__.CEDSharedStartTests.test_training_starts_before_first_copy_and_crosses_epoch_without_waiting) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 4.071s\n\nOK\n"
+    }
+  ]
+}

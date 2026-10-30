@@ -1,3 +1,42 @@
+## 2026-10-30：MeSH CED 四层 audio listen 隔离训练路线收尾
+
+已从 `run_mizar_s1_gbs256_recursive_mesh_ced_small_5090.sh` 的母本复制隔离，完成
+[四层 listen 路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer36912_listen/README.md)。
+原最终层mapper及MeSH主路径、20物理层/30逻辑执行、五槽与三组原write/read routers保留。
+单次冻结CED编码提取第3/6/9/12个block的最终LN前状态，按segment/time/frequency排列为
+`[B,126,1536]`，四套独立非affine LN1536→Linear1536x576→非affine LN576生成音频bank。
+Prelude后与第一次循环后，分别用有效prompt的归一化masked mean、独立Linear576x4及sigmoid
+聚合四路特征；两个独立softmax listen routers写入原记忆前126个audio位置。
+顺序为原write→listen→原read；循环2后仍只有原write/read。
+原循环router仍用循环输入计算权重，循环输出作为原写入值。
+
+两个新增零初值标量β经tanh控制写入，固定尺度为γ/4，**γ=0.3**。
+单次新增写入每槽/token RMS≤约0.3，不代表主路径30%或全网梯度有界。
+新增3,551,636个参数；全部新增LN非affine、eps1e-5；新参数max LR6e-4。
+保留原LM LR3e-4、mapper LR6e-4、loss、AdamW/LambdaLR/GradNorm、FP32、683-token布局、
+hybrid 1,477,492行、GBS256（8×8×4）、3 epochs/17,313 updates/866 warmup及后台staging。
+新增模块在原文本权重strict加载后注册并隔离CPU RNG；入口、输出、日志、index cache、tmpfs及resume身份独立。
+完整恢复额外保存/校验梯度解锁状态与optimizer步数；完成checkpoint可审计但不能重新resume。
+
+GitHub同步后，在远程登录节点直接提交formal，无smoke或tensor检查自动前置任务：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_mesh_ced_small_layer36912_listen_5090.sh --stage-workers 4
+```
+
+资源为 `pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`、`mellow_c8204d8`。
+默认run根为 `outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer36912_listen_5090/formal_<timestamp>/`，
+最终为其中 `formal/checkpoints/model--epo-3.ckpt` 与 `model--step-17313.ckpt`。
+恢复命令及诊断字段见路线README；原母本和共享MeSH实现未修改，普通CED evaluator尚未适配新架构。
+
+本地统一入口 `python -B tests/validate_mizar_s1_mesh_ced_listen.py`，结果见
+`audit_reports/mizar_s1_mesh_ced_listen_validation.json`：46项实际检查通过，29项真实CPU tensor检查因缺依赖跳过；
+另通过Python/Bash语法及母本源码对照。远程可手动加 `--require-tensors` 强制tensor全部实际运行，
+不下载资产、不用CUDA训练、不提交作业。真实权重、8 GPU稳定性与恢复仍待远程确认，不登记远程PASS。
+
 ## 2026-10-30：四条非 MeSH CED checkpoint 的 MMAU / MMAR 评测扩展
 
 两个既有入口 `run_mizar_s1_ced_small_mmau_eval_5090.sh`、
