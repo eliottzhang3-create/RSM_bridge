@@ -57,10 +57,17 @@ class RouteTests(unittest.TestCase):
         arch = contract.cross_attention_contract()
         self.assertEqual(arch["ced_blocks_0based"], [2,5,8,11])
         self.assertEqual(arch["logical_indices_0based"], [5,15])
-        self.assertEqual(arch["new_parameters"], 4874693)
+        self.assertEqual(arch["new_parameters"], 4892741)
         self.assertEqual(arch["gate1"]["scope"], "sample")
         self.assertEqual(arch["gate2"]["scope"], "text_token")
         self.assertEqual(arch["round_bias"]["applies_to"], "Q_input_only")
+        self.assertTrue(contract.ROUTE.endswith("_v2"))
+        self.assertEqual(arch["normalization"]["eps"], 1e-5)
+        self.assertFalse(arch["normalization"]["output"]["elementwise_affine"])
+        self.assertEqual(arch["residual_scale"], .1)
+        self.assertFalse(arch["residual_scale_trainable"])
+        self.assertEqual(arch["residual_base"], "original_unnormalized_text")
+        self.assertFalse(arch["cross_attention"]["out_proj_zero_init"])
 
     def test_parent_recipe_equal_except_explicit_architecture_lr_and_identity(self):
         prepared = dict(rows=1477492, source_rows=contract.SOURCE_COUNTS,
@@ -87,11 +94,15 @@ class RouteTests(unittest.TestCase):
         for i in range(4):
             pairs.extend([(prefix+f"projections.{i}.weight",Param((576,1536))),
                           (prefix+f"projections.{i}.bias",Param((576,)))])
+            for component,width in (("audio_input_norms",1536),("audio_output_norms",576)):
+                pairs.extend([(prefix+f"{component}.{i}.weight",Param((width,))),
+                              (prefix+f"{component}.{i}.bias",Param((width,)))])
         pairs.extend((prefix+name,Param(shape)) for name,shape in (
             ("gate1.weight",(4,576)),("gate1.bias",(4,)),("gate2.weight",(1,576)),("gate2.bias",(1,)),
             ("cross_attention.in_proj_weight",(1728,576)),("cross_attention.in_proj_bias",(1728,)),
             ("cross_attention.out_proj.weight",(576,576)),("cross_attention.out_proj.bias",(576,)),
-            ("round_bias.0",(576,)),("round_bias.1",(576,))))
+            ("round_bias.0",(576,)),("round_bias.1",(576,)),
+            ("text_norm.weight",(576,)),("text_norm.bias",(576,))))
         return pairs
 
     def test_actual_optimizer_all_new_parameters_and_mapper_6e4_original_lm_3e4(self):
@@ -108,7 +119,7 @@ class RouteTests(unittest.TestCase):
         optimizer,_,audit = scope["build_optimizer"](SimpleNamespace(named_parameters=lambda: iter(pairs)),17313)
         self.assertEqual(optimizer.kwargs["betas"],(.9,.999))
         self.assertEqual(optimizer.kwargs["eps"],1e-8)
-        self.assertEqual(sum(g["numel"] for g in audit if g["role"].startswith("crossattn_")),4874693)
+        self.assertEqual(sum(g["numel"] for g in audit if g["role"].startswith("crossattn_")),4892741)
         seen=[]
         for group in audit:
             self.assertEqual(group["base_lr"],3e-4 if group["role"] == "default" else 6e-4)
@@ -117,7 +128,15 @@ class RouteTests(unittest.TestCase):
                 self.assertEqual(group["weight_decay"],0 if param.ndim<=1 or name.endswith((".bias","_bias")) else .01)
                 seen.append(name)
         self.assertCountEqual(seen,[n for n,_ in pairs])
-        for bad in ("audio_encoder.base.ced.blocks.0.weight","caption_decoder.lm.model.audio_crossattn.typo.weight"):
+        norm_names = [n for n,_ in pairs if any(
+            component in n for component in ("audio_input_norms", "audio_output_norms", "text_norm"))]
+        self.assertEqual(len(norm_names), 18)
+        self.assertEqual(sum(dict(pairs)[name].numel() for name in norm_names), 18048)
+        self.assertTrue(all(g["base_lr"] == 6e-4 and g["weight_decay"] == 0.
+                            for g in audit if any(n in norm_names for n in g["names"])))
+        for bad in ("audio_encoder.base.ced.blocks.0.weight","caption_decoder.lm.model.audio_crossattn.typo.weight",
+                    "caption_decoder.lm.model.audio_crossattn.residual_scale",
+                    "caption_decoder.lm.model.audio_crossattn.output_norm.weight"):
             with self.assertRaises(ValueError):
                 scope["parameter_role"](bad)
 
@@ -158,9 +177,28 @@ class RouteTests(unittest.TestCase):
         prefix="caption_decoder.lm.model.audio_crossattn."
         params={n[len(prefix):]:p for n,p in self.parameter_inventory() if n.startswith(prefix)}
         adapter=SimpleNamespace(width=576,text_start=127,audio_tokens=126,prompt_tokens=256,
-            cross_attention=SimpleNamespace(num_heads=9,dropout=0.,batch_first=True),named_parameters=lambda:iter(params.items()))
+            residual_scale=.1, cross_attention=SimpleNamespace(num_heads=9,dropout=0.,batch_first=True),
+            named_parameters=lambda:iter(params.items()))
+        def norm(width, affine=True):
+            return SimpleNamespace(normalized_shape=(width,),eps=1e-5,elementwise_affine=affine)
+        adapter.audio_input_norms=[norm(1536) for _ in range(4)]
+        adapter.audio_output_norms=[norm(576) for _ in range(4)]
+        adapter.text_norm,adapter.output_norm=norm(576),norm(576,False)
         model=SimpleNamespace(model=SimpleNamespace(audio_crossattn=adapter,layers=list(range(20)),logical_to_physical=contract.TEXT_MODEL_SCHEDULE))
-        self.assertEqual(recursive_text.validate_audio_cross_attention(model)["actual_parameters"],4874693)
+        self.assertEqual(recursive_text.validate_audio_cross_attention(model)["actual_parameters"],4892741)
+        for attribute,bad_value in (("residual_scale",1.),("residual_scale",Param(())),
+                                    ("output_norm",norm(576)),("text_norm",norm(1536)),
+                                    ("audio_input_norms",[norm(1536)]*4),
+                                    ("audio_output_norms",[norm(576)]*3)):
+            original=getattr(adapter,attribute)
+            setattr(adapter,attribute,bad_value)
+            with self.subTest(attribute=attribute),self.assertRaises(ValueError):
+                recursive_text.validate_audio_cross_attention(model)
+            setattr(adapter,attribute,original)
+        adapter.text_norm.eps=1e-6
+        with self.assertRaisesRegex(ValueError,"epsilon"):
+            recursive_text.validate_audio_cross_attention(model)
+        adapter.text_norm.eps=1e-5
         params["projections.3.weight"]=Param((576,384))
         with self.assertRaisesRegex(ValueError,"inventory"):
             recursive_text.validate_audio_cross_attention(model)
@@ -188,7 +226,8 @@ class RouteTests(unittest.TestCase):
             loss_reduction="mean_of_rank_local_microbatch_token_means_then_DDP_mean",
             batch_geometry=dict(world_size=8,microbatch_size=8,gradient_accumulation_steps=4,global_batch_size=256))
         contract.validate_resume_payload(payload,cfg,g)
-        mutations = [("route_variant", "parent"), ("contract_sha256", "wrong"),
+        mutations = [("route_variant", "parent"), ("route_variant", contract.ROUTE[:-1]+"1"),
+                     ("contract_sha256", "wrong"),
                      ("contract", {"synthetic": False}), ("random_state_by_rank", [{}]*8),
                      ("random_state_by_rank", payload["random_state_by_rank"][:7]),
                      ("scheduler", {"last_epoch": 2}), ("next_optimizer_step", 4),

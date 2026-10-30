@@ -1,3 +1,39 @@
+## 2026-10-30：四层 CED cross attention 的分支归一化与固定注入尺度 v2
+
+用户反馈原四层 cross attention 训练可以运行，但出现注意力残差放大及梯度爆炸。
+已在[现有隔离路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer36912_crossattn/README.md)落实两项架构调整：
+四个深度各自采用 `LN1536 -> Linear(1536,576) -> LN576`；
+共享 `LN_text(T)` 仅供有效prompt的Gate1池化、Gate2和CA query使用，原T仍作为残差基底。
+CA输出经过共享且 `elementwise_affine=False` 的LN，按
+`T_new = T + 0.1 * tanh(Gate2(LN_text(T))) * LN_out(CA(...))` 注入。
+轮次偏置仍只在文本LN之后加入query，Gate2仍全零初始化，CA输出投影保持原随机初始化。
+所有LN的eps为1e-5，其余LN可训练weight=1/bias=0；两轮共享文本/输出LN、CA及两个gate。
+每个token的实际注入RMS在数值有限时不超过约0.1，不代表主路径的10%或全部梯度稳定性证明。
+
+新增18,048个LN参数，交互模块共4,892,741个参数；新增LN沿用分支max LR6e-4、
+一维参数不衰减。原LM LR3e-4、mapper LR6e-4、AdamW/LambdaLR/GradNormTracker、
+loss、数据顺序、FP32、GBS256（8×8×4）、3 epochs / 17,313 updates / 866 warmup、
+683-token布局、后台staging、保存节点和提交资源全部保留。
+runtime/checkpoint架构身份升级为 `ced_small_mizar_s1_fixed20_gbs256_recursive_5_10_5_layer36912_crossattn_v2`，
+拒绝旧v1音频checkpoint的完整resume；从原文本checkpoint重新初始化，使用新的空输出目录。
+
+经GitHub同步后，在远程登录节点直接提交formal，不传resume参数，无smoke前置任务：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer36912_crossattn_5090.sh --stage-workers 4
+```
+
+默认新时间戳run中的最终产物仍为 `formal/checkpoints/model--epo-3.ckpt` 和
+`model--step-17313.ckpt`。metrics区分原始CA输出RMS、归一化后RMS、实际残差RMS，
+并记录 `residual_token_rms_max` 与固定 `residual_scale=0.1`。
+本地58项实际检查通过、15项真实CPU tensor检查因缺少依赖跳过，汇总入口仍为
+`python tests/validate_mizar_s1_ced_multilayer_crossattn.py`。
+v2真实tensor、远程权重加载、8 GPU训练稳定性与完整恢复待远程确认，不登记远程PASS。
+旧路线与共享递归实现未修改；现有普通CED evaluator仍未适配本架构。
+
 ## 2026-10-29：CED 第 3/6/9/12 层选择与两轮共享 cross attention
 
 已接续完成从非 MeSH CED 母本复制隔离的

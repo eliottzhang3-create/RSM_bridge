@@ -119,10 +119,22 @@ class TensorTests(unittest.TestCase):
         state = torch.get_rng_state().clone()
         adapter = self.adapter_class()
         self.assertTrue(torch.equal(state,torch.get_rng_state()))
-        self.assertEqual(sum(p.numel() for p in adapter.parameters()),4874693)
+        self.assertEqual(sum(p.numel() for p in adapter.parameters()),4892741)
         self.assertEqual(adapter.cross_attention.num_heads,9)
         self.assertEqual(adapter.cross_attention.dropout,0.)
         self.assertEqual(len({id(p.weight) for p in adapter.projections}),4)
+        norms = list(adapter.audio_input_norms) + list(adapter.audio_output_norms) + [adapter.text_norm]
+        self.assertEqual(len({id(n) for n in norms + [adapter.output_norm]}),10)
+        for norm in norms:
+            self.assertEqual(norm.eps,1e-5)
+            self.assertTrue(norm.elementwise_affine)
+            torch.testing.assert_close(norm.weight,torch.ones_like(norm.weight),rtol=0,atol=0)
+            self.assertFalse(norm.bias.ne(0).any())
+        self.assertFalse(adapter.output_norm.elementwise_affine)
+        self.assertEqual(list(adapter.output_norm.parameters()),[])
+        self.assertEqual(adapter.residual_scale,.1)
+        self.assertNotIn("residual_scale",dict(adapter.named_parameters()))
+        self.assertTrue(adapter.cross_attention.out_proj.weight.ne(0).any())
         for layer in (adapter.gate1,adapter.gate2):
             self.assertFalse(layer.weight.ne(0).any())
             self.assertFalse(layer.bias.ne(0).any())
@@ -156,8 +168,13 @@ class TensorTests(unittest.TestCase):
         self.assertTrue(output["embedding"].requires_grad)
         adapter = self.adapter_class()
         bank = adapter.project_audio(output["layer_grids"],output["embedding"])
-        (bank.square().mean()+output["embedding"].square().mean()).backward()
+        # Output LN makes squared energy nearly constant. Use a nonconstant
+        # weighted objective to exercise every upstream normalization/projection.
+        ((bank*torch.randn_like(bank)).mean()+output["embedding"].square().mean()).backward()
         self.assertTrue(all(p.grad is not None and p.grad.ne(0).any() for p in adapter.projections.parameters()))
+        self.assertTrue(all(p.grad is not None and torch.isfinite(p.grad).all() and p.grad.ne(0).any()
+                            for norms in (adapter.audio_input_norms,adapter.audio_output_norms)
+                            for p in norms.parameters()))
         self.assertTrue(all(p.grad is None for p in wrapper.ced.parameters()))
         self.assertFalse(wrapper.ced.training)
         self.assertTrue(wrapper.mapper.training)
@@ -189,20 +206,24 @@ class TensorTests(unittest.TestCase):
             adapter.round_bias[0].fill_(.2)
             adapter.round_bias[1].fill_(-.3)
         x, grids, mask = self.context()
-        calls, projections, observations = [],[],[]
+        calls, projections, observations, norm_calls = [],[],[],[]
         handles = [layer.register_forward_pre_hook(lambda _,args,index=i:calls.append(index))
                    for i,layer in enumerate(model.model.layers)]
         handles += [layer.register_forward_hook(lambda *args,index=i:projections.append(index))
                     for i,layer in enumerate(adapter.projections)]
+        handles += [layer.register_forward_hook(lambda *args,name=name:norm_calls.append(name))
+                    for name,layer in adapter.named_modules() if isinstance(layer,torch.nn.LayerNorm)]
         original_forward = adapter.forward
         def observe(hidden,bank,prompt_mask,round_index):
             with patch.object(adapter.cross_attention,"forward",wraps=adapter.cross_attention.forward) as attention, \
                  patch.object(adapter.gate2,"forward",wraps=adapter.gate2.forward) as gate:
                 output = original_forward(hidden,bank,prompt_mask,round_index)
             q,k,v = attention.call_args.args
-            torch.testing.assert_close(q,hidden[:,127:]+adapter.round_bias[round_index])
+            normalized = torch.nn.functional.layer_norm(hidden[:,127:], (36,),
+                adapter.text_norm.weight,adapter.text_norm.bias,eps=1e-5)
+            torch.testing.assert_close(q,normalized+adapter.round_bias[round_index])
             self.assertIs(k,v)
-            torch.testing.assert_close(gate.call_args.args[0],hidden[:,127:],rtol=0,atol=0)
+            torch.testing.assert_close(gate.call_args.args[0],normalized,rtol=0,atol=0)
             torch.testing.assert_close(output[:,:127],hidden[:,:127],rtol=0,atol=0)
             observations.append((round_index,id(bank)))
             return output
@@ -215,6 +236,35 @@ class TensorTests(unittest.TestCase):
         self.assertEqual(projections,[0,1,2,3])
         self.assertEqual([r for r,_ in observations],[0,1])
         self.assertEqual(observations[0][1],observations[1][1])
+        for i in range(4):
+            self.assertEqual(norm_calls.count(f"audio_input_norms.{i}"),1)
+            self.assertEqual(norm_calls.count(f"audio_output_norms.{i}"),1)
+        self.assertEqual(norm_calls.count("text_norm"),2)
+        self.assertEqual(norm_calls.count("output_norm"),2)
+
+    def test_large_ca_outputs_obey_per_token_residual_bound_in_both_rounds(self):
+        torch = self.torch
+        model = self.lm().eval()
+        adapter = model.model.audio_crossattn
+        x,grids,mask = self.context()
+        with torch.no_grad():
+            adapter.gate2.bias.fill_(100.)
+            adapter.cross_attention.out_proj.weight.mul_(1e6)
+            adapter.cross_attention.out_proj.bias.fill_(1e6)
+            adapter.collect_diagnostics = True
+            bank = adapter.project_audio(grids*1e5,x)
+            for r in (0,1):
+                output = adapter(x,bank,mask,r)
+                self.assertTrue(torch.isfinite(output).all())
+                torch.testing.assert_close(output[:,:127],x[:,:127],rtol=0,atol=0)
+                token_rms = (output[:,127:]-x[:,127:]).square().mean(dim=-1).sqrt()
+                self.assertLessEqual(token_rms.max().item(),.1+1e-6)
+                self.assertGreater(token_rms.max().item(),.099)
+        for entry in adapter.diagnostics():
+            self.assertGreater(entry["cross_attention_rms"],1000.)
+            self.assertLessEqual(entry["normalized_cross_attention_rms"],1.+1e-6)
+            self.assertLessEqual(entry["residual_token_rms_max"],.1+1e-6)
+            self.assertEqual(entry["residual_scale"],.1)
 
     def test_gate2_opens_before_each_upstream_branch_receives_gradients(self):
         torch = self.torch

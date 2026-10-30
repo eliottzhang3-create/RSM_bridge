@@ -9,7 +9,7 @@ import random
 import time
 from pathlib import Path
 
-ROUTE = "ced_small_mizar_s1_fixed20_gbs256_recursive_5_10_5_layer36912_crossattn_v1"
+ROUTE = "ced_small_mizar_s1_fixed20_gbs256_recursive_5_10_5_layer36912_crossattn_v2"
 TEXT_MODEL_CONTRACT = "logical_30_physical_20_5_10_5_loops_2_no_mesh"
 TEXT_MODEL_ARCHITECTURE = TEXT_MODEL_CONTRACT
 TEXT_MODEL_SOURCE_MAPPING = (
@@ -511,15 +511,26 @@ def cross_attention_contract():
         "frozen_grid_shape": [4, 126, 1536], "projections": [4, 1536, 576],
         "logical_indices_0based": [5, 15], "text_start": 127,
         "gate1": {"linear": [576, 4], "activation": "softmax", "scope": "sample",
-                  "summary": "valid_prompt_masked_mean_excluding_answer_and_PAD", "zero_init": True},
-        "gate2": {"linear": [576, 1], "activation": "tanh", "scope": "text_token", "zero_init": True},
+                  "summary": "normalized_valid_prompt_masked_mean_excluding_answer_and_PAD", "zero_init": True},
+        "gate2": {"linear": [576, 1], "activation": "tanh", "scope": "text_token", "zero_init": True,
+                  "input": "normalized_text_without_round_bias"},
         "cross_attention": {"width": 576, "heads": 9, "head_dim": 64,
-                            "dropout": 0., "bias": True, "shared_across_rounds": True},
+                            "dropout": 0., "bias": True, "shared_across_rounds": True,
+                            "query": "normalized_text_plus_round_bias", "out_proj_zero_init": False},
         "round_bias": {"count": 2, "width": 576, "zero_init": True, "applies_to": "Q_input_only"},
         "shared_gate1": True, "shared_gate2": True,
         "residual_positions": "all_text_positions_including_original_visible_PAD",
-        "extra_norm": False, "extra_FFN": False, "use_cache": False,
-        "new_parameters": 4874693, "max_lr": 6e-4,
+        "normalization": {
+            "type": "LayerNorm", "eps": 1e-5, "axis": "last_dimension_per_token",
+            "audio_input": {"count": 4, "width": 1536, "elementwise_affine": True},
+            "audio_output": {"count": 4, "width": 576, "elementwise_affine": True},
+            "text": {"width": 576, "elementwise_affine": True, "shared_across_rounds": True},
+            "output": {"width": 576, "elementwise_affine": False, "shared_across_rounds": True},
+            "affine_initialization": {"weight": 1., "bias": 0.}},
+        "residual_scale": 0.1, "residual_scale_trainable": False,
+        "residual_base": "original_unnormalized_text",
+        "extra_norm": True, "extra_FFN": False, "use_cache": False,
+        "new_parameters": 4892741, "max_lr": 6e-4,
         "initial_gradient": "gate2_opens_first_other_branch_gradients_zero_is_expected",
     }
 

@@ -1,5 +1,10 @@
 # CED 第 3/6/9/12 层选择与两轮共享 cross attention
 
+2026-10-30：当前为 **v2 分支归一化与固定 0.1 注入尺度版本**。
+用户反馈 v1 真实训练可以启动，但观察到注意力残差放大、梯度爆炸。
+本次仅修改交互分支架构，保留原训练配方；新版本远程稳定性尚待验证。
+v1 音频 checkpoint 不能直接作为 v2 的 full resume；从原文本初始化重新训练，使用新的空输出目录。
+
 本路线完整复制隔离自
 `mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small`，
 即 `run_mizar_s1_gbs256_recursive_5_10_5_ced_small_5090.sh` 对应的非 MeSH 母本。
@@ -25,13 +30,15 @@ hooks 不替换输出，正常结束或异常退出都会移除。
 → [B,2 segments,4 frequency bins,63 time steps,384]
 → [B,2 segments,63 time steps,4 frequency bins,384]
 → [B,126,1536]
+→ 独立 LayerNorm(1536)
 → 独立 Linear(1536,576)
+→ 独立 LayerNorm(576)
 → ai: [B,126,576]，i=1,2,3,4 对应 CED 层3,6,9,12
 ```
 
-仅合并频率与通道，不平均时间/频率，不增加分支归一化、激活、dropout 或 FFN。
-四个投影参数独立，位于 CED 的 no_grad 范围之外。
-每次 LM forward 各投影只执行一次，结果供两次交互复用。
+仅合并频率与通道，不平均时间/频率，不增加激活、dropout 或 FFN。
+每个深度独立拥有投影前后的两个 LayerNorm 和投影，均位于 CED 的 no_grad 范围之外。
+每次 LM forward 各音频分支只执行一次，结果供两次交互复用。
 
 ### 两次文本交互
 
@@ -43,24 +50,36 @@ hooks 不替换输出，正常结束或异常退出都会移除。
 对当前状态 H，令 T=H[:,127:]：
 
 ```text
-s = masked_mean(H[:,127:383], tokenizer_prompt_attention_mask)
+U = LN_text(T)                                    # only the interaction branch
+s = masked_mean(U[:,:256], tokenizer_prompt_attention_mask)
 alpha = softmax(Gate1(s))                          # [B,4]
 A = sum_i alpha_i * ai                             # [B,126,576]
-Z = CrossAttention(Q_input=T+b_round, K_input=A, V_input=A)
-g = tanh(Gate2(T))                                 # [B,text_length,1]
-T_new = T + g * Z
+Z = CrossAttention(Q_input=U+b_round, K_input=A, V_input=A)
+Z_hat = LN_out(Z)                                 # elementwise_affine=False
+g = tanh(Gate2(U))                                # [B,text_length,1]
+residual = 0.1 * g * Z_hat                         # fixed, non-trainable scale
+T_new = T + residual                              # original T is the residual base
 ```
 
 | 模块 | 共享与初始化 |
 |---|---|
 | 四个 Linear(1536,576) | 深度之间独立；Xavier uniform weight、零 bias；两轮复用结果 |
+| 四个输入 LN1536 + 四个输出 LN576 | 各深度独立；eps1e-5；可训练 weight=1、bias=0；两轮复用结果 |
+| LN_text(576) | 两轮共享；eps1e-5；可训练 weight=1、bias=0；仅用于 Gate1/Gate2/Q 分支 |
+| LN_out(576) | 两轮共享；eps1e-5；elementwise_affine=False，无可训练参数 |
 | Gate1: Linear(576,4)+softmax | 两轮共享；weight/bias全零，初始四层权重均为0.25 |
 | Gate2: Linear(576,1)+tanh | 两轮共享；weight/bias全零，每文本 token 一个标量门控 |
 | MultiheadAttention | 两轮共享；hidden576、9 heads、head_dim64、dropout0、带bias |
 | b1、b2 | 两个独立可训练的576维零初值向量，仅加入对应轮次的Q输入 |
 
-Cross attention 权重按 PyTorch MultiheadAttention 初始化，bias全零。
-轮次偏置不进入 Gate1、Gate2、K、V 或残差基底。新增参数共 **4,874,693**。
+Cross attention 权重按 PyTorch MultiheadAttention 初始化，bias全零；输出投影 weight 不做零初始化。
+轮次偏置在文本 LN 之后加入，不进入 Gate1、Gate2、K、V 或残差基底。
+固定 γ=0.1，不加入 optimizer。v2 交互模块共 **4,892,741** 个参数，较 v1 多 **18,048** 个 LN 参数。
+
+LN 仅沿每个 token 的最后一维计算，不混合 token/batch；不将 U 写回主路径。
+在数值有限时，非仿射输出 LN 使每 token 的输出 RMS 不超过约1，结合逐 token 标量
+`|g|≤1`，单次实际注入残差每 token RMS 不超过约0.1（允许浮点误差）。
+这是绝对幅度约束，不表示主路径的10%，也不是对全部训练梯度的稳定性证明。
 
 残差覆盖 prompt、answer 和母本原有的可见 PAD；前126个音频位置及SEP不直接注入。
 Gate1 只汇总 tokenizer prompt attention_mask 标记的有效位置，排除 answer 和直接池化的PAD，
@@ -76,20 +95,21 @@ Gate1 允许 prompt 位置共享完整已知问题摘要，不通过答案摘要
 
 原 CED/mapper 构造顺序不变；严格加载并审计原非 MeSH 文本权重后才注册新增模块。
 新增模块在 CPU RNG fork 内初始化并恢复调用方RNG，不改变母本原参数的初始化随机状态。
+LN 注册在原交互模块初始化之后，采用常量初始化，不消耗额外随机数。
 
 Gate2初始残差严格为零。首次反向允许投影、Gate1、cross attention和轮次偏置梯度为零，
 但梯度必须已连接且有限；mapper、原LM、Gate2必须有非零梯度。
-Gate2更新打开后，逐一检查四个投影和两个轮次偏置的非零梯度。
+Gate2更新打开后，逐一检查四个投影、八个音频LN、文本LN和两个轮次偏置的非零梯度。
 每个训练段最多等待32次更新；未全部连通会失败，并保存各rank证据。
 
 | 参数 | max LR |
 |---|---:|
 | 原LM全部参数 | 3e-4 |
 | 原CED mapper | 6e-4 |
-| 四个投影、Gate1、Gate2、cross attention、b1/b2 | 6e-4 |
+| 四个投影、九个可训练LN、Gate1、Gate2、cross attention、b1/b2 | 6e-4 |
 
 保留 AdamW betas=(0.9,0.999)、eps=1e-8、WD0.01，bias及ndim≤1参数不衰减，
-包括两个一维轮次偏置。保留母本 LambdaLR 和 GradNormTracker。
+包括两个一维轮次偏置和全部一维LN参数。保留母本 LambdaLR 和 GradNormTracker。
 调度首步系数为0.1，首步实际LR为LM 3e-5、mapper/新增参数6e-5，
 随后按原5% warmup/cosine调度。
 
@@ -131,6 +151,7 @@ cd code/RSmol
 bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer36912_crossattn_5090.sh --stage-workers 4
 ```
 
+不传 `--resume-checkpoint`，默认使用新的时间戳输出目录，从原文本 checkpoint 开始新的 v2 训练。
 直接提交formal，不自动执行smoke、runtime_checks或tensor验证，不要求历史smoke report。
 GPU由wrapper的 `vc submit` 提交，不在登录节点直接运行CUDA。
 资源为 `pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`；
@@ -166,13 +187,20 @@ formal/checkpoints/model--epo-3.ckpt
 中途保存步数为2886、5771、8656、11542、14428、17313。
 完整checkpoint包含CED、原mapper、LM及全部新增模块、optimizer、scheduler、
 GradScaler、GradNormTracker、8 rank RNG及epoch/update游标。
-metrics按指定记录步保存rank0最后一个microbatch的两轮层权重、gate均值/绝对值、
-cross attention RMS及残差RMS；这些是训练诊断，不是验证集指标。
+metrics按指定记录步保存rank0最后一个microbatch的两轮层权重、gate均值/绝对值，以及：
+
+- `cross_attention_rms`：输出LN之前的原始CA输出RMS。
+- `normalized_cross_attention_rms`：非仿射输出LN之后的RMS。
+- `residual_rms`：包含γ=0.1和gate的实际注入RMS。
+- `residual_token_rms_max`：所有文本token实际注入RMS的最大值，应不超过约0.1。
+- `residual_scale`：固定0.1。
+
+这些是rank0最后一个microbatch的训练诊断，不是所有rank的稳定性或验证集指标。
 
 仅接受本路线未完成的完整formal checkpoint，route为
-`ced_small_mizar_s1_fixed20_gbs256_recursive_5_10_5_layer36912_crossattn_v1`。
+`ced_small_mizar_s1_fixed20_gbs256_recursive_5_10_5_layer36912_crossattn_v2`。
 恢复核对代码/资产/数据/配方、完整状态及游标；
-拒绝母本、4→8、8→4、MeSH或其他架构checkpoint。
+拒绝v1未归一化交互、母本、4→8、8→4、MeSH或其他架构checkpoint。
 仍需原始文本和CED资产；job/node/tmpfs路径不作为持久恢复身份。
 
 在远程 `code/RSmol` 目录设置实际run root和已保存step后执行：
@@ -190,14 +218,16 @@ bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer36912_crossattn_5090.sh
 
 ## 6. 验证状态
 
-2026-10-29本地重跑：**56项实际检查通过，14项真实CPU tensor检查跳过**。
+2026-10-30 v2本地验证：**58项实际检查通过，15项真实CPU tensor检查跳过**。
 缺少torch、torchaudio、transformers、soundfile；NumPy行为检查不是autograd证明。
 
-通过范围包括实际方法的NumPy行为/因果性、strict loader拒绝条件、参数inventory/LR分组、
+通过范围包括实际方法的NumPy行为/因果性、放大CA输出与饱和门控下的逐token残差上限、
+原文本残差基底保持、strict loader拒绝条件、LN/γ结构审计、参数inventory/LR分组、
 源码/AST母本对照、Python编译、Bash语法与fresh/resume模拟提交、
 本路线共享音频立即启动与producer退出清理，以及母本回归。
-新路线11项及母本3项真实CPU tensor检查未执行；
-门控开门时点断言已按母本非零首步LR修正，修正本身不算执行通过。
+新路线12项及母本3项真实CPU tensor检查未执行，包括零门控logits/原参数梯度等价、
+开门后新增LN梯度、真实tensor逐token残差上限和完整checkpoint continuation。
+历史v1在2026-10-29的记录为56项实际检查通过、14项tensor检查跳过。
 
 从仓库根目录汇总：
 
@@ -218,7 +248,8 @@ python tests/validate_mizar_s1_ced_multilayer_crossattn.py --require-tensors
 checkpoint tensor测试模拟八卡collective和CUDA RNG接口，
 即使通过也只证明CPU continuation，不作为真实8 GPU恢复验收。
 
-真实权重加载、显存、吞吐、8 GPU训练/恢复仍待远程验证，未登记远程PASS。
+用户已确认v1训练可运行但发生梯度爆炸；v2真实权重加载、显存、吞吐、
+8 GPU训练稳定性及恢复仍待远程验证，不登记为v2远程PASS。
 正式作业保留真实来源探针、交互轨迹、首步和开门后梯度检查、
 冻结CED不变检查与最终checkpoint重读审计。
 原有普通CED评测入口尚未适配本新架构。

@@ -47,14 +47,29 @@ class ActualMethodsTests(unittest.TestCase):
                 return np.zeros(shape, dtype=self.dtype).view(Tensor)
             def ne(self, value):
                 return (self != value).view(Tensor)
+            def detach(self):
+                return self
+            def cpu(self):
+                return self
+            def square(self):
+                return np.square(np.asarray(self)).view(Tensor)
+            def abs(self):
+                return np.abs(np.asarray(self)).view(Tensor)
+            def mean(self, dim=None, axis=None, keepdims=False):
+                return np.asarray(np.asarray(self).mean(
+                    axis=dim if axis is None else axis, keepdims=keepdims)).view(Tensor)
+            def sqrt(self):
+                return np.sqrt(np.asarray(self)).view(Tensor)
+            def max(self):
+                return np.asarray(np.asarray(self).max()).view(Tensor)
         cls.Tensor = Tensor
         def softmax(x, dim):
             x = np.asarray(x)
             e = np.exp(x - x.max(axis=dim, keepdims=True))
             return (e / e.sum(axis=dim, keepdims=True)).view(Tensor)
         cls.torch = SimpleNamespace(Tensor=Tensor, softmax=softmax, tanh=np.tanh,
-            stack=lambda xs, dim: np.stack(xs, axis=dim).view(Tensor),
-            cat=lambda xs, dim: np.concatenate(xs, axis=dim).view(Tensor))
+            stack=lambda xs, dim=0: np.stack(xs, axis=dim).view(Tensor),
+            cat=lambda xs, dim=0: np.concatenate(xs, axis=dim).view(Tensor))
         scope = dict(torch=cls.torch)
         for name in ("project_audio", "pool_prompt", "forward"):
             execute([method(ROUTE/"models/multilayer_audio.py", "MultilayerAudioCrossAttention", name)], scope)
@@ -80,20 +95,33 @@ class ActualMethodsTests(unittest.TestCase):
                 self.last = x.copy()
                 return (x @ self.weight + self.bias).view(type(x))
         class Attention:
+            output_scale = 1.
             def __call__(self, query, key, value, need_weights):
                 self.query, self.key, self.value = query.copy(), key.copy(), value.copy()
                 scores = query @ key.transpose(0, 2, 1) / 2.
                 weights = self_softmax(scores, dim=-1)
-                return (weights @ value).view(type(query)), None
+                return (self.output_scale * (weights @ value)).view(type(query)), None
+        class LayerNorm:
+            def __init__(self, width):
+                self.width, self.calls = width, 0
+            def __call__(self, x):
+                self.calls += 1
+                self.last = x.copy()
+                values = np.asarray(x)
+                return tensor((values - values.mean(axis=-1, keepdims=True)) /
+                              np.sqrt(values.var(axis=-1, keepdims=True) + 1e-5))
         self_softmax = self.torch.softmax
         class Adapter(SimpleNamespace):
             def __call__(candidate, *args):
                 return self.actual["forward"](candidate, *args)
         adapter = Adapter(width=4, audio_tokens=2, prompt_tokens=3, text_start=3,
-                          collect_diagnostics=False, last_diagnostics=[])
+                          collect_diagnostics=False, last_diagnostics=[], residual_scale=.1)
         adapter.pool_prompt = types.MethodType(self.actual["pool_prompt"], adapter)
         adapter.project_audio = types.MethodType(self.actual["project_audio"], adapter)
         adapter.projections = [Linear(1536, 4) for _ in range(4)]
+        adapter.audio_input_norms = [LayerNorm(1536) for _ in range(4)]
+        adapter.audio_output_norms = [LayerNorm(4) for _ in range(4)]
+        adapter.text_norm, adapter.output_norm = LayerNorm(4), LayerNorm(4)
         adapter.gate1, adapter.gate2 = Linear(4, 4), Linear(4, 1)
         adapter.gate2.weight[:] = 0
         adapter.gate2.bias[:] = 0 if closed else .4
@@ -112,10 +140,11 @@ class ActualMethodsTests(unittest.TestCase):
     def test_round_bias_enters_only_query_and_preserves_audio_separator(self):
         a, h, bank, mask = self.fixture()
         output = a(h, bank, mask, 0)
-        expected_summary = self.np.stack([h[0, 3:5].mean(axis=0), h[1, 3]])
+        u = a.text_norm(h[:, 3:])
+        expected_summary = self.np.stack([u[0, :2].mean(axis=0), u[1, 0]])
         self.np.testing.assert_allclose(a.gate1.last, expected_summary)
-        self.np.testing.assert_array_equal(a.gate2.last, h[:, 3:])
-        self.np.testing.assert_allclose(a.cross_attention.query, h[:, 3:] + a.round_bias[0])
+        self.np.testing.assert_array_equal(a.gate2.last, u)
+        self.np.testing.assert_allclose(a.cross_attention.query, u + a.round_bias[0])
         weights = self.torch.softmax(a.gate1(self.tensor(expected_summary)), -1)
         expected_audio = (bank * weights[:, :, None, None]).sum(dim=1)
         self.np.testing.assert_allclose(a.cross_attention.key, expected_audio)
@@ -125,14 +154,14 @@ class ActualMethodsTests(unittest.TestCase):
 
     def test_prompt_pool_excludes_answer_and_actual_pad_but_includes_valid_positions(self):
         a, h, bank, mask = self.fixture()
-        expected = a.pool_prompt(h, mask)
+        expected = a.pool_prompt(a.text_norm(h[:, 3:]), mask)
         changed = h.copy()
         changed[:, 6:] = 1e10  # answer
         changed[0, 5] = 1e9   # actual prompt PAD
         changed[1, 4:6] = -1e9
-        self.np.testing.assert_array_equal(a.pool_prompt(changed, mask), expected)
-        changed[0, 3] += 1
-        self.assertFalse(self.np.array_equal(a.pool_prompt(changed, mask), expected))
+        self.np.testing.assert_array_equal(a.pool_prompt(a.text_norm(changed[:, 3:]), mask), expected)
+        changed[0, 3, 0] += 1
+        self.assertFalse(self.np.array_equal(a.pool_prompt(a.text_norm(changed[:, 3:]), mask), expected))
 
     def test_prompt_mask_rejects_empty_wrong_shape_and_nonbinary(self):
         a, h, bank, mask = self.fixture()
@@ -150,9 +179,44 @@ class ActualMethodsTests(unittest.TestCase):
         a(h, bank, mask, 0)
         a(h, bank, mask, 1)
         self.assertEqual([p.calls for p in a.projections], [1,1,1,1])
+        self.assertEqual([n.calls for n in a.audio_input_norms + a.audio_output_norms], [1]*8)
+        for i in range(4):
+            normalized = a.audio_input_norms[i](grids[:, i])
+            self.np.testing.assert_array_equal(a.projections[i].last, normalized)
+            self.assertLessEqual(float(self.np.sqrt(self.np.square(
+                self.np.asarray(bank[:, i])).mean(axis=-1)).max()), 1.)
         for bad in (None, grids[:, :3], grids[:, :, :1], grids[..., :384]):
             with self.assertRaises(ValueError):
                 a.project_audio(bad, h)
+
+    def test_large_ca_outputs_have_bounded_each_token_injection_and_actual_diagnostics(self):
+        a, h, bank, mask = self.fixture()
+        a.gate2.bias[:] = 100  # Saturated |g|=1; test the actual worst-case scale.
+        a.cross_attention.output_scale = 1e6
+        a.collect_diagnostics = True
+        for r in (0, 1):
+            output = a(h, bank, mask, r)
+            residual = self.np.asarray(output[:, 3:] - h[:, 3:])
+            per_token = self.np.sqrt((residual**2).mean(axis=-1))
+            self.assertTrue(self.np.isfinite(output).all())
+            self.assertLessEqual(float(per_token.max()), .1 + 1e-12)
+            self.assertGreater(float(per_token.max()), .099)
+            self.np.testing.assert_array_equal(output[:, :3], h[:, :3])
+            values = a.last_diagnostics[-1][1]
+            self.assertGreater(float(values[6]), 1000.)
+            self.assertAlmostEqual(float(values[7]), float(self.np.sqrt((residual**2).mean())), places=12)
+            self.assertLessEqual(float(values[8]), 1. + 1e-12)
+            self.assertAlmostEqual(float(values[9]), float(per_token.max()), places=12)
+
+    def test_text_norm_is_per_token_and_original_text_is_residual_base(self):
+        a, h, bank, mask = self.fixture()
+        h = self.tensor(self.np.asarray(h)*100 + 500)
+        output = a(h, bank, mask, 0)
+        self.assertGreater(float(self.np.asarray(h[:, 3:]).mean()), 100.)
+        self.assertLess(float(self.np.abs(self.np.asarray(output[:, 3:] - h[:, 3:])).max()), .21)
+        u = a.text_norm(h[:, 3:])
+        self.np.testing.assert_allclose(self.np.asarray(u).mean(axis=-1), 0., atol=1e-14)
+        self.np.testing.assert_array_equal(a.gate2.last, u)
 
     def run_actual_schedule(self, a, h, bank, mask):
         calls = []
@@ -254,8 +318,10 @@ class ActualMethodsTests(unittest.TestCase):
         parameters={name:SimpleNamespace(requires_grad=True,grad=self.tensor([1.,2.])) for name in (
             "audio_encoder.base.mapper.weight", "caption_decoder.lm.model.layers.5.weight",
             *(prefix+f"projections.{i}.weight" for i in range(4)),
+            *(prefix+f"audio_input_norms.{i}.weight" for i in range(4)),
+            *(prefix+f"audio_output_norms.{i}.weight" for i in range(4)),
             *(prefix+name for name in ("gate1.weight","gate2.weight","cross_attention.in_proj_weight",
-                                      "round_bias.0","round_bias.1")))}
+                                      "round_bias.0","round_bias.1","text_norm.weight")))}
         model=SimpleNamespace(named_parameters=lambda:iter(parameters.items()))
         actual=scope["first_gradient_audit"]
         self.assertTrue(actual(model)["all_branches_nonzero"])

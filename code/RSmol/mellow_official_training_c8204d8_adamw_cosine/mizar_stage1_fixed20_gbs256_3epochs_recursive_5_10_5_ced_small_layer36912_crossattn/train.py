@@ -77,7 +77,8 @@ def role_snapshots(model):
                 stride = max(1, param.numel() // 2048)
                 result[role] = (name, param.detach().reshape(-1)[::stride][:2048].cpu().clone())
     if set(result) != {"mapper", "lm", "crossattn_projections", "crossattn_gate1",
-                       "crossattn_gate2", "crossattn_cross_attention", "crossattn_round_bias"}:
+                       "crossattn_gate2", "crossattn_cross_attention", "crossattn_round_bias",
+                       "crossattn_audio_input_norms", "crossattn_audio_output_norms", "crossattn_text_norm"}:
         raise ValueError("missing required trainable model component")
     return result
 
@@ -96,7 +97,8 @@ def validate_trainable_model(model):
         if parameter.requires_grad:
             roles.add(parameter_role(name))
     if roles != {"map", "default", "crossattn_projections", "crossattn_gate1", "crossattn_gate2",
-                 "crossattn_cross_attention", "crossattn_round_bias"} or not model.audio_encoder.base.mapper.training:
+                 "crossattn_cross_attention", "crossattn_round_bias", "crossattn_audio_input_norms",
+                 "crossattn_audio_output_norms", "crossattn_text_norm"} or not model.audio_encoder.base.mapper.training:
         raise ValueError("the CED mapper, original LM and complete cross attention branch must train")
     validate_audio_cross_attention(model.caption_decoder.lm)
 
@@ -104,10 +106,13 @@ def validate_trainable_model(model):
 def first_gradient_audit(model):
     audit = {"missing": [], "nonfinite": [], "frozen_with_gradient": [],
              "nonzero_by_role": {role: False for role in ("map", "default", "crossattn_projections",
-                 "crossattn_gate1", "crossattn_gate2", "crossattn_cross_attention", "crossattn_round_bias")},
+                 "crossattn_gate1", "crossattn_gate2", "crossattn_cross_attention", "crossattn_round_bias",
+                 "crossattn_audio_input_norms", "crossattn_audio_output_norms", "crossattn_text_norm")},
              "nonzero_by_branch": {name: False for name in (
                  "projections.0", "projections.1", "projections.2", "projections.3",
-                 "gate1", "gate2", "cross_attention", "round_bias.0", "round_bias.1")}}
+                 "gate1", "gate2", "cross_attention", "round_bias.0", "round_bias.1", "text_norm",
+                 *(f"audio_input_norms.{i}" for i in range(4)),
+                 *(f"audio_output_norms.{i}" for i in range(4)))}}
     for name, parameter in model.named_parameters():
         if not parameter.requires_grad:
             if parameter.grad is not None:
@@ -123,7 +128,8 @@ def first_gradient_audit(model):
             prefix = "caption_decoder.lm.model.audio_crossattn."
             if name.startswith(prefix):
                 parts = name[len(prefix):].split(".")
-                branch = ".".join(parts[:2]) if parts[0] in {"projections", "round_bias"} else parts[0]
+                branch = ".".join(parts[:2]) if parts[0] in {
+                    "projections", "round_bias", "audio_input_norms", "audio_output_norms"} else parts[0]
                 audit["nonzero_by_branch"][branch] = True
     audit["passed"] = (not audit["missing"] and not audit["nonfinite"]
                        and not audit["frozen_with_gradient"] and all(audit["nonzero_by_role"][role]

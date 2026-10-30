@@ -2,7 +2,7 @@
   "status": "PASS",
   "scope": "source/AST parity only; not tensor, weight-loading or GPU evidence",
   "parent": "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small",
-  "route_code_sha256": "80d2c57d0cd086415cf73df29ae4d740fd12a1a0fa0d32cf06224b89063d3f3a",
+  "route_code_sha256": "5f6bca8d556a6986d298cc3d21b05f92161607426349439dd85bc7180098fb68",
   "identical_files": {
     "check_ced_assets.py": "075b49dc02eca6d5293f1abaadce736fece46a2fc67661324ac9b45913466367",
     "data/audio_paths.py": "f65433f8db88a59bf1d7701ce9b0bfe85e8c00affa673b69246684ae34596685",

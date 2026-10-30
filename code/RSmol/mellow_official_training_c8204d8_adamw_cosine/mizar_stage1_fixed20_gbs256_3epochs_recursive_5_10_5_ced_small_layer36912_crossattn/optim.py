@@ -8,7 +8,8 @@ def parameter_role(name):
     prefix = "caption_decoder.lm.model.audio_crossattn."
     if name.startswith(prefix):
         component = name[len(prefix):].split(".")[0]
-        if component not in {"projections", "gate1", "gate2", "cross_attention", "round_bias"}:
+        if component not in {"projections", "gate1", "gate2", "cross_attention", "round_bias",
+                             "audio_input_norms", "audio_output_norms", "text_norm"}:
             raise ValueError(f"unexpected cross attention component: {name}")
         return "crossattn_" + component
     if name.startswith("audio_encoder.base.mapper."):
@@ -30,7 +31,9 @@ def build_optimizer(model, total_steps):
         groups.setdefault(key, []).append(param)
         names.setdefault(key, []).append(name)
     if {key[0] for key in groups} != {"map", "default", "crossattn_projections", "crossattn_gate1",
-                                       "crossattn_gate2", "crossattn_cross_attention", "crossattn_round_bias"}:
+                                       "crossattn_gate2", "crossattn_cross_attention", "crossattn_round_bias",
+                                       "crossattn_audio_input_norms", "crossattn_audio_output_norms",
+                                       "crossattn_text_norm"}:
         raise ValueError("expected trainable CED mapper and full language model")
     audit = [{"role": role, "base_lr": lr, "weight_decay": wd,
               "numel": sum(p.numel() for p in groups[(role, lr, wd)]), "names": names[(role, lr, wd)]}

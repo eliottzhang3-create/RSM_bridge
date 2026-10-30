@@ -90,6 +90,19 @@ def validate_audio_cross_attention(model):
             or adapter.prompt_tokens != 256 or adapter.cross_attention.num_heads != 9
             or adapter.cross_attention.dropout != 0. or not adapter.cross_attention.batch_first):
         raise ValueError("cross attention geometry/heads/dropout contract mismatch")
+    if type(adapter.residual_scale) is not float or adapter.residual_scale != 0.1:
+        raise ValueError("cross attention residual scale must be the fixed float 0.1")
+    if len(adapter.audio_input_norms) != 4 or len(adapter.audio_output_norms) != 4:
+        raise ValueError("each of the four audio branches requires independent pre/post LayerNorm")
+    norms = [(norm, 1536, True) for norm in adapter.audio_input_norms]
+    norms += [(norm, 576, True) for norm in adapter.audio_output_norms]
+    norms += [(adapter.text_norm, 576, True), (adapter.output_norm, 576, False)]
+    if len({id(norm) for norm, _, _ in norms}) != len(norms):
+        raise ValueError("audio depth norms and shared text/output norms must be independent modules")
+    for norm, width, affine in norms:
+        if (tuple(norm.normalized_shape) != (width,) or norm.eps != 1e-5
+                or norm.elementwise_affine is not affine):
+            raise ValueError("cross attention LayerNorm shape/epsilon/affine contract mismatch")
     expected = {"gate1.weight": (4, 576), "gate1.bias": (4,),
                 "gate2.weight": (1, 576), "gate2.bias": (1,),
                 "round_bias.0": (576,), "round_bias.1": (576,),
@@ -100,6 +113,11 @@ def validate_audio_cross_attention(model):
     for index in range(4):
         expected[f"projections.{index}.weight"] = (576, 1536)
         expected[f"projections.{index}.bias"] = (576,)
+        for component, width in (("audio_input_norms", 1536), ("audio_output_norms", 576)):
+            expected[f"{component}.{index}.weight"] = (width,)
+            expected[f"{component}.{index}.bias"] = (width,)
+    expected["text_norm.weight"] = (576,)
+    expected["text_norm.bias"] = (576,)
     actual = dict(adapter.named_parameters())
     if set(actual) != set(expected) or any(tuple(actual[name].shape) != shape for name, shape in expected.items()):
         raise ValueError("cross attention parameter inventory mismatch")

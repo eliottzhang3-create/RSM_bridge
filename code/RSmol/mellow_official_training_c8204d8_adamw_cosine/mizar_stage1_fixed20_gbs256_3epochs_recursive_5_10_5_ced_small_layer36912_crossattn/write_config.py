@@ -74,9 +74,9 @@ def main():
               "checkpoint_steps": [round(contract["geometry"]["total_steps"] * i / 6) for i in range(1, 7)],
               "official_reference": "Mizar_159M/configs/s1.yaml.in + runtime/stage1 + pipeline/build_ced_cache.py",
               "intentional_differences": [
-                  "CED raw blocks3/6/9/12 -> temporal flatten -> four independent Linear(1536,576)",
-                  "shared sample-level prompt-masked-mean depth gate and token-level zero tanh residual gate",
-                  "shared text/audio cross attention before each middle loop; two round biases apply only to Q",
+                  "CED raw blocks3/6/9/12 -> temporal flatten -> independent LN1536/Linear(1536,576)/LN576 branches",
+                  "shared text LN feeds valid-prompt masked-mean Gate1, Gate2 and cross attention Q; residual base unchanged",
+                  "shared cross attention before each middle loop; Q-only round biases; non-affine output LN and fixed residual scale0.1",
                   "all added parameters and original mapper max LR6e-4; original LM max LR3e-4",
                   "non-MeSH recursive 5-10-5 text checkpoint and architecture retained; audio uses online CED-Small plus official freq_merge_126 mapper",
                   "single audio126 + SEP1 + prompt256 + answer300; full fixed20 waveform processed before mapping",
