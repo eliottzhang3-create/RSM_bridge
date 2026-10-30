@@ -83,7 +83,7 @@ def main():
         executed_tests=sum(r.get("tests", 0)-r.get("skipped", 0) for r in results),
         skipped_tests=skips, checks=results)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2)+"\n", encoding="utf-8", newline="\n")
     print(json.dumps({k: v for k, v in report.items() if k != "checks"}), flush=True)
     print("report="+str(args.output), flush=True)
     return int(failed)

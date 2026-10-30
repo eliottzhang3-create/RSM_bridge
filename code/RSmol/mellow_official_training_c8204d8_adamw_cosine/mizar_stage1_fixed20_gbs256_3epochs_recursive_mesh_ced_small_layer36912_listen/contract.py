@@ -9,7 +9,7 @@ import random
 import time
 from pathlib import Path
 
-ROUTE = "ced_small_mizar_s1_fixed20_gbs256_recursive_mesh_layer36912_listen_v1"
+ROUTE = "ced_small_mizar_s1_fixed20_gbs256_recursive_mesh_layer36912_listen_v2"
 TEXT_MODEL_CONTRACT = "logical_30_physical_20_5_10x2_5"
 TEXT_MODEL_ARCHITECTURE = "logical_30_physical_20_5_10x2_5_mesh"
 TEXT_MODEL_SCHEDULE = tuple(
@@ -476,7 +476,7 @@ def semantic_contract(prepared, text_model_dir, ced_model_dir):
 
 
 def audio_listen_contract():
-    return {"version": 1, "ced_layers_1based": [3, 6, 9, 12], "tap": "block_output_pre_final_norm",
+    return {"version": 2, "ced_layers_1based": [3, 6, 9, 12], "tap": "block_output_pre_final_norm",
             "grid_order": "segment_time_frequency_channel", "grid_shape": [126, 1536],
             "branch": "LN1536_Linear1536x576_LN576", "depth_projections_shared": False,
             "layer_norm_eps": 1e-5, "all_added_layer_norms_affine": False,
@@ -485,14 +485,15 @@ def audio_listen_contract():
             "aggregate": "sum_of_four_independent_sigmoid_weighted_depths",
             "listen_query": "normalized_boundary_audio_hidden",
             "listen_router": "two_independent_Linear576x5_softmax_original_initialization",
-            "amplitude": "two_independent_zero_initialized_scalars_tanh",
-            "gamma": 0.3, "write_scale": "gamma_divided_by_4",
+            "amplitude": "two_independent_Linear576x1_tanh_zero_weight_bias",
+            "amplitude_input": "raw_boundary_audio_hidden", "amplitude_shape": [126, 1],
+            "write_scale": "none", "write_formula": "tanh_amplitude_times_slot_probability_times_aggregate_audio",
             "target": "existing_five_slots_audio_positions_0_to_125_only",
             "boundaries_logical_0based": [5, 15],
             "order": "original_write_then_audio_listen_then_original_read",
             "original_loop_router_query": "loop_input_unchanged",
-            "audio_bank": "project_once_reuse_both_rounds", "new_parameters": 3551636,
-            "new_parameter_tensors": 18, "new_parameter_max_lr": 6e-4,
+            "audio_bank": "project_once_reuse_both_rounds", "new_parameters": 3552788,
+            "new_parameter_tensors": 20, "new_parameter_max_lr": 6e-4,
             "use_cache": False}
 
 

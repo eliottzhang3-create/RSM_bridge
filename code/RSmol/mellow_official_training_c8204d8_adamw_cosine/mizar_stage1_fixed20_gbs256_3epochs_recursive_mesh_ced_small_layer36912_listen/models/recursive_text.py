@@ -106,10 +106,8 @@ def validate_audio_listen(model):
     from contract import audio_listen_contract
     adapter = model.model.audio_listen
     if (adapter.width, adapter.audio_tokens, adapter.prompt_tokens, adapter.memory_slots,
-            adapter.text_start, adapter.gamma) != (576, 126, 256, 5, 127, 0.3):
-        raise ValueError("audio listen geometry/fixed gamma mismatch")
-    if type(adapter.gamma) is not float:
-        raise ValueError("audio listen gamma must be a fixed float")
+            adapter.text_start) != (576, 126, 256, 5, 127):
+        raise ValueError("audio listen geometry mismatch")
     norms = [(n, 1536) for n in adapter.audio_input_norms]
     norms += [(n, 576) for n in adapter.audio_output_norms]
     norms += [(adapter.text_norm, 576), (adapter.query_norm, 576)]
@@ -123,10 +121,9 @@ def validate_audio_listen(model):
         expected[f"projections.{i}.weight"] = (576, 1536)
         expected[f"projections.{i}.bias"] = (576,)
     for i in range(2):
-        for component, rows in (("gates", 4), ("listen_routers", 5)):
+        for component, rows in (("gates", 4), ("listen_routers", 5), ("amplitudes", 1)):
             expected[f"{component}.{i}.weight"] = (rows, 576)
             expected[f"{component}.{i}.bias"] = (rows,)
-        expected[f"amplitudes.{i}"] = (1,)
     parameters = dict(adapter.named_parameters())
     if (set(parameters) != set(expected)
             or any(tuple(parameters[name].shape) != shape for name, shape in expected.items())

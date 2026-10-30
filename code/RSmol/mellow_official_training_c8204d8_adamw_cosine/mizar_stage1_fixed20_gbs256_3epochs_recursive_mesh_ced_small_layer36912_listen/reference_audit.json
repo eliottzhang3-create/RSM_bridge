@@ -80,7 +80,7 @@
     "dropped_rows_per_epoch": 116
   },
   "audio_listen": {
-    "version": 1,
+    "version": 2,
     "ced_layers_1based": [
       3,
       6,
@@ -102,9 +102,14 @@
     "aggregate": "sum_of_four_independent_sigmoid_weighted_depths",
     "listen_query": "normalized_boundary_audio_hidden",
     "listen_router": "two_independent_Linear576x5_softmax_original_initialization",
-    "amplitude": "two_independent_zero_initialized_scalars_tanh",
-    "gamma": 0.3,
-    "write_scale": "gamma_divided_by_4",
+    "amplitude": "two_independent_Linear576x1_tanh_zero_weight_bias",
+    "amplitude_input": "raw_boundary_audio_hidden",
+    "amplitude_shape": [
+      126,
+      1
+    ],
+    "write_scale": "none",
+    "write_formula": "tanh_amplitude_times_slot_probability_times_aggregate_audio",
     "target": "existing_five_slots_audio_positions_0_to_125_only",
     "boundaries_logical_0based": [
       5,
@@ -113,8 +118,8 @@
     "order": "original_write_then_audio_listen_then_original_read",
     "original_loop_router_query": "loop_input_unchanged",
     "audio_bank": "project_once_reuse_both_rounds",
-    "new_parameters": 3551636,
-    "new_parameter_tensors": 18,
+    "new_parameters": 3552788,
+    "new_parameter_tensors": 20,
     "new_parameter_max_lr": 0.0006,
     "use_cache": false
   }

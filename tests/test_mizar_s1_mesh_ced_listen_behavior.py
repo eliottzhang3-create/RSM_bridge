@@ -1,5 +1,6 @@
 """Execute production listen math with NumPy tensors; not PyTorch/autograd evidence."""
 import ast
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace, MethodType
 import unittest
@@ -38,6 +39,30 @@ class Array(np.ndarray):
     def float(self):
         return self.to(dtype=np.float32)
 
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def square(self):
+        return Array(np.square(np.asarray(self)))
+
+    def sqrt(self):
+        return Array(np.sqrt(np.asarray(self)))
+
+    def abs(self):
+        return Array(np.abs(np.asarray(self)))
+
+    def clamp_min(self, value):
+        return Array(np.maximum(np.asarray(self), value))
+
+    def log(self):
+        return Array(np.log(np.asarray(self)))
+
+    def ne(self, value):
+        return Array(np.asarray(self) != value)
+
 
 def softmax(x, dim):
     value = np.asarray(x)
@@ -47,8 +72,9 @@ def softmax(x, dim):
 
 TORCH = SimpleNamespace(float32=np.float32, sigmoid=lambda x: Array(1 / (1 + np.exp(-x))),
     tanh=lambda x: Array(np.tanh(x)), softmax=softmax,
-    stack=lambda values, dim: Array(np.stack(values, axis=dim)),
-    cat=lambda values, dim: Array(np.concatenate(values, axis=dim)))
+    stack=lambda values, dim=0: Array(np.stack(values, axis=dim)),
+    no_grad=nullcontext, isfinite=lambda value: Array(np.isfinite(np.asarray(value))),
+    cat=lambda values, dim=0: Array(np.concatenate(values, axis=dim)))
 
 
 def production_functions(path, class_name, names):
@@ -66,7 +92,7 @@ def production_functions(path, class_name, names):
 
 
 METHODS = production_functions(ROUTE / "models/audio_listen.py", "MultilayerAudioListen",
-    ("project_audio", "validate_prompt_mask", "pool_prompt", "forward"))
+    ("project_audio", "validate_prompt_mask", "pool_prompt", "forward", "diagnostics"))
 MEMORY = production_functions(ROUTE / "models/recursive_mesh_listen.py", "MeshLlamaModel", ("_write", "_read"))
 
 
@@ -84,17 +110,20 @@ class Linear:
     def __call__(self, x):
         return Array(np.asarray(x) @ np.asarray(self.weight).T + self.bias)
 
+    def parameters(self):
+        return (self.weight, self.bias)
+
 
 def fixture():
     rng = np.random.default_rng(987)
     module = SimpleNamespace(width=8, audio_tokens=3, prompt_tokens=4, text_start=4,
-        gamma=.3, collect_diagnostics=False, last_diagnostics=[], last_rounds=[],
+        collect_diagnostics=False, last_diagnostics=[], last_rounds=[], last_gradient_diagnostics=None,
         projections=[Linear(rng, 1536, 8) for _ in range(4)],
         audio_input_norms=[norm] * 4, audio_output_norms=[norm] * 4,
         text_norm=norm, query_norm=norm,
         gates=[Linear(rng, 8, 4, True) for _ in range(2)],
         listen_routers=[Linear(rng, 8, 5) for _ in range(2)],
-        amplitudes=[Array(np.zeros(1, np.float32)) for _ in range(2)])
+        amplitudes=[Linear(rng, 8, 1, True) for _ in range(2)])
     for name, fn in METHODS.items():
         setattr(module, name, MethodType(fn, module))
     hidden = Array(rng.normal(size=(2, 11, 8)).astype(np.float32))
@@ -116,13 +145,13 @@ class ProductionMathTests(unittest.TestCase):
     def test_only_audio_memory_positions_change_when_open(self):
         _, module, hidden, _, mask, memory, reads, bank = fixture()
         for r in (0, 1):
-            module.amplitudes[r][0] = .7
+            module.amplitudes[r].bias[0] = .7
             updated = module.forward(memory, hidden, bank, mask, r, reads)
             np.testing.assert_array_equal(updated[:, :, 3:], memory[:, :, 3:])
             self.assertGreater(np.abs(updated[:, :, :3] - memory[:, :, :3]).max(), 0)
             self.assertEqual(updated.shape, memory.shape)
 
-    def test_stress_aligned_depths_and_concentrated_routes_obey_gamma_bound(self):
+    def test_aligned_depths_and_concentrated_routes_have_no_fixed_scaling(self):
         rng, module, hidden, _, mask, memory, reads, _ = fixture()
         audio = norm(Array(rng.normal(size=(2, 3, 8)).astype(np.float32)))
         bank = Array(np.stack([audio] * 4, axis=1))
@@ -133,14 +162,36 @@ class ProductionMathTests(unittest.TestCase):
             module.listen_routers[r].bias[:] = -30
             module.listen_routers[r].bias[0] = 30
             for sign in (-1, 1):
-                module.amplitudes[r][0] = sign * 30
+                module.amplitudes[r].bias[0] = sign * 30
                 updated = module.forward(memory, hidden, bank, mask, r, reads)
                 delta = Array(updated - memory)
-                maximum = np.sqrt(np.asarray(delta) ** 2 .__class__(1)) if False else np.sqrt(np.mean(np.asarray(delta) ** 2, axis=-1)).max()
-                self.assertLessEqual(maximum, .3 + 1e-6)
-                self.assertGreater(maximum, .299)
+                np.testing.assert_allclose(delta[:, 0, :3], sign * 4 * audio, rtol=1e-6, atol=1e-6)
+                maximum = np.sqrt(np.mean(np.asarray(delta) ** 2, axis=-1)).max()
+                self.assertLessEqual(maximum, 4 + 1e-6)
+                self.assertGreater(maximum, 3.99)
                 direct = MEMORY["_read"](delta, reads)
-                self.assertLessEqual(np.sqrt(np.mean(np.asarray(direct) ** 2, axis=-1)).max(), .3 + 1e-6)
+                np.testing.assert_allclose(direct[:, :3], sign * 4 * audio, rtol=1e-6, atol=1e-6)
+
+    def test_token_gate_uses_raw_boundary_state_and_round_specific_linear(self):
+        _, module, hidden, _, mask, memory, reads, bank = fixture()
+        # Fix A and slot probabilities so only the new token gate varies.
+        bank[:] = 1
+        hidden[:, :3] = 0
+        hidden[:, :3, 0] = [2, -1, 0]
+        for r in (0, 1):
+            module.listen_routers[r].weight[:] = 0
+            module.amplitudes[r].weight[0, 0] = 1 if r == 0 else -2
+            module.amplitudes[r].bias[0] = .25 * r
+            gate = np.tanh(np.asarray(hidden[:, :3, :1]) * (1 if r == 0 else -2) + .25 * r)
+            updated = module.forward(memory, hidden, bank, mask, r, reads)
+            expected = gate[:, None] * np.ones((2, 5, 3, 8)) * (2 / 5)
+            np.testing.assert_allclose(updated[:, :, :3] - memory[:, :, :3], expected, rtol=1e-6, atol=2e-7)
+            # A constant shift is removed by LN_query, but must affect the raw gate.
+            changed = hidden.copy()
+            changed[:, 1] += 3
+            other = module.forward(memory, changed, bank, mask, r, reads)
+            np.testing.assert_array_equal(other[:, :, [0, 2]], updated[:, :, [0, 2]])
+            self.assertGreater(np.abs(other[:, :, 1] - updated[:, :, 1]).max(), .1)
 
     def test_prompt_pool_excludes_pad_answer_sep_and_audio(self):
         rng, module, hidden, _, mask, _, _, _ = fixture()
@@ -156,10 +207,48 @@ class ProductionMathTests(unittest.TestCase):
         changed[0, 4, 0] += 100
         self.assertFalse(np.array_equal(module.pool_prompt(changed, mask), expected))
 
+    def test_production_diagnostics_reports_nonuniform_token_gate_statistics(self):
+        _, module, hidden, _, mask, memory, reads, bank = fixture()
+        module.collect_diagnostics = True
+        for r in (0, 1):
+            module.amplitudes[r].weight[0, 0] = r + 1
+            logits = np.asarray(hidden[:, :3, :1]) * (r + 1)
+            amplitude = np.tanh(logits)
+            module.forward(memory, hidden, bank, mask, r, reads)
+            stats = module.diagnostics()[-1]
+            for key, expected in (("mean", amplitude.mean()), ("abs_mean", np.abs(amplitude).mean()),
+                                  ("min", amplitude.min()), ("max", amplitude.max()),
+                                  ("saturation_fraction", (np.abs(amplitude) > .99).astype(np.float32).mean())):
+                self.assertAlmostEqual(stats["amplitude_" + key], float(expected), places=6)
+            self.assertAlmostEqual(stats["amplitude_logit_mean"], float(logits.mean()), places=6)
+            self.assertAlmostEqual(stats["amplitude_logit_abs_max"], float(np.abs(logits).max()), places=6)
+            self.assertNotIn("gamma", stats)
+            self.assertNotIn("beta", stats)
+            self.assertGreater(stats["write_slot_token_rms_max"], 0)
+
+    def test_real_training_audit_collects_both_token_gate_weight_and_bias(self):
+        _, module, *_ = fixture()
+        for layer in module.projections + module.gates + module.listen_routers + module.amplitudes:
+            for parameter in layer.parameters():
+                parameter.grad = Array(np.ones_like(parameter))
+        tree = ast.parse((ROUTE / "train.py").read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "listen_gradient_audit")
+        scope = {"torch": TORCH}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "<production-gradient-audit>", "exec"), scope)
+        model = SimpleNamespace(caption_decoder=SimpleNamespace(lm=SimpleNamespace(model=SimpleNamespace(audio_listen=module))))
+        audit = scope["listen_gradient_audit"](model)
+        self.assertEqual(len(audit), 10)
+        self.assertTrue(all(v["present"] and v["finite"] and v["nonzero"] for v in audit.values()))
+        module.amplitudes[0].weight.grad[:] = 0
+        self.assertTrue(scope["listen_gradient_audit"](model)["amplitude_0"]["nonzero"])
+        module.amplitudes[0].bias.grad = None
+        self.assertEqual(scope["listen_gradient_audit"](model)["amplitude_0"],
+                         dict(present=False, finite=False, nonzero=False))
+
     def test_sigmoid_selects_depths_independently_and_gates_are_round_specific(self):
         _, module, hidden, _, mask, memory, reads, bank = fixture()
         for amplitude in module.amplitudes:
-            amplitude[0] = 1
+            amplitude.bias[0] = 1
         module.gates[0].bias[:] = -30
         module.gates[1].bias[:] = 30
         closed = module.forward(memory, hidden, bank, mask, 0, reads)
@@ -167,7 +256,7 @@ class ProductionMathTests(unittest.TestCase):
         self.assertLess(np.abs(closed - memory).max(), 1e-6)
         self.assertGreater(np.abs(opened - memory).max(), 1e-3)
 
-    def test_actual_math_has_beta_gradient_at_zero_and_upstream_unlocks_after_opening(self):
+    def test_token_gate_weight_and_bias_gradients_at_zero_and_upstream_unlock(self):
         rng, module, hidden, _, mask, memory, reads, bank = fixture()
         memory[:] = 0
         objective_weights = rng.normal(size=memory.shape)
@@ -179,10 +268,11 @@ class ProductionMathTests(unittest.TestCase):
             array[index] = old - eps; minus = objective()
             array[index] = old
             return (plus - minus) / (2 * eps)
-        self.assertGreater(abs(derivative(module.amplitudes[0], 0)), 1e-5)
+        self.assertGreater(abs(derivative(module.amplitudes[0].weight, (0, 0))), 1e-5)
+        self.assertGreater(abs(derivative(module.amplitudes[0].bias, 0)), 1e-5)
         self.assertEqual(derivative(module.gates[0].bias, 0), 0)
         self.assertEqual(derivative(module.listen_routers[0].bias, 0), 0)
-        module.amplitudes[0][0] = .5
+        module.amplitudes[0].weight[0, 0] = .5
         self.assertGreater(abs(derivative(module.gates[0].bias, 0)), 1e-6)
         self.assertGreater(abs(derivative(module.listen_routers[0].bias, 0)), 1e-6)
 

@@ -1,0 +1,102 @@
+{
+  "status": "PASS",
+  "scope": "stdlib source audit; not tensor or remote GPU validation",
+  "route_code_sha256": "9ad12f523d572efa9be545dc786b64def94e2d2a968e590fb57b8801ef6d7ac5",
+  "parent_parity": {
+    "identical_files_normalized_lf": [
+      "prepare_index.py",
+      "stage_data.py",
+      "check_ced_assets.py",
+      "utils/audio_io.py",
+      "models/audio.py",
+      "models/ced_offline.py",
+      "data/audio_paths.py",
+      "data/audiotext_dataset.py",
+      "data/fixed20.py",
+      "data/indexed_jsonl.py",
+      "data/prepared_index.py",
+      "data/sampler.py",
+      "data/staging.py",
+      "data/template.py"
+    ],
+    "identical_function_asts": {
+      "train.py": [
+        "answer_loss",
+        "move_batch",
+        "rng_state",
+        "restore_rng",
+        "inspect_tokenizer",
+        "audit_checkpoint_tokenizer",
+        "main"
+      ],
+      "contract.py": [
+        "geometry",
+        "data_order",
+        "rank_seed",
+        "raw_references",
+        "lr_factor",
+        "recursive_checkpoint_contract",
+        "validate_tokenizer_contract",
+        "validate_checkpoint_tokenizer",
+        "validate_ced_assets"
+      ],
+      "optim.py": [
+        "_clip_grad",
+        "track_and_clip_",
+        "state_dict",
+        "load_state_dict"
+      ],
+      "models/ced.py": [
+        "_waveform_to_mel",
+        "_prepare_ced_input",
+        "_hidden_to_temporal_grid",
+        "train"
+      ],
+      "models/recursive_text.py": [
+        "validate_recursive_config"
+      ],
+      "models/decoder.py": [
+        "_make_prefix",
+        "generate_prefix_inference"
+      ]
+    },
+    "optimizer_epoch_loop": "identical except explicit diagnostic additions"
+  },
+  "backbone_parity": {
+    "entire_backbone_ast_equal_after_explicit_additions": true,
+    "added_nodes": {
+      "assign": 3,
+      "guard": 6,
+      "for": 1,
+      "inject": 1
+    }
+  },
+  "parent_file_sha256": {
+    "audit_reference.py": "d6e25040e57f3c405ed3a31bd462f1d83b8b486198d6fde4ef0594db39d083fd",
+    "check_ced_assets.py": "075b49dc02eca6d5293f1abaadce736fece46a2fc67661324ac9b45913466367",
+    "contract.py": "fcfa16a089df52273177822aae2450b85f3f961d51eeea6c699470586e907753",
+    "data/audio_paths.py": "f65433f8db88a59bf1d7701ce9b0bfe85e8c00affa673b69246684ae34596685",
+    "data/audiotext_dataset.py": "f41bbd8edf863c906d8ef996da87b726edaedae7987fa5507416e03113b5bf8b",
+    "data/fixed20.py": "f4580fdaf1b75acd54bbd12dbfc72f18e2906e1dbcebd8ff8e5d1ff355ac6a5c",
+    "data/indexed_jsonl.py": "1fac5952ad67609cc050d9b05cfac8c9cb16f4bf520b9eabbcfb0dee3af82e8a",
+    "data/prepared_index.py": "9852107e00223c91bb07a4bf05347089884bbfcff9d5075cc60ef53086af57e3",
+    "data/sampler.py": "66be929c5f5458816c64b12bec058791a173698290ea1e7a5ef80a730aa02525",
+    "data/staging.py": "db7a465e90deb6be5aa0342afbb6cb56279fbea20081cd09f79c42db2fac4515",
+    "data/template.py": "0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2",
+    "models/audio.py": "de8394e231c4ee67d6a9baaad864032e2825c717f7e5c6c838543a613619ebb4",
+    "models/ced.py": "67c101680a14ee8391568f892cf33f1748443af4c182ba5b3270707e210d3517",
+    "models/ced_offline.py": "94a0d5ede90337b4b88b112dfaad3db0144e644458dcc1a744096c6f19f248af",
+    "models/decoder.py": "f7733393540929f5c6da8dd1e6b2f37f453bddffb75cd93be36953d538973511",
+    "models/mellow.py": "1990fe5eacd412a027fabd76f193975ddd5e22c9e02e7c371dc077030e07bdcf",
+    "models/recursive_text.py": "513b5b96baa8bcaf085ca68dd4184498a6651ab70fc26ba978dd68bd65e920f9",
+    "optim.py": "e0bd421eb5edf6dfc60a4e6e14e3d221de450ad94c4829c234e7c6058319036e",
+    "prepare_index.py": "daf059301ff5cb2550a11e6f35cb53fe655b17b6b92cb0974da8f3da55f337e2",
+    "README.md": "5aab19d5427ed1567555e8385b85437b1e392f918488dfd97409aab7db804df0",
+    "run.sh": "5d67695db27539e433197e1535a122da622611733cbf23b9648e97b56129ac5b",
+    "runtime_checks.py": "f464fac7735e7b97909bdd11f9c79cff228de66d704c2d53ae7340eb88b5853a",
+    "stage_data.py": "83925428208c0b5e1859b3ccd9f41670235720a07c76c514bd1453c5eee205cf",
+    "train.py": "1e4a15f59adee57064426d004b04652cf21e39636e95fe63535ae1458d1fb663",
+    "utils/audio_io.py": "67f3680af4b8bb5cbc30426c54d71155d2b65f8cdd5c4fb89af08a374e63f311",
+    "write_config.py": "dd93ddece983958a5241d6277999eacb685e294c24b5f66817feed02ea9b80ad"
+  }
+}

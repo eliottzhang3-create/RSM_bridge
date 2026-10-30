@@ -1,7 +1,7 @@
 """Prompt-selected CED depths written into the existing MeSH audio positions.
 
 Only the added branch is normalized. Original MeSH states/routers are untouched.
-The two zero-initialized scalar amplitudes make both initial writes exactly zero.
+Two independent zero-initialized audio-token gates make initial writes exactly zero.
 """
 import math
 
@@ -14,7 +14,6 @@ class MultilayerAudioListen(nn.Module):
         super().__init__()
         self.width, self.audio_tokens, self.prompt_tokens = width, audio_tokens, prompt_tokens
         self.text_start = audio_tokens + 1
-        self.gamma = 0.3
         self.memory_slots = 5
         # Preserve the mother's mapper/LM initialization and subsequent RNG draws.
         # This module is registered only AFTER strict loading of all original LM weights.
@@ -25,8 +24,15 @@ class MultilayerAudioListen(nn.Module):
                 nn.Linear(width, 4, device="cpu", dtype=torch.float32) for _ in range(2)])
             self.listen_routers = nn.ModuleList([
                 nn.Linear(width, self.memory_slots, device="cpu", dtype=torch.float32) for _ in range(2)])
-            self.amplitudes = nn.ParameterList([
-                nn.Parameter(torch.zeros(1, dtype=torch.float32)) for _ in range(2)])
+            # Linear constructors draw random values before we zero them. Keep
+            # those draws local so existing projections/routers initialize exactly
+            # as in the scalar-gate version, as does the caller's CPU RNG above.
+            with torch.random.fork_rng(devices=[]):
+                self.amplitudes = nn.ModuleList([
+                    nn.Linear(width, 1, device="cpu", dtype=torch.float32) for _ in range(2)])
+                for amplitude in self.amplitudes:
+                    nn.init.zeros_(amplitude.weight)
+                    nn.init.zeros_(amplitude.bias)
             for projection in self.projections:
                 nn.init.xavier_uniform_(projection.weight)
                 nn.init.zeros_(projection.bias)
@@ -93,12 +99,14 @@ class MultilayerAudioListen(nn.Module):
             raise ValueError("listen must update the existing five-slot MeSH memory")
         weights = torch.sigmoid(self.gates[round_index](self.pool_prompt(boundary_hidden, prompt_mask)))
         audio = (audio_bank * weights[:, :, None, None]).sum(dim=1)
-        query = self.query_norm(boundary_hidden[:, :self.audio_tokens])
+        audio_hidden = boundary_hidden[:, :self.audio_tokens]
+        query = self.query_norm(audio_hidden)
         probabilities = torch.softmax(self.listen_routers[round_index](query).float(), dim=-1).to(query.dtype)
-        amplitude = torch.tanh(self.amplitudes[round_index])
-        # RMS(a_i)<=1, sum(sigmoid_i)<=4, |tanh(beta)|<=1, p_slot<=1.
-        # Thus every added slot/token RMS <= gamma (finite arithmetic assumed).
-        delta = (self.gamma / 4.0) * amplitude * audio.unsqueeze(1) * probabilities.transpose(1, 2).unsqueeze(-1)
+        # The amplitude sees the raw boundary audio state, independently per
+        # token and round. Only the existing slot-router query is normalized.
+        amplitude_logits = self.amplitudes[round_index](audio_hidden)
+        amplitude = torch.tanh(amplitude_logits)
+        delta = amplitude.unsqueeze(1) * audio.unsqueeze(1) * probabilities.transpose(1, 2).unsqueeze(-1)
         self.last_rounds.append(round_index)
         if self.collect_diagnostics:
             with torch.no_grad():
@@ -108,9 +116,12 @@ class MultilayerAudioListen(nn.Module):
                 base_rms = base_read.square().mean(dim=-1).sqrt()
                 read_rms = direct_read.square().mean(dim=-1).sqrt()
                 p = probabilities.detach()
+                a = amplitude.detach()
+                z = amplitude_logits.detach()
                 stats = torch.cat((weights.detach().mean(dim=0), p.mean(dim=(0, 1)),
                     torch.stack((-(p.clamp_min(1e-12).log() * p).sum(dim=-1).mean(),
-                                 self.amplitudes[round_index].detach()[0], amplitude.detach()[0],
+                                 z.mean(), z.abs().max(), a.mean(), a.abs().mean(), a.min(), a.max(),
+                                 (a.abs() > .99).float().mean(),
                                  audio.detach().square().mean().sqrt(),
                                  delta.detach().square().mean(dim=-1).sqrt().max(),
                                  read_rms.max(), (read_rms / base_rms.clamp_min(1e-8)).max(),
@@ -128,11 +139,14 @@ class MultilayerAudioListen(nn.Module):
             values = tensor.cpu().tolist()
             result.append({"round": index + 1, "mean_depth_sigmoids": values[:4],
                            "mean_slot_probabilities": values[4:9], "slot_entropy": values[9],
-                           "beta": values[10], "tanh_beta": values[11], "aggregate_audio_rms": values[12],
-                           "write_slot_token_rms_max": values[13], "direct_read_token_rms_max": values[14],
-                           "direct_read_to_base_rms_ratio_max": values[15], "gamma": self.gamma,
-                           "depth_gate_saturation_fraction": values[16],
-                           "base_read_token_rms_mean": values[17], "boundary_audio_rms": values[18],
+                           "amplitude_logit_mean": values[10], "amplitude_logit_abs_max": values[11],
+                           "amplitude_mean": values[12], "amplitude_abs_mean": values[13],
+                           "amplitude_min": values[14], "amplitude_max": values[15],
+                           "amplitude_saturation_fraction": values[16], "aggregate_audio_rms": values[17],
+                           "write_slot_token_rms_max": values[18], "direct_read_token_rms_max": values[19],
+                           "direct_read_to_base_rms_ratio_max": values[20],
+                           "depth_gate_saturation_fraction": values[21],
+                           "base_read_token_rms_mean": values[22], "boundary_audio_rms": values[23],
                            "gradient_snapshot": self.last_gradient_diagnostics,
                            "scope": "last_microbatch_before_optimizer_update"})
         return result
@@ -142,7 +156,7 @@ class MultilayerAudioListen(nn.Module):
         branches = {f"projection_{i}": list(m.parameters()) for i, m in enumerate(self.projections)}
         branches.update({f"gate_{i}": list(m.parameters()) for i, m in enumerate(self.gates)})
         branches.update({f"router_{i}": list(m.parameters()) for i, m in enumerate(self.listen_routers)})
-        branches.update({f"amplitude_{i}": [p] for i, p in enumerate(self.amplitudes)})
+        branches.update({f"amplitude_{i}": list(m.parameters()) for i, m in enumerate(self.amplitudes)})
         values = {}
         with torch.no_grad():
             for name, parameters in branches.items():

@@ -129,7 +129,7 @@ def listen_gradient_audit(model):
     branches = {f"projection_{i}": list(module.parameters()) for i, module in enumerate(adapter.projections)}
     branches.update({f"gate_{i}": list(module.parameters()) for i, module in enumerate(adapter.gates)})
     branches.update({f"router_{i}": list(module.parameters()) for i, module in enumerate(adapter.listen_routers)})
-    branches.update({f"amplitude_{i}": [p] for i, p in enumerate(adapter.amplitudes)})
+    branches.update({f"amplitude_{i}": list(module.parameters()) for i, module in enumerate(adapter.amplitudes)})
     return {name: {"present": all(p.grad is not None for p in parameters),
                    "finite": all(p.grad is not None and bool(torch.isfinite(p.grad).all().item()) for p in parameters),
                    "nonzero": any(p.grad is not None and bool(p.grad.ne(0).any().item()) for p in parameters)}
@@ -150,8 +150,8 @@ def audit_listen_update(model, state, update, run_dir, rank, device):
     if state["complete"]:
         state["opened_at_update"] = update
         write_json(run_dir / f"listen_gradient_open_rank{rank}.json", {**state, "branches": branches})
-    # Initial zero gradients upstream of beta are expected. A persistently closed
-    # branch is an error, never a reason to skip an optimizer update or alter LR.
+    # Initial zero gradients upstream of the audio-token gate are expected.
+    # A persistently closed branch must not skip an optimizer update or alter LR.
     collective_require(state["complete"] or update < state["deadline"],
                        "listen gradients did not unlock within 32 real updates", device)
 

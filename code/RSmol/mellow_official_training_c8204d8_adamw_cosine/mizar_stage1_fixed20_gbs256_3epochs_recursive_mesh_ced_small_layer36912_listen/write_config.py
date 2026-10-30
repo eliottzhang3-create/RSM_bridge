@@ -74,7 +74,7 @@ def main():
               "checkpoint_steps": [round(contract["geometry"]["total_steps"] * i / 6) for i in range(1, 7)],
               "official_reference": "Mizar_159M/configs/s1.yaml.in + runtime/stage1 + pipeline/build_ced_cache.py",
               "intentional_differences": [
-                  "mother MeSH CED recipe retained; only add four CED depth projections and two bounded zero-amplitude listen writes",
+                  "mother MeSH CED recipe retained; four CED depth projections and two zero-initialized audio-token listen gates without fixed write scaling",
                   "recursive MeSH text checkpoint and architecture retained; audio uses online CED-Small plus official freq_merge_126 mapper",
                   "single audio126 + SEP1 + prompt256 + answer300; full fixed20 waveform processed before mapping",
                   "shared raw audio decoded online, collective switch to staged bytes after full copy; no hidden-feature cache",

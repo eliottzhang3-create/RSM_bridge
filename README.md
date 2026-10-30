@@ -1,4 +1,40 @@
-## 2026-10-30：MeSH CED 四层 audio listen 隔离训练路线收尾
+## 2026-10-30：MeSH CED 第 4→8 层在两次 memory read 后残差注入
+
+新增 [MeSH CED 4→8 隔离路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer4_8_inject/README.md)，
+完整复制自 `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small`。
+保留20物理层/30逻辑执行、两次循环、5个瞬时memory slots和6个routers。
+冻结CED在一次编码中提取第4、8个block最终LN之前的完整输出，经两套独立
+`LN1536 -> Linear1536/576 -> GELU -> Dropout0 -> Linear576/576 -> LN576` 得到A4/A8。
+在 `read_routers[0]`、`read_routers[1]` 的memory read之后，分别按原非MeSH 4→8方法
+`h_audio += tanh(Linear576/1(h_audio)) * A` 注入前126个音频位置，再进入对应中段循环。
+两个gate独立且weight/bias全零；第三次read后不注入，SEP/文本不直接注入。
+
+新增2,444,930个参数；新增MLP/gate和原mapper maxLR6e-4，原LM/routers maxLR3e-4。
+保留母本683-token布局、hybrid 1,477,492行、FP32、GBS256（8×8×4）、3epochs /
+17,313updates / 866warmup、loss、优化器/调度/GradNorm、数据顺序、后台staging和完整恢复。
+新实现、入口、输出、日志、index cache、tmpfs与resume身份隔离；原两条路线及共享MeSH实现未修改。
+
+经GitHub同步后，在远程登录节点直接提交formal，无smoke前置任务：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_mesh_ced_small_layer4_8_inject_5090.sh --stage-workers 4
+```
+
+沿用mellow_c8204d8和pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node。
+默认输出根为 `outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_inject_5090/formal_<timestamp>/`，
+最终产物为其中 `formal/checkpoints/model--epo-3.ckpt`，同时保留 `model--step-17313.ckpt`。
+仅支持本新路线完整checkpoint resume；现有普通MeSH CED evaluator尚未适配新架构。
+
+本地汇总：`python -B tests/validate_mizar_s1_mesh_ced_layer48.py`，66项实际检查通过，
+16项真实CPU tensor检查因缺依赖跳过（新路线9项、原4→8路线7项）。Python/Bash语法通过。
+报告为 `audit_reports/mizar_s1_mesh_ced_layer48_validation.json`。
+远程可手动加 `--require-tensors` 禁止跳过；不下载资产、不用CUDA、不提交作业，不作为formal前置任务。
+真实权重、远程tensor、8 GPU训练及完整恢复待服务器确认，不登记远程PASS。
+
+## 2026-10-30：MeSH CED 四层 audio listen 更新为逐音频 token gate v2
 
 已从 `run_mizar_s1_gbs256_recursive_mesh_ced_small_5090.sh` 的母本复制隔离，完成
 [四层 listen 路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer36912_listen/README.md)。
@@ -10,13 +46,21 @@ Prelude后与第一次循环后，分别用有效prompt的归一化masked mean�
 顺序为原write→listen→原read；循环2后仍只有原write/read。
 原循环router仍用循环输入计算权重，循环输出作为原写入值。
 
-两个新增零初值标量β经tanh控制写入，固定尺度为γ/4，**γ=0.3**。
-单次新增写入每槽/token RMS≤约0.3，不代表主路径30%或全网梯度有界。
-新增3,551,636个参数；全部新增LN非affine、eps1e-5；新参数max LR6e-4。
+原入口和实现就地更新：两个标量β替换成两套独立 `Linear(576,1) → tanh`，分别直接读取
+Prelude和第一次循环输出的原始音频潜状态，为每个音频token产生幅度，weight/bias均全零。
+保留四路聚合A_r和原 `LN_query → Linear(576,5) → softmax` 槽位概率P_r，
+写入为 `delta_M[r,s,t] = tanh(W_r H_audio[r,t] + b_r) * P_r[t,s] * A_r[t]`。
+**删除固定γ和/4缩放**，初始新增写入仍为零。初版γ=0.3的RMS界限不再适用；
+不额外添加缩放、归一化或梯度裁剪。
+新增分支共3,552,788个参数、20个tensors，比标量初版增加1,152个参数；
+全部新增LN非affine、eps1e-5；新参数max LR6e-4，矩阵decay0.01/bias不衰减沿用原分组。
 保留原LM LR3e-4、mapper LR6e-4、loss、AdamW/LambdaLR/GradNorm、FP32、683-token布局、
 hybrid 1,477,492行、GBS256（8×8×4）、3 epochs/17,313 updates/866 warmup及后台staging。
-新增模块在原文本权重strict加载后注册并隔离CPU RNG；入口、输出、日志、index cache、tmpfs及resume身份独立。
+新增模块在原文本权重strict加载后注册并隔离CPU RNG；保留初版投影/router精确初值。
+入口、输出、日志、index cache、tmpfs及resume身份独立。
 完整恢复额外保存/校验梯度解锁状态与optimizer步数；完成checkpoint可审计但不能重新resume。
+架构身份为 `ced_small_mizar_s1_fixed20_gbs256_recursive_mesh_layer36912_listen_v2`；
+旧标量gate checkpoint不能完整resume，从原文本checkpoint在新的空输出目录开始训练。
 
 GitHub同步后，在远程登录节点直接提交formal，无smoke或tensor检查自动前置任务：
 
@@ -33,7 +77,7 @@ bash run_mizar_s1_gbs256_recursive_mesh_ced_small_layer36912_listen_5090.sh --st
 恢复命令及诊断字段见路线README；原母本和共享MeSH实现未修改，普通CED evaluator尚未适配新架构。
 
 本地统一入口 `python -B tests/validate_mizar_s1_mesh_ced_listen.py`，结果见
-`audit_reports/mizar_s1_mesh_ced_listen_validation.json`：46项实际检查通过，29项真实CPU tensor检查因缺依赖跳过；
+`audit_reports/mizar_s1_mesh_ced_listen_validation.json`：49项实际检查通过，32项真实CPU tensor检查因缺依赖跳过；
 另通过Python/Bash语法及母本源码对照。远程可手动加 `--require-tensors` 强制tensor全部实际运行，
 不下载资产、不用CUDA训练、不提交作业。真实权重、8 GPU稳定性与恢复仍待远程确认，不登记远程PASS。
 

@@ -1,9 +1,9 @@
-# CED 四层特征 → 两次 MeSH audio listen，固定 γ=0.3
+# CED 四层特征 → 两次 MeSH audio listen，逐音频 token gate v2
 
 完整复制隔离自 `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small`，母本入口为
 `code/RSmol/run_mizar_s1_gbs256_recursive_mesh_ced_small_5090.sh`。
 保留原 CED 最终层、官方 mapper、MeSH 主路径及训练配方，增加四个独立音频投影、
-两个 prompt gate、两个 softmax listen router 和两个零初值幅度标量。
+两个 prompt gate、两个 softmax listen router 和两套零初始化逐音频 token 幅度 Linear。
 本地维护代码，权重、数据和正式环境位于远程 Linux，经 GitHub 同步。
 
 ## 架构
@@ -30,10 +30,10 @@ block 的输出，位于 encoder 最终 LN 之前。正常或异常退出都会�
 20个物理层仍执行 `0..14,5..14,15..19`，五槽瞬时记忆形状 `[B,5,L,576]`。
 原初始化和三组 write/read routers 保留，不增加记忆槽。
 
-| 边界 | 操作顺序 | 新 gate 输入 |
+| 边界 | 操作顺序 | 四路选择 gate / 幅度 gate 输入 |
 |---|---|---|
-| Prelude 5层后，逻辑索引5 | 原 write₀ → listen₀ → 原 read₀ → 循环1 | Prelude 输出的有效 prompt |
-| 循环1后，逻辑索引15 | 原 write₁ → listen₁ → 原 read₁ → 循环2 | 循环1输出的有效 prompt |
+| Prelude 5层后，逻辑索引5 | 原 write₀ → listen₀ → 原 read₀ → 循环1 | Prelude 输出的有效 prompt / 原始 audio 潜状态 |
+| 循环1后，逻辑索引15 | 原 write₁ → listen₁ → 原 read₁ → 循环2 | 循环1输出的有效 prompt / 原始 audio 潜状态 |
 | 循环2后 | 原 write₂ → 原 read₂ → suffix 5层 | 无新增操作 |
 
 母本在循环结束后仍用该次循环的**输入**计算原 write/read 权重，用循环**输出**作为原写入值。
@@ -44,7 +44,8 @@ p_r = masked_mean(LN_text(H_r[:,127:383]), prompt_attention_mask)
 g_r = sigmoid(Linear_r(p_r))                         # [B,4]
 A_r = sum_i g_r[i] * a_i                            # [B,126,576]
 P_r = softmax(ListenLinear_r(LN_query(H_r[:,:126]))) # [B,126,5]
-delta_M[:,s,t] = (0.3/4) * tanh(beta_r) * P_r[:,t,s] * A_r[:,t]
+u_r = tanh(AmplitudeLinear_r(H_r[:,:126]))           # [B,126,1]
+delta_M[:,s,t] = u_r[:,t] * P_r[:,t,s] * A_r[:,t]
 ```
 
 两个 gate 为独立 `Linear(576,4)`，weight/bias全零，初始四路sigmoid均为0.5；
@@ -53,15 +54,19 @@ prompt PAD或answer；空／非二值mask会被拒绝。mask只用于池化，LM
 
 两个 listen router 为独立 `Linear(576,5)→softmax`，使用原router初始化规则：
 std=`sqrt(2/(5*576))` 的正态权重截到±3 std，bias=0。
-**β₀和β₁分别初始化为零**，由tanh幅度保证实际初始写入为零，softmax概率本身不为零。
+两个幅度 gate 为独立 `Linear(576,1) → tanh`，直接读取对应边界的原始音频潜状态，
+不做额外 LN、池化、detach 或跨 token 聚合。weight/bias全部为零，保证实际初始写入为零；
+每个样本、每个音频 token 分别得到有正负号的幅度，五槽共享该 token 幅度再乘各槽概率。
+原槽位router前的 `LN_query` 保持。**无固定 γ、无 `/4`，也不按四路权重和归一化。**
 只更新前126个音频位置的五槽记忆，SEP及文本位置不直接写入。
 
-非affine输出LN使每个a_i的token RMS≤1；四路sigmoid和≤4，|tanh β|≤1，P≤1，
-因此**单次新增写入的每槽/token RMS≤约0.3**。固定该次原read权重时，新增写入直接带入read的
-分量也满足此界限。这不是主路径的30%，不限制每个维度到±0.3，也不保证两轮累计、后续网络或梯度有界。
+非affine输出LN使每个a_i的token RMS≤1；四路sigmoid和≤4，|u_r|≤1，P≤1。
+数值有限时单次新增写入每槽/token RMS最多约4；初版的0.3界限不再适用。
+不增加其他裁剪或缩放；不据此保证两轮累计、后续网络或梯度稳定性。
 
-新增 **3,551,636** 个参数、18个可训练tensors，LN无参数。先严格加载全部原文本权重，
+新增分支共 **3,552,788** 个参数、20个可训练tensors，较标量初版增加1,152个参数，LN无参数。先严格加载全部原文本权重，
 再在 `torch.random.fork_rng(devices=[])` 中注册新模块，保护母本CPU RNG。
+两套新增幅度Linear的构造另用嵌套CPU RNG隔离，保留初版四路投影和槽位router的精确初值。
 原共享MeSH文件、母本与其他路线均不修改。新增分支要求完整prefix重算、无KV cache。
 
 ## 保持母本训练配方
@@ -78,7 +83,7 @@ std=`sqrt(2/(5*576))` 的正态权重截到±3 std，bias=0。
 | 步数 | 3 epochs；5771 updates/epoch；17313 total；866 warmup；每epoch丢弃116行 |
 | Loss reduction | rank-local有效answer token mean，四个microbatch均值，再DDP mean |
 | AdamW | LM max LR3e-4；原mapper及所有新增参数max LR6e-4；betas=(0.9,0.999)，eps1e-8，decay0.01 |
-| No decay | bias和ndim≤1，包括两个β |
+| No decay | bias和ndim≤1；幅度Linear矩阵沿用decay0.01，bias不衰减 |
 | Scheduler | 原LambdaLR，5% warmup+cosine，floor0.1，optimizer后step；初始LR为0.1倍max LR |
 | GradNorm | 原Tracker：initial L2=1、max=10、overdrive2.5、momentum0.995 |
 | 精度 | FP32 forward，无autocast，GradScaler启用，TF32关闭 |
@@ -88,7 +93,8 @@ std=`sqrt(2/(5*576))` 的正态权重截到±3 std，bias=0。
 | 环境／资源 | mellow_c8204d8；pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node |
 
 新增参数参与原GradNormTracker；它们可能改变共同缩放，这是新架构的结果，不改变裁剪算法。
-β=0时投影、gate、listen Linear首步零梯度是预期；β更新后应解锁。
+幅度Linear全零时，投影、prompt gate、listen router首步零梯度是预期；
+幅度Linear的weight/bias可先获得梯度，首次更新后应解锁上游分支。
 每rank保留首次梯度审计，要求全部10个新增模块在前32次真实更新内获得有限非零梯度。
 失败即报错，不跳过optimizer更新，不重置LR或放宽母本稳定性检查。
 
@@ -128,7 +134,8 @@ formal/metrics.jsonl
 formal/training_report.json
 ```
 
-metrics的 `audio_listen` 记录两轮深度sigmoid均值及饱和比例、槽概率及熵、β/tanh β、
+metrics的 `audio_listen` 记录两轮深度sigmoid均值及饱和比例、槽概率及熵、
+逐token幅度logit均值/绝对最大值、tanh幅度均值/绝对均值/最小/最大/饱和比例、
 聚合音频RMS、最大写入RMS、直接read增量RMS及其与原read的比值。
 第1、2及每25次更新记录rank0累积、unscale后、GradNorm前的各新增模块梯度L2。
 梯度快照带自身update编号；其余前向指标为最后一个microbatch。
@@ -147,8 +154,11 @@ bash run_mizar_s1_gbs256_recursive_mesh_ced_small_layer36912_listen_5090.sh \
 ```
 
 替换为实际run时间戳及已保存checkpoint。恢复完整模型、optimizer、scheduler、GradScaler、GradNorm、
-8 rank RNG、数据游标及梯度解锁状态。拒绝母本／其他架构／旧γ checkpoint，以及代码、资产、数据、
+8 rank RNG、数据游标及梯度解锁状态。架构合同为
+`ced_small_mizar_s1_fixed20_gbs256_recursive_mesh_layer36912_listen_v2`，分支合同version=2。
+拒绝母本／其他架构／初版标量gate checkpoint（包括旧γ版本），以及代码、资产、数据、
 超参或optimizer/scheduler/数据游标不一致。完成的17313步checkpoint可做最终重载审计，不能重新resume。
+从指定文本checkpoint启动新的v2训练，不迁移旧音频训练状态；使用新的空输出目录。
 新作业重新staging；旧节点和tmpfs路径不参与身份比较。
 
 ## 验证与证据边界
@@ -171,9 +181,12 @@ python -B tests/validate_mizar_s1_mesh_ced_listen.py --require-tensors
 ```
 
 不下载资产、不运行CUDA训练、不提交作业，也不会被formal入口自动调用。
-覆盖单次CED提取／异常清理、时间顺序、冻结／梯度、零β输出/loss/原参数梯度等价、prompt与答案因果性、
-两次写入、梯度解锁、幅度界限、优化器分组及CPU checkpoint续训。
+覆盖单次CED提取／异常清理、时间顺序、冻结／梯度、零gate输出/loss/原参数梯度等价、prompt与答案因果性、
+两次写入、逐token原始边界输入与独立gate、无固定缩放、梯度解锁、原投影/router初值、
+优化器分组及CPU checkpoint续训。
 CPU续训测试明确mock八卡collectives/CUDA RNG，并关闭CPU GradScaler，不代表真实8 GPU恢复通过。
 本地实际执行数与依赖跳过数见汇总报告。
+本次v2本地49项实际检查通过，32项真实CPU tensor检查因缺少Torch/torchaudio/Transformers/soundfile跳过；
+Python/Bash语法和母本源码对照通过。NumPy行为检查不作为真实PyTorch/autograd的证据。
 真实CED/文本权重、8 GPU稳定性、CUDA GradScaler/RNG恢复和17313步完成须以远程日志／产物确认。
 现有普通CED／MeSH evaluator尚未适配此新增架构。

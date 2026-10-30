@@ -143,7 +143,7 @@ def audit_parent():
     launcher = (ROOT / f"code/RSmol/{launch_name}_layer36912_listen_5090.sh").read_text(encoding="utf-8")
     launcher = launcher.replace(new_name, old_name).replace("recursive_mesh_layer36912_listen_5090", "recursive_mesh_5090")
     launcher = launcher.replace("ced_small_layer36912_listen.", "ced_small.").replace("mizar-ced-mesh-listen-", "mizar-s1-ced-mesh-gbs256-")
-    launcher = launcher.replace("recursive MeSH four-depth listen gamma0.3:", "recursive MeSH:")
+    launcher = launcher.replace("recursive MeSH four-depth listen token-gate v2:", "recursive MeSH:")
     if launcher != (ROOT / f"code/RSmol/{launch_name}_5090.sh").read_text(encoding="utf-8"):
         raise AssertionError("launcher changed beyond isolated identity/path")
     checks.append("formal submission, resources, shared-start staging and cleanup; paths/identity only")
@@ -159,5 +159,5 @@ def audit_parent():
 
 if __name__ == "__main__":
     report = audit_parent()
-    (HERE / "reference_audit.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (HERE / "reference_audit.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps({k: v for k, v in report.items() if k != "mother_file_sha256"}, ensure_ascii=False))

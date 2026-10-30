@@ -63,5 +63,5 @@ vc submit \
   -d "$SCRIPT_DIR" \
   JOB=1:1 "$SCRIPT_DIR/log/mizar_s1_gbs256_recursive_mesh_ced_small_layer36912_listen.${RUN_TAG}.JOB.log" \
   --cmd "bash mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer36912_listen/run.sh $CMD_ARGS"
-echo "Submitted Mizar S1 / CED-Small GBS256 / recursive MeSH four-depth listen gamma0.3: 8 GPUs x microbatch8 x accumulation4; output=$OUTPUT_DIR"
+echo "Submitted Mizar S1 / CED-Small GBS256 / recursive MeSH four-depth listen token-gate v2: 8 GPUs x microbatch8 x accumulation4; output=$OUTPUT_DIR"
 echo "Raw audio: shared-path training starts immediately; background local copy then collective switch; workers=$STAGE_WORKERS; index=$INDEX_DIR"

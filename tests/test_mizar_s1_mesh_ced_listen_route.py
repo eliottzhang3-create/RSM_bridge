@@ -67,7 +67,14 @@ class ListenRouteTests(unittest.TestCase):
         c = contract.audio_listen_contract()
         self.assertEqual(c["ced_layers_1based"], [3, 6, 9, 12])
         self.assertEqual(c["boundaries_logical_0based"], [5, 15])
-        self.assertEqual((c["gamma"], c["new_parameters"], c["new_parameter_tensors"]), (.3, 3551636, 18))
+        self.assertEqual((c["version"], c["new_parameters"], c["new_parameter_tensors"]), (2, 3552788, 20))
+        self.assertTrue(contract.ROUTE.endswith("_listen_v2"))
+        self.assertNotIn("gamma", c)
+        self.assertEqual(c["write_scale"], "none")
+        self.assertEqual(c["amplitude_input"], "raw_boundary_audio_hidden")
+        self.assertEqual(c["amplitude_shape"], [126, 1])
+        self.assertEqual(c["amplitude"], "two_independent_Linear576x1_tanh_zero_weight_bias")
+        self.assertEqual(c["listen_query"], "normalized_boundary_audio_hidden")
         self.assertFalse(c["all_added_layer_norms_affine"])
 
     def test_staging_paths_are_not_resume_identity(self):
@@ -105,14 +112,17 @@ class ListenRouteTests(unittest.TestCase):
             with self.subTest(missing=name), self.assertRaises(ValueError):
                 contract.validate_resume_payload(changed, config, geometry)
 
-    def test_cross_route_gamma_and_code_changes_rejected(self):
+    def test_cross_route_scalar_gate_and_code_changes_rejected(self):
         for name, value in (("route_variant", "ced_small_mizar_s1_fixed20_gbs256_recursive_mesh_v1"),
+                            ("route_variant", contract.ROUTE.replace("_listen_v2", "_listen_v1")),
                             ("mode", "smoke"), ("schema_version", 2), ("contract_sha256", "changed")):
             saved, config, g = payload()
             saved[name] = value
             with self.subTest(name=name), self.assertRaises(ValueError):
                 contract.validate_resume_payload(saved, config, g)
-        for key, value in (("gamma", .1), ("new_parameters", 0)):
+        for key, value in (("gamma", .3), ("amplitude", "two_independent_zero_initialized_scalars_tanh"),
+                           ("write_scale", "gamma_divided_by_4"), ("amplitude_input", "normalized_boundary_audio_hidden"),
+                           ("new_parameters", 3551636)):
             saved, config, g = copy.deepcopy(payload())
             saved["contract"]["audio_listen"][key] = value
             saved["contract_sha256"] = contract.digest(saved["contract"])

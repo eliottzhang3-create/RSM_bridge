@@ -6,6 +6,7 @@ real eight-GPU resume. Missing dependencies produce explicit skips.
 import ast
 import copy
 import importlib.util
+import math
 import random
 import sys
 import tempfile
@@ -117,8 +118,8 @@ class TensorTests(unittest.TestCase):
         before = t.get_rng_state().clone()
         adapter = self.adapter_class()
         self.assertTrue(t.equal(before, t.get_rng_state()))
-        self.assertEqual(sum(p.numel() for p in adapter.parameters()), 3551636)
-        self.assertEqual(len(list(adapter.parameters())), 18)
+        self.assertEqual(sum(p.numel() for p in adapter.parameters()), 3552788)
+        self.assertEqual(len(list(adapter.parameters())), 20)
         self.assertEqual(len({id(m.weight) for m in adapter.projections}), 4)
         norms = list(adapter.audio_input_norms) + list(adapter.audio_output_norms) + [adapter.text_norm, adapter.query_norm]
         self.assertEqual(len({id(n) for n in norms}), 10)
@@ -126,18 +127,64 @@ class TensorTests(unittest.TestCase):
             self.assertEqual(norm.eps, 1e-5)
             self.assertFalse(norm.elementwise_affine)
             self.assertEqual(list(norm.parameters()), [])
-        self.assertEqual(adapter.gamma, .3)
-        self.assertNotIn("gamma", dict(adapter.named_parameters()))
+        self.assertFalse(hasattr(adapter, "gamma"))
         for gate in adapter.gates:
             self.assertEqual(gate.weight.count_nonzero().item(), 0)
             self.assertEqual(gate.bias.count_nonzero().item(), 0)
             t.testing.assert_close(t.sigmoid(gate(t.randn(2, 576))), t.full((2, 4), .5), rtol=0, atol=0)
-        for beta in adapter.amplitudes:
-            self.assertEqual(beta.item(), 0.)
+        self.assertEqual(len({id(m.weight) for m in adapter.amplitudes}), 2)
+        for amplitude in adapter.amplitudes:
+            self.assertEqual(tuple(amplitude.weight.shape), (1, 576))
+            self.assertEqual(tuple(amplitude.bias.shape), (1,))
+            self.assertEqual(amplitude.weight.count_nonzero().item(), 0)
+            self.assertEqual(amplitude.bias.count_nonzero().item(), 0)
+            t.testing.assert_close(t.tanh(amplitude(t.randn(2, 126, 576))), t.zeros(2, 126, 1), rtol=0, atol=0)
         for router in adapter.listen_routers:
             self.assertGreater(router.weight.count_nonzero().item(), 0)
             self.assertEqual(router.bias.count_nonzero().item(), 0)
             self.assertLessEqual(router.weight.abs().max().item(), 3*(2/(5*576))**.5 + 1e-7)
+
+    def test_v1_projection_and_router_initial_weights_are_preserved(self):
+        t, nn = self.torch, self.torch.nn
+        t.manual_seed(721)
+        adapter = self.adapter_class()
+        # Recreate the v1 initialization sequence, before its scalar amplitudes.
+        with t.random.fork_rng(devices=[]):
+            projections = [nn.Linear(1536, 576) for _ in range(4)]
+            gates = [nn.Linear(576, 4) for _ in range(2)]
+            routers = [nn.Linear(576, 5) for _ in range(2)]
+            for projection in projections:
+                nn.init.xavier_uniform_(projection.weight)
+                nn.init.zeros_(projection.bias)
+            for gate in gates:
+                nn.init.zeros_(gate.weight)
+                nn.init.zeros_(gate.bias)
+            with t.no_grad():
+                for router in routers:
+                    std = math.sqrt(2.0 / (5 * 576))
+                    values = t.empty_like(router.weight)
+                    values.normal_(0.0, std).clamp_(-3.0 * std, 3.0 * std)
+                    router.weight.copy_(values)
+                    router.bias.zero_()
+            for old, new in zip(projections + gates + routers,
+                                list(adapter.projections) + list(adapter.gates) + list(adapter.listen_routers)):
+                t.testing.assert_close(new.weight, old.weight, rtol=0, atol=0)
+                t.testing.assert_close(new.bias, old.bias, rtol=0, atol=0)
+
+    def test_real_parameter_inventory_loader_rejects_scalar_or_shared_gates(self):
+        t, nn = self.torch, self.torch.nn
+        adapter = self.adapter_class()
+        core = SimpleNamespace(audio_listen=adapter, layers=[None]*20,
+            write_routers=[nn.Linear(576, 5) for _ in range(3)],
+            read_routers=[nn.Linear(576, 5) for _ in range(3)])
+        self.assertEqual(self.loader.validate_audio_listen(SimpleNamespace(model=core))["actual_parameters"], 3552788)
+        original = adapter.amplitudes
+        adapter.amplitudes = nn.ParameterList([nn.Parameter(t.zeros(1)) for _ in range(2)])
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            self.loader.validate_audio_listen(SimpleNamespace(model=core))
+        adapter.amplitudes = nn.ModuleList([original[0], original[0]])
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            self.loader.validate_audio_listen(SimpleNamespace(model=core))
 
     def test_single_ced_forward_tap_values_temporal_order_and_hook_cleanup(self):
         t = self.torch
@@ -172,7 +219,7 @@ class TensorTests(unittest.TestCase):
         self.assertTrue(any(p.grad is not None and p.grad.ne(0).any() for p in wrapper.mapper.parameters()))
         self.assertFalse(wrapper.ced.training)
 
-    def test_zero_beta_logits_loss_and_original_gradients_equal_mother(self):
+    def test_zero_token_gates_logits_loss_and_original_gradients_equal_mother(self):
         t = self.torch
         t.manual_seed(7)
         model = self.lm(enable=False)
@@ -201,11 +248,14 @@ class TensorTests(unittest.TestCase):
         model = self.lm().eval()
         adapter, core = model.model.audio_listen, model.model
         with t.no_grad():
-            for beta in adapter.amplitudes:
-                beta.fill_(.4)
+            for amplitude in adapter.amplitudes:
+                amplitude.bias.fill_(.4)
         calls, projections, rounds = [], [], []
+        amplitude_inputs = []
         handles = [m.register_forward_pre_hook(lambda _, args, i=i: calls.append(i)) for i, m in enumerate(core.layers)]
         handles += [m.register_forward_hook(lambda *args, i=i: projections.append(i)) for i, m in enumerate(adapter.projections)]
+        handles += [m.register_forward_pre_hook(lambda _, args, i=i: amplitude_inputs.append((i, args[0].detach().cpu().clone())))
+                    for i, m in enumerate(adapter.amplitudes)]
         normal_listen = adapter.forward
         def listen(memory, boundary, bank, mask, index, reads):
             rounds.append((index, id(bank)))
@@ -221,6 +271,9 @@ class TensorTests(unittest.TestCase):
             self.assertEqual(projections, [0, 1, 2, 3])
             self.assertEqual([r for r, _ in rounds], [0, 1])
             self.assertEqual(rounds[0][1], rounds[1][1])
+            self.assertEqual([i for i, _ in amplitude_inputs], [0, 1])
+            t.testing.assert_close(amplitude_inputs[0][1], core.last_prefix_output[:, :126], rtol=0, atol=0)
+            t.testing.assert_close(amplitude_inputs[1][1], core.last_core_outputs[0][:, :126], rtol=0, atol=0)
             for i in range(2):
                 for kind in ("write", "read"):
                     t.testing.assert_close(core.last_router_queries[f"{kind}_{i}"], core.last_core_inputs[i], rtol=0, atol=0)
@@ -233,20 +286,22 @@ class TensorTests(unittest.TestCase):
         model = self.lm().eval()
         adapter = model.model.audio_listen
         with t.no_grad():
-            for beta in adapter.amplitudes:
-                beta.fill_(.5)
+            for amplitude in adapter.amplitudes:
+                amplitude.weight.normal_(0, .1)
+                amplitude.bias.fill_(.5)
             for gate in adapter.gates:
                 gate.weight.normal_(0, .1)
         x, grids, mask = self.context()
         gates = []
-        handles = [m.register_forward_hook(lambda _, args, output: gates.append(output.detach().clone())) for m in adapter.gates]
+        handles = [m.register_forward_hook(lambda _, args, output: gates.append(output.detach().clone()))
+                   for m in list(adapter.gates) + list(adapter.amplitudes)]
         try:
             with t.no_grad():
                 a = model(inputs_embeds=x, audio_grids=grids, prompt_mask=mask, use_cache=False).logits
                 changed = x.clone(); changed[:, 386:] += t.randn_like(changed[:, 386:])*10
                 b = model(inputs_embeds=changed, audio_grids=grids, prompt_mask=mask, use_cache=False).logits
             t.testing.assert_close(a[:, :386], b[:, :386], rtol=0, atol=0)
-            for first, second in zip(gates[:2], gates[2:]):
+            for first, second in zip(gates[:4], gates[4:]):
                 t.testing.assert_close(first, second, rtol=0, atol=0)
         finally:
             for h in handles:
@@ -262,7 +317,7 @@ class TensorTests(unittest.TestCase):
         changed[:, 127+180:] += t.randn_like(changed[:, 127+180:])*100
         t.testing.assert_close(adapter.pool_prompt(changed, mask), expected, rtol=0, atol=0)
 
-    def test_extreme_write_and_direct_read_bounds_and_diagnostics(self):
+    def test_extreme_write_has_no_fixed_scale_and_reports_token_gate_statistics(self):
         t = self.torch
         adapter = self.adapter_class(width=24)
         x, grids, mask = self.context()
@@ -277,14 +332,47 @@ class TensorTests(unittest.TestCase):
             for sign in (-1, 1):
                 adapter.last_diagnostics = []
                 for i in range(2):
-                    adapter.amplitudes[i].fill_(sign*30)
+                    adapter.amplitudes[i].bias.fill_(sign*30)
                     delta = adapter(memory, x, bank, mask, i, reads)
-                    self.assertLessEqual(delta.square().mean(-1).sqrt().max().item(), .300001)
-                    self.assertGreater(delta.square().mean(-1).sqrt().max().item(), .299)
+                    t.testing.assert_close(delta[:, 0, :126], sign*4*bank[:, 0], rtol=1e-6, atol=1e-6)
+                    self.assertLessEqual(delta.square().mean(-1).sqrt().max().item(), 4.00001)
+                    self.assertGreater(delta.square().mean(-1).sqrt().max().item(), 3.99)
                     self.assertEqual(delta[:, :, 126:].count_nonzero().item(), 0)
                 for stats in adapter.diagnostics():
-                    self.assertLessEqual(stats["direct_read_token_rms_max"], .300001)
+                    self.assertLessEqual(stats["direct_read_token_rms_max"], 4.00001)
+                    self.assertGreater(stats["direct_read_token_rms_max"], 3.99)
                     self.assertEqual(stats["depth_gate_saturation_fraction"], 1.)
+                    self.assertEqual(stats["amplitude_mean"], float(sign))
+                    self.assertEqual(stats["amplitude_min"], float(sign))
+                    self.assertEqual(stats["amplitude_max"], float(sign))
+                    self.assertEqual(stats["amplitude_saturation_fraction"], 1.)
+                    self.assertNotIn("gamma", stats)
+                    self.assertNotIn("beta", stats)
+
+    def test_nonuniform_raw_audio_token_gates_formula_and_diagnostics(self):
+        t = self.torch
+        adapter = self.adapter_class(width=24)
+        x, grids, mask = self.context()
+        bank = adapter.project_audio(grids, x, mask)
+        memory = t.zeros(1, 5, 389, 24)
+        reads = t.full((1, 389, 5), .2)
+        adapter.collect_diagnostics = True
+        with t.no_grad():
+            for r, layer in enumerate(adapter.amplitudes):
+                layer.weight[0, 0] = r + 1
+                layer.bias[0] = .25
+                amplitude = t.tanh((r+1)*x[:, :126, :1]+.25)
+                slot_probs = t.softmax(adapter.listen_routers[r](adapter.query_norm(x[:, :126])), -1)
+                aggregate = bank.sum(1)*.5
+                expected = amplitude.unsqueeze(1)*aggregate.unsqueeze(1)*slot_probs.transpose(1, 2).unsqueeze(-1)
+                actual = adapter(memory, x, bank, mask, r, reads)
+                t.testing.assert_close(actual[:, :, :126], expected, rtol=0, atol=0)
+                self.assertEqual(actual[:, :, 126:].count_nonzero().item(), 0)
+                stats = adapter.diagnostics()[-1]
+                for name, value in (("mean", amplitude.mean()), ("min", amplitude.min()), ("max", amplitude.max()),
+                                    ("abs_mean", amplitude.abs().mean()),
+                                    ("saturation_fraction", (amplitude.abs() > .99).float().mean())):
+                    self.assertEqual(stats["amplitude_"+name], value.item())
 
     def test_true_autograd_zero_start_and_unlock_after_first_optimizer_update(self):
         t = self.torch
@@ -294,6 +382,9 @@ class TensorTests(unittest.TestCase):
         first = self.train.listen_gradient_audit(model)
         self.assertTrue(all(v["present"] and v["finite"] for v in first.values()))
         self.assertTrue(first["amplitude_0"]["nonzero"] and first["amplitude_1"]["nonzero"])
+        for layer in model.caption_decoder.lm.model.audio_listen.amplitudes:
+            self.assertGreater(layer.weight.grad.abs().sum().item(), 0)
+            self.assertGreater(layer.bias.grad.abs().sum().item(), 0)
         self.assertTrue(all(not v["nonzero"] for k, v in first.items() if not k.startswith("amplitude")))
         self.tracker_class().track_and_clip_(model.named_parameters())
         optimizer.step(); optimizer.zero_grad(set_to_none=True); scheduler.step()
@@ -303,6 +394,7 @@ class TensorTests(unittest.TestCase):
         adapter = model.caption_decoder.lm.model.audio_listen
         adapter.capture_gradient_diagnostics(2)
         self.assertEqual(len(adapter.last_gradient_diagnostics["modules"]), 10)
+        self.assertTrue(all(adapter.last_gradient_diagnostics["modules"][f"amplitude_{i}"]["present"] for i in range(2)))
         self.assertTrue(all(v["finite"] and v["l2"] > 0 for v in adapter.last_gradient_diagnostics["modules"].values()))
 
     def test_original_parameter_optimizer_groups_keep_lr_and_decay(self):
