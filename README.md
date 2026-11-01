@@ -1,3 +1,87 @@
+## 2026-11-02：MeSH CED 第 8→4 层 read 后残差注入独立训练路线
+
+已完整复制原 MeSH 第4→8层注入路线，新增
+[MeSH 8→4 隔离路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer8_4_inject/README.md)。
+唯一模型计算变化为：`read_routers[0]` 的 memory read 后、第一次中段循环前使用 A8/gate8；
+`read_routers[1]` 的 memory read 后、第二次中段循环前使用 A4/gate4，实际轨迹 `[[5,8],[15,4]]`。
+CED仍一次编码提取第4/8层，MLP/gate注册与初始化顺序仍为4、8，显式接口仍为`(A4,A8)`。
+原final-layer mapper、残差公式、零gate、CPU RNG、20物理层/30次执行、五槽/六router、
+循环input-query/output-value与第三次read后不注入均保持；新增参数仍为2,444,930。
+
+沿用原MeSH文本`formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244`初始化，
+保留hybrid 1,477,492行、683-token布局、loss/attention、FP32、GBS256（8×8×4）、
+3epochs/17,313updates/866warmup、LM/routers LR3e-4与mapper/MLP/gate LR6e-4、
+AdamW/LambdaLR/GradNorm/GradScaler、数据顺序、后台staging及完整恢复。
+新route/output/log/index-cache/tmpfs和resume身份独立，原4→8、普通MeSH CED、非MeSH路线和共享模型未修改。
+
+本地代码经GitHub同步后，在远程登录节点直接提交formal，无自动smoke或tensor前置任务：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_mesh_ced_small_layer8_4_inject_5090.sh --stage-workers 4
+```
+
+沿用`mellow_c8204d8`与`pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`。
+默认输出根为`outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer8_4_inject_5090/formal_<timestamp>/`，
+内部最终为`formal/checkpoints/model--epo-3.ckpt`和`model--step-17313.ckpt`。
+仅接受本8→4路线的完整正式checkpoint恢复，拒绝原4→8、普通MeSH或非MeSHcheckpoint full resume；
+详细产物、恢复命令与架构见路线README。当前MMAU/MMAR evaluator尚未适配本新路线。
+
+统一检查入口`python -B tests/validate_mizar_s1_mesh_ced_layer84.py`：98项实际检查通过，
+26项真实CPU tensor检查因缺依赖跳过（新路线10项、原MeSH 4→8 9项、非MeSH 4→8 7项），
+Python/Bash语法、完整源码/AST差异白名单、105个原文件保护和模拟提交检查通过。
+报告为`audit_reports/mizar_s1_mesh_ced_layer84_validation.json`；路线内`reference_audit.json`记录母本对照。
+具备原依赖时可手动加`--require-tensors`禁止skip；不下载资产、不用CUDA、不提交作业，不是formal前置任务。
+真实远程权重加载、CPU tensor、8GPU训练与完整恢复尚未执行，未登记远程PASS。
+
+## 2026-11-02：音频七槽 split3 + read 后零门控残差的独立训练
+
+已从 split3 完整复制隔离出
+[split3_inject 正式训练路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer4_8_audio7slot_split3_inject/README.md)。
+保留音频七槽/文本五槽、六个音频 router 的 slot0 三等分初始化及两套 MLP。
+同一对 A4/A8 先初始化音频 memory 槽5/6，再在 pre/loop0 memory read 后、
+第一/第二轮循环前分别做残差注入；gate 输入明确为 memory read 后的音频 hidden：
+`h_audio += tanh(Linear(h_audio)) * A`。
+两个独立 Linear(576,1) 的 weight/bias 均为0，每个音频token一个标量；
+仅音频前126位置直接注入，无第三次注入或额外 memory write。
+循环后 query 仍取含残差的循环输入，write value 仍取循环输出。
+
+仅增加1,154个gate参数；相对原五槽CED MeSH新增合计2,469,164。
+原LM/文本router maxLR3e-4；mapper/MLP/音频router/两个gate maxLR6e-4。
+零gate时初始forward与split3对齐；MLP仍可经已有memory路径取得首步梯度。
+CED冻结/eval且每批一次编码，A4/A8的MLP不重复计算。
+数据、FP32、683-token布局、loss、GBS256（8×8×4）、3epochs/17313updates/866warmup、
+优化器/调度/GradNorm、后台staging和完整恢复配方保留。
+原split3、K7、48listen、旧inject及共享模型未修改。
+
+本地代码经GitHub同步后，在远程登录节点直接提交formal，无自动smoke前置任务：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_mesh_ced_small_layer4_8_audio7slot_split3_inject_5090.sh --stage-workers 4
+```
+
+资源仍为 `pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`，环境 `mellow_c8204d8`。
+默认输出根为
+`outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_audio7slot_split3_inject_5090/formal_<timestamp>/`，
+内部最终 `formal/checkpoints/model--epo-3.ckpt` 和 `model--step-17313.ckpt`。
+新route/output/log/index-cache/tmpfs/resume身份隔离，只接受本路线完整checkpoint恢复；
+恢复不会清零已训练gate或重新三等分router。默认仍从原文本checkpoint初始化，
+未实现已训练split3音频checkpoint权重迁移；现有评测器需要独立适配。
+首两次及每25次update记录两gate幅度/符号/饱和比例/残差范数比及梯度。
+
+统一验证入口 `python -B tests/validate_mizar_s1_mesh_ced_audio7slot_split3_inject.py`。
+本地70项实际检查通过、Python/Bash语法通过；16项真实CPU tensor检查因缺依赖跳过。
+实际forward/gate的NumPy检查覆盖零gate母本对照、非零gate读取post-read hidden、
+两次注入边界、音频范围和普通memory写入；完整训练循环AST对照及母本回归通过。
+报告 `audit_reports/mizar_s1_mesh_ced_audio7slot_split3_inject_validation.json`。
+依赖齐备时可手动加 `--require-tensors` 禁止skip，不下载资产、不用CUDA、不提交作业，
+不是formal前置任务。远程真实权重加载、8GPU训练与恢复未执行，不登记远程PASS。
+
 ## 2026-11-01：音频七槽 split3 独立训练——原第一槽概率三等分
 
 已完整复制K=7七槽版本，新增[独立 split3 正式训练路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer4_8_audio7slot_split3/README.md)。
