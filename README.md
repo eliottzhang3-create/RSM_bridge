@@ -1,3 +1,39 @@
+## 2026-11-01：CED4/8 初始音频七槽、文本五槽的独立正式训练路线
+
+已复制48listen并实现[隔离 audio7slot 路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer4_8_audio7slot/README.md)。
+冻结CED一次提取第4/8层，经原两套独立MLP得到A4/A8，在prelude前与input embedding同时初始化：
+音频七槽`[embedding,0,0,0,0,A4,A8]`，SEP/文本仍五槽。
+六个新增音频write/read router分别复制对应原router前五行，新增两行weight=0、bias=-7；
+原六个router继续仅用于SEP/文本。删除旧gate/两次listen注入，七槽后续均参与普通write/read。
+保留30次层执行、三次交互及循环input-query/output-value语义，每个完整forward重建memory，无KV cache。
+
+原LM及六个文本router maxLR3e-4；原mapper、两套MLP和六个新增音频router maxLR6e-4；
+共新增2,468,010参数。原数据/683-token布局/loss/FP32/AdamW/LambdaLR/GradNorm/GradScaler、
+GBS256（8×8×4）/3epochs/17,313updates/866warmup、后台staging和完整恢复配方保留。
+源码AST核验原训练循环仅增加诊断，原CED MeSH、48listen和共享模型未修改。
+新route/output/log/index-cache/tmpfs/resume身份隔离；完整恢复不会把已训练新行重置为0/-7。
+首两次update和每25次记录七槽概率、两新槽合计阈值比例及梯度/RMS；K只控制初始化，不限制后续学习。
+
+经GitHub同步后，在远程登录节点直接提交formal，无自动smoke前置任务：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_mesh_ced_small_layer4_8_audio7slot_5090.sh --stage-workers 4
+```
+
+资源仍为`pdgpu-5090 / 32 CPU / 256G / 8 GPU / 1 node`，环境`mellow_c8204d8`。
+默认输出`outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_audio7slot_5090/formal_<timestamp>/`，
+其内最终`formal/checkpoints/model--epo-3.ckpt`及`model--step-17313.ckpt`。
+完整结构、诊断字段和恢复命令见路线README；原评测器需后续适配。
+
+统一检查入口`python -B tests/validate_mizar_s1_mesh_ced_audio7slot.py`，报告
+`audit_reports/mizar_s1_mesh_ced_audio7slot_validation.json`；本地34项实际检查通过、Python/Bash语法通过，
+12项真实CPU tensor检查因缺依赖明确skip，
+具备原依赖的环境可手动加`--require-tensors`禁止skip。无资产下载/CUDA/作业提交，不是formal前置任务。
+本地检查不等于远程真实权重、8 GPU正式训练或完整恢复通过。
+
 ## 2026-11-01：音频七槽设计的原五槽 MeSH 文本 router K 标定工具
 
 新增独立的[第一阶段文本生成与K标定工具](code/RSmol/scripts/README_mesh_text_router_k.md)，
