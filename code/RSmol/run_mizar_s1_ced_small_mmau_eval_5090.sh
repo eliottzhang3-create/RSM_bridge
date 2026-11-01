@@ -35,12 +35,66 @@ case "$EVAL_VARIANT" in
     JOB_NAME_PREFIX="mizar-ced-r515-${JOB_TAG}-mmau"
     JOB_LOG_PREFIX="mizar_s1_ced_small_${EVAL_VARIANT}_mmau_5090"
     ;;
+  recursive_5_10_5_layer36912_crossattn|recursive_5_10_5_layer36912_query32_crossattn|recursive_mesh_layer4_8_inject|recursive_mesh_layer4_8_listen|recursive_mesh_layer36912_listen)
+    RUN_STAMP=
+    case "$EVAL_VARIANT" in
+      recursive_5_10_5_layer36912_crossattn) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer36912_crossattn; RUN_STAMP=20261030_140459065784533; JOB_TAG=ca4 ;;
+      recursive_5_10_5_layer36912_query32_crossattn) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer36912_query32_crossattn; RUN_STAMP=20261030_162028139130855; JOB_TAG=q32 ;;
+      recursive_mesh_layer4_8_inject) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_inject; JOB_TAG=m48i ;;
+      recursive_mesh_layer4_8_listen) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_listen; RUN_STAMP=20261030_172450546025072; JOB_TAG=m48l ;;
+      recursive_mesh_layer36912_listen) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer36912_listen; JOB_TAG=m4l ;;
+    esac
+    DEFAULT_RUN_ROOT=
+    if [[ -n "$RUN_STAMP" ]]; then
+      DEFAULT_RUN_ROOT="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_${EVAL_VARIANT}_5090/formal_${RUN_STAMP}"
+    fi
+    DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_${FAMILY}_ced_small_${ROUTE_SUFFIX}"
+    EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh
+    JOB_NAME_PREFIX="mizar-ced-multi-${JOB_TAG}-mmau"
+    JOB_LOG_PREFIX="mizar_s1_ced_small_${EVAL_VARIANT}_mmau_5090"
+    ;;
   *)
-    echo "unsupported RSMOL_MIZAR_CED_EVAL_VARIANT: $EVAL_VARIANT (expected base, recursive_mesh, or a supported recursive_5_10_5 variant)" >&2
+    echo "unsupported RSMOL_MIZAR_CED_EVAL_VARIANT: $EVAL_VARIANT (expected base or a supported recursive CED variant)" >&2
     exit 2
     ;;
 esac
 RUN_ROOT="${RSMOL_MIZAR_CED_RUN_ROOT:-$DEFAULT_RUN_ROOT}"
+# Pending training routes need an actual run or an explicit checkpoint/runtime/output triple.
+# Inspect path overrides before submission, while still forwarding every CLI argument unchanged.
+if [[ "$EVAL_SCRIPT" == scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh ]]; then
+  RUN_ROOT="${RSMOL_MIZAR_CED_RUN_ROOT:-}"
+  EXTRA_ARGS=("$@")
+  for ((i=0; i<${#EXTRA_ARGS[@]}; i++)); do
+    case "${EXTRA_ARGS[i]}" in
+      --run-root|--checkpoint|--runtime-config|--output-dir)
+        ((i+1 < ${#EXTRA_ARGS[@]})) || { echo "missing value for ${EXTRA_ARGS[i]}" >&2; exit 2; }
+        OPTION="${EXTRA_ARGS[i]}"
+        VALUE="${EXTRA_ARGS[i+1]}"
+        i=$((i+1))
+        ;;
+      --run-root=*|--checkpoint=*|--runtime-config=*|--output-dir=*)
+        OPTION="${EXTRA_ARGS[i]%%=*}"
+        VALUE="${EXTRA_ARGS[i]#*=}"
+        ;;
+      *) continue ;;
+    esac
+    [[ -n "$VALUE" && "$VALUE" != --* ]] || { echo "missing value for $OPTION" >&2; exit 2; }
+    case "$OPTION" in
+      --run-root) RUN_ROOT="$VALUE" ;;
+      --checkpoint) RSMOL_MIZAR_CED_CHECKPOINT="$VALUE" ;;
+      --runtime-config) RSMOL_MIZAR_CED_RUNTIME_CONFIG="$VALUE" ;;
+      --output-dir) RSMOL_MIZAR_CED_MMAU_OUTPUT_DIR="$VALUE" ;;
+    esac
+  done
+  if [[ -z "$RUN_ROOT" && "${RSMOL_MIZAR_CED_CHECKPOINT:-}" == */formal/checkpoints/* ]]; then
+    RUN_ROOT="${RSMOL_MIZAR_CED_CHECKPOINT%/formal/checkpoints/*}"
+  fi
+  RUN_ROOT="${RUN_ROOT:-$DEFAULT_RUN_ROOT}"
+  if [[ -z "$RUN_ROOT" ]] && { [[ -z "${RSMOL_MIZAR_CED_CHECKPOINT:-}" ]] || [[ -z "${RSMOL_MIZAR_CED_RUNTIME_CONFIG:-}" ]] || [[ -z "${RSMOL_MIZAR_CED_MMAU_OUTPUT_DIR:-}" ]]; }; then
+    echo "No completed default run for $EVAL_VARIANT; set RSMOL_MIZAR_CED_RUN_ROOT / --run-root or provide checkpoint, runtime-config and output-dir explicitly." >&2
+    exit 2
+  fi
+fi
 EXPECTED_STEP="${RSMOL_MIZAR_CED_EXPECTED_STEP:-17313}"
 EXPECTED_GEOMETRY="${RSMOL_MIZAR_CED_EXPECTED_GEOMETRY:-8,8,4}"
 CHECKPOINT="${RSMOL_MIZAR_CED_CHECKPOINT:-$RUN_ROOT/formal/checkpoints/model--step-$EXPECTED_STEP.ckpt}"
@@ -54,7 +108,7 @@ ARGS=(--benchmark mmau --checkpoint "$CHECKPOINT" --runtime-config "$RUNTIME_CON
       --route-root "$ROUTE_ROOT" --dataset-dir "$DATASET_DIR" --output-dir "$OUTPUT_DIR"
       --parquet-batch-size 8 --expected-step "$EXPECTED_STEP"
       --expected-geometry "$EXPECTED_GEOMETRY")
-if [[ "$EVAL_VARIANT" == recursive_5_10_5* ]]; then ARGS+=(--eval-variant "$EVAL_VARIANT"); fi
+if [[ "$EVAL_VARIANT" == recursive_5_10_5* || "$EVAL_SCRIPT" == scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh ]]; then ARGS+=(--eval-variant "$EVAL_VARIANT"); fi
 if (($#)); then ARGS+=("$@"); fi
 printf -v CMD_ARGS '%q ' "${ARGS[@]}"
 

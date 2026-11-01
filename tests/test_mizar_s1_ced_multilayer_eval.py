@@ -1,0 +1,366 @@
+"""Executable contract/loading/decoding checks without production assets or CUDA."""
+from __future__ import annotations
+
+import ast
+import copy
+import importlib.util
+import json
+import sys
+import tempfile
+import types
+import unittest
+from contextlib import nullcontext
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "code/RSmol/scripts"
+sys.path.insert(0, str(SCRIPTS))
+import evaluate_mizar_s1_ced_multilayer_benchmark as runner
+
+adapter = runner.runtime_adapter
+VARIANTS = tuple(adapter.ROUTE_SPECS)
+
+
+def load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+BASE = load_module("ced_multilayer_test_helpers", ROOT / "tests/test_mizar_s1_ced_benchmark_eval.py")
+PREVIOUS = load_module("ced_multilayer_loader_helpers", ROOT / "tests/test_mizar_s1_ced_recursive_eval.py")
+
+
+class MultilayerEvaluationTests(unittest.TestCase):
+    def setUp(self):
+        self.runner, self.runtime = runner, adapter
+        self.select(VARIANTS[0])
+
+    def select(self, variant):
+        self.variant, self.spec = variant, adapter.variant_spec(variant)
+        self.route = load_module("multilayer_contract_" + variant, self.spec["route_root"] / "contract.py")
+
+    def fixture(self):
+        contract, saved, runtime = BASE.CedBenchmarkEvaluationTest.fixture(self)
+        contract["recursive_text_checkpoint"] = {"fixture_only": True}
+        self.resign(saved, runtime)
+        return contract, saved, runtime
+
+    resign = BASE.CedBenchmarkEvaluationTest.resign
+    loader_fixture = PREVIOUS.RecursiveCedEvaluationTests.loader_fixture
+    test_raw_predictions_preserve_eos_and_order = BASE.CedBenchmarkEvaluationTest.test_materialized_predictions_keep_raw_eos_and_official_order
+
+    def validate(self, saved, runtime, **kwargs):
+        return adapter.validate_checkpoint(saved, runtime, self.route, 17313,
+                                           eval_variant=self.variant, **kwargs)
+
+    def test_five_actual_contracts_accept_completed_checkpoints_and_bind_three_runs(self):
+        stamps = ("20261030_140459065784533", "20261030_162028139130855", None,
+                  "20261030_172450546025072", None)
+        counts = (4892741, 6241733, 2444930, 2450700, 3552788)
+        for variant, stamp, count in zip(VARIANTS, stamps, counts):
+            self.select(variant)
+            contract, saved, runtime = self.fixture()
+            self.assertIs(self.validate(saved, runtime), contract)
+            self.assertEqual(self.spec["route"], self.route.ROUTE)
+            self.assertEqual(self.spec["new_parameters"], count)
+            for benchmark in ("mmau", "mmar"):
+                argv = ["--benchmark", benchmark, "--eval-variant", variant]
+                if stamp:
+                    args = runner.parse_args(argv)
+                    self.assertEqual(args.run_root.name, "formal_" + stamp)
+                else:
+                    with patch("sys.stderr"), self.assertRaises(SystemExit): runner.parse_args(argv)
+                    args = runner.parse_args(argv + ["--run-root", "/actual completed run"])
+                self.assertEqual(args.checkpoint, args.run_root / "formal/checkpoints/model--step-17313.ckpt")
+                self.assertEqual(args.runtime_config, args.run_root / "formal/runtime.json")
+                self.assertEqual(args.expected_geometry, (8, 8, 4))
+                self.assertEqual(args.output_dir.parent, args.run_root / "eval")
+
+    def test_explicit_checkpoint_infers_its_own_run_and_noncanonical_paths_need_full_triple(self):
+        for variant in VARIANTS:
+            argv = ["--benchmark", "mmar", "--eval-variant", variant]
+            args = runner.parse_args(argv + ["--checkpoint", "/new run/formal/checkpoints/model.ckpt"])
+            self.assertEqual(args.runtime_config, Path("/new run/formal/runtime.json").resolve())
+        argv = ["--benchmark", "mmar", "--eval-variant", VARIANTS[2]]
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            runner.parse_args(argv + ["--checkpoint", "/weights.ckpt"])
+        args = runner.parse_args(argv + ["--checkpoint", "/weights.ckpt", "--runtime-config", "/runtime.json",
+                                         "--output-dir", "/independent output"])
+        self.assertIsNone(args.run_root)
+        self.assertEqual(args.output_dir, Path("/independent output").resolve())
+
+    def test_all_cross_route_pairings_are_rejected(self):
+        for variant in VARIANTS:
+            self.select(variant)
+            _, saved, runtime = self.fixture()
+            for other in set(VARIANTS) - {variant}:
+                with self.subTest(checkpoint=variant, selected=other), self.assertRaises(ValueError):
+                    adapter.validate_checkpoint(saved, runtime, self.route, 17313, eval_variant=other)
+
+    def test_runtime_step_loss_source_and_geometry_are_strict(self):
+        for variant in VARIANTS:
+            self.select(variant)
+            for key, value in (("schema_version", 2), ("mode", "smoke"), ("state_dict", {}),
+                               ("total_step", 20), ("num_epochs", 2), ("loss_reduction", "wrong"),
+                               ("contract_sha256", "wrong")):
+                _, saved, runtime = self.fixture()
+                saved[key] = value
+                with self.subTest(variant=variant, key=key), self.assertRaises(ValueError):
+                    self.validate(saved, runtime)
+            _, saved, runtime = self.fixture()
+            with self.assertRaises(ValueError): self.validate(saved, {**runtime, "route": "other"})
+            with self.assertRaises(ValueError): self.validate(saved, runtime, expected_geometry=(8, 4, 4))
+            for method in ("code_digest", "recursive_model_source_sha256"):
+                with patch.object(self.route, method, return_value="changed"), self.assertRaises(ValueError):
+                    self.validate(saved, runtime)
+
+    def test_branch_and_input_contract_mutations_are_rejected(self):
+        for variant in VARIANTS:
+            self.select(variant)
+            key, _ = adapter.branch_contract(self.route, self.spec)
+            for section, name, value in ((None, "prefix", [126, 1, 129]), (None, "attention_mask", "pad"),
+                    (None, "forward_dtype", "bfloat16"), (None, "text_model_schedule", list(range(30))),
+                    (None, "text_model_architecture", "other"), (None, "recursive_text_checkpoint", {}),
+                    ("audio_encoder", "frozen", False), ("mapper", "name", "other"),
+                    (key, "ced_layers_1based", [12, 9, 6, 3])):
+                contract, saved, runtime = self.fixture()
+                (contract if section is None else contract[section])[name] = value
+                self.resign(saved, runtime)
+                with self.subTest(variant=variant, field=name), self.assertRaises(ValueError):
+                    self.validate(saved, runtime)
+            contract, saved, runtime = self.fixture()
+            contract["audio_reinjection"] = {}
+            self.resign(saved, runtime)
+            with self.assertRaises(ValueError): self.validate(saved, runtime)
+
+    def test_original_protocol_and_fifteen_runner_functions_are_unchanged(self):
+        def functions(path):
+            return {n.name: ast.dump(n, include_attributes=False)
+                    for n in ast.parse(path.read_text(encoding="utf-8-sig")).body if isinstance(n, ast.FunctionDef)}
+        original = functions(SCRIPTS / "evaluate_mizar_s1_ced_benchmark.py")
+        actual = functions(Path(runner.__file__))
+        self.assertEqual(set(original), set(actual))
+        self.assertEqual({name for name in original if original[name] != actual[name]},
+                         {"parse_args", "generate", "_identity"})
+        self.assertEqual(adapter.PROTOCOL, adapter.reference.PROTOCOL)
+        self.assertEqual(runner.EXPECTED_ROWS, 1000)
+        for relative in ("data/fixed20.py", "data/audiotext_dataset.py", "models/ced_offline.py"):
+            expected = ast.dump(ast.parse((adapter.reference.ROUTE_ROOT / relative).read_text(encoding="utf-8-sig")))
+            for spec in adapter.ROUTE_SPECS.values():
+                self.assertEqual(ast.dump(ast.parse((spec["route_root"] / relative).read_text(encoding="utf-8-sig"))), expected)
+
+    def run_loader(self, fixture):
+        args, model, modules, packages = fixture
+        def after_load(*_, **__):
+            model.load_state_dict.assert_called_once()
+            model.requires_grad_.assert_not_called()
+            return {"status": "PASS"}
+        with (patch.dict(sys.modules, packages), patch.object(adapter, "import_training_route", return_value=modules),
+              patch.object(adapter, "audit_assets", return_value={"status": "PASS"}),
+              patch.object(adapter, "audit_recursive_route", side_effect=after_load),
+              patch.object(adapter, "install_recursive_trace_audit", return_value={"status": "PENDING"})):
+            return adapter.load_runtime(args)
+
+    def test_full_audio_state_loads_strictly_before_audit_and_freeze_without_vocab_growth(self):
+        for variant in VARIANTS:
+            self.select(variant)
+            for ddp in (False, True):
+                with tempfile.TemporaryDirectory() as directory:
+                    state = {name: [i] for i, name in enumerate(("audio_encoder.base.ced.weight",
+                        "audio_encoder.base.mapper.weight", "caption_decoder.lm.model.layers.5.weight",
+                        "trained_branch.weight"))}
+                    fixture = self.loader_fixture(directory, {"module." + k: v for k, v in state.items()} if ddp else state)
+                    result, model = self.run_loader(fixture), fixture[1]
+                    model.load_state_dict.assert_called_once_with(state, strict=True)
+                    calls = [c[0] for c in model.method_calls]
+                    self.assertLess(calls.index("float"), calls.index("load_state_dict"))
+                    model.requires_grad_.assert_called_once_with(False)
+                    model.caption_decoder.lm.resize_token_embeddings.assert_not_called()
+                    self.assertEqual(result[5]["tokenizer"]["checkpoint_source"]["vocabulary_growth"], 0)
+                    self.assertEqual(result[5]["tokenizer"]["pad_id"], 17)
+                    self.assertEqual(result[5]["ddp_state_dict_prefix_normalized"], ddp)
+
+    def test_loader_rejects_missing_keys_mixed_ddp_and_wrong_precision_or_mode(self):
+        for variant in VARIANTS:
+            self.select(variant)
+            for kind in ("ddp", "strict", "dtype", "mode"):
+                with tempfile.TemporaryDirectory() as directory:
+                    fixture = self.loader_fixture(directory, {"module.a": [1], "b": [2]} if kind == "ddp" else {"a": [1]})
+                    model = fixture[1]
+                    if kind == "strict": model.load_state_dict.side_effect = RuntimeError("Missing trained gate")
+                    elif kind == "dtype": model.parameters.return_value = [types.SimpleNamespace(dtype="float16")]
+                    elif kind == "mode": model.modules.return_value = [types.SimpleNamespace(training=True)]
+                    with self.subTest(variant=variant, kind=kind), self.assertRaises((ValueError, RuntimeError)):
+                        self.run_loader(fixture)
+
+    def test_generate_encodes_once_per_sample_and_uses_exact_training_context(self):
+        class Tensor:
+            shape = (1, 383, 576)
+            def numel(self): return 320000
+            def unsqueeze(self, _): return self
+            def to(self, _): return self
+            def eq(self, _): return self
+            def sum(self): return 11
+        for variant in VARIANTS:
+            self.select(variant)
+            model, tokenizer, encoder = Mock(), Mock(pad_token_id=17), Mock()
+            mask = Tensor()
+            encoder.tokenize.return_value = {"input_ids": Tensor(), "attention_mask": mask}
+            tokenizer.encode.return_value = [1, 2]
+            contexts = []
+            for _ in range(2):
+                if self.spec["kind"] in ("inject48", "listen48"):
+                    context, output = (object(), object()), {}
+                else:
+                    grids = object()
+                    output = {"layer_grids": grids}
+                    context = None if self.spec["kind"] == "listen36912" else {"audio_grids": grids, "prompt_mask": mask}
+                contexts.append((output, context))
+            model.generate_prefix_inference.side_effect = [(Tensor(), out, ctx) for out, ctx in contexts]
+            with (patch.dict(sys.modules, {"torch": types.SimpleNamespace(inference_mode=nullcontext)}),
+                  patch.object(runner, "_fixed20_pair", return_value=(Tensor(), Tensor())),
+                  patch.object(adapter, "greedy_decode", return_value={"generated_text": " raw EOS ", "generated_token_count": 1}) as decode):
+                for _ in contexts:
+                    result = runner.generate((model, tokenizer, "cuda:0", encoder, None,
+                                              {"eval_variant": variant}, None), {"prompt": "Question?"})
+                    self.assertEqual(result["first_answer_logit_position"], 382)
+            self.assertEqual(model.generate_prefix_inference.call_count, 2)
+            for call, (out, ctx) in zip(decode.call_args_list, contexts):
+                got = call.kwargs["context"]
+                if self.spec["kind"] in ("inject48", "listen48"):
+                    self.assertIs(got["audio_information"], ctx)
+                else:
+                    self.assertIs(got["audio_grids"], out["layer_grids"])
+                    self.assertIs(got["prompt_mask"], mask)
+            encoder.tokenize.assert_called_with("question?", 256)
+
+    def test_sample_context_rejects_missing_or_stale_four_depth_context(self):
+        for variant in VARIANTS[:2]:
+            for context in (None, {}, {"audio_grids": object()}):
+                with self.assertRaises(ValueError): adapter.sample_context(variant, {}, context, {})
+        with self.assertRaises(ValueError): adapter.sample_context(VARIANTS[4], {}, {}, {})
+
+    def test_trace_hooks_check_physical_calls_branches_routers_and_query32(self):
+        for variant in VARIANTS:
+            self.select(variant)
+            lm = Mock()
+            core, kind = lm.model, self.spec["kind"]
+            core.layers = [Mock() for _ in range(20)]
+            core.write_routers, core.read_routers = [Mock() for _ in range(3)], [Mock() for _ in range(3)]
+            core.audio_gates = {str(k): Mock() for k in (4, 8)}
+            core.listen_routers = {str(k): Mock() for k in (4, 8)}
+            core.audio_listen.listen_routers = [Mock() for _ in range(2)]
+            core.audio_listen.last_rounds = [0, 1]
+            core.last_injection_trace = core.last_listen_trace = ((5, 4), (15, 8))
+            core.last_crossattn_trace = (5, 15)
+            audit = adapter.install_recursive_trace_audit(lm, eval_variant=variant)
+            begin = lm.register_forward_pre_hook.call_args.args[0]
+            finish = lm.register_forward_hook.call_args.args[0]
+            output = types.SimpleNamespace(past_key_values=None, logits=types.SimpleNamespace(shape=(1, 383, 576)))
+            def hook(module, inputs=()):
+                self.assertIsNone(module.register_forward_hook.call_args.args[0](module, inputs, None))
+            def execute(*, bad_order=False, bad_compression=False):
+                begin(lm, (), {"use_cache": False, "attention_mask": None})
+                if kind == "query32":
+                    q = types.SimpleNamespace(shape=(4, 31 if bad_compression else 32, 576))
+                    kv = types.SimpleNamespace(shape=(4, 126, 576))
+                    hook(core.audio_crossattn.compression_attention, (q, kv, kv))
+                for logical, physical in enumerate(adapter.TEXT_MODEL_SCHEDULE):
+                    if logical in (5, 15, 25) and self.spec["mesh"]:
+                        index = (logical - 5) // 10
+                        hook(core.write_routers[index])
+                        if not bad_order: hook(core.read_routers[index])
+                        if index < 2:
+                            if kind == "listen36912":
+                                hook(core.audio_listen.listen_routers[index])
+                                hook(core.audio_listen, (None, None, None, None, index, None))
+                            else:
+                                layer = str(4 if index == 0 else 8)
+                                hook(core.audio_gates[layer])
+                                if kind == "listen48": hook(core.listen_routers[layer])
+                        if bad_order: hook(core.read_routers[index])
+                    elif logical in (5, 15):
+                        hook(core.audio_crossattn, (None, None, None, 0 if logical == 5 else 1))
+                    hook(core.layers[physical])
+                finish(lm, (), output)
+            execute()
+            execute()
+            self.assertEqual(audit["checked_forwards"], 2)
+            self.assertEqual(audit["last_physical_schedule"], list(adapter.TEXT_MODEL_SCHEDULE))
+            for kwargs in ({"use_cache": True}, {"use_cache": False, "past_key_values": object()},
+                           {"use_cache": False, "attention_mask": object()}):
+                with self.assertRaises(RuntimeError): begin(lm, (), kwargs)
+            begin(lm, (), {"use_cache": False})
+            with self.assertRaisesRegex(RuntimeError, "physical schedule"): finish(lm, (), output)
+            if self.spec["mesh"] and kind.startswith("listen"):
+                with self.assertRaisesRegex(RuntimeError, "router invocation order"): execute(bad_order=True)
+            if kind == "query32":
+                with self.assertRaisesRegex(RuntimeError, "compress"): execute(bad_compression=True)
+
+
+@unittest.skipUnless(importlib.util.find_spec("numpy"), "requires numpy for executable decode stand-ins")
+class NumpyDecodeTests(unittest.TestCase):
+    def fixture(self, variant, ids):
+        import numpy as np
+        class Tensor(np.ndarray):
+            device = "cpu"
+            def __new__(cls, value, dtype=np.float32): return np.asarray(value, dtype=dtype).view(cls)
+            def sum(self, dim=None, **kwargs): return super().sum(axis=dim, **kwargs)
+        torch = types.SimpleNamespace(Tensor=Tensor, float32=np.dtype("float32"), long=np.int64,
+            isfinite=np.isfinite, argmax=lambda value, dim: np.argmax(value, axis=dim),
+            cat=lambda values, dim: Tensor(np.concatenate(values, axis=dim)),
+            tensor=lambda value, device, dtype: Tensor(value, dtype))
+        prefix = Tensor(np.zeros((1, 383, 576)))
+        context = ({"audio_information": (Tensor(np.zeros((1, 126, 576))), Tensor(np.ones((1, 126, 576))))}
+            if adapter.variant_spec(variant)["kind"] in ("inject48", "listen48") else
+            {"audio_grids": Tensor(np.zeros((1, 4, 126, 1536))),
+             "prompt_mask": Tensor([[1] * 180 + [0] * 76], np.int64)})
+        def forward(**kwargs):
+            token = next(tokens)
+            logits = Tensor(np.zeros((1, kwargs["inputs_embeds"].shape[1], 8)))
+            logits[0, -1, token] = 1
+            return types.SimpleNamespace(logits=logits)
+        tokens = iter(ids)
+        lm = Mock(side_effect=forward)
+        lm.get_input_embeddings.return_value = lambda ids: Tensor(np.zeros((1, 1, 576)))
+        model = types.SimpleNamespace(caption_decoder=types.SimpleNamespace(lm=lm))
+        tokenizer = types.SimpleNamespace(eos_token_id=0, decode=Mock(return_value="  A) raw <|endoftext|>  "))
+        return model, tokenizer, prefix, context, torch
+
+    def test_eos_full_recomputation_explicit_context_and_raw_text(self):
+        for variant in VARIANTS:
+            model, tokenizer, prefix, context, torch = self.fixture(variant, [3, 0, 7])
+            with patch.dict(sys.modules, {"torch": torch}):
+                result = adapter.greedy_decode(model, tokenizer, prefix, eval_variant=variant, context=context)
+            self.assertEqual(result["generated_token_ids"], [3, 0])
+            self.assertEqual(result["generated_text"], "  A) raw <|endoftext|>  ")
+            self.assertEqual(result["stop_reason"], "eos_token")
+            self.assertEqual([c.kwargs["inputs_embeds"].shape[1] for c in model.caption_decoder.lm.call_args_list], [383, 384])
+            for call in model.caption_decoder.lm.call_args_list:
+                self.assertIsNone(call.kwargs["attention_mask"])
+                self.assertIs(call.kwargs["use_cache"], False)
+                for key, value in context.items(): self.assertIs(call.kwargs[key], value)
+            tokenizer.decode.assert_called_once_with([3, 0], skip_special_tokens=False, clean_up_tokenization_spaces=False)
+
+    def test_both_benchmarks_keep_300_token_limit_and_finite_context(self):
+        for variant in VARIANTS:
+            model, tokenizer, prefix, context, torch = self.fixture(variant, [3] * 300)
+            with patch.dict(sys.modules, {"torch": torch}):
+                result = adapter.greedy_decode(model, tokenizer, prefix, eval_variant=variant, context=context)
+                self.assertEqual(result["generated_token_count"], 300)
+                self.assertEqual(result["stop_reason"], "max_new_tokens")
+                with self.assertRaises(ValueError):
+                    adapter.greedy_decode(model, tokenizer, prefix, 32, eval_variant=variant, context=context)
+                for bad in (None, {}, {"audio_grids": object(), "prompt_mask": object()}):
+                    with self.assertRaises(ValueError): adapter.validate_context(variant, bad, prefix)
+                value = next(iter(context.values()))
+                target = value[0] if isinstance(value, tuple) else value
+                target.flat[0] = float("nan")
+                with self.assertRaises(ValueError): adapter.validate_context(variant, context, prefix)
+
+
+if __name__ == "__main__":
+    unittest.main()

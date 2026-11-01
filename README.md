@@ -1,3 +1,39 @@
+## 2026-10-31：五条 CED 多层交互 checkpoint 的 MMAU / MMAR 评测扩展
+
+已扩展两个现有提交入口 `run_mizar_s1_ced_small_mmau_eval_5090.sh`、
+`run_mizar_s1_ced_small_mmar_eval_5090.sh`，新增五个 `RSMOL_MIZAR_CED_EVAL_VARIANT`：
+`recursive_5_10_5_layer36912_crossattn`、`recursive_5_10_5_layer36912_query32_crossattn`、
+`recursive_mesh_layer4_8_inject`、`recursive_mesh_layer4_8_listen`、
+`recursive_mesh_layer36912_listen`。
+模型适配、统一runner及compute wrapper位于训练目录之外；训练源码、共享递归模型和旧评测实现未修改。
+
+三条已有产物分别默认绑定用户提供的 `formal_20261030_140459065784533`、
+`formal_20261030_162028139130855`、`formal_20261030_172450546025072`，
+加载各自 `formal/checkpoints/model--step-17313.ckpt` 与同run的 `formal/runtime.json`。
+MeSH layer4_8_inject、layer36912_listen没有猜测默认run，须显式指定实际run或完整路径。
+
+统一保留原CED的fixed20/32kHz mono、固定选项顺序和小写prompt、126+1+256 prefix383、
+FP32/eval/inference mode/TF32关闭、attention_mask=None、无KV cache/逐token完整重算/纯argmax、
+最多300新tokens/首次EOS停止、完整原样输出及原官方scorer；MMAU/MMAR各1000条、零skip。
+每样本CED只编码一次；额外grids/(A4,A8)/prompt mask按各训练接口显式逐步传递，
+LM内投影/query32压缩照常每次forward执行，MeSH memory每次完整forward重建。
+query32输入prefix仍为383，实际合同为v1；四层MeSH listen加载逐token gate v2，无固定γ或/4缩放。
+
+strict加载完整音频checkpoint并校验route/runtime/源码/资产/训练geometry和实际结构，
+只读hooks检查30次物理层执行、两次交互、routers调用和query32压缩；不修改训练forward。
+资源仍为pdgpu-5090 / 8 CPU / 32G / 1 GPU / 1 node、mellow_c8204d8，直接full评测。
+三份现有checkpoint的六条提交命令、另外两条完成后的四条命令、输出和续跑说明见
+[五路线评测说明](code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md)。
+
+本地汇总入口 `python -B tests/validate_mizar_s1_ced_multilayer_eval.py`：
+93项实际检查通过，18项真实CPU tensor检查因缺Torch/Transformers跳过（新路线9项、旧回归9项），
+Python/Bash语法通过。包含十种1000条模拟流程、断点续跑、原始输出/官方scorer分母、
+十种提交组合与路径覆盖、旧评测回归。报告为
+`audit_reports/mizar_s1_ced_multilayer_eval_validation.json`。
+具备原依赖的环境可手动加 `--require-tensors` 禁止任何tensor跳过；无下载、无CUDA、无作业提交，
+不作为full评测自动前置任务。三份远程权重内部合同/runtime、真实GPU推理和正式分数仍待服务器核验，
+未登记远程PASS。
+
 ## 2026-10-30：MeSH CED 第 4→8 层在两次 memory read 后残差注入
 
 新增 [MeSH CED 4→8 隔离路线](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer4_8_inject/README.md)，
