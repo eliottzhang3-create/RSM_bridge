@@ -1,3 +1,31 @@
+## 2026-11-01：音频七槽设计的原五槽 MeSH 文本 router K 标定工具
+
+新增独立的[第一阶段文本生成与K标定工具](code/RSmol/scripts/README_mesh_text_router_k.md)，
+不修改训练路线或共享MeSH实现。使用两条MeSH CED训练入口共同的原文本初始化
+`formal_round2_lr2e-4_2e-5_resume5000_20260908/checkpoint-009244`，
+显式读取用户填写的十条`id/prompt` JSONL，FP32/eval、纯argmax、无KV cache、
+每条最多100个新token、首次EOS停止；不加载CED或音频checkpoint，不注册七槽模块。
+只读hooks记录原六个router的逐token logits、五槽概率和logsumexp，
+每位置只记一次，另加末token观察前向但不生成第101个token。
+
+按假设扩展`[z1..z5,-K,-K]`计算两新增槽**合计**概率，默认全部记录位置/六个router
+均低于0.5%，取最坏位置边界再加1.0 logit余量、向上取整至0.1作为共用K。
+报告保留每router差异、prompt/生成段统计和1%/0.5%候选边界；纯文本结果不保证音频输入上界。
+模板创建/输入检查/CSV离线重算只用标准库。远程填好十条prompt后从`code/RSmol/`提交：
+
+```bash
+bash run_mesh_text_router_k_5090.sh \
+  --prompts-jsonl /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mesh_text_router_k_5090/inputs/prompts.jsonl
+```
+
+单卡`pdgpu-5090 / 8 CPU / 32G / 1 GPU / 1 node`、`mellow_c8204d8`，
+输出默认`outputs/RSmol/mesh_text_router_k_5090/run_<timestamp>/`，无smoke前置任务。
+模板填写、完整提交和结果文件见上述README。统一验证入口为
+`python -B tests/validate_mesh_text_router_k.py`，本地22项实际检查通过、
+5项真实CPU tensor检查因缺torch/transformers跳过，Python/Bash语法通过；
+报告为`audit_reports/mesh_text_router_k_validation.json`。
+远程真实权重、文本生成和K数值尚未执行，不登记远程PASS。
+
 ## 2026-10-31：五条 CED 多层交互 checkpoint 的 MMAU / MMAR 评测扩展
 
 已扩展两个现有提交入口 `run_mizar_s1_ced_small_mmau_eval_5090.sh`、

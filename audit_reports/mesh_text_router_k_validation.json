@@ -1,0 +1,63 @@
+{
+  "status": "PASS",
+  "scope": "local CPU/code checks only; no remote checkpoint, CUDA or submission",
+  "tests_run": 27,
+  "passed": 22,
+  "skipped": [
+    {
+      "test": "test_context_overflow_and_eos_mismatch_fail_before_forward (test_mesh_text_router_k_tensor.RouterTensorTests.test_context_overflow_and_eos_mismatch_fail_before_forward)",
+      "reason": "real CPU tensor checks require torch and transformers"
+    },
+    {
+      "test": "test_eos_stops_at_one_but_still_records_the_eos_input (test_mesh_text_router_k_tensor.RouterTensorTests.test_eos_stops_at_one_but_still_records_the_eos_input)",
+      "reason": "real CPU tensor checks require torch and transformers"
+    },
+    {
+      "test": "test_fixed100_generation_final_token_observation_and_no_duplicate_positions (test_mesh_text_router_k_tensor.RouterTensorTests.test_fixed100_generation_final_token_observation_and_no_duplicate_positions)",
+      "reason": "real CPU tensor checks require torch and transformers"
+    },
+    {
+      "test": "test_measured_logit_formula_matches_real_fp32_expanded_linear (test_mesh_text_router_k_tensor.RouterTensorTests.test_measured_logit_formula_matches_real_fp32_expanded_linear)",
+      "reason": "real CPU tensor checks require torch and transformers"
+    },
+    {
+      "test": "test_read_only_hooks_preserve_logits_all_weights_and_remove_handles (test_mesh_text_router_k_tensor.RouterTensorTests.test_read_only_hooks_preserve_logits_all_weights_and_remove_handles)",
+      "reason": "real CPU tensor checks require torch and transformers"
+    }
+  ],
+  "failures": [],
+  "syntax": [
+    {
+      "path": "code\\RSmol\\scripts\\calibrate_mesh_text_router_k.py",
+      "status": "PASS"
+    },
+    {
+      "path": "tests\\test_mesh_text_router_k.py",
+      "status": "PASS"
+    },
+    {
+      "path": "tests\\test_mesh_text_router_k_shell.py",
+      "status": "PASS"
+    },
+    {
+      "path": "tests\\test_mesh_text_router_k_tensor.py",
+      "status": "PASS"
+    },
+    {
+      "path": "tests\\validate_mesh_text_router_k.py",
+      "status": "PASS"
+    },
+    {
+      "path": "code\\RSmol\\run_mesh_text_router_k_5090.sh",
+      "status": "PASS",
+      "stderr": ""
+    },
+    {
+      "path": "code\\RSmol\\scripts\\calibrate_mesh_text_router_k.sh",
+      "status": "PASS",
+      "stderr": ""
+    }
+  ],
+  "require_tensors": false,
+  "remote_gpu_verified": false
+}
