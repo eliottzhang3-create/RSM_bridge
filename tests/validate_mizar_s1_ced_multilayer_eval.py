@@ -1,4 +1,4 @@
-"""Validate the five-route CED evaluator, existing recursive and base/MeSH regressions.
+"""Validate the eight-route CED evaluator, existing recursive and base/MeSH regressions.
 
 No downloads, production weights, CUDA or job submission. --require-tensors
 turns any missing tensor dependency or skipped tensor check into failure.
@@ -22,6 +22,9 @@ TEST_FILES = (
     "test_mizar_s1_ced_multilayer_eval_workflow.py",
     "test_mizar_s1_ced_multilayer_eval_shell.py",
     "test_mizar_s1_ced_multilayer_eval_tensor.py",
+    "test_mizar_s1_mesh_ced_audio7slot_split3_behavior.py",
+    "test_mizar_s1_mesh_ced_audio7slot_split3_inject_behavior.py",
+    "test_mizar_s1_mesh_ced_layer84_behavior.py",
     "test_mizar_s1_ced_recursive_eval.py",
     "test_mizar_s1_ced_recursive_eval_workflow.py",
     "test_mizar_s1_ced_recursive_eval_shell.py",
@@ -85,7 +88,7 @@ def main():
         "missing_dependencies": missing, "executed_tests": sum(r.get("tests", 0) - r.get("skipped", 0) for r in results),
         "skipped_tests": sum(r.get("skipped", 0) for r in results), "checks": results}
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps({k: v for k, v in report.items() if k != "checks"}), flush=True)
     print(f"report={args.output}", flush=True)
     return int(failed)

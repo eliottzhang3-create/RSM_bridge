@@ -1,4 +1,4 @@
-"""Five isolated CED interaction routes, using the original CED scoring protocol.
+"""Isolated CED interaction routes, using the original CED scoring protocol.
 
 Import the actual training models; never patch their forward methods or relax
 their source identities. Per-sample context is explicit and never stored on a
@@ -34,7 +34,10 @@ for _family, _suffix, _version, _stamp, _kind, _count in (
     ("recursive_5_10_5", "layer36912_query32_crossattn", 1, "20261030_162028139130855", "query32", 6241733),
     ("recursive_mesh", "layer4_8_inject", 1, None, "inject48", 2444930),
     ("recursive_mesh", "layer4_8_listen", 1, "20261030_172450546025072", "listen48", 2450700),
-    ("recursive_mesh", "layer36912_listen", 2, None, "listen36912", 3552788),
+    ("recursive_mesh", "layer36912_listen", 2, "20261101_113133327944502", "listen36912", 3552788),
+    ("recursive_mesh", "layer4_8_audio7slot_split3", 1, "20261101_170211458358358", "audio7split3", 2468010),
+    ("recursive_mesh", "layer4_8_audio7slot_split3_inject", 1, None, "audio7split3_inject", 2469164),
+    ("recursive_mesh", "layer8_4_inject", 1, None, "inject84", 2444930),
 ):
     _variant = f"{_family}_{_suffix}"
     _mesh = _family == "recursive_mesh"
@@ -44,7 +47,11 @@ for _family, _suffix, _version, _stamp, _kind, _count in (
         "run_root": (REMOTE_OUTPUT_ROOT / f"mizar_s1_ced_small_gbs256_{_variant}_5090" / f"formal_{_stamp}"
                      if _stamp else None),
         "kind": _kind, "mesh": _mesh, "new_parameters": _count,
-        "implementation": ("models.recursive_layer_inject" if _kind == "inject48" else
+        "context_kind": "pair" if _kind in ("inject48", "inject84", "listen48", "audio7split3", "audio7split3_inject") else "grids",
+        "audio_memory_slots": 7 if _kind.startswith("audio7") else 5 if _mesh else 0,
+        "interaction_layers": ((8, 4) if _kind == "inject84" else (4, 8)
+                               if _kind in ("inject48", "listen48", "audio7split3_inject") else ()),
+        "implementation": ("models.recursive_layer_inject" if _kind in ("inject48", "inject84") else
                            "models.recursive_mesh_listen" if _mesh else "models.recursive_crossattn"),
         "text_contract": "logical_30_physical_20_5_10x2_5" if _mesh else "logical_30_physical_20_5_10_5_loops_2_no_mesh",
         "text_architecture": "logical_30_physical_20_5_10x2_5_mesh" if _mesh else "logical_30_physical_20_5_10_5_loops_2_no_mesh",
@@ -61,9 +68,9 @@ def branch_contract(route_contract, spec):
     kind = spec["kind"]
     if kind in ("crossattn", "query32"):
         return "audio_cross_attention", route_contract.cross_attention_contract()
-    if kind == "inject48":
+    if kind in ("inject48", "inject84"):
         return "layer_injection", dict(route_contract.INJECTION_CONTRACT)
-    if kind == "listen48":
+    if kind in ("listen48", "audio7split3", "audio7split3_inject"):
         return "audio_listen", dict(route_contract.LISTEN_CONTRACT)
     return "audio_listen", route_contract.audio_listen_contract()
 
@@ -189,15 +196,26 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
         if core.audio_listen.collect_diagnostics:
             raise ValueError("audio listen diagnostic mode must remain disabled")
     else:
-        branch = (loader.validate_layer_injection(lm) if kind == "inject48" else loader.validate_audio_listen(lm))
+        if kind in ("inject48", "inject84"):
+            branch = loader.validate_layer_injection(lm)
+        elif spec["audio_memory_slots"] == 7:
+            # Trained router rows/gates must not be checked against initialization.
+            branch = loader.validate_audio_listen(lm, fresh=False)
+        else:
+            branch = loader.validate_audio_listen(lm)
         mlps = model.audio_encoder.base.layer_mlps
         if set(mlps) != {"4", "8"} or mlps["4"] is mlps["8"]:
             raise ValueError("CED4/8 requires two independent audio MLPs")
-        extra = [mlps, core.audio_gates]
+        extra = [mlps]
+        if spec["interaction_layers"]:
+            extra.append(core.audio_gates)
+        if spec["audio_memory_slots"] == 7:
+            extra += [core.audio_listen_write_routers, core.audio_listen_read_routers]
+            routers += list(core.audio_listen_write_routers) + list(core.audio_listen_read_routers)
         if kind == "listen48":
             extra.append(core.listen_routers)
             routers += list(core.listen_routers.values())
-        if getattr(core, "collect_injection_stats" if kind == "inject48" else "collect_listen_stats", True):
+        if getattr(core, "collect_injection_stats" if kind in ("inject48", "inject84") else "collect_listen_stats", True):
             raise ValueError("CED4/8 diagnostic mode must remain disabled")
     count = sum(p.numel() for module in extra for p in module.parameters())
     if count != spec["new_parameters"]:
@@ -207,7 +225,10 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
     return {"checkpoint": actual, "parameters": parameters, "branch": branch,
             "implementation": spec["implementation"], "new_parameter_count": count,
             "implementation_sha256": contract["recursive_model_source_sha256"],
-            "memory_slots": 5 if spec["mesh"] else 0, "routers": len(routers)}
+            "memory_slots": 5 if spec["mesh"] else 0,
+            "audio_memory_slots": spec["audio_memory_slots"],
+            "text_memory_slots": 5 if spec["mesh"] else 0,
+            "interaction_layers": list(spec["interaction_layers"]), "routers": len(routers)}
 
 
 def install_recursive_trace_audit(lm, *, eval_variant):
@@ -215,7 +236,10 @@ def install_recursive_trace_audit(lm, *, eval_variant):
     spec = variant_spec(eval_variant)
     trace, events, compression, router_events = [], [], [], []
     audit = {"status": "PENDING", "checked_forwards": 0, "use_cache": False,
-             "expected_schedule": list(TEXT_MODEL_SCHEDULE), "expected_branch_indices": [5, 15],
+             "expected_schedule": list(TEXT_MODEL_SCHEDULE),
+             "expected_branch_indices": [] if spec["kind"] == "audio7split3" else [5, 15],
+             "audio_memory_slots": spec["audio_memory_slots"],
+             "text_memory_slots": 5 if spec["mesh"] else 0,
              "memory_policy": "fresh_per_full_sequence_forward" if spec["mesh"] else "none"}
 
     def begin(_module, _inputs, kwargs):
@@ -254,19 +278,22 @@ def install_recursive_trace_audit(lm, *, eval_variant):
             raise RuntimeError(f"CED actual physical schedule mismatch: {trace}")
         if output.past_key_values is not None:
             raise RuntimeError("CED evaluation unexpectedly returned a KV cache")
-        pair = spec["kind"] in ("inject48", "listen48")
-        expected = [[5, 4], [15, 8]] if pair else [[5, 0], [15, 1]]
+        layers = spec["interaction_layers"]
+        expected = ([[boundary, layer] for boundary, layer in zip((5, 15), layers)] if layers else
+                    [] if spec["kind"] == "audio7split3" else [[5, 0], [15, 1]])
         if events != expected:
             raise RuntimeError(f"CED actual interaction order mismatch: {events}")
-        if pair:
-            internal = getattr(module.model, "last_injection_trace" if spec["kind"] == "inject48" else "last_listen_trace")
+        if layers:
+            internal = getattr(module.model, "last_listen_trace" if spec["kind"] == "listen48" else "last_injection_trace")
             if [list(item) for item in internal] != expected:
                 raise RuntimeError("CED layer trace disagrees with observed gates")
-        elif spec["kind"] != "listen36912" and tuple(module.model.last_crossattn_trace) != (5, 15):
+        elif spec["kind"] in ("crossattn", "query32") and tuple(module.model.last_crossattn_trace) != (5, 15):
             raise RuntimeError("CED cross attention trace mismatch")
         if spec["mesh"]:
             expected_routers = []
             for boundary, index in ((5, 0), (15, 1), (25, 2)):
+                if spec["audio_memory_slots"] == 7:
+                    expected_routers += [[boundary, f"audio_write_{index}"], [boundary, f"audio_read_{index}"]]
                 expected_routers += [[boundary, f"write_{index}"], [boundary, f"read_{index}"]]
                 if index < 2 and spec["kind"].startswith("listen"):
                     expected_routers.append([boundary, f"listen_{index}"])
@@ -292,6 +319,11 @@ def install_recursive_trace_audit(lm, *, eval_variant):
             router.register_forward_hook(router_event(f"write_{index}"))
         for index, router in enumerate(core.read_routers):
             router.register_forward_hook(router_event(f"read_{index}"))
+        if spec["audio_memory_slots"] == 7:
+            for index, router in enumerate(core.audio_listen_write_routers):
+                router.register_forward_hook(router_event(f"audio_write_{index}"))
+            for index, router in enumerate(core.audio_listen_read_routers):
+                router.register_forward_hook(router_event(f"audio_read_{index}"))
     if kind in ("crossattn", "query32"):
         core.audio_crossattn.register_forward_hook(interaction)
         if kind == "query32":
@@ -300,7 +332,7 @@ def install_recursive_trace_audit(lm, *, eval_variant):
         core.audio_listen.register_forward_hook(interaction)
         for index, router in enumerate(core.audio_listen.listen_routers):
             router.register_forward_hook(router_event(f"listen_{index}"))
-    else:
+    elif spec["interaction_layers"]:
         for layer in (4, 8):
             core.audio_gates[str(layer)].register_forward_hook(pair_event(layer))
         if kind == "listen48":
@@ -391,8 +423,9 @@ def load_runtime(args):
 
 def sample_context(eval_variant, audio_output, context, text_input):
     """Respect each training prefix API, including four-depth listen's None."""
-    kind = variant_spec(eval_variant)["kind"]
-    if kind in ("inject48", "listen48"):
+    spec = variant_spec(eval_variant)
+    kind = spec["kind"]
+    if spec["context_kind"] == "pair":
         return {"audio_information": context}
     if kind == "listen36912":
         if context is not None:
@@ -411,10 +444,10 @@ def validate_context(eval_variant, context, prefix):
                 and value.device == prefix.device and value.dtype == prefix.dtype
                 and bool(torch.isfinite(value).all()))
 
-    kind = variant_spec(eval_variant)["kind"]
+    spec = variant_spec(eval_variant)
     if not isinstance(context, dict):
         raise ValueError("explicit per-sample CED context is required")
-    if kind in ("inject48", "listen48"):
+    if spec["context_kind"] == "pair":
         pair = context.get("audio_information")
         if (set(context) != {"audio_information"} or not isinstance(pair, (tuple, list)) or len(pair) != 2
                 or any(not tensor(value, (1, AUDIO_TOKENS, HIDDEN_SIZE)) for value in pair)):

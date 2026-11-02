@@ -1,3 +1,31 @@
+## 2026-11-02：扩展原 MMAU/MMAR evaluator，支持七槽 split3、split3_inject 和 MeSH 8→4
+
+两个原提交入口 `code/RSmol/run_mizar_s1_ced_small_mmau_eval_5090.sh`、
+`code/RSmol/run_mizar_s1_ced_small_mmar_eval_5090.sh` 现支持八条多层交互路线。
+新增 `recursive_mesh_layer4_8_audio7slot_split3`、
+`recursive_mesh_layer4_8_audio7slot_split3_inject` 和 `recursive_mesh_layer8_4_inject`；
+四层 `recursive_mesh_layer36912_listen` 继续使用原 v2 适配。
+详见[评测说明及完整提交命令](code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md)。
+
+本次两份默认产物为四层 listen 的 `formal_20261101_113133327944502` 和
+split3 的 `formal_20261101_170211458358358`，均精确读取同 run 的
+`formal/checkpoints/model--step-17313.ckpt` 和 `formal/runtime.json`。
+后两条训练完成后显式传入 `--run-root` 即可，无需再改代码；不自动扫描 latest。
+
+直接导入各路线训练模型、严格加载完整 state_dict，训练源码及 SHA 校验保持。
+七槽路线保留音频7槽/文本5槽及12个独立 routers；加载后用 `fresh=False`
+校验已训练参数，不重新三等分 router 或清零 gate。
+split3_inject 同时保留种子memory和read后4→8残差；8→4路线仍传 `(A4,A8)`，
+由训练模型按 `[[5,8],[15,4]]` 注入。每步完整forward重建memory。
+原 fixed20、256-token prompt、383 prefix、FP32/batch1、无KV cache、
+argmax/300-token/EOS及官方scorer设置均保持，两个benchmark各完整1000条。
+
+本地统一验证入口 `python -B tests/validate_mizar_s1_ced_multilayer_eval.py`：
+125项实际检查通过，19项真实CPU tensor检查因缺 Torch/Transformers 跳过；
+Python/Bash语法、八路线合同/上下文/16种1000条模拟流程、提交参数和旧评测回归通过。
+报告为 `audit_reports/mizar_s1_ced_multilayer_eval_validation.json`。
+本轮未读取远程权重或提交作业，真实checkpoint加载和full评测需在服务器执行。
+
 ## 2026-11-02：MeSH CED 第 8→4 层 read 后残差注入独立训练路线
 
 已完整复制原 MeSH 第4→8层注入路线，新增

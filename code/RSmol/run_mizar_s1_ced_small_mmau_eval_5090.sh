@@ -35,14 +35,17 @@ case "$EVAL_VARIANT" in
     JOB_NAME_PREFIX="mizar-ced-r515-${JOB_TAG}-mmau"
     JOB_LOG_PREFIX="mizar_s1_ced_small_${EVAL_VARIANT}_mmau_5090"
     ;;
-  recursive_5_10_5_layer36912_crossattn|recursive_5_10_5_layer36912_query32_crossattn|recursive_mesh_layer4_8_inject|recursive_mesh_layer4_8_listen|recursive_mesh_layer36912_listen)
+  recursive_5_10_5_layer36912_crossattn|recursive_5_10_5_layer36912_query32_crossattn|recursive_mesh_layer4_8_inject|recursive_mesh_layer4_8_listen|recursive_mesh_layer36912_listen|recursive_mesh_layer4_8_audio7slot_split3|recursive_mesh_layer4_8_audio7slot_split3_inject|recursive_mesh_layer8_4_inject)
     RUN_STAMP=
     case "$EVAL_VARIANT" in
       recursive_5_10_5_layer36912_crossattn) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer36912_crossattn; RUN_STAMP=20261030_140459065784533; JOB_TAG=ca4 ;;
       recursive_5_10_5_layer36912_query32_crossattn) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer36912_query32_crossattn; RUN_STAMP=20261030_162028139130855; JOB_TAG=q32 ;;
       recursive_mesh_layer4_8_inject) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_inject; JOB_TAG=m48i ;;
       recursive_mesh_layer4_8_listen) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_listen; RUN_STAMP=20261030_172450546025072; JOB_TAG=m48l ;;
-      recursive_mesh_layer36912_listen) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer36912_listen; JOB_TAG=m4l ;;
+      recursive_mesh_layer36912_listen) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer36912_listen; RUN_STAMP=20261101_113133327944502; JOB_TAG=m4l ;;
+      recursive_mesh_layer4_8_audio7slot_split3) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_audio7slot_split3; RUN_STAMP=20261101_170211458358358; JOB_TAG=m7s3 ;;
+      recursive_mesh_layer4_8_audio7slot_split3_inject) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_audio7slot_split3_inject; JOB_TAG=m7s3i ;;
+      recursive_mesh_layer8_4_inject) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer8_4_inject; JOB_TAG=m84i ;;
     esac
     DEFAULT_RUN_ROOT=
     if [[ -n "$RUN_STAMP" ]]; then

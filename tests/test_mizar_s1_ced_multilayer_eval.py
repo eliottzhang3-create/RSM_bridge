@@ -56,10 +56,12 @@ class MultilayerEvaluationTests(unittest.TestCase):
         return adapter.validate_checkpoint(saved, runtime, self.route, 17313,
                                            eval_variant=self.variant, **kwargs)
 
-    def test_five_actual_contracts_accept_completed_checkpoints_and_bind_three_runs(self):
+    def test_eight_actual_contracts_accept_completed_checkpoints_and_bind_five_runs(self):
         stamps = ("20261030_140459065784533", "20261030_162028139130855", None,
-                  "20261030_172450546025072", None)
-        counts = (4892741, 6241733, 2444930, 2450700, 3552788)
+                  "20261030_172450546025072", "20261101_113133327944502",
+                  "20261101_170211458358358", None, None)
+        counts = (4892741, 6241733, 2444930, 2450700, 3552788, 2468010, 2469164, 2444930)
+        self.assertEqual(len(VARIANTS), 8)
         for variant, stamp, count in zip(VARIANTS, stamps, counts):
             self.select(variant)
             contract, saved, runtime = self.fixture()
@@ -212,7 +214,7 @@ class MultilayerEvaluationTests(unittest.TestCase):
             tokenizer.encode.return_value = [1, 2]
             contexts = []
             for _ in range(2):
-                if self.spec["kind"] in ("inject48", "listen48"):
+                if self.spec["context_kind"] == "pair":
                     context, output = (object(), object()), {}
                 else:
                     grids = object()
@@ -230,7 +232,7 @@ class MultilayerEvaluationTests(unittest.TestCase):
             self.assertEqual(model.generate_prefix_inference.call_count, 2)
             for call, (out, ctx) in zip(decode.call_args_list, contexts):
                 got = call.kwargs["context"]
-                if self.spec["kind"] in ("inject48", "listen48"):
+                if self.spec["context_kind"] == "pair":
                     self.assertIs(got["audio_information"], ctx)
                 else:
                     self.assertIs(got["audio_grids"], out["layer_grids"])
@@ -243,6 +245,42 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 with self.assertRaises(ValueError): adapter.sample_context(variant, {}, context, {})
         with self.assertRaises(ValueError): adapter.sample_context(VARIANTS[4], {}, {}, {})
 
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "requires NumPy parameter stand-ins")
+    def test_actual_seven_slot_validators_preserve_learned_rows_and_gates(self):
+        import numpy as np
+        class Parameter(np.ndarray):
+            def data_ptr(self): return self.__array_interface__["data"][0]
+            def detach(self): return self
+            def ne(self, value): return self != value
+        class Linear:
+            def __init__(self, rows):
+                self.weight = np.arange(rows * 576, dtype=np.float32).reshape(rows, 576).view(Parameter)
+                self.bias = np.arange(rows, dtype=np.float32).view(Parameter) + .25
+            def parameters(self): return (self.weight, self.bias)
+        for suffix in ("layer4_8_audio7slot_split3", "layer4_8_audio7slot_split3_inject"):
+            self.select("recursive_mesh_" + suffix)
+            core = types.SimpleNamespace(listen_audio_tokens=126, audio_memory_slots=7, text_memory_slots=5,
+                audio_router_initialization="split_slot0_three_ways", config=types.SimpleNamespace(
+                    audio_injection="post_read_tanh_linear_zero"),
+                write_routers=[Linear(5) for _ in range(3)], read_routers=[Linear(5) for _ in range(3)],
+                audio_listen_write_routers=[Linear(7) for _ in range(3)],
+                audio_listen_read_routers=[Linear(7) for _ in range(3)])
+            if suffix.endswith("_inject"): core.audio_gates = {str(k): Linear(1) for k in (4, 8)}
+            model = types.SimpleNamespace(model=core, config=types.SimpleNamespace(hidden_size=576))
+            routers = core.audio_listen_write_routers + core.audio_listen_read_routers
+            parameters = [p for r in routers for p in r.parameters()]
+            if hasattr(core, "audio_gates"):
+                parameters += [p for r in core.audio_gates.values() for p in r.parameters()]
+            before = [p.copy() for p in parameters]
+            with patch.dict(sys.modules, {"contract": self.route, "torch": types.SimpleNamespace(equal=np.array_equal)}):
+                loader = load_module("seven_slot_validator", self.spec["route_root"] / "models/recursive_text.py")
+                branch = loader.validate_audio_listen(model, fresh=False)
+                self.assertEqual((branch["audio_memory_slots"], branch["text_memory_slots"], branch["total_routers"]), (7, 5, 12))
+                with self.assertRaises(ValueError): loader.validate_audio_listen(model, fresh=True)
+                for actual, original in zip(parameters, before): np.testing.assert_array_equal(actual, original)
+                core.audio_listen_read_routers[0] = core.audio_listen_write_routers[0]
+                with self.assertRaises(ValueError): loader.validate_audio_listen(model, fresh=False)
+
     def test_trace_hooks_check_physical_calls_branches_routers_and_query32(self):
         for variant in VARIANTS:
             self.select(variant)
@@ -250,11 +288,12 @@ class MultilayerEvaluationTests(unittest.TestCase):
             core, kind = lm.model, self.spec["kind"]
             core.layers = [Mock() for _ in range(20)]
             core.write_routers, core.read_routers = [Mock() for _ in range(3)], [Mock() for _ in range(3)]
+            core.audio_listen_write_routers, core.audio_listen_read_routers = [Mock() for _ in range(3)], [Mock() for _ in range(3)]
             core.audio_gates = {str(k): Mock() for k in (4, 8)}
             core.listen_routers = {str(k): Mock() for k in (4, 8)}
             core.audio_listen.listen_routers = [Mock() for _ in range(2)]
             core.audio_listen.last_rounds = [0, 1]
-            core.last_injection_trace = core.last_listen_trace = ((5, 4), (15, 8))
+            core.last_injection_trace = core.last_listen_trace = tuple(zip((5, 15), self.spec["interaction_layers"]))
             core.last_crossattn_trace = (5, 15)
             audit = adapter.install_recursive_trace_audit(lm, eval_variant=variant)
             begin = lm.register_forward_pre_hook.call_args.args[0]
@@ -262,7 +301,7 @@ class MultilayerEvaluationTests(unittest.TestCase):
             output = types.SimpleNamespace(past_key_values=None, logits=types.SimpleNamespace(shape=(1, 383, 576)))
             def hook(module, inputs=()):
                 self.assertIsNone(module.register_forward_hook.call_args.args[0](module, inputs, None))
-            def execute(*, bad_order=False, bad_compression=False):
+            def execute(*, bad_order=False, bad_compression=False, reverse_injection=False, omit_audio_router=False):
                 begin(lm, (), {"use_cache": False, "attention_mask": None})
                 if kind == "query32":
                     q = types.SimpleNamespace(shape=(4, 31 if bad_compression else 32, 576))
@@ -271,17 +310,20 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 for logical, physical in enumerate(adapter.TEXT_MODEL_SCHEDULE):
                     if logical in (5, 15, 25) and self.spec["mesh"]:
                         index = (logical - 5) // 10
+                        if self.spec["audio_memory_slots"] == 7:
+                            hook(core.audio_listen_write_routers[index])
+                            if not omit_audio_router: hook(core.audio_listen_read_routers[index])
+                        if bad_order: hook(core.read_routers[index])
                         hook(core.write_routers[index])
                         if not bad_order: hook(core.read_routers[index])
                         if index < 2:
                             if kind == "listen36912":
                                 hook(core.audio_listen.listen_routers[index])
                                 hook(core.audio_listen, (None, None, None, None, index, None))
-                            else:
-                                layer = str(4 if index == 0 else 8)
+                            elif self.spec["interaction_layers"]:
+                                layer = str(self.spec["interaction_layers"][1 - index if reverse_injection else index])
                                 hook(core.audio_gates[layer])
                                 if kind == "listen48": hook(core.listen_routers[layer])
-                        if bad_order: hook(core.read_routers[index])
                     elif logical in (5, 15):
                         hook(core.audio_crossattn, (None, None, None, 0 if logical == 5 else 1))
                     hook(core.layers[physical])
@@ -295,8 +337,12 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError): begin(lm, (), kwargs)
             begin(lm, (), {"use_cache": False})
             with self.assertRaisesRegex(RuntimeError, "physical schedule"): finish(lm, (), output)
-            if self.spec["mesh"] and kind.startswith("listen"):
+            if self.spec["mesh"]:
                 with self.assertRaisesRegex(RuntimeError, "router invocation order"): execute(bad_order=True)
+            if self.spec["audio_memory_slots"] == 7:
+                with self.assertRaisesRegex(RuntimeError, "router invocation order"): execute(omit_audio_router=True)
+            if self.spec["interaction_layers"]:
+                with self.assertRaisesRegex(RuntimeError, "interaction order"): execute(reverse_injection=True)
             if kind == "query32":
                 with self.assertRaisesRegex(RuntimeError, "compress"): execute(bad_compression=True)
 
@@ -315,7 +361,7 @@ class NumpyDecodeTests(unittest.TestCase):
             tensor=lambda value, device, dtype: Tensor(value, dtype))
         prefix = Tensor(np.zeros((1, 383, 576)))
         context = ({"audio_information": (Tensor(np.zeros((1, 126, 576))), Tensor(np.ones((1, 126, 576))))}
-            if adapter.variant_spec(variant)["kind"] in ("inject48", "listen48") else
+            if adapter.variant_spec(variant)["context_kind"] == "pair" else
             {"audio_grids": Tensor(np.zeros((1, 4, 126, 1536))),
              "prompt_mask": Tensor([[1] * 180 + [0] * 76], np.int64)})
         def forward(**kwargs):

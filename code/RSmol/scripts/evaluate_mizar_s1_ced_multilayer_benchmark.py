@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full CED evaluation for five isolated multilayer interaction routes."""
+"""Full CED evaluation for isolated multilayer and memory interaction routes."""
 from __future__ import annotations
 
 import argparse

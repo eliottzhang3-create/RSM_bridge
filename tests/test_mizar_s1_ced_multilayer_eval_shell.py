@@ -1,4 +1,4 @@
-"""Exercise all ten submissions with fake vc and the real compute wrapper."""
+"""Exercise all sixteen submissions with fake vc and the real compute wrapper."""
 from __future__ import annotations
 
 import importlib.util
@@ -19,7 +19,10 @@ SPECS = {
     "recursive_5_10_5_layer36912_query32_crossattn": ("recursive_5_10_5", "layer36912_query32_crossattn", "20261030_162028139130855", "q32"),
     "recursive_mesh_layer4_8_inject": ("recursive_mesh", "layer4_8_inject", None, "m48i"),
     "recursive_mesh_layer4_8_listen": ("recursive_mesh", "layer4_8_listen", "20261030_172450546025072", "m48l"),
-    "recursive_mesh_layer36912_listen": ("recursive_mesh", "layer36912_listen", None, "m4l"),
+    "recursive_mesh_layer36912_listen": ("recursive_mesh", "layer36912_listen", "20261101_113133327944502", "m4l"),
+    "recursive_mesh_layer4_8_audio7slot_split3": ("recursive_mesh", "layer4_8_audio7slot_split3", "20261101_170211458358358", "m7s3"),
+    "recursive_mesh_layer4_8_audio7slot_split3_inject": ("recursive_mesh", "layer4_8_audio7slot_split3_inject", None, "m7s3i"),
+    "recursive_mesh_layer8_4_inject": ("recursive_mesh", "layer8_4_inject", None, "m84i"),
 }
 
 
@@ -32,7 +35,7 @@ class MultilayerCedShellTests(unittest.TestCase):
         self.bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
         if not self.bash: self.skipTest("Bash is unavailable")
 
-    def test_ten_submissions_bind_variant_checkpoint_runtime_route_and_resources(self):
+    def test_sixteen_submissions_bind_variant_checkpoint_runtime_route_and_resources(self):
         for variant, (family, suffix, stamp, tag) in SPECS.items():
             for benchmark in ("mmau", "mmar"):
                 with self.subTest(variant=variant, benchmark=benchmark), tempfile.TemporaryDirectory() as directory:
@@ -99,7 +102,7 @@ class MultilayerCedShellTests(unittest.TestCase):
                 self.assertIsNone(submission)
 
     def test_pending_routes_reject_missing_run_before_submitting_and_accept_cli_paths(self):
-        for variant in ("recursive_mesh_layer4_8_inject", "recursive_mesh_layer36912_listen"):
+        for variant in (name for name, value in SPECS.items() if value[2] is None):
             for benchmark in ("mmau", "mmar"):
                 with tempfile.TemporaryDirectory() as directory:
                     result, submission = self.run_launcher(directory, benchmark, variant)
@@ -149,7 +152,7 @@ class MultilayerCedShellTests(unittest.TestCase):
                     ["-u", "scripts/evaluate_mizar_s1_ced_multilayer_benchmark.py", "--eval-variant", "recursive_5_10_5_layer36912_crossattn"])
                 self.assertEqual(captured_env.read_text(encoding="utf-8").splitlines(), ["1", "1", "false", helpers.bash_path(root)])
 
-    def test_checkpoint_override_infers_matching_run_for_all_five(self):
+    def test_checkpoint_override_infers_matching_run_for_all_eight(self):
         checkpoint = "/replacement run/formal/checkpoints/model--step-17313.ckpt"
         for variant in SPECS:
             for benchmark in ("mmau", "mmar"):
