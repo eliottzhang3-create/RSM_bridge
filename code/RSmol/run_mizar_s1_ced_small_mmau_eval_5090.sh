@@ -8,6 +8,9 @@ mkdir -p log
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
 EVAL_VARIANT="${RSMOL_MIZAR_CED_EVAL_VARIANT:-base}"
 case "$EVAL_VARIANT" in
+  official_mizar)
+    exec bash "$SCRIPT_DIR/mizar_official_eval/submit_5090.sh" mmau "$@"
+    ;;
   base)
     DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_5090/formal_20261026_193830617147305
     DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_ced_small"

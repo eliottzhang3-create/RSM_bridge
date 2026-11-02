@@ -1,0 +1,111 @@
+{
+  "schema": "mizar_official_matched_eval_release_v1",
+  "release": {
+    "name": "Mizar-159M",
+    "stage": 3,
+    "recipe": "Q4",
+    "seed": 20260905,
+    "optimizer_step": 200,
+    "parameters": 159299840,
+    "huggingface_revision": "c2bf5a2c16a0078e27ee52bce86e0cdc176b448e",
+    "source": "https://github.com/kaiyangli-ml/Mizar_159M"
+  },
+  "checkpoint": {
+    "path": "checkpoints/final/stage3_q4_seed20260905.ckpt",
+    "bytes": 637470191,
+    "sha256": "0c542f63e11ed55d360feb0d66e7be0e8c6a878f44cffd302a92388f915388a2"
+  },
+  "tensor_count": 454,
+  "tensor_elements": 187628509,
+  "files": [
+    {
+      "path": "assets/smollm2-135m/config.json",
+      "bytes": 704,
+      "sha256": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843"
+    },
+    {
+      "path": "assets/smollm2-135m/generation_config.json",
+      "bytes": 111,
+      "sha256": "2056c988e990b0d13670f63f2f3b87b3b6d07edaf7a3416998ba27dab2d8a059"
+    },
+    {
+      "path": "assets/smollm2-135m/merges.txt",
+      "bytes": 466391,
+      "sha256": "0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510"
+    },
+    {
+      "path": "assets/smollm2-135m/model.safetensors",
+      "bytes": 269060552,
+      "sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+    },
+    {
+      "path": "assets/smollm2-135m/special_tokens_map.json",
+      "bytes": 831,
+      "sha256": "e786b595b9a23148bf1630df78d9037a048ea671e48bfd3549a1e3c233742bb3"
+    },
+    {
+      "path": "assets/smollm2-135m/tokenizer.json",
+      "bytes": 2104556,
+      "sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c"
+    },
+    {
+      "path": "assets/smollm2-135m/tokenizer_config.json",
+      "bytes": 3658,
+      "sha256": "4bb9af56a342753d39374f4016a16574cab299fe088e896f425ce3c433f61424"
+    },
+    {
+      "path": "assets/smollm2-135m/vocab.json",
+      "bytes": 800662,
+      "sha256": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79"
+    },
+    {
+      "path": "assets/ced-small/README.md",
+      "bytes": 3406,
+      "sha256": "abadd277170322483db97cb726a566b3e3290d58a4016ed08e0c61c93250c146"
+    },
+    {
+      "path": "assets/ced-small/config.json",
+      "bytes": 25059,
+      "sha256": "8b76f3ed8b7a443cbcc7d124d23c7faf222e690f338e4753920697282978cac9"
+    },
+    {
+      "path": "assets/ced-small/configuration_ced.py",
+      "bytes": 6746,
+      "sha256": "147ac3602c1b35c3309d68575e3f19eb22cc2afe088897397991613e68a82a64"
+    },
+    {
+      "path": "assets/ced-small/feature_extraction_ced.py",
+      "bytes": 6482,
+      "sha256": "d2eff0a8cbc563196f8ccef4180d9e9299d643bfee087a545e97e9c4a9e64cb4"
+    },
+    {
+      "path": "assets/ced-small/model.safetensors",
+      "bytes": 86506420,
+      "sha256": "a495e319a620dec4c8b7ca7bb927667ed68169a9efc1a943ccbf5d5c6f9c0c71"
+    },
+    {
+      "path": "assets/ced-small/modeling_ced.py",
+      "bytes": 20075,
+      "sha256": "c8a8e8b865e4e3dcebffefb40215d6778bfa380ecea388f11806e33521a29327"
+    },
+    {
+      "path": "assets/ced-small/preprocessor_config.json",
+      "bytes": 384,
+      "sha256": "668fbf4f00f9e3915de04fc07a621434ef1746b933662840623a9701291ca55a"
+    },
+    {
+      "path": "model_info.json",
+      "bytes": 548,
+      "sha256": "36e3fe63ba7181f0e8fb80b8ebf8b06ddcf585313eeec7f20f7d0051b3352738"
+    },
+    {
+      "path": "provenance/local_bundle.json",
+      "bytes": 6275,
+      "sha256": "fc363289df3fca4820b792c52a7f326a979d24255a108a15116bfd9a3a0484ab"
+    }
+  ],
+  "official_mapper_ast_sha256": {
+    "CEDFrequencyMerger": "531e7e93ef6ed0d84b56a0bfd634523ba5047905e8f395a4cc18318567906f8f",
+    "CEDTemporalMapper": "12685d53bedd8dcb6b353ce902e128281a1ef93d20f6bc85ee5c4f61bb297c29"
+  }
+}

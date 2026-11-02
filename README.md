@@ -1,3 +1,44 @@
+## 2026-11-02：官方 Mizar final 权重沿用现有 CED MMAU/MMAR 协议评测
+
+新增[独立官方 Mizar 评测目录与完整说明](code/RSmol/mizar_official_eval/README.md)。
+默认读取已上传的 `/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M`，
+使用官方 `checkpoints/final/stage3_q4_seed20260905.ckpt`：Stage3 / Q4 / seed20260905 / update200，
+159,299,840 独立参数。checkpoint、15 个 base assets、model_info 和 provenance
+共18个文件固定大小/SHA256；不需要训练数据 manifest 或项目训练 runtime.json。
+
+通过现有非递归 CED 模型构造标准30个独立LM层，FP32下严格全量加载官方 plain state_dict；
+不替换训练模型、不重初始化已训练 mapper。直接复用原 evaluator 的音频、prompt、
+generate/greedy、预测写入和官方评分函数对象，保留中心裁20s、256-token prompt及EOS后缀、
+383 prefix、PAD17/EOS0、batch1/FP32/TF32关闭、无KV cache、纯argmax/300tokens、
+原始EOS与空格，以及两个benchmark各1000条、零跳过、官方评分分母1000。
+只读hooks核验每次forward依次执行0..29，不改变输出。
+
+两个旧提交脚本各只增加 `official_mizar` 分支；默认base和全部旧训练版本评测保持。
+本地改动经GitHub提交并同步后，远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+RSMOL_MIZAR_CED_EVAL_VARIANT=official_mizar bash run_mizar_s1_ced_small_mmau_eval_5090.sh
+RSMOL_MIZAR_CED_EVAL_VARIANT=official_mizar bash run_mizar_s1_ced_small_mmar_eval_5090.sh
+```
+
+仍使用 `mellow_c8204d8`、`vc submit`、pdgpu-5090 / 8CPU / 32G / 1GPU / 1node，
+无自动smoke/tensor前置作业。独立输出根为
+`outputs/RSmol/mizar_official_stage3_q4_seed20260905_matched_ced_v1/{mmau_test_mini,mmar}`，
+同目录重提可恢复JSONL；改动权重/资产/模型源码/评测代码/协议等身份时拒绝混用。
+新环境变量使用 `RSMOL_MIZAR_OFFICIAL_*`；路径覆盖及产物字段见目录README。
+结果应标记“官方Stage3 final在本项目相同协议下的对照”，不等同于论文9k/五seed原生评测复现。
+
+验证入口 `python -B tests/validate_mizar_official_eval.py`：
+本地149项实际检查通过，22项真实CPU tensor检查因缺Torch/Transformers跳过（本扩展3项）。
+覆盖strict loader、官方mapper源码AST一致性、两类1000条模拟流程、断点恢复、评分分母、
+真实Bash假提交及原各CED评测回归；另只读核验本地已下载18个文件SHA256全部通过。
+报告为 `audit_reports/mizar_official_eval_validation.json`；
+可手动加 `--model-dir <已下载目录>` 检查资产，或 `--require-tensors` 禁止tensor skip。
+本轮未提交远程作业，真实权重tensor加载及GPU完整评测尚未执行，未登记远程PASS。
+
 ## 2026-11-02：非 MeSH input embeddings → CED 8→4 串行注入正式训练
 
 已完整复制非 MeSH 8→4 路线，新增
