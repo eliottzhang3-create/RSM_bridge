@@ -1,0 +1,95 @@
+{
+  "status": "PASS",
+  "scope": "local checks only; no pretrained assets or GPU training",
+  "require_tensors": false,
+  "tensor_status": "SKIPPED",
+  "missing_dependencies": [
+    "torch",
+    "torchaudio",
+    "transformers",
+    "soundfile"
+  ],
+  "executed_tests": 63,
+  "skipped_tests": 21,
+  "checks": [
+    {
+      "check": "python_syntax",
+      "status": "PASS",
+      "files": 33
+    },
+    {
+      "check": "run_mizar_s1_gbs128_recursive_mesh_5_10x4_5_ced_small_5090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "run.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "test_mizar_s1_mesh_x4_ced_small_route.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_assets_validate_geometry_without_onnx_and_reject_incompatible_config (__main__.CEDRouteTests.test_assets_validate_geometry_without_onnx_and_reject_incompatible_config) ... ok\ntest_formal_schedule_and_shorter_sequence (__main__.CEDRouteTests.test_formal_schedule_and_shorter_sequence) ... ok\ntest_launcher_resources_arguments_and_rejections_before_submit (__main__.CEDRouteTests.test_launcher_resources_arguments_and_rejections_before_submit) ... ok\ntest_optimizer_classifies_only_mapper_and_full_lm (__main__.CEDRouteTests.test_optimizer_classifies_only_mapper_and_full_lm) ... ok\ntest_parent_data_and_real_update_loop_preserved (__main__.CEDRouteTests.test_parent_data_and_real_update_loop_preserved) ... ok\ntest_resume_contract_separates_routes_and_is_independent_of_staging_root (__main__.CEDRouteTests.test_resume_contract_separates_routes_and_is_independent_of_staging_root) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 2.272s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_x4_ced_small_shared_start.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[cpu-index] verifying manifest/audit TSV SHA256; no raw audio scan\n[cpu-index] manifest/audit TSV contents verified\n[staging] phase=COPYING staged 0/1 files (0.00/0.00 GiB) ready_through_batch=0 MiB_per_second=0.0 cgroup_remaining_bytes=None\n[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues\n[staging] training can start: read_policy=shared_until_complete prefill_steps=0 ready_through_batch=0 report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmpfaevv1d8\\report.json\n[staging] phase=COMPLETE staged 1/1 files (0.00/0.00 GiB) ready_through_batch=11542 MiB_per_second=0.0 cgroup_remaining_bytes=None\ntest_content_check_identifies_size_change_and_keeps_expected_paths (__main__.CEDSharedStartTests.test_content_check_identifies_size_change_and_keeps_expected_paths) ... ok\ntest_copy_failure_dead_process_and_stale_heartbeat_still_abort (__main__.CEDSharedStartTests.test_copy_failure_dead_process_and_stale_heartbeat_still_abort) ... ok\ntest_cpu_index_reuses_mapping_and_rejects_changed_inputs (__main__.CEDSharedStartTests.test_cpu_index_reuses_mapping_and_rejects_changed_inputs) ... ok\ntest_final_report_requires_full_copy_even_in_shared_mode (__main__.CEDSharedStartTests.test_final_report_requires_full_copy_even_in_shared_mode) ... ok\ntest_formal_config_is_created_with_zero_staged_files (__main__.CEDSharedStartTests.test_formal_config_is_created_with_zero_staged_files) ... ok\ntest_legacy_timestamp_only_identity_requires_rebuild (__main__.CEDSharedStartTests.test_legacy_timestamp_only_identity_requires_rebuild) ... ok\ntest_runner_starts_real_training_during_copy_and_cleans_on_failure (__main__.CEDSharedStartTests.test_runner_starts_real_training_during_copy_and_cleans_on_failure) ... ok\ntest_shared_path_remains_selected_until_explicit_boundary_switch (__main__.CEDSharedStartTests.test_shared_path_remains_selected_until_explicit_boundary_switch) ... ok\ntest_source_identity_change_is_rejected_and_partial_copy_removed (__main__.CEDSharedStartTests.test_source_identity_change_is_rejected_and_partial_copy_removed) ... ok\ntest_switch_is_collective_before_loading_all_four_microbatches (__main__.CEDSharedStartTests.test_switch_is_collective_before_loading_all_four_microbatches) ... ok\ntest_training_starts_before_first_copy_and_crosses_epoch_without_waiting (__main__.CEDSharedStartTests.test_training_starts_before_first_copy_and_crosses_epoch_without_waiting) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 2.099s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_x4_ced_small_behavior.py",
+      "status": "PASS",
+      "tests": 9,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_actual_forward_trace_audit_rejects_partial_execution_or_shared_routers (__main__.BehaviorTests.test_actual_forward_trace_audit_rejects_partial_execution_or_shared_routers) ... ok\ntest_completion_check_executes_dynamic_steps_and_rejects_old_step (__main__.BehaviorTests.test_completion_check_executes_dynamic_steps_and_rejects_old_step) ... ok\ntest_entire_parent_recipe_update_loop_and_original_sources (__main__.BehaviorTests.test_entire_parent_recipe_update_loop_and_original_sources) ... ok\ntest_gbs128_config_checkpoint_steps_and_complete_horizon_lr (__main__.BehaviorTests.test_gbs128_config_checkpoint_steps_and_complete_horizon_lr) ... ok\ntest_resume_guard_requires_this_route_same_code_data_and_recipe (__main__.BehaviorTests.test_resume_guard_requires_this_route_same_code_data_and_recipe) ... ok\ntest_staging_guard_accepts_only_exact_new_direct_tmpfs_prefix (__main__.BehaviorTests.test_staging_guard_accepts_only_exact_new_direct_tmpfs_prefix) ... ok\ntest_staging_priority_and_cursor_follow_16_samples_per_rank_update (__main__.BehaviorTests.test_staging_priority_and_cursor_follow_16_samples_per_rank_update) ... ok\ntest_strict_x4_loader_executes_actual_rejection_paths (__main__.BehaviorTests.test_strict_x4_loader_executes_actual_rejection_paths) ... ok\ntest_x4_checkpoint_contract_rejects_x2_wrong_schedule_and_missing_assets (__main__.BehaviorTests.test_x4_checkpoint_contract_rejects_x2_wrong_schedule_and_missing_assets) ... ok\n\n----------------------------------------------------------------------\nRan 9 tests in 1.062s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_x4_ced_small_tensor.py",
+      "status": "PASS_WITH_SKIPS",
+      "tests": 21,
+      "skipped": 21,
+      "exit_code": 0,
+      "output": "test_accumulated_gradient_is_mean_of_microbatch_means (__main__.RuntimeChecks.test_accumulated_gradient_is_mean_of_microbatch_means) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_ced_frozen_eval_and_mapper_gradient_with_whole20_splits (__main__.RuntimeChecks.test_ced_frozen_eval_and_mapper_gradient_with_whole20_splits) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_ced_temporal_grid_preserves_chunk_frequency_time_order (__main__.RuntimeChecks.test_ced_temporal_grid_preserves_chunk_frequency_time_order) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_decode_averages_every_channel_then_resamples (__main__.RuntimeChecks.test_decode_averages_every_channel_then_resamples) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_fixed20_single_order_and_right_padding (__main__.RuntimeChecks.test_fixed20_single_order_and_right_padding) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_fixed20_true_pair_is_independent (__main__.RuntimeChecks.test_fixed20_true_pair_is_independent) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_gbs128_optimizer_geometry (__main__.RuntimeChecks.test_gbs128_optimizer_geometry) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_gradnorm_ema_common_scale_and_restore (__main__.RuntimeChecks.test_gradnorm_ema_common_scale_and_restore) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_loader_is_offline_strict_and_keeps_only_frozen_encoder (__main__.RuntimeChecks.test_loader_is_offline_strict_and_keeps_only_frozen_encoder) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_mellow_rejoins_both_halves_before_encoding (__main__.RuntimeChecks.test_mellow_rejoins_both_halves_before_encoding) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_mesh_loss_matches_ced_baseline_with_tokenizer_masks (__main__.RuntimeChecks.test_mesh_loss_matches_ced_baseline_with_tokenizer_masks) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_one_separator_padding_visibility_and_next_token_ce (__main__.RuntimeChecks.test_one_separator_padding_visibility_and_next_token_ce) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_online_db_matches_individual_cache_extraction (__main__.RuntimeChecks.test_online_db_matches_individual_cache_extraction) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_optimizer_groups_scheduler_step_order_and_full_resume (__main__.RuntimeChecks.test_optimizer_groups_scheduler_step_order_and_full_resume) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_sampler_staging_and_consumed_cursor_agree (__main__.RuntimeChecks.test_sampler_staging_and_consumed_cursor_agree) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_text_metadata_fallback_and_cot_preservation (__main__.RuntimeChecks.test_text_metadata_fallback_and_cot_preservation) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_actual_ced_prefix_x4_forward_gradients_and_lr_groups (__main__.X4TensorTests.test_actual_ced_prefix_x4_forward_gradients_and_lr_groups) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_all_four_recurrent_boundaries_receive_gradients (__main__.X4TensorTests.test_all_four_recurrent_boundaries_receive_gradients) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_full_checkpoint_resume_matches_next_optimizer_update (__main__.X4TensorTests.test_full_checkpoint_resume_matches_next_optimizer_update) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_memory_has_seven_slots_and_is_rebuilt_each_forward (__main__.X4TensorTests.test_memory_has_seven_slots_and_is_rebuilt_each_forward) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_real_strict_x4_checkpoint_preserves_all_parameters_and_routers (__main__.X4TensorTests.test_real_strict_x4_checkpoint_preserves_all_parameters_and_routers) ... skipped 'requires torch/torchaudio/transformers/soundfile'\n\n----------------------------------------------------------------------\nRan 21 tests in 0.000s\n\nOK (skipped=21)\n"
+    },
+    {
+      "check": "test_mizar_s1_recursive_mesh_ced_small_route.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_assets_validate_geometry_without_onnx_and_reject_incompatible_config (__main__.CEDRouteTests.test_assets_validate_geometry_without_onnx_and_reject_incompatible_config) ... ok\ntest_formal_schedule_and_shorter_sequence (__main__.CEDRouteTests.test_formal_schedule_and_shorter_sequence) ... ok\ntest_launcher_resources_arguments_and_rejections_before_submit (__main__.CEDRouteTests.test_launcher_resources_arguments_and_rejections_before_submit) ... ok\ntest_optimizer_classifies_only_mapper_and_full_lm (__main__.CEDRouteTests.test_optimizer_classifies_only_mapper_and_full_lm) ... ok\ntest_parent_data_and_real_update_loop_preserved (__main__.CEDRouteTests.test_parent_data_and_real_update_loop_preserved) ... ok\ntest_resume_contract_separates_routes_and_is_independent_of_staging_root (__main__.CEDRouteTests.test_resume_contract_separates_routes_and_is_independent_of_staging_root) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 1.938s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_recursive_mesh_ced_small_shared_start.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[cpu-index] verifying manifest/audit TSV SHA256; no raw audio scan\n[cpu-index] manifest/audit TSV contents verified\n[staging] phase=COPYING staged 0/1 files (0.00/0.00 GiB) ready_through_batch=0 MiB_per_second=0.0 cgroup_remaining_bytes=None\n[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues\n[staging] training can start: read_policy=shared_until_complete prefill_steps=0 ready_through_batch=0 report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmppzmnpfeh\\report.json\n[staging] phase=COMPLETE staged 1/1 files (0.00/0.00 GiB) ready_through_batch=5771 MiB_per_second=0.0 cgroup_remaining_bytes=None\ntest_content_check_identifies_size_change_and_keeps_expected_paths (__main__.CEDSharedStartTests.test_content_check_identifies_size_change_and_keeps_expected_paths) ... ok\ntest_copy_failure_dead_process_and_stale_heartbeat_still_abort (__main__.CEDSharedStartTests.test_copy_failure_dead_process_and_stale_heartbeat_still_abort) ... ok\ntest_cpu_index_reuses_mapping_and_rejects_changed_inputs (__main__.CEDSharedStartTests.test_cpu_index_reuses_mapping_and_rejects_changed_inputs) ... ok\ntest_final_report_requires_full_copy_even_in_shared_mode (__main__.CEDSharedStartTests.test_final_report_requires_full_copy_even_in_shared_mode) ... ok\ntest_formal_config_is_created_with_zero_staged_files (__main__.CEDSharedStartTests.test_formal_config_is_created_with_zero_staged_files) ... ok\ntest_legacy_timestamp_only_identity_requires_rebuild (__main__.CEDSharedStartTests.test_legacy_timestamp_only_identity_requires_rebuild) ... ok\ntest_runner_starts_real_training_during_copy_and_cleans_on_failure (__main__.CEDSharedStartTests.test_runner_starts_real_training_during_copy_and_cleans_on_failure) ... ok\ntest_shared_path_remains_selected_until_explicit_boundary_switch (__main__.CEDSharedStartTests.test_shared_path_remains_selected_until_explicit_boundary_switch) ... ok\ntest_source_identity_change_is_rejected_and_partial_copy_removed (__main__.CEDSharedStartTests.test_source_identity_change_is_rejected_and_partial_copy_removed) ... ok\ntest_switch_is_collective_before_loading_all_four_microbatches (__main__.CEDSharedStartTests.test_switch_is_collective_before_loading_all_four_microbatches) ... ok\ntest_training_starts_before_first_copy_and_crosses_epoch_without_waiting (__main__.CEDSharedStartTests.test_training_starts_before_first_copy_and_crosses_epoch_without_waiting) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 1.818s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_recursive_mesh_ced_small_parity.py",
+      "status": "PASS",
+      "tests": 4,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_mesh_loader_and_checkpoint_contract_preserved (__main__.MeSHCEDParityTests.test_mesh_loader_and_checkpoint_contract_preserved) ... ok\ntest_model_build_order_preserves_mapper_initialization (__main__.MeSHCEDParityTests.test_model_build_order_preserves_mapper_initialization) ... ok\ntest_official_mapper_and_report_identity (__main__.MeSHCEDParityTests.test_official_mapper_and_report_identity) ... ok\ntest_original_mesh_semantics_and_ced_baseline_match (__main__.MeSHCEDParityTests.test_original_mesh_semantics_and_ced_baseline_match) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.694s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_recursive_mesh_5_10x4_5_static.py",
+      "status": "PASS",
+      "tests": 16,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_completion_check_accepts_new_schedule_and_rejects_old_schedule (__main__.RecursiveMizarRouteTests.test_completion_check_accepts_new_schedule_and_rejects_old_schedule) ... ok\ntest_existing_bang_special_registration_can_return_one (__main__.RecursiveMizarRouteTests.test_existing_bang_special_registration_can_return_one) ... ok\ntest_generated_formal_config_uses_gbs128_schedule (__main__.RecursiveMizarRouteTests.test_generated_formal_config_uses_gbs128_schedule) ... ok\ntest_only_model_loader_decoder_contract_changes (__main__.RecursiveMizarRouteTests.test_only_model_loader_decoder_contract_changes) ... ok\ntest_optimizer_and_sequence_contract_are_baseline_values (__main__.RecursiveMizarRouteTests.test_optimizer_and_sequence_contract_are_baseline_values) ... ok\ntest_outer_launcher_isolated_and_uses_remote_mesh_checkpoint (__main__.RecursiveMizarRouteTests.test_outer_launcher_isolated_and_uses_remote_mesh_checkpoint) ... ok\ntest_recursive_checkpoint_contract_accepts_expected_remote_shape (__main__.RecursiveMizarRouteTests.test_recursive_checkpoint_contract_accepts_expected_remote_shape) ... ok\ntest_recursive_checkpoint_contract_rejects_missing_assets (__main__.RecursiveMizarRouteTests.test_recursive_checkpoint_contract_rejects_missing_assets) ... ok\ntest_route_identity_and_geometry (__main__.RecursiveMizarRouteTests.test_route_identity_and_geometry) ... ok\ntest_source_eos_pad_is_overridden_by_mizar_bang_pad (__main__.RecursiveMizarRouteTests.test_source_eos_pad_is_overridden_by_mizar_bang_pad) ... ok\ntest_source_tokenizer_rejects_bang_aliasing_eos (__main__.RecursiveMizarRouteTests.test_source_tokenizer_rejects_bang_aliasing_eos) ... ok\ntest_source_tokenizer_rejects_changed_bang_id_without_vocabulary_growth (__main__.RecursiveMizarRouteTests.test_source_tokenizer_rejects_changed_bang_id_without_vocabulary_growth) ... ok\ntest_source_tokenizer_still_rejects_actual_vocabulary_growth (__main__.RecursiveMizarRouteTests.test_source_tokenizer_still_rejects_actual_vocabulary_growth) ... ok\ntest_staging_rows_follow_reduced_microbatch_and_resume_cursor (__main__.RecursiveMizarRouteTests.test_staging_rows_follow_reduced_microbatch_and_resume_cursor) ... ok\ntest_startup_logs_serialize_both_tokenizer_audit_levels (__main__.RecursiveMizarRouteTests.test_startup_logs_serialize_both_tokenizer_audit_levels) ... ok\ntest_startup_tokenizer_audit_uses_resolved_model_vocab_size (__main__.RecursiveMizarRouteTests.test_startup_tokenizer_audit_uses_resolved_model_vocab_size) ... ok\n\n----------------------------------------------------------------------\nRan 16 tests in 0.168s\n\nOK\n"
+    }
+  ]
+}

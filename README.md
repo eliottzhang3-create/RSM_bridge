@@ -1,3 +1,39 @@
+## 2026-11-02：四循环 MeSH + CED-small / 官方 mapper，GBS128 正式训练
+
+完整复制CED MeSH母本，新增
+[四循环CED训练路线、GitHub同步及提交/恢复说明](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs128_3epochs_recursive_mesh_5_10x4_5_ced_small/README.md)。
+文本采用现有x4严格loader及stage4_5_10x4_5_mesh的checkpoint-018488初始化：
+hidden576、20物理层、50次逻辑执行、`0..4,(5..14)×4,15..19`、7个瞬时memory槽和10个独立router。
+CED冻结/eval，官方freq_merge_126 mapper随机初始化并全量训练，完整LM与router可训练。
+
+除文本架构/初始化源和GBS改为128（8 GPU×microbatch4×GA4）外，
+沿用原CED的hybrid 1,477,492行、683-token布局、answer-only CE、FP32/GradScaler、
+AdamW、GradNorm、LM/router maxLR3e-4、mapper maxLR6e-4、3epochs和后台staging。
+对应11,542updates/epoch、34,626total、1,731warmup（沿用round规则）、每epoch丢弃116行。
+route/output/log/job/index-cache/tmpfs和恢复身份独立，原启动器/原路线/共享模型未修改。
+
+本地代码经GitHub提交并同步后，远程登录节点直接提交formal：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs128_recursive_mesh_5_10x4_5_ced_small_5090.sh --stage-workers 4
+```
+
+保持mellow_c8204d8及pdgpu-5090 / 32CPU / 256G / 8GPU / 1node，无自动smoke/tensor前置任务。
+默认输出根为
+`outputs/RSmol/mizar_s1_ced_small_gbs128_recursive_mesh_5_10x4_5_5090/formal_<timestamp>/`，
+最终文件在其formal/checkpoints/model--step-34626.ckpt及model--epo-3.ckpt。
+完整恢复须使用本新路线相同源码/资产/数据/合同checkpoint和原输出根目录；现有评测器需独立适配。
+
+统一检查入口 `python -B tests/validate_mizar_s1_mesh_x4_ced_small.py`：
+本地63项实际测试及Python/Bash语法通过；21项真实CPU tensor检查因缺依赖跳过。
+覆盖strict loader、四循环trace、全部LR位置、GBS128 staging与恢复身份、Bash模拟提交和原路线回归。
+53个原文件normalized-LF SHA保护、完整训练更新循环和CED配方对照通过；
+报告为audit_reports/mizar_s1_mesh_x4_ced_small_validation.json，可手动加--require-tensors禁止skip。
+本轮未执行git commit/push、远程真实权重加载、八卡训练或真实分布式恢复，未登记远程PASS。
+
 ## 2026-11-02：有效 prompt 条件的 E/A4/A8 输入融合，MeSH 七槽 split3 独立训练
 
 从clean split3完整复制新增
