@@ -1,0 +1,38 @@
+{
+  "status": "PASS",
+  "scope": "source parity; no tensor/assets/GPU claim",
+  "route_code_sha256": "3e9b6554fecc5d2ad6c182160d014b863d2760a1fe9461e2ca6b3bcb6ba3e932",
+  "protected": {
+    "original_files": 1978,
+    "all_normalized_sha256_match": true
+  },
+  "parent_parity": {
+    "identical_files_normalized_lf": [
+      "check_ced_assets.py",
+      "data/audio_paths.py",
+      "data/audiotext_dataset.py",
+      "data/fixed20.py",
+      "data/indexed_jsonl.py",
+      "data/prepared_index.py",
+      "data/sampler.py",
+      "data/staging.py",
+      "data/template.py",
+      "models/audio.py",
+      "models/ced.py",
+      "models/ced_offline.py",
+      "prepare_index.py",
+      "run.sh",
+      "runtime_checks.py",
+      "stage_data.py",
+      "utils/audio_io.py"
+    ],
+    "entire_trainer_parity": true,
+    "optimizer_scheduler_resume_parity": true,
+    "common_training_contract_equal": true
+  },
+  "backbone_parity": {
+    "entire_model_after_explicit_seed_deltas_equal": true,
+    "all_six_split3_initializers_unchanged": true,
+    "strict_loader_parity": true
+  }
+}

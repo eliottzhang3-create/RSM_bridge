@@ -1,3 +1,44 @@
+## 2026-11-02：有效 prompt 条件的 E/A4/A8 输入融合，MeSH 七槽 split3 独立训练
+
+从clean split3完整复制新增
+[七槽 prompt_mix 正式路线与提交/恢复说明](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer4_8_audio7slot_split3_prompt_mix/README.md)。
+原256-token prompt的有效input embeddings均值，经过新增Linear576→576/GELU/Linear576→3和softmax，
+得到每样本E/A4/A8三个权重。池化只用tokenizer attention_mask去掉padding，
+保留有效!及EOS，不使用answer、SEP或contextual hidden，梯度不detach。
+prelude音频输入为E_mix=αE·E+α4·A4+α8·A8；
+七槽memory为[αE·E,0,0,0,0,α4·A4,α8·A8]，三份加权tensor只计算一次。
+六个音频router初始概率仍为[p0/3,p1,p2,p3,p4,p0/3,p0/3]，文本仍五槽。
+后续仅原MeSH all-slot write/read，无残差重注入或×3补偿。
+新prompt MLP334,083参数，相对普通CED MeSH新增合计2,802,093。
+
+原文本MeSH checkpoint-009244初始化、hybrid数据、683-token布局、FP32、
+GBS256（8×8×4）、3epochs/17313updates/866warmup、AdamW/LambdaLR/GradNorm/GradScaler、
+数据顺序及后台staging保持；新MLP同音频分支maxLR6e-4，LM/文本router仍3e-4。
+route/output/log/job/index-cache/tmpfs/完整恢复身份隔离，旧路线与共享模型未修改。
+
+本地代码经GitHub提交并同步后，远程登录节点直接提交formal：
+
+~~~bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_mesh_ced_small_layer4_8_audio7slot_split3_prompt_mix_5090.sh --stage-workers 4
+~~~
+
+沿用mellow_c8204d8及pdgpu-5090 / 32CPU / 256G / 8GPU / 1node，无自动smoke/tensor前置任务。
+默认输出为
+outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_audio7slot_split3_prompt_mix_5090/formal_<timestamp>/，
+最终文件在其formal/checkpoints/model--step-17313.ckpt与model--epo-3.ckpt。
+仅支持本新路线同源码/资产/数据/配方完整checkpoint恢复，现有评测器需独立适配。
+
+检查入口 python -B tests/validate_mizar_s1_mesh_ced_audio7slot_split3_prompt_mix.py：
+90项实际测试通过，30项真实CPU tensor检查因缺依赖跳过（本路线17项）。
+实际NumPy代码执行、finite difference、训练推理前缀/种子一致、原路线回归、Bash模拟提交及staging检查通过。
+1978个原文件normalized-LF SHA保持，整个trainer/MeSH主体/优化器/恢复及原训练合同对照通过。
+报告为audit_reports/mizar_s1_mesh_ced_audio7slot_split3_prompt_mix_validation.json；
+可手动加--require-tensors禁止tensor skip。
+尚未执行远程真实权重加载、八卡训练或完整恢复，未登记远程PASS。
+
 ## 2026-11-02：官方 Mizar final 权重沿用现有 CED MMAU/MMAR 协议评测
 
 新增[独立官方 Mizar 评测目录与完整说明](code/RSmol/mizar_official_eval/README.md)。
