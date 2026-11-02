@@ -1,3 +1,45 @@
+## 2026-11-02：非 MeSH input embeddings → CED 8→4 串行注入正式训练
+
+已完整复制非 MeSH 8→4 路线，新增
+[串行组合路线及完整提交/恢复说明](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject/README.md)。
+每次 LM forward 从原 mapper 音频前缀一次计算共享 A_input。
+在零基逻辑索引5/15，先用共享 input gate 注入 A_input，再用更新后的 hidden
+计算独立 gate8/gate4，分别注入 A8/A4。实际轨迹
+`[[5,"input"],[5,"layer8"],[15,"input"],[15,"layer4"]]`。
+CED仍每批一次编码提取最终层与完整第4/8层；原mapper和两套MLP保持。
+三个gate全零，input投影沿用原随机初始化/零bias；
+中间MLP/gate注册顺序仍4、8，新增input模块单独CPU RNG隔离。
+相对普通CED循环母本新增合计2,777,859参数。
+
+保留原文本 stage4_5_10_5 checkpoint-step-009244 初始化、20物理层/30次执行、
+hybrid数据、683-token布局、原loss、FP32、GBS256（8×8×4）、
+3epochs/17313updates/866warmup和原优化器/调度/GradNorm/staging。
+LM maxLR3e-4；mapper、input投影、两套MLP与三个gate maxLR6e-4。
+新route/output/log/job/index-cache/tmpfs和恢复身份隔离，只接受本组合路线的完整正式checkpoint。
+
+本地代码经GitHub同步后，在远程登录节点直接提交formal：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject_5090.sh --stage-workers 4
+```
+
+沿用mellow_c8204d8和pdgpu-5090 / 32CPU / 256G / 8GPU / 1node，无自动smoke或tensor前置任务。
+默认输出根为
+`outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_5090/formal_<timestamp>/`，
+最终为其下formal/checkpoints/model--epo-3.ckpt及model--step-17313.ckpt。
+
+统一检查入口`python -B tests/validate_mizar_s1_ced_layer84_audio_reinject.py`：
+本地109项实际检查通过，37项真实CPU tensor检查因缺依赖跳过（新路线12项）。
+Python/Bash语法、非零gate串行数值/有限差分、关闭单分支对照、梯度审计、
+模拟提交及原8→4/audio_reinject/4→8/普通CED循环回归通过。
+源码对照保护137个原文件，完整模型和train函数只保留明确新增注入及合同/诊断差异；
+报告为audit_reports/mizar_s1_ced_layer84_audio_reinject_validation.json。
+具备原依赖时可手动加--require-tensors禁止skip。
+未执行远程真实权重加载、八卡训练和完整恢复，未登记远程PASS；现有评测器需独立适配。
+
 ## 2026-11-02：扩展原 MMAU/MMAR evaluator，支持七槽 split3、split3_inject 和 MeSH 8→4
 
 两个原提交入口 `code/RSmol/run_mizar_s1_ced_small_mmau_eval_5090.sh`、

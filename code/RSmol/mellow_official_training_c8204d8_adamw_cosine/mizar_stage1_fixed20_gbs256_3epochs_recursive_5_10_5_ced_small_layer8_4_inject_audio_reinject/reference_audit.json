@@ -1,0 +1,130 @@
+{
+  "status": "PASS",
+  "scope": "source audit only; no tensor/remote validation",
+  "route_code_sha256": "ae532b0a10c50c69fd13bcd2b7c9c00cd40b518beb0f7cebfe47db476bb08260",
+  "protected_originals": {
+    "files": 137,
+    "all_unchanged": true
+  },
+  "parent_parity": {
+    "identical_source_files": [
+      "check_ced_assets.py",
+      "data/audio_paths.py",
+      "data/audiotext_dataset.py",
+      "data/fixed20.py",
+      "data/indexed_jsonl.py",
+      "data/prepared_index.py",
+      "data/sampler.py",
+      "data/staging.py",
+      "data/template.py",
+      "models/audio.py",
+      "models/ced.py",
+      "models/ced_offline.py",
+      "models/decoder.py",
+      "models/mellow.py",
+      "prepare_index.py",
+      "run.sh",
+      "stage_data.py",
+      "utils/audio_io.py"
+    ],
+    "inherited_function_asts": {
+      "train.py": [
+        "answer_loss",
+        "move_batch",
+        "rng_state",
+        "restore_rng",
+        "save_checkpoint",
+        "reload_audit",
+        "inspect_tokenizer",
+        "audit_checkpoint_tokenizer",
+        "main"
+      ],
+      "contract.py": [
+        "geometry",
+        "data_order",
+        "rank_seed",
+        "raw_references",
+        "lr_factor",
+        "validate_recursive_config_values",
+        "recursive_checkpoint_contract",
+        "validate_tokenizer_contract",
+        "validate_checkpoint_tokenizer",
+        "validate_ced_assets"
+      ],
+      "models/recursive_text.py": [
+        "validate_recursive_config",
+        "validate_loaded_model",
+        "validate_layer_injection"
+      ]
+    },
+    "common_recipe_equal": true,
+    "input_contract_equal": true
+  },
+  "backbone_parity": {
+    "entire_parent_backbone_ast_equal": true,
+    "original_input_branch_methods_equal": true,
+    "explicit_added_nodes": {
+      "guard": 1,
+      "assign": 5,
+      "trace": 2
+    }
+  },
+  "training_parity": {
+    "complete_train_function_ast_equal_after_explicit_audits": true,
+    "explicit_audit_nodes": {
+      "contract_guard": 1,
+      "collect": 1,
+      "diagnostics": 1,
+      "rank_contract": 1,
+      "new_role_predicate": 2,
+      "opened_audit": 1,
+      "end_roles": 1,
+      "audit_keys": 2
+    }
+  },
+  "serial_contract": {
+    "contract": "mapped_input_residual_then_ced_layer8_4_residual_v1",
+    "order": [
+      "audio_input_embeddings",
+      "ced_intermediate"
+    ],
+    "logical_indices_0based": [
+      5,
+      15
+    ],
+    "ced_layers_1based": [
+      8,
+      4
+    ],
+    "input_gate_condition": "audio_hidden_before_input_residual",
+    "intermediate_gate_condition": "audio_hidden_after_input_residual",
+    "trace": [
+      [
+        5,
+        "input"
+      ],
+      [
+        5,
+        "layer8"
+      ],
+      [
+        15,
+        "input"
+      ],
+      [
+        15,
+        "layer4"
+      ]
+    ],
+    "shared_input_projection_and_gate": true,
+    "independent_intermediate_mlps_and_gates": true,
+    "audio_positions": [
+      0,
+      126
+    ],
+    "additional_normalization": false,
+    "additional_scale": false,
+    "detach_residuals": false,
+    "new_parameters": 2777859
+  }
+}
