@@ -19,8 +19,9 @@ RSMOL_MIZAR_CED_EVAL_VARIANT=official_mizar bash run_mizar_s1_ced_small_mmar_eva
 ```
 
 两次提交分别完整处理 MMAU test-mini 1000 条、MMAR 1000 条。
-沿用 `vc submit`、`pdgpu-5090`、原镜像、8 CPU / 32G / 1 GPU / 1 node，
+使用 `vc submit`、`pdgpu-4090`、原镜像、8 CPU / 32G / 1 GPU / 1 node，
 计算节点激活 `mellow_c8204d8`。不增加自动 smoke、tensor 测试或单独 GPU 前置任务。
+保留原 `_5090.sh` 入口文件名，`official_mizar` 分支实际提交到 `pdgpu-4090`。
 加载时校验文件身份及模型结构；正式生成过程中只读 hooks 检查每次执行 30 个独立层。
 
 默认模型目录已经对应上传位置：
@@ -110,7 +111,7 @@ MMAU test-mini 也不同于论文9k评测和五seed统计，不能把这里结�
 `evaluation_report.json`、`official_evaluation.txt`，以及
 MMAU 的 `predictions_fixed_order.json` 或 MMAR 的 `predictions_official.json`。
 `evaluation_report.json` 同时记录 release、严格加载、实际层执行审计、覆盖率和官方分数。
-`log/mizar_official_{mmau,mmar}_5090.<timestamp>.JOB.log` 保存作业日志。
+`log/mizar_official_{mmau,mmar}_4090.<timestamp>.JOB.log` 保存作业日志。
 
 中断后重新执行对应提交命令，使用同一输出目录按 JSONL 恢复已完成样本。
 输出身份包含权重/资产、模型源码、评测代码、数据、scorer 和完整生成协议；

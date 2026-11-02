@@ -29,9 +29,9 @@ ARGS+=("$@")
 printf -v CMD_ARGS '%q ' "${ARGS[@]}"
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
 mkdir -p log
-JOB_LOG="$SCRIPT_DIR/log/mizar_official_${BENCHMARK}_5090.${RUN_TAG}.JOB.log"
+JOB_LOG="$SCRIPT_DIR/log/mizar_official_${BENCHMARK}_4090.${RUN_TAG}.JOB.log"
 vc submit \
-  -p pdgpu-5090 \
+  -p pdgpu-4090 \
   -i docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1 \
   -c 8 -m 32G -g 1 -n 1 \
   -j "mizar-official-${BENCHMARK}-${RUN_TAG}" \

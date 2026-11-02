@@ -29,7 +29,13 @@ class OfficialShellTests(unittest.TestCase):
         if not self.bash:
             self.skipTest("Bash unavailable")
 
-    assert_resources = helpers.MeshCedEvaluationShellTests.assert_resources
+    def assert_resources(self, submission):
+        self.assertEqual(submission[0], "submit")
+        for flag, value in (("-p", "pdgpu-4090"), ("-c", "8"), ("-m", "32G"),
+                            ("-g", "1"), ("-n", "1"),
+                            ("-i", "docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1")):
+            self.assertEqual(submission[submission.index(flag) + 1], value)
+        self.assertLessEqual(len(submission[submission.index("-j") + 1]), 60)
 
     def run_launcher(self, directory, benchmark, overrides=None, extra=()):
         target = Path(directory) / "mizar_official_eval"
@@ -53,7 +59,7 @@ class OfficialShellTests(unittest.TestCase):
                 self.assertEqual(args.output_dir, (runner.OUTPUT_ROOT / folder).resolve())
                 self.assertNotIn("--expected-step", command)
                 self.assertNotIn("--runtime-config", command)
-                self.assertIn(f"mizar_official_{benchmark}_5090.", submission[submission.index("JOB=1:1") + 1])
+                self.assertIn(f"mizar_official_{benchmark}_4090.", submission[submission.index("JOB=1:1") + 1])
 
     def test_environment_and_cli_paths_survive_quoting(self):
         for benchmark in ("mmau", "mmar"):

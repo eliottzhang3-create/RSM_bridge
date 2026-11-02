@@ -24,7 +24,8 @@ RSMOL_MIZAR_CED_EVAL_VARIANT=official_mizar bash run_mizar_s1_ced_small_mmau_eva
 RSMOL_MIZAR_CED_EVAL_VARIANT=official_mizar bash run_mizar_s1_ced_small_mmar_eval_5090.sh
 ```
 
-仍使用 `mellow_c8204d8`、`vc submit`、pdgpu-5090 / 8CPU / 32G / 1GPU / 1node，
+使用 `mellow_c8204d8`、`vc submit`、pdgpu-4090 / 8CPU / 32G / 1GPU / 1node，
+保留原 `_5090.sh` 入口文件名，`official_mizar` 分支实际提交到 `pdgpu-4090`。
 无自动smoke/tensor前置作业。独立输出根为
 `outputs/RSmol/mizar_official_stage3_q4_seed20260905_matched_ced_v1/{mmau_test_mini,mmar}`，
 同目录重提可恢复JSONL；改动权重/资产/模型源码/评测代码/协议等身份时拒绝混用。
