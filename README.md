@@ -1,3 +1,34 @@
+## 2026-11-03：扩展 MMAU/MMAR，支持 prompt_mix、串行8→4与四循环 MeSH
+
+原两个 CED 评测提交入口已扩展为十一条路线，见
+[完整实现说明、默认产物和八项提交命令](code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md)。
+本次四份产物均精确绑定同 run 的 formal/checkpoints 和 formal/runtime.json：
+
+| variant | 默认 formal run 时间戳 | step / 训练 geometry |
+|---|---|---|
+| recursive_mesh_layer4_8_audio7slot_split3_inject | 20261102_002211827036990 | 17313 / 8,8,4 |
+| recursive_mesh_layer4_8_audio7slot_split3_prompt_mix | 20261102_132232677352730 | 17313 / 8,8,4 |
+| recursive_5_10_5_layer8_4_inject_audio_reinject | 20261102_112121702891801 | 17313 / 8,8,4 |
+| recursive_mesh_5_10x4_5 | 20261103_093224843011222 | 34626 / 8,4,4 |
+
+直接导入各路线真实训练模型并 strict 加载完整音频训练 checkpoint，训练源码/共享模型及 SHA 校验保持。
+prompt_mix 使用有效 prompt 输入 embedding 计算一次三路权重，E_mix 作 prefix，
+每个完整 LM forward 显式传入相同三份加权 seeds 重建音频七槽/文本五槽；不重复加权。
+串行8→4保留每次 forward 一次原 mapper prefix 投影，以及边界5/15的
+input→CED8、input→CED4顺序。四循环保留20物理层/50次执行、全序列七槽和10个 routers，禁止两循环 ablation。
+
+fixed20、256-token prompt、383 prefix、FP32/batch1/单GPU、无KV cache、argmax/300 tokens、
+首次EOS停止、原始输出及官方 scorer 均保持；两个 benchmark 各完整1000条、零skip。
+沿用 mellow_c8204d8 和 pdgpu-5090 / 8CPU / 32G / 1GPU / 1node，无自动前置测试作业。
+中间 checkpoint 不参与默认选择；四循环输出目录带 step34626，其余带 step17313。
+
+本地验证入口仍为 `python -B tests/validate_mizar_s1_ced_multilayer_eval.py`，
+覆盖十一条路线、22种千条模拟流程/提交组合、实际训练源码 NumPy/stdlib 行为及旧评测回归，
+177项实际检查通过，23项真实 tensor 检查因缺 Torch/Transformers 跳过，Python/Bash语法通过。
+报告为 audit_reports/mizar_s1_ced_multilayer_eval_validation.json。
+缺少 Torch/Transformers 的真实 tensor 检查明确记录 skip；可手动加 --require-tensors 禁止跳过。
+本轮未读取远程权重或提交真实作业，服务器上的完整权重加载和八项 full 评测尚待执行。
+
 ## 2026-11-02：四循环 MeSH + CED-small / 官方 mapper，GBS128 正式训练
 
 完整复制CED MeSH母本，新增

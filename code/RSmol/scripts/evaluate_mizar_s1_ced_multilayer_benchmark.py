@@ -45,13 +45,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--evaluation-script", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--parquet-batch-size", type=int, default=8)
-    parser.add_argument("--expected-step", type=int, default=17313,
+    parser.add_argument("--expected-step", type=int,
                         help="checkpoint total_step expected by the selected training route")
     parser.add_argument("--expected-geometry", type=runtime_adapter.parse_training_geometry,
-                        default=(8, 8, 4),
-                        help="world_size,microbatch,gradient_accumulation (default: 8,8,4)")
+                        help="world_size,microbatch,gradient_accumulation (default: selected training route)")
     args = parser.parse_args(argv)
 
+    spec = runtime_adapter.variant_spec(args.eval_variant)
+    if args.expected_step is None:
+        args.expected_step = spec["default_step"]
+    if args.expected_geometry is None:
+        args.expected_geometry = spec["default_geometry"]
     if args.expected_step < 1:
         parser.error("--expected-step must be positive")
     args.dataset_dir = (args.dataset_dir or (DEFAULT_MMAU_DIR if args.benchmark == "mmau" else DEFAULT_MMAR_DIR)).resolve()
@@ -63,7 +67,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     else:
         args.parquet = None
         args.audio_root = (args.audio_root or args.dataset_dir / "mmar-audio").resolve()
-    spec = runtime_adapter.variant_spec(args.eval_variant)
     run_root = args.run_root
     if run_root is None and args.checkpoint is not None:
         checkpoint = args.checkpoint

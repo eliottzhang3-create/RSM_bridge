@@ -27,7 +27,7 @@ class WorkflowTests(unittest.TestCase):
                                   "--evaluation-script", str(scorer), "--output-dir", str(root / "eval")])
         records = [{"id": str(i), "question": "Question?", "choices": ["One", "Two"],
                     "answer": "One", "audio_path": "fixture.wav"} for i in range(1000)]
-        runtime = (None, None, None, None, None, {"checkpoint_step": 17313}, {})
+        runtime = (None, None, None, None, None, {"checkpoint_step": args.expected_step}, {})
         identity = {"benchmark": benchmark, "eval_variant": args.eval_variant,
                     "checkpoint": "fixture", "prediction_key": "model_output"}
         return args, records, runtime, identity

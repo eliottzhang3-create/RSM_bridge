@@ -126,17 +126,22 @@ class OfficialShellTests(unittest.TestCase):
                 self.assertEqual(captured_env.read_text(encoding="utf-8").splitlines(),
                                  ["1", "1", "false", bash_path(root)])
 
-    def test_original_launcher_branches_are_byte_identical_after_removing_official_case(self):
-        # git supplies the pre-change sources during development; the unified
-        # regression suite independently exercises all old routes after upload.
+    def test_official_dispatch_remains_exact_while_other_variants_can_expand(self):
+        # Other CED variants evolve independently; protect the official dispatch
+        # itself and exercise older training variants in their behavior suites.
         for benchmark in ("mmau", "mmar"):
             name = f"code/RSmol/run_mizar_s1_ced_small_{benchmark}_eval_5090.sh"
             prior = subprocess.run(["git", "show", f"HEAD:{name}"], cwd=ROOT,
                                    capture_output=True, check=True).stdout.replace(b"\r\n", b"\n")
             current = (ROOT / name).read_bytes().replace(b"\r\n", b"\n")
             case = (f'  official_mizar)\n    exec bash "$SCRIPT_DIR/mizar_official_eval/submit_5090.sh" {benchmark} "$@"\n    ;;\n').encode()
-            # HEAD may already include this extension when testing a committed checkout.
-            self.assertEqual(current.replace(case, b""), prior.replace(case, b""))
+            self.assertEqual(current.count(case), 1)
+            if case in prior:
+                self.assertEqual(prior.count(case), 1)
+            before_dispatch = current.split(case, 1)[0]
+            self.assertIn(b'case "$EVAL_VARIANT" in\n', before_dispatch)
+            self.assertNotIn(b'ARGS=(', before_dispatch)
+            self.assertNotIn(b'vc submit', before_dispatch)
 
 
 if __name__ == "__main__":

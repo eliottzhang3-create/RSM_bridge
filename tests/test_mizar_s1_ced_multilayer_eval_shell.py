@@ -1,4 +1,4 @@
-"""Exercise all sixteen submissions with fake vc and the real compute wrapper."""
+"""Exercise all 22 submissions with fake vc and the real compute wrapper."""
 from __future__ import annotations
 
 import importlib.util
@@ -21,9 +21,16 @@ SPECS = {
     "recursive_mesh_layer4_8_listen": ("recursive_mesh", "layer4_8_listen", "20261030_172450546025072", "m48l"),
     "recursive_mesh_layer36912_listen": ("recursive_mesh", "layer36912_listen", "20261101_113133327944502", "m4l"),
     "recursive_mesh_layer4_8_audio7slot_split3": ("recursive_mesh", "layer4_8_audio7slot_split3", "20261101_170211458358358", "m7s3"),
-    "recursive_mesh_layer4_8_audio7slot_split3_inject": ("recursive_mesh", "layer4_8_audio7slot_split3_inject", None, "m7s3i"),
+    "recursive_mesh_layer4_8_audio7slot_split3_inject": ("recursive_mesh", "layer4_8_audio7slot_split3_inject", "20261102_002211827036990", "m7s3i"),
     "recursive_mesh_layer8_4_inject": ("recursive_mesh", "layer8_4_inject", None, "m84i"),
+    "recursive_mesh_layer4_8_audio7slot_split3_prompt_mix": ("recursive_mesh", "layer4_8_audio7slot_split3_prompt_mix", "20261102_132232677352730", "m7pm"),
+    "recursive_5_10_5_layer8_4_inject_audio_reinject": ("recursive_5_10_5", "layer8_4_inject_audio_reinject", "20261102_112121702891801", "r84ri"),
+    "recursive_mesh_5_10x4_5": ("recursive_mesh_5_10x4_5", "", "20261103_093224843011222", "mx4"),
 }
+
+
+def expected_step(variant):
+    return 34626 if variant == "recursive_mesh_5_10x4_5" else 17313
 
 
 class MultilayerCedShellTests(unittest.TestCase):
@@ -35,7 +42,7 @@ class MultilayerCedShellTests(unittest.TestCase):
         self.bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
         if not self.bash: self.skipTest("Bash is unavailable")
 
-    def test_sixteen_submissions_bind_variant_checkpoint_runtime_route_and_resources(self):
+    def test_twenty_two_submissions_bind_variant_checkpoint_runtime_route_and_resources(self):
         for variant, (family, suffix, stamp, tag) in SPECS.items():
             for benchmark in ("mmau", "mmar"):
                 with self.subTest(variant=variant, benchmark=benchmark), tempfile.TemporaryDirectory() as directory:
@@ -46,16 +53,19 @@ class MultilayerCedShellTests(unittest.TestCase):
                     command = shlex.split(submission[submission.index("--cmd") + 1])
                     self.assertEqual(command[:2], ["bash", "scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh"])
                     options = dict(zip(command[2::2], command[3::2]))
-                    run = (f"/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_{variant}_5090/formal_{stamp}"
+                    gbs = 128 if variant == "recursive_mesh_5_10x4_5" else 256
+                    step = expected_step(variant)
+                    run = (f"/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs{gbs}_{variant}_5090/formal_{stamp}"
                            if stamp else "/actual completed run")
                     self.assertEqual(options["--eval-variant"], variant)
-                    self.assertEqual(options["--checkpoint"], run + "/formal/checkpoints/model--step-17313.ckpt")
+                    self.assertEqual(options["--checkpoint"], run + f"/formal/checkpoints/model--step-{step}.ckpt")
                     self.assertEqual(options["--runtime-config"], run + "/formal/runtime.json")
-                    self.assertTrue(options["--route-root"].endswith(f"/mizar_stage1_fixed20_gbs256_3epochs_{family}_ced_small_{suffix}"))
-                    folder = "mmau_test_mini_step17313" if benchmark == "mmau" else "mmar_step17313"
+                    route = (f"mizar_stage1_fixed20_gbs{gbs}_3epochs_{family}_ced_small" + (f"_{suffix}" if suffix else ""))
+                    self.assertTrue(options["--route-root"].endswith("/" + route))
+                    folder = f"mmau_test_mini_step{step}" if benchmark == "mmau" else f"mmar_step{step}"
                     self.assertEqual(options["--output-dir"], run + "/eval/" + folder)
-                    self.assertEqual(options["--expected-step"], "17313")
-                    self.assertEqual(options["--expected-geometry"], "8,8,4")
+                    self.assertEqual(options["--expected-step"], str(step))
+                    self.assertEqual(options["--expected-geometry"], "8,4,4" if gbs == 128 else "8,8,4")
                     self.assertEqual(options["--benchmark"], benchmark)
                     self.assertTrue(submission[submission.index("-j") + 1].startswith(f"mizar-ced-multi-{tag}-{benchmark}-"))
                     if benchmark == "mmau": self.assertEqual(options["--parquet-batch-size"], "8")
@@ -90,9 +100,9 @@ class MultilayerCedShellTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 command = shlex.split(submission[submission.index("--cmd") + 1])
                 options = dict(zip(command[2::2], command[3::2]))
-                self.assertEqual(options["--checkpoint"], "/another run/formal/checkpoints/model--step-17313.ckpt")
+                self.assertEqual(options["--checkpoint"], f"/another run/formal/checkpoints/model--step-{expected_step(variant)}.ckpt")
                 self.assertEqual(options["--runtime-config"], "/another run/formal/runtime.json")
-                self.assertEqual(options["--output-dir"], "/another run/eval/mmar_step17313")
+                self.assertEqual(options["--output-dir"], f"/another run/eval/mmar_step{expected_step(variant)}")
 
     def test_unknown_variant_never_calls_vc(self):
         for benchmark in ("mmau", "mmar"):
@@ -152,9 +162,10 @@ class MultilayerCedShellTests(unittest.TestCase):
                     ["-u", "scripts/evaluate_mizar_s1_ced_multilayer_benchmark.py", "--eval-variant", "recursive_5_10_5_layer36912_crossattn"])
                 self.assertEqual(captured_env.read_text(encoding="utf-8").splitlines(), ["1", "1", "false", helpers.bash_path(root)])
 
-    def test_checkpoint_override_infers_matching_run_for_all_eight(self):
-        checkpoint = "/replacement run/formal/checkpoints/model--step-17313.ckpt"
+    def test_checkpoint_override_infers_matching_run_for_all_variants(self):
         for variant in SPECS:
+            step = expected_step(variant)
+            checkpoint = f"/replacement run/formal/checkpoints/model--step-{step}.ckpt"
             for benchmark in ("mmau", "mmar"):
                 for source in ("cli", "env"):
                     with self.subTest(variant=variant, benchmark=benchmark, source=source), tempfile.TemporaryDirectory() as directory:
@@ -166,7 +177,7 @@ class MultilayerCedShellTests(unittest.TestCase):
                         options = dict(zip(command[2::2], command[3::2]))
                         self.assertEqual(options["--checkpoint"], checkpoint)
                         self.assertEqual(options["--runtime-config"], "/replacement run/formal/runtime.json")
-                        folder = "mmau_test_mini_step17313" if benchmark == "mmau" else "mmar_step17313"
+                        folder = f"mmau_test_mini_step{step}" if benchmark == "mmau" else f"mmar_step{step}"
                         self.assertEqual(options["--output-dir"], "/replacement run/eval/" + folder)
 
     def test_cli_equals_and_missing_path_values_before_submission(self):
@@ -185,6 +196,24 @@ class MultilayerCedShellTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 2)
                     self.assertIsNone(submission)
                     self.assertIn("missing value", result.stderr)
+
+    def test_step_and_geometry_overrides_derive_paths_before_submission(self):
+        for variant in ("recursive_mesh_5_10x4_5", "recursive_mesh_layer4_8_audio7slot_split3_prompt_mix"):
+            for benchmark in ("mmau", "mmar"):
+                for source in ("env", "cli", "equals"):
+                    with self.subTest(variant=variant, benchmark=benchmark, source=source), tempfile.TemporaryDirectory() as directory:
+                        env = {"RSMOL_MIZAR_CED_EXPECTED_STEP": "100", "RSMOL_MIZAR_CED_EXPECTED_GEOMETRY": "4,8,4"}
+                        extra = () if source == "env" else (("--expected-step", "200", "--expected-geometry", "4,4,4")
+                            if source == "cli" else ("--expected-step=200", "--expected-geometry=4,4,4"))
+                        result, submission = self.run_launcher(directory, benchmark, variant, env, extra)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        command = shlex.split(submission[submission.index("--cmd") + 1])
+                        step, geometry = ("100", "4,8,4") if source == "env" else ("200", "4,4,4")
+                        # Generated named arguments precede unchanged user arguments.
+                        self.assertEqual(command[command.index("--expected-step") + 1], step)
+                        self.assertEqual(command[command.index("--expected-geometry") + 1], geometry)
+                        self.assertTrue(command[command.index("--checkpoint") + 1].endswith(f"model--step-{step}.ckpt"))
+                        self.assertTrue(command[command.index("--output-dir") + 1].endswith("step" + step))
 
 
 if __name__ == "__main__":

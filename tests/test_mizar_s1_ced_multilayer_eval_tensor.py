@@ -1,6 +1,6 @@
 """Real CPU training models with synthetic inputs, no weights/downloads/CUDA.
 
-The 20 physical layers, 30 executions, 383 prefix positions, four CED grids
+The 20 physical layers, 30/50 executions, 383 prefix positions, four CED grids
 and query32 geometry stay real. Most tests reduce only LM width/vocabulary and
 decode horizon. The structure audit also uses production width 576.
 """
@@ -49,8 +49,7 @@ class MultilayerTensorTests(unittest.TestCase):
                 package.__path__ = [str(spec["route_root"] / "models")]
                 sys.modules["models"] = package
                 contract = load_module("contract", spec["route_root"] / "contract.py")
-                implementation = load_module(spec["implementation"],
-                    spec["route_root"] / (spec["implementation"].replace(".", "/") + ".py"))
+                implementation = load_module(spec["implementation"], adapter.implementation_path(spec))
                 loader = load_module("models.recursive_text", spec["route_root"] / "models/recursive_text.py")
                 decoder = load_module("models.decoder", spec["route_root"] / "models/decoder.py")
                 # Four-depth listen imports its branch lazily when it is enabled.
@@ -58,20 +57,21 @@ class MultilayerTensorTests(unittest.TestCase):
                     load_module("models.audio_listen", spec["route_root"] / "models/audio_listen.py")
                 cls.modules[variant] = (contract, implementation, loader, decoder)
                 cls.namespaces[variant] = {name: module for name, module in sys.modules.items()
-                    if name == "contract" or name == "models" or name.startswith("models.")}
+                    if name == "contract" or name == "models" or name.startswith("models.")
+                    or name == spec["implementation"]}
 
     def model(self, variant, width=36):
         t = self.torch
         t.manual_seed(1234)
+        spec = adapter.variant_spec(variant)
         cfg = self.config_class(vocab_size=32, hidden_size=width, intermediate_size=48,
-            num_hidden_layers=30, num_attention_heads=9, num_key_value_heads=3,
+            num_hidden_layers=len(spec["schedule"]), num_attention_heads=9, num_key_value_heads=3,
             max_position_embeddings=1024, pad_token_id=17, eos_token_id=0,
             use_cache=False, attention_dropout=0.)
-        cfg.recursive_layer_count, cfg.recursive_loops = 20, 2
-        cfg.logical_to_physical = list(adapter.TEXT_MODEL_SCHEDULE)
-        spec = adapter.variant_spec(variant)
+        cfg.recursive_layer_count, cfg.recursive_loops = 20, spec["loops"]
+        cfg.logical_to_physical = list(spec["schedule"])
         if spec["mesh"]:
-            cfg.mesh_memory_slots, cfg.mesh_router_count = 5, 6
+            cfg.mesh_memory_slots, cfg.mesh_router_count = spec["memory_slots"], 2 * (spec["loops"] + 1)
             cfg.mesh_architecture_contract = spec["text_contract"]
             cfg.model_architecture_contract = spec["text_architecture"]
         else:
@@ -83,10 +83,15 @@ class MultilayerTensorTests(unittest.TestCase):
         if kind in ("crossattn", "query32"):
             core.enable_audio_cross_attention()
             gate_modules = [core.audio_crossattn.gate2]
-        elif kind in ("inject48", "inject84"):
+        elif kind in ("inject48", "inject84", "serial84"):
             core.enable_layer_injection()
             gate_modules = list(core.audio_gates.values())
-        elif spec["context_kind"] == "pair":
+            if kind == "serial84":
+                core.enable_audio_reinjection()
+                gate_modules.append(core.audio_gate)
+        elif kind == "mesh_x4":
+            gate_modules = []
+        elif spec["context_kind"] in ("pair", "seeds"):
             core.enable_audio_listen()
             gate_modules = list(core.audio_gates.values()) if spec["interaction_layers"] else []
         else:
@@ -97,7 +102,7 @@ class MultilayerTensorTests(unittest.TestCase):
             for i, gate in enumerate(gate_modules):
                 gate.weight.fill_(.01)
                 gate.bias.fill_(.2 if i == 0 else -.15)
-            if spec["audio_memory_slots"] == 7:
+            if spec["split_memory"]:
                 # Simulate learned rows that have departed from split3 initialization.
                 for router in list(core.audio_listen_write_routers) + list(core.audio_listen_read_routers):
                     router.weight[5].add_(.03)
@@ -107,8 +112,14 @@ class MultilayerTensorTests(unittest.TestCase):
     def inputs(self, variant, width=36):
         t = self.torch
         prefix = t.randn(1, 383, width)
-        if adapter.variant_spec(variant)["context_kind"] == "pair":
+        kind = adapter.variant_spec(variant)["context_kind"]
+        if kind == "pair":
             context = {"audio_information": (t.randn(1, 126, width), t.randn(1, 126, width) + 2)}
+        elif kind == "seeds":
+            context = {"audio_memory_seeds": tuple(t.randn(1, 126, width) + i for i in range(3))}
+            prefix[:, :126] = sum(context["audio_memory_seeds"])
+        elif kind == "none":
+            context = {}
         else:
             context = {"audio_grids": t.randn(1, 4, 126, 1536),
                        "prompt_mask": t.tensor([[1] * 180 + [0] * 76])}
@@ -118,7 +129,16 @@ class MultilayerTensorTests(unittest.TestCase):
     def call(lm, prefix, context):
         return lm(inputs_embeds=prefix, attention_mask=None, labels=None, use_cache=False, **context)
 
-    def test_hooks_preserve_real_logits_state_and_transient_memory_for_all_eight(self):
+    def decoder(self, variant):
+        cls = self.modules[variant][3].DecoderModel
+        decoder = cls.__new__(cls)
+        self.torch.nn.Module.__init__(decoder)
+        decoder.lm, decoder.lm_embedding_size = self.model(variant), 36
+        if adapter.variant_spec(variant)["kind"] == "prompt_mix":
+            decoder._init_prompt_mix_mlp()
+        return decoder.eval()
+
+    def test_hooks_preserve_real_logits_state_and_transient_memory_for_all_routes(self):
         t = self.torch
         for variant in adapter.ROUTE_SPECS:
             with self.subTest(variant=variant), t.inference_mode():
@@ -131,7 +151,7 @@ class MultilayerTensorTests(unittest.TestCase):
                 self.assertTrue(t.equal(expected.logits, actual.logits))
                 self.assertIsNone(actual.past_key_values)
                 self.assertEqual(audit["checked_forwards"], 1)
-                self.assertEqual(audit["last_physical_schedule"], list(adapter.TEXT_MODEL_SCHEDULE))
+                self.assertEqual(audit["last_physical_schedule"], list(adapter.variant_spec(variant)["schedule"]))
                 for key, value in lm.state_dict().items(): self.assertTrue(t.equal(value, state[key]), key)
                 self.assertFalse(any("memory_slot" in name or name.endswith(".memory") for name in state))
 
@@ -169,14 +189,22 @@ class MultilayerTensorTests(unittest.TestCase):
                 decoder = decoder_class.__new__(decoder_class)
                 t.nn.Module.__init__(decoder)
                 decoder.lm, decoder.lm_embedding_size = self.model(variant), 36
+                kind = adapter.variant_spec(variant)["kind"]
+                if kind == "prompt_mix": decoder._init_prompt_mix_mlp()
                 audio = t.randn(1, 126, 36)
                 prompt = {"input_ids": t.randint(1, 16, (1, 256)),
                           "attention_mask": t.tensor([[1] * 180 + [0] * 76])}
                 answer = {"input_ids": t.randint(1, 16, (1, 300))}
                 _, context = self.inputs(variant)
-                kwargs = {"audio_information": context["audio_information"]} if "audio_information" in context else {"audio_grids": context["audio_grids"]}
+                kwargs = ({"audio_information": context["audio_information"]} if "audio_information" in context else
+                          {"audio_grids": context["audio_grids"]} if "audio_grids" in context else
+                          {"audio_information": (t.randn_like(audio), t.randn_like(audio))} if kind == "prompt_mix" else {})
                 train_output = decoder(audio, None, prompt, answer, **kwargs)
-                prefix = decoder.generate_prefix_inference(audio, None, prompt)
+                if kind == "prompt_mix":
+                    prefix, seeds = decoder.generate_prefix_inference(audio, None, prompt, **kwargs)
+                    context = {"audio_memory_seeds": seeds}
+                else:
+                    prefix = decoder.generate_prefix_inference(audio, None, prompt)
                 context = {**context, **({"prompt_mask": prompt["attention_mask"]} if "prompt_mask" in context else {})}
                 evaluated = self.call(decoder.lm, prefix, context)
                 t.testing.assert_close(train_output.logits[:, 382], evaluated.logits[:, -1], rtol=1e-5, atol=1e-6)
@@ -190,7 +218,7 @@ class MultilayerTensorTests(unittest.TestCase):
                 state = copy.deepcopy(lm.state_dict())
                 restored.load_state_dict(state, strict=True)
                 self.assertTrue(t.equal(self.call(lm, prefix, context).logits, self.call(restored, prefix, context).logits))
-                key = next(key for key in state if any(part in key for part in ("audio_crossattn", "audio_gates", "audio_listen")))
+                key = next(key for key in state if any(part in key for part in ("audio_crossattn", "audio_gates", "audio_listen", "write_routers")))
                 state.pop(key)
                 with self.assertRaises(RuntimeError): restored.load_state_dict(state, strict=True)
 
@@ -204,9 +232,11 @@ class MultilayerTensorTests(unittest.TestCase):
                 changed = copy.deepcopy(context)
                 if "audio_information" in changed:
                     changed["audio_information"] = tuple(reversed(changed["audio_information"]))
+                elif "audio_memory_seeds" in changed:
+                    changed["audio_memory_seeds"] = tuple(reversed(changed["audio_memory_seeds"]))
                 else:
-                    changed["audio_grids"] = changed["audio_grids"] * -2
-                after = self.call(lm, prefix, changed).logits.clone()
+                    if changed: changed["audio_grids"] = changed["audio_grids"] * -2
+                after = self.call(lm, prefix if context else prefix * -2, changed).logits.clone()
                 repeated = self.call(lm, prefix, context).logits.clone()
                 self.assertTrue(t.equal(prefix, original))
                 self.assertTrue(t.equal(before, repeated))
@@ -234,6 +264,114 @@ class MultilayerTensorTests(unittest.TestCase):
                 self.assertTrue(t.equal(k, v))
                 self.assertFalse(t.equal(k[0], k[1]))
 
+    def test_prompt_mix_uses_tokenizer_mask_once_and_reuses_exact_weighted_seeds(self):
+        t = self.torch
+        variant = "recursive_mesh_layer4_8_audio7slot_split3_prompt_mix"
+        with t.inference_mode():
+            decoder = self.decoder(variant)
+            # A valid literal ! and EOS participate even though padding uses the same ! id.
+            decoder.lm.get_input_embeddings().weight[17].fill_(.7)
+            prompt = {"input_ids": t.tensor([[17, 0, 3] + [17] * 253]),
+                      "attention_mask": t.tensor([[1, 1, 1] + [0] * 253])}
+            audio, pair = t.randn(1, 126, 36), (t.randn(1, 126, 36), t.randn(1, 126, 36))
+            calls, forwarded = [], []
+            handle = decoder.prompt_mix_mlp.register_forward_hook(lambda *_: calls.append(1))
+            capture = decoder.lm.register_forward_pre_hook(
+                lambda _m, _i, kw: forwarded.append(kw["audio_memory_seeds"]), with_kwargs=True)
+            try:
+                prefix, seeds = decoder.generate_prefix_inference(audio, None, prompt, audio_information=pair)
+                context = adapter.sample_context(variant, {}, seeds, prompt)
+                model = types.SimpleNamespace(caption_decoder=decoder)
+                tokenizer = types.SimpleNamespace(eos_token_id=-1, decode=lambda *_a, **_k: " raw ")
+                with patch.object(adapter, "HIDDEN_SIZE", 36), patch.object(adapter, "MAX_NEW_TOKENS", 3):
+                    audit = adapter.install_recursive_trace_audit(decoder.lm, eval_variant=variant)
+                    adapter.greedy_decode(model, tokenizer, prefix, 3, eval_variant=variant, context=context)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(audit["checked_forwards"], 3)
+                self.assertTrue(all(value is seeds for value in forwarded))
+            finally:
+                handle.remove(); capture.remove()
+            embedding = decoder.lm.get_input_embeddings()(prompt["input_ids"])
+            alpha = t.softmax(decoder.prompt_mix_mlp(embedding[:, :3].mean(1)), dim=-1)
+            for i, value in enumerate((audio, *pair)):
+                t.testing.assert_close(seeds[i], alpha[:, i, None, None] * value, rtol=1e-5, atol=1e-6)
+            t.testing.assert_close(prefix[:, :126], seeds[0] + seeds[1] + seeds[2], rtol=0, atol=0)
+            changed = {key: value.clone() for key, value in prompt.items()}
+            changed["input_ids"][:, 3:] = 8
+            _, padded_seeds = decoder.generate_prefix_inference(audio, None, changed, audio_information=pair)
+            for before, after in zip(seeds, padded_seeds): self.assertTrue(t.equal(before, after))
+            changed["attention_mask"][:, :2] = 0
+            _, excluded = decoder.generate_prefix_inference(audio, None, changed, audio_information=pair)
+            self.assertFalse(t.equal(seeds[0], excluded[0]))
+
+    def test_prompt_mix_strict_state_restores_trained_mlp_and_rejects_missing_weights(self):
+        t = self.torch
+        variant = "recursive_mesh_layer4_8_audio7slot_split3_prompt_mix"
+        with t.inference_mode():
+            decoder, restored = self.decoder(variant), self.decoder(variant)
+            decoder.prompt_mix_mlp[2].weight.add_(.17)
+            state = copy.deepcopy(decoder.state_dict())
+            restored.load_state_dict(state, strict=True)
+            for key, value in restored.state_dict().items(): self.assertTrue(t.equal(value, state[key]), key)
+            state.pop("prompt_mix_mlp.2.weight")
+            with self.assertRaises(RuntimeError): restored.load_state_dict(state, strict=True)
+
+    def test_serial_nonzero_input_residual_precedes_layer_gate_and_uses_raw_prefix_projection(self):
+        t = self.torch
+        variant = "recursive_5_10_5_layer8_4_inject_audio_reinject"
+        with t.inference_mode():
+            lm, (prefix, context) = self.model(variant), self.inputs(variant)
+            core, projected, gate_inputs = lm.model, [], []
+            handles = [core.audio_linear.register_forward_pre_hook(lambda _m, values: projected.append(values[0].clone()))]
+            for gate in (core.audio_gate, core.audio_gates["8"], core.audio_gates["4"]):
+                handles.append(gate.register_forward_pre_hook(lambda _m, values: gate_inputs.append(values[0].clone())))
+            try:
+                with patch.object(adapter, "HIDDEN_SIZE", 36):
+                    audit = adapter.install_recursive_trace_audit(lm, eval_variant=variant)
+                    self.call(lm, prefix, context)
+            finally:
+                for handle in handles: handle.remove()
+            self.assertEqual(audit["last_branch_events"], [[5, "input"], [5, "layer8"], [15, "input"], [15, "layer4"]])
+            self.assertEqual(len(projected), 1)
+            t.testing.assert_close(projected[0], prefix[:, :126], rtol=0, atol=0)
+            information = core.audio_linear(prefix[:, :126])
+            for index in (0, 2):
+                before = gate_inputs[index]
+                expected = before + t.tanh(core.audio_gate(before)) * information
+                t.testing.assert_close(gate_inputs[index + 1], expected, rtol=0, atol=0)
+                self.assertFalse(t.equal(gate_inputs[index + 1], before))
+
+    def test_four_loop_mesh_uses_full_sequence_seven_slots_five_transitions_and_fresh_memory(self):
+        t = self.torch
+        variant = "recursive_mesh_5_10x4_5"
+        with t.inference_mode():
+            lm, (prefix, context) = self.model(variant), self.inputs(variant)
+            core = lm.model
+            core.audit_mode = True
+            output = self.call(lm, prefix, context).logits.clone()
+            memory = core.last_initial_memory.clone()
+            self.assertEqual(tuple(memory.shape), (1, 7, 383, 36))
+            t.testing.assert_close(memory[:, 0], prefix, rtol=0, atol=0)
+            self.assertEqual(int(t.count_nonzero(memory[:, 1:])), 0)
+            self.assertEqual(len(core.last_core_inputs), 4)
+            self.assertEqual(len(core.last_router_queries), 10)
+            self.assertEqual(len(core.last_memory_write_history), 5)
+            for stage, suffix in enumerate(("pre", "0", "1", "2", "3")):
+                query = core.last_prefix_output if stage == 0 else core.last_core_inputs[stage - 1]
+                value = core.last_prefix_output if stage == 0 else core.last_core_outputs[stage - 1]
+                for action in ("write", "read"):
+                    t.testing.assert_close(core.last_router_queries[f"{action}_{suffix}"], query, rtol=0, atol=0)
+                memory += value.unsqueeze(1) * core.last_router_weights[f"write_{suffix}"].transpose(1, 2).unsqueeze(-1)
+                t.testing.assert_close(memory, core.last_memory_write_history[stage], rtol=0, atol=0)
+            self.call(lm, prefix * -2, {})
+            self.assertTrue(t.equal(self.call(lm, prefix, {}).logits, output))
+            core.audit_mode = False
+            with patch.object(adapter, "HIDDEN_SIZE", 36):
+                adapter.install_recursive_trace_audit(lm, eval_variant=variant)
+                core.ablate_after_two_loops = True
+                with self.assertRaisesRegex(RuntimeError, "four trained MeSH loops"):
+                    self.call(lm, prefix, {})
+
     def test_mesh_actual_writes_listens_reads_and_injections_have_training_order(self):
         t = self.torch
         for variant, spec in adapter.ROUTE_SPECS.items():
@@ -256,10 +394,12 @@ class MultilayerTensorTests(unittest.TestCase):
                         self.call(lm, prefix, context)
                 finally:
                     handle.remove()
-                if spec["audio_memory_slots"] == 7:
+                if spec["split_memory"]:
                     boundary = ["write", "write", "read", "read"]
                     extra = ["inject"] if spec["interaction_layers"] else []
                     self.assertEqual(events, (boundary + extra) * 2 + boundary)
+                elif spec["kind"] == "mesh_x4":
+                    self.assertEqual(events, ["write", "read"] * 5)
                 else:
                     boundary = ["write", "read", "inject"] if spec["kind"] in ("inject48", "inject84") else ["write", "listen", "read"]
                     self.assertEqual(events, boundary * 2 + ["write", "read"])
@@ -271,20 +411,24 @@ class MultilayerTensorTests(unittest.TestCase):
             with patch.object(adapter, "HIDDEN_SIZE", 36):
                 self.assertIs(adapter.validate_context(variant, context, prefix), context)
                 bad = copy.deepcopy(context)
-                if "audio_information" in bad:
-                    bad["audio_information"] = (bad["audio_information"][0].double(), bad["audio_information"][1])
+                key = "audio_information" if "audio_information" in bad else "audio_memory_seeds"
+                if key in bad:
+                    bad[key] = (bad[key][0].double(), *bad[key][1:])
+                elif not bad:
+                    bad["audio_information"] = (t.randn(1, 126, 36),) * 2
                 else:
                     bad["prompt_mask"].zero_()
                 with self.assertRaises(ValueError): adapter.validate_context(variant, bad, prefix)
+                if not context: continue
                 bad = copy.deepcopy(context)
-                value = bad["audio_information"][0] if "audio_information" in bad else bad["audio_grids"]
+                value = bad[key][0] if key in bad else bad["audio_grids"]
                 value.flatten()[0] = float("nan")
                 with self.assertRaises(ValueError): adapter.validate_context(variant, bad, prefix)
 
     def test_audio7_actual_seeds_router_queries_writes_and_post_read_injections(self):
         t = self.torch
         for variant, spec in adapter.ROUTE_SPECS.items():
-            if spec["audio_memory_slots"] != 7: continue
+            if not spec["split_memory"]: continue
             with self.subTest(variant=variant), t.inference_mode():
                 lm, (prefix, context) = self.model(variant), self.inputs(variant)
                 core = lm.model
@@ -294,11 +438,12 @@ class MultilayerTensorTests(unittest.TestCase):
                 audio, text = core.last_initial_memory
                 self.assertEqual(tuple(audio.shape), (1, 7, 126, 36))
                 self.assertEqual(tuple(text.shape), (1, 5, 257, 36))
-                t.testing.assert_close(audio[:, 0], prefix[:, :126], rtol=0, atol=0)
+                seeds = context.get("audio_memory_seeds", (prefix[:, :126], *context.get("audio_information", ())))
+                t.testing.assert_close(audio[:, 0], seeds[0], rtol=0, atol=0)
                 t.testing.assert_close(text[:, 0], prefix[:, 126:], rtol=0, atol=0)
                 self.assertEqual(int(t.count_nonzero(audio[:, 1:5])), 0)
                 self.assertEqual(int(t.count_nonzero(text[:, 1:])), 0)
-                for slot, feature in zip((5, 6), context["audio_information"]):
+                for slot, feature in zip((5, 6), seeds[1:]):
                     t.testing.assert_close(audio[:, slot], feature, rtol=0, atol=0)
                 memory = [audio.clone(), text.clone()]
                 for stage, suffix in enumerate(("pre", "0", "1")):
@@ -334,19 +479,21 @@ class MultilayerTensorTests(unittest.TestCase):
             contract, implementation, loader, _ = self.modules[variant]
             lm = self.model(variant, width=576)
             base = t.nn.Module()
-            if spec["context_kind"] == "pair":
+            if spec["context_kind"] in ("pair", "seeds"):
                 base.layer_mlps = t.nn.ModuleDict({str(k): t.nn.Sequential(t.nn.LayerNorm(1536),
                     t.nn.Linear(1536, 576), t.nn.GELU(), t.nn.Linear(576, 576), t.nn.LayerNorm(576)) for k in (4, 8)})
             model = types.SimpleNamespace(caption_decoder=types.SimpleNamespace(lm=lm,
                 is_recursive_mesh=spec["mesh"], is_recursive_5_10_5=not spec["mesh"],
                 text_model_contract=spec["text_contract"]), audio_encoder=types.SimpleNamespace(base=base))
+            if spec["kind"] == "prompt_mix":
+                model.caption_decoder.prompt_mix_mlp = t.nn.Sequential(t.nn.Linear(576, 576), t.nn.GELU(), t.nn.Linear(576, 3))
             identity = {"synthetic_text": True}
             with patch.dict(sys.modules, self.namespaces[variant]), patch.object(contract, "recursive_checkpoint_contract", return_value=identity):
                 recipe = {"text_model_dir": "synthetic", "recursive_text_checkpoint": identity,
                           "recursive_model_source_sha256": contract.recursive_model_source_sha256()}
                 audit = adapter.audit_recursive_route(contract, recipe, model, eval_variant=variant)
                 self.assertEqual(audit["new_parameter_count"], spec["new_parameters"])
-                if spec["audio_memory_slots"] == 7:
+                if spec["split_memory"]:
                     self.assertEqual((audit["audio_memory_slots"], audit["text_memory_slots"], audit["routers"]), (7, 5, 12))
                     with self.assertRaises(ValueError): loader.validate_audio_listen(lm, fresh=True)
                 lm.model.layers[1] = lm.model.layers[0]

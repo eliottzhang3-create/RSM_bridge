@@ -1,4 +1,4 @@
-"""Validate the eight-route CED evaluator, existing recursive and base/MeSH regressions.
+"""Validate the eleven-route CED evaluator, existing recursive and base/MeSH regressions.
 
 No downloads, production weights, CUDA or job submission. --require-tensors
 turns any missing tensor dependency or skipped tensor check into failure.
@@ -22,9 +22,13 @@ TEST_FILES = (
     "test_mizar_s1_ced_multilayer_eval_workflow.py",
     "test_mizar_s1_ced_multilayer_eval_shell.py",
     "test_mizar_s1_ced_multilayer_eval_tensor.py",
+    "test_mizar_official_eval_shell.py",
     "test_mizar_s1_mesh_ced_audio7slot_split3_behavior.py",
     "test_mizar_s1_mesh_ced_audio7slot_split3_inject_behavior.py",
     "test_mizar_s1_mesh_ced_layer84_behavior.py",
+    "test_mizar_s1_mesh_ced_audio7slot_split3_prompt_mix_behavior.py",
+    "test_mizar_s1_ced_layer84_audio_reinject_behavior.py",
+    "test_mizar_s1_mesh_x4_ced_small_behavior.py",
     "test_mizar_s1_ced_recursive_eval.py",
     "test_mizar_s1_ced_recursive_eval_workflow.py",
     "test_mizar_s1_ced_recursive_eval_shell.py",

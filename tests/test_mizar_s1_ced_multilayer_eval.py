@@ -44,24 +44,30 @@ class MultilayerEvaluationTests(unittest.TestCase):
 
     def fixture(self):
         contract, saved, runtime = BASE.CedBenchmarkEvaluationTest.fixture(self)
+        saved["total_step"] = self.spec["default_step"]
         contract["recursive_text_checkpoint"] = {"fixture_only": True}
         self.resign(saved, runtime)
         return contract, saved, runtime
 
     resign = BASE.CedBenchmarkEvaluationTest.resign
-    loader_fixture = PREVIOUS.RecursiveCedEvaluationTests.loader_fixture
+    def loader_fixture(self, directory, state):
+        fixture = PREVIOUS.RecursiveCedEvaluationTests.loader_fixture(self, directory, state)
+        fixture[0].expected_step = self.spec["default_step"]
+        fixture[0].expected_geometry = self.spec["default_geometry"]
+        return fixture
     test_raw_predictions_preserve_eos_and_order = BASE.CedBenchmarkEvaluationTest.test_materialized_predictions_keep_raw_eos_and_official_order
 
     def validate(self, saved, runtime, **kwargs):
-        return adapter.validate_checkpoint(saved, runtime, self.route, 17313,
+        return adapter.validate_checkpoint(saved, runtime, self.route, self.spec["default_step"],
                                            eval_variant=self.variant, **kwargs)
 
-    def test_eight_actual_contracts_accept_completed_checkpoints_and_bind_five_runs(self):
+    def test_eleven_actual_contracts_accept_completed_checkpoints_and_bind_nine_runs(self):
         stamps = ("20261030_140459065784533", "20261030_162028139130855", None,
                   "20261030_172450546025072", "20261101_113133327944502",
-                  "20261101_170211458358358", None, None)
-        counts = (4892741, 6241733, 2444930, 2450700, 3552788, 2468010, 2469164, 2444930)
-        self.assertEqual(len(VARIANTS), 8)
+                  "20261101_170211458358358", "20261102_002211827036990", None,
+                  "20261102_132232677352730", "20261102_112121702891801", "20261103_093224843011222")
+        counts = (4892741, 6241733, 2444930, 2450700, 3552788, 2468010, 2469164, 2444930, 2802093, 2777859, 0)
+        self.assertEqual(len(VARIANTS), 11)
         for variant, stamp, count in zip(VARIANTS, stamps, counts):
             self.select(variant)
             contract, saved, runtime = self.fixture()
@@ -76,9 +82,11 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 else:
                     with patch("sys.stderr"), self.assertRaises(SystemExit): runner.parse_args(argv)
                     args = runner.parse_args(argv + ["--run-root", "/actual completed run"])
-                self.assertEqual(args.checkpoint, args.run_root / "formal/checkpoints/model--step-17313.ckpt")
+                step = 34626 if variant == "recursive_mesh_5_10x4_5" else 17313
+                self.assertEqual(args.expected_step, step)
+                self.assertEqual(args.checkpoint, args.run_root / f"formal/checkpoints/model--step-{step}.ckpt")
                 self.assertEqual(args.runtime_config, args.run_root / "formal/runtime.json")
-                self.assertEqual(args.expected_geometry, (8, 8, 4))
+                self.assertEqual(args.expected_geometry, (8, 4, 4) if step == 34626 else (8, 8, 4))
                 self.assertEqual(args.output_dir.parent, args.run_root / "eval")
 
     def test_explicit_checkpoint_infers_its_own_run_and_noncanonical_paths_need_full_triple(self):
@@ -114,7 +122,7 @@ class MultilayerEvaluationTests(unittest.TestCase):
                     self.validate(saved, runtime)
             _, saved, runtime = self.fixture()
             with self.assertRaises(ValueError): self.validate(saved, {**runtime, "route": "other"})
-            with self.assertRaises(ValueError): self.validate(saved, runtime, expected_geometry=(8, 4, 4))
+            with self.assertRaises(ValueError): self.validate(saved, runtime, expected_geometry=(8, 1, 4))
             for method in ("code_digest", "recursive_model_source_sha256"):
                 with patch.object(self.route, method, return_value="changed"), self.assertRaises(ValueError):
                     self.validate(saved, runtime)
@@ -122,19 +130,20 @@ class MultilayerEvaluationTests(unittest.TestCase):
     def test_branch_and_input_contract_mutations_are_rejected(self):
         for variant in VARIANTS:
             self.select(variant)
-            key, _ = adapter.branch_contract(self.route, self.spec)
-            for section, name, value in ((None, "prefix", [126, 1, 129]), (None, "attention_mask", "pad"),
+            mutations = [(None, "prefix", [126, 1, 129]), (None, "attention_mask", "pad"),
                     (None, "forward_dtype", "bfloat16"), (None, "text_model_schedule", list(range(30))),
                     (None, "text_model_architecture", "other"), (None, "recursive_text_checkpoint", {}),
-                    ("audio_encoder", "frozen", False), ("mapper", "name", "other"),
-                    (key, "ced_layers_1based", [12, 9, 6, 3])):
+                    ("audio_encoder", "frozen", False), ("mapper", "name", "other")]
+            mutations += [(key, "wrong_branch_contract", True)
+                          for key in adapter.branch_contracts(self.route, self.spec)]
+            for section, name, value in mutations:
                 contract, saved, runtime = self.fixture()
                 (contract if section is None else contract[section])[name] = value
                 self.resign(saved, runtime)
                 with self.subTest(variant=variant, field=name), self.assertRaises(ValueError):
                     self.validate(saved, runtime)
             contract, saved, runtime = self.fixture()
-            contract["audio_reinjection"] = {}
+            contract["audio_cross_attention" if self.spec["kind"] == "serial84" else "audio_reinjection"] = {}
             self.resign(saved, runtime)
             with self.assertRaises(ValueError): self.validate(saved, runtime)
 
@@ -216,6 +225,10 @@ class MultilayerEvaluationTests(unittest.TestCase):
             for _ in range(2):
                 if self.spec["context_kind"] == "pair":
                     context, output = (object(), object()), {}
+                elif self.spec["context_kind"] == "seeds":
+                    context, output = (object(), object(), object()), {}
+                elif self.spec["context_kind"] == "none":
+                    context, output = None, {}
                 else:
                     grids = object()
                     output = {"layer_grids": grids}
@@ -234,6 +247,10 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 got = call.kwargs["context"]
                 if self.spec["context_kind"] == "pair":
                     self.assertIs(got["audio_information"], ctx)
+                elif self.spec["context_kind"] == "seeds":
+                    self.assertIs(got["audio_memory_seeds"], ctx)
+                elif self.spec["context_kind"] == "none":
+                    self.assertEqual(got, {})
                 else:
                     self.assertIs(got["audio_grids"], out["layer_grids"])
                     self.assertIs(got["prompt_mask"], mask)
@@ -244,6 +261,7 @@ class MultilayerEvaluationTests(unittest.TestCase):
             for context in (None, {}, {"audio_grids": object()}):
                 with self.assertRaises(ValueError): adapter.sample_context(variant, {}, context, {})
         with self.assertRaises(ValueError): adapter.sample_context(VARIANTS[4], {}, {}, {})
+        with self.assertRaises(ValueError): adapter.sample_context("recursive_mesh_5_10x4_5", {}, (object(), object()), {})
 
     @unittest.skipUnless(importlib.util.find_spec("numpy"), "requires NumPy parameter stand-ins")
     def test_actual_seven_slot_validators_preserve_learned_rows_and_gates(self):
@@ -257,7 +275,7 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 self.weight = np.arange(rows * 576, dtype=np.float32).reshape(rows, 576).view(Parameter)
                 self.bias = np.arange(rows, dtype=np.float32).view(Parameter) + .25
             def parameters(self): return (self.weight, self.bias)
-        for suffix in ("layer4_8_audio7slot_split3", "layer4_8_audio7slot_split3_inject"):
+        for suffix in ("layer4_8_audio7slot_split3", "layer4_8_audio7slot_split3_inject", "layer4_8_audio7slot_split3_prompt_mix"):
             self.select("recursive_mesh_" + suffix)
             core = types.SimpleNamespace(listen_audio_tokens=126, audio_memory_slots=7, text_memory_slots=5,
                 audio_router_initialization="split_slot0_three_ways", config=types.SimpleNamespace(
@@ -286,8 +304,10 @@ class MultilayerEvaluationTests(unittest.TestCase):
             self.select(variant)
             lm = Mock()
             core, kind = lm.model, self.spec["kind"]
+            core.ablate_after_two_loops = False
             core.layers = [Mock() for _ in range(20)]
-            core.write_routers, core.read_routers = [Mock() for _ in range(3)], [Mock() for _ in range(3)]
+            groups = self.spec["loops"] + 1
+            core.write_routers, core.read_routers = [Mock() for _ in range(groups)], [Mock() for _ in range(groups)]
             core.audio_listen_write_routers, core.audio_listen_read_routers = [Mock() for _ in range(3)], [Mock() for _ in range(3)]
             core.audio_gates = {str(k): Mock() for k in (4, 8)}
             core.listen_routers = {str(k): Mock() for k in (4, 8)}
@@ -295,22 +315,28 @@ class MultilayerEvaluationTests(unittest.TestCase):
             core.audio_listen.last_rounds = [0, 1]
             core.last_injection_trace = core.last_listen_trace = tuple(zip((5, 15), self.spec["interaction_layers"]))
             core.last_crossattn_trace = (5, 15)
+            core.last_reinject_trace = (5, 15)
+            core.last_serial_injection_trace = ((5, "input"), (5, "layer8"), (15, "input"), (15, "layer4"))
             audit = adapter.install_recursive_trace_audit(lm, eval_variant=variant)
             begin = lm.register_forward_pre_hook.call_args.args[0]
             finish = lm.register_forward_hook.call_args.args[0]
             output = types.SimpleNamespace(past_key_values=None, logits=types.SimpleNamespace(shape=(1, 383, 576)))
             def hook(module, inputs=()):
                 self.assertIsNone(module.register_forward_hook.call_args.args[0](module, inputs, None))
-            def execute(*, bad_order=False, bad_compression=False, reverse_injection=False, omit_audio_router=False):
+            def execute(*, bad_order=False, bad_compression=False, reverse_injection=False, omit_audio_router=False,
+                        reverse_serial=False, duplicate_projection=False):
                 begin(lm, (), {"use_cache": False, "attention_mask": None})
+                if kind == "serial84":
+                    for _ in range(2 if duplicate_projection else 1):
+                        hook(core.audio_linear, (types.SimpleNamespace(shape=(1, 126, 576)),))
                 if kind == "query32":
                     q = types.SimpleNamespace(shape=(4, 31 if bad_compression else 32, 576))
                     kv = types.SimpleNamespace(shape=(4, 126, 576))
                     hook(core.audio_crossattn.compression_attention, (q, kv, kv))
-                for logical, physical in enumerate(adapter.TEXT_MODEL_SCHEDULE):
-                    if logical in (5, 15, 25) and self.spec["mesh"]:
+                for logical, physical in enumerate(self.spec["schedule"]):
+                    if logical >= 5 and (logical - 5) % 10 == 0 and self.spec["mesh"]:
                         index = (logical - 5) // 10
-                        if self.spec["audio_memory_slots"] == 7:
+                        if self.spec["split_memory"]:
                             hook(core.audio_listen_write_routers[index])
                             if not omit_audio_router: hook(core.audio_listen_read_routers[index])
                         if bad_order: hook(core.read_routers[index])
@@ -325,13 +351,19 @@ class MultilayerEvaluationTests(unittest.TestCase):
                                 hook(core.audio_gates[layer])
                                 if kind == "listen48": hook(core.listen_routers[layer])
                     elif logical in (5, 15):
-                        hook(core.audio_crossattn, (None, None, None, 0 if logical == 5 else 1))
+                        if kind == "serial84":
+                            if not reverse_serial: hook(core.audio_gate)
+                            order = (4, 8) if reverse_injection else (8, 4)
+                            hook(core.audio_gates[str(order[(logical - 5) // 10])])
+                            if reverse_serial: hook(core.audio_gate)
+                        else:
+                            hook(core.audio_crossattn, (None, None, None, 0 if logical == 5 else 1))
                     hook(core.layers[physical])
                 finish(lm, (), output)
             execute()
             execute()
             self.assertEqual(audit["checked_forwards"], 2)
-            self.assertEqual(audit["last_physical_schedule"], list(adapter.TEXT_MODEL_SCHEDULE))
+            self.assertEqual(audit["last_physical_schedule"], list(self.spec["schedule"]))
             for kwargs in ({"use_cache": True}, {"use_cache": False, "past_key_values": object()},
                            {"use_cache": False, "attention_mask": object()}):
                 with self.assertRaises(RuntimeError): begin(lm, (), kwargs)
@@ -339,12 +371,18 @@ class MultilayerEvaluationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "physical schedule"): finish(lm, (), output)
             if self.spec["mesh"]:
                 with self.assertRaisesRegex(RuntimeError, "router invocation order"): execute(bad_order=True)
-            if self.spec["audio_memory_slots"] == 7:
+            if self.spec["split_memory"]:
                 with self.assertRaisesRegex(RuntimeError, "router invocation order"): execute(omit_audio_router=True)
             if self.spec["interaction_layers"]:
                 with self.assertRaisesRegex(RuntimeError, "interaction order"): execute(reverse_injection=True)
             if kind == "query32":
                 with self.assertRaisesRegex(RuntimeError, "compress"): execute(bad_compression=True)
+            if kind == "serial84":
+                with self.assertRaisesRegex(RuntimeError, "interaction order"): execute(reverse_serial=True)
+                with self.assertRaisesRegex(RuntimeError, "projected once"): execute(duplicate_projection=True)
+            if kind == "mesh_x4":
+                core.ablate_after_two_loops = True
+                with self.assertRaisesRegex(RuntimeError, "four trained"): execute()
 
 
 @unittest.skipUnless(importlib.util.find_spec("numpy"), "requires numpy for executable decode stand-ins")
@@ -360,10 +398,15 @@ class NumpyDecodeTests(unittest.TestCase):
             cat=lambda values, dim: Tensor(np.concatenate(values, axis=dim)),
             tensor=lambda value, device, dtype: Tensor(value, dtype))
         prefix = Tensor(np.zeros((1, 383, 576)))
-        context = ({"audio_information": (Tensor(np.zeros((1, 126, 576))), Tensor(np.ones((1, 126, 576))))}
-            if adapter.variant_spec(variant)["context_kind"] == "pair" else
-            {"audio_grids": Tensor(np.zeros((1, 4, 126, 1536))),
-             "prompt_mask": Tensor([[1] * 180 + [0] * 76], np.int64)})
+        kind = adapter.variant_spec(variant)["context_kind"]
+        if kind in ("pair", "seeds"):
+            key, count = ("audio_information", 2) if kind == "pair" else ("audio_memory_seeds", 3)
+            context = {key: tuple(Tensor(np.full((1, 126, 576), i)) for i in range(count))}
+        elif kind == "none":
+            context = {}
+        else:
+            context = {"audio_grids": Tensor(np.zeros((1, 4, 126, 1536))),
+                       "prompt_mask": Tensor([[1] * 180 + [0] * 76], np.int64)}
         def forward(**kwargs):
             token = next(tokens)
             logits = Tensor(np.zeros((1, kwargs["inputs_embeds"].shape[1], 8)))
@@ -400,8 +443,11 @@ class NumpyDecodeTests(unittest.TestCase):
                 self.assertEqual(result["stop_reason"], "max_new_tokens")
                 with self.assertRaises(ValueError):
                     adapter.greedy_decode(model, tokenizer, prefix, 32, eval_variant=variant, context=context)
-                for bad in (None, {}, {"audio_grids": object(), "prompt_mask": object()}):
+                invalid = [None, {"audio_grids": object(), "prompt_mask": object()}]
+                if context: invalid.append({})
+                for bad in invalid:
                     with self.assertRaises(ValueError): adapter.validate_context(variant, bad, prefix)
+                if not context: continue
                 value = next(iter(context.values()))
                 target = value[0] if isinstance(value, tuple) else value
                 target.flat[0] = float("nan")
