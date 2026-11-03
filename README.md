@@ -1,3 +1,43 @@
+## 2026-11-03：非 MeSH 串行音频注入 + 中间十层两套独立 LoRA
+
+从原 `layer8_4_inject_audio_reinject` 完整复制两条正式训练路线，
+见[双 LoRA 实现、隔离说明与提交命令](code/RSmol/scripts/README_mizar_s1_ced_loop_lora.md)。
+仅物理层5..14的q/k/v/o与gate/up/down投影加两套独立LoRA；
+两轮共享基础W且继续全量训练，前五层/后五层不加LoRA。
+rank8、alpha16、scale2、dropout0、LoRA maxLR6e-4；两套新增1,628,160参数。
+两版分别保持 input→CED8 / input→CED4，以及 input→CED4 / input→CED8，
+中间gate读取post-input hidden，input投影/gate共享，A4/A8 MLP/gate独立。
+
+严格加载原文本checkpoint后再注册LoRA；CPU RNG隔离，B零初始化，
+新增四类LoRA A/B参数角色，纳入优化器、首步/更新后梯度审计、GradNorm、保存及完整恢复。
+两个目录/启动器/route/output/log/job/index-cache/tmpfs/resume身份完全隔离。
+母本及共享模型未修改；原数据、FP32、GBS256（8×8×4）、3epochs/17313updates/866warmup、
+原loss、AdamW/LambdaLR/GradScaler/GradNorm、保存与后台staging配置保持。
+
+本地代码经GitHub提交/推送同步后，远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+# 8→4 + 两套 LoRA
+bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject_loop_lora_r8_5090.sh --stage-workers 4
+# 4→8 + 两套 LoRA
+bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer4_8_inject_audio_reinject_loop_lora_r8_5090.sh --stage-workers 4
+```
+
+两命令各提交一个formal作业；沿用mellow_c8204d8及pdgpu-5090 / 32CPU / 256G / 8GPU / 1node，
+无自动smoke/tensor前置任务。只能从对应新版本、同源码/资产/数据/配方的完整checkpoint恢复。
+现有评测器需另行适配双LoRA与对应注入顺序。
+
+统一验证 `python -B tests/validate_mizar_s1_ced_loop_lora.py`：149项实际检查通过，
+51项真实CPU tensor检查因缺依赖跳过（新版本共14项）。Python/Bash语法、
+两启动器假提交、非零LoRA数值/轮次对照、有限差分、梯度审计失败用例、
+12类优化器分组、跨路线恢复拒绝及母本回归通过。
+34个母本原文件SHA保护，完整骨干和train函数经过明确新增节点剥离后的AST对照通过。
+报告为 `audit_reports/mizar_s1_ced_loop_lora_validation.json`；可手动加 `--require-tensors` 禁止skip。
+本次未执行git commit/push、远程资产加载、八卡训练或真实分布式恢复，未登记远程PASS。
+
 ## 2026-11-03：补充 MeSH 8→4 注入的默认评测产物
 
 两个原 CED MMAU/MMAR 入口的 `recursive_mesh_layer8_4_inject` 已绑定
