@@ -66,7 +66,7 @@ runtime 均为同 run 的 `formal/runtime.json`：
 | `recursive_mesh_layer36912_listen` | `mizar_s1_ced_small_gbs256_recursive_mesh_layer36912_listen_5090/formal_20261101_113133327944502` |
 | `recursive_mesh_layer4_8_audio7slot_split3` | `mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_audio7slot_split3_5090/formal_20261101_170211458358358` |
 | `recursive_mesh_layer4_8_audio7slot_split3_inject` | `mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_audio7slot_split3_inject_5090/formal_20261102_002211827036990` |
-| `recursive_mesh_layer8_4_inject` | 训练中，必须显式指定实际产物 |
+| `recursive_mesh_layer8_4_inject` | `mizar_s1_ced_small_gbs256_recursive_mesh_layer8_4_inject_5090/formal_20261102_112040402999384` |
 | `recursive_mesh_layer4_8_audio7slot_split3_prompt_mix` | `mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_audio7slot_split3_prompt_mix_5090/formal_20261102_132232677352730` |
 | `recursive_5_10_5_layer8_4_inject_audio_reinject` | `mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_5090/formal_20261102_112121702891801` |
 | `recursive_mesh_5_10x4_5` | `mizar_s1_ced_small_gbs128_recursive_mesh_5_10x4_5_5090/formal_20261103_093224843011222` |
@@ -224,18 +224,23 @@ RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_mesh_5_10x4_5 bash run_mizar_s1_ced_small
 已有 shell 会话若设置过 `RSMOL_MIZAR_CED_*` 路径或 step/geometry 覆盖变量，
 需先清除这些旧覆盖值再使用默认命令。每条命令直接提交一个 full 作业，不运行自动前置测试。
 
-## 没有内置默认 run 的旧路线
+## 补充产物：MeSH 8→4 注入的两项评测
 
-将下面变量替换为**实际已经产出 checkpoint 的 run 根目录**：
+已绑定 `formal_20261102_112040402999384` 的 step17313 和同 run 的 runtime，
+直接使用已有 MeSH 8→4 adapter。保持 `(A4,A8)` 输入、read 后 A8→A4 注入、
+五槽 memory、六个原 routers 和原推理/评分协议。同步代码后，在远程 `code/RSmol` 执行：
 
 ```bash
-inject84_run=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer8_4_inject_5090/formal_REPLACE_WITH_ACTUAL_RUN
-
-RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_mesh_layer8_4_inject RSMOL_MIZAR_CED_RUN_ROOT="$inject84_run" bash run_mizar_s1_ced_small_mmau_eval_5090.sh
-RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_mesh_layer8_4_inject RSMOL_MIZAR_CED_RUN_ROOT="$inject84_run" bash run_mizar_s1_ced_small_mmar_eval_5090.sh
+RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_mesh_layer8_4_inject bash run_mizar_s1_ced_small_mmau_eval_5090.sh
+RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_mesh_layer8_4_inject bash run_mizar_s1_ced_small_mmar_eval_5090.sh
 ```
 
-也可用 `--run-root "$inject84_run"` 等 CLI 参数。标准
+本次默认产物绑定经15项合同/上下文与9项Bash假提交检查验证通过；
+未读取远程权重或提交真实作业。
+
+## 路径与 step 覆盖
+
+替换产物时可用 `--run-root /path/to/actual_run` 等 CLI 参数。标准
 `<run>/formal/checkpoints/<file>` checkpoint 路径可推导其 run；对十一条路线，
 显式 run 优先，其次是显式标准 checkpoint 所属 run，最后才使用已知默认 run。
 非标准 checkpoint 路径应同时提供 `--checkpoint`、`--runtime-config`、`--output-dir`。

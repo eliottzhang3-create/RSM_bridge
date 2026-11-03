@@ -61,10 +61,10 @@ class MultilayerEvaluationTests(unittest.TestCase):
         return adapter.validate_checkpoint(saved, runtime, self.route, self.spec["default_step"],
                                            eval_variant=self.variant, **kwargs)
 
-    def test_eleven_actual_contracts_accept_completed_checkpoints_and_bind_nine_runs(self):
+    def test_eleven_actual_contracts_accept_completed_checkpoints_and_bind_ten_runs(self):
         stamps = ("20261030_140459065784533", "20261030_162028139130855", None,
                   "20261030_172450546025072", "20261101_113133327944502",
-                  "20261101_170211458358358", "20261102_002211827036990", None,
+                  "20261101_170211458358358", "20261102_002211827036990", "20261102_112040402999384",
                   "20261102_132232677352730", "20261102_112121702891801", "20261103_093224843011222")
         counts = (4892741, 6241733, 2444930, 2450700, 3552788, 2468010, 2469164, 2444930, 2802093, 2777859, 0)
         self.assertEqual(len(VARIANTS), 11)

@@ -50,7 +50,7 @@ case "$EVAL_VARIANT" in
       recursive_mesh_layer36912_listen) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer36912_listen; RUN_STAMP=20261101_113133327944502; JOB_TAG=m4l ;;
       recursive_mesh_layer4_8_audio7slot_split3) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_audio7slot_split3; RUN_STAMP=20261101_170211458358358; JOB_TAG=m7s3 ;;
       recursive_mesh_layer4_8_audio7slot_split3_inject) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_audio7slot_split3_inject; RUN_STAMP=20261102_002211827036990; JOB_TAG=m7s3i ;;
-      recursive_mesh_layer8_4_inject) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer8_4_inject; JOB_TAG=m84i ;;
+      recursive_mesh_layer8_4_inject) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer8_4_inject; RUN_STAMP=20261102_112040402999384; JOB_TAG=m84i ;;
       recursive_mesh_layer4_8_audio7slot_split3_prompt_mix) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_audio7slot_split3_prompt_mix; RUN_STAMP=20261102_132232677352730; JOB_TAG=m7pm ;;
       recursive_5_10_5_layer8_4_inject_audio_reinject) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer8_4_inject_audio_reinject; RUN_STAMP=20261102_112121702891801; JOB_TAG=r84ri ;;
       recursive_mesh_5_10x4_5) FAMILY=recursive_mesh; ROUTE_SUFFIX=; RUN_STAMP=20261103_093224843011222; JOB_TAG=mx4; DEFAULT_EXPECTED_STEP=34626; DEFAULT_EXPECTED_GEOMETRY=8,4,4 ;;

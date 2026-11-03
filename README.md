@@ -1,3 +1,12 @@
+## 2026-11-03：补充 MeSH 8→4 注入的默认评测产物
+
+两个原 CED MMAU/MMAR 入口的 `recursive_mesh_layer8_4_inject` 已绑定
+`mizar_s1_ced_small_gbs256_recursive_mesh_layer8_4_inject_5090/formal_20261102_112040402999384`，
+精确选择同 run 的 `formal/checkpoints/model--step-17313.ckpt` 和 `formal/runtime.json`。
+复用已支持的真实训练模型与 adapter，保持 read 后先 A8 再 A4 注入、五槽/六router，
+原推理和评分协议保持。完整命令见[评测说明](code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md)。
+本次复验15项评测合同/上下文检查及9项Bash假提交检查全部通过；未读取远程权重或提交真实作业。
+
 ## 2026-11-03：扩展 MMAU/MMAR，支持 prompt_mix、串行8→4与四循环 MeSH
 
 原两个 CED 评测提交入口已扩展为十一条路线，见

@@ -37,7 +37,7 @@ for _family, _suffix, _version, _stamp, _kind, _count in (
     ("recursive_mesh", "layer36912_listen", 2, "20261101_113133327944502", "listen36912", 3552788),
     ("recursive_mesh", "layer4_8_audio7slot_split3", 1, "20261101_170211458358358", "audio7split3", 2468010),
     ("recursive_mesh", "layer4_8_audio7slot_split3_inject", 1, "20261102_002211827036990", "audio7split3_inject", 2469164),
-    ("recursive_mesh", "layer8_4_inject", 1, None, "inject84", 2444930),
+    ("recursive_mesh", "layer8_4_inject", 1, "20261102_112040402999384", "inject84", 2444930),
     ("recursive_mesh", "layer4_8_audio7slot_split3_prompt_mix", 1, "20261102_132232677352730", "prompt_mix", 2802093),
     ("recursive_5_10_5", "layer8_4_inject_audio_reinject", 1, "20261102_112121702891801", "serial84", 2777859),
 ):

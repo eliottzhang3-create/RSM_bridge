@@ -22,7 +22,7 @@ SPECS = {
     "recursive_mesh_layer36912_listen": ("recursive_mesh", "layer36912_listen", "20261101_113133327944502", "m4l"),
     "recursive_mesh_layer4_8_audio7slot_split3": ("recursive_mesh", "layer4_8_audio7slot_split3", "20261101_170211458358358", "m7s3"),
     "recursive_mesh_layer4_8_audio7slot_split3_inject": ("recursive_mesh", "layer4_8_audio7slot_split3_inject", "20261102_002211827036990", "m7s3i"),
-    "recursive_mesh_layer8_4_inject": ("recursive_mesh", "layer8_4_inject", None, "m84i"),
+    "recursive_mesh_layer8_4_inject": ("recursive_mesh", "layer8_4_inject", "20261102_112040402999384", "m84i"),
     "recursive_mesh_layer4_8_audio7slot_split3_prompt_mix": ("recursive_mesh", "layer4_8_audio7slot_split3_prompt_mix", "20261102_132232677352730", "m7pm"),
     "recursive_5_10_5_layer8_4_inject_audio_reinject": ("recursive_5_10_5", "layer8_4_inject_audio_reinject", "20261102_112121702891801", "r84ri"),
     "recursive_mesh_5_10x4_5": ("recursive_mesh_5_10x4_5", "", "20261103_093224843011222", "mx4"),
