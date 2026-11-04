@@ -1,3 +1,28 @@
+## 2026-11-04：非 MeSH 串行8→4 + 双循环 LoRA 的 MMAU/MMAR 评测
+
+两个原 CED 评测入口新增 `recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8`，
+见[实现与两项提交命令](code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md)。
+默认绑定 `mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8_5090/formal_20261103_165410438279511`，
+精确读取同 run 的 `formal/checkpoints/model--step-17313.ckpt` 和 `formal/runtime.json`。
+直接导入非 MeSH 真实训练模型，strict 加载全部 mapper、A4/A8 MLP、input projection/gates、
+共享 LM 基础权重与两轮 LoRA；训练源码/共享模型与原 SHA 身份校验保持。
+每次 forward 保留 input→CED8 / input→CED4、一次 input 投影及30次物理层调用；
+中间十层七种投影使用两轮各70次 LoRA，检查280份独立 A/B、rank8/scale2、调用复位及禁止 gradient checkpointing。
+音频分支2,777,859与LoRA1,628,160合计4,406,019新增参数，基础W不重复计数。
+
+fixed20、256-token prompt/383 prefix、单GPU/batch1/FP32、无cache、argmax/300tokens/首EOS停止、
+原始输出与官方 scorer，以及两个 benchmark 各完整1000条的原协议保持。
+沿用 mellow_c8204d8 与 pdgpu-5090 / 8CPU / 32G / 1GPU / 1node，无自动前置作业。
+结果在该训练 run 的 `eval/mmau_test_mini_step17313/` 与 `eval/mmar_step17313/`。
+
+`python -B tests/validate_mizar_s1_ced_multilayer_eval.py` 本地192项检查通过，
+26项真实 tensor 检查因缺 Torch/Transformers 跳过（当前适配17项、旧回归9项），Python/Bash语法通过。
+覆盖十二路线/24种千条模拟流程与假提交、LoRA真实源码NumPy数值行为、错轮/漏调用/重复调用/残留索引拒绝、原评测回归；
+真实 tensor 用例覆盖已训练共享W/两套A/B strict restore、非零LoRA数值、首答案对齐和跨样本/异常隔离。
+报告为 `audit_reports/mizar_s1_ced_multilayer_eval_validation.json`，可手动加 `--require-tensors` 禁止skip。
+本轮未执行git commit/push、远程权重/runtime读取或真实GPU评测，不登记远程PASS。
+非 MeSH 4→8双LoRA及MeSH双LoRA仍需独立评测适配。
+
 ## 2026-11-03：MeSH CED4→8 注入 + 中间十层两套独立 LoRA
 
 从 MeSH `layer4_8_inject` 母本完整复制隔离一个正式训练版本，
@@ -61,7 +86,7 @@ bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer4_8_inject_audio_reinje
 
 两命令各提交一个formal作业；沿用mellow_c8204d8及pdgpu-5090 / 32CPU / 256G / 8GPU / 1node，
 无自动smoke/tensor前置任务。只能从对应新版本、同源码/资产/数据/配方的完整checkpoint恢复。
-现有评测器需另行适配双LoRA与对应注入顺序。
+非 MeSH 8→4双LoRA已于2026-11-04适配原MMAU/MMAR评测；4→8双LoRA仍需另行适配。
 
 统一验证 `python -B tests/validate_mizar_s1_ced_loop_lora.py`：149项实际检查通过，
 51项真实CPU tensor检查因缺依赖跳过（新版本共14项）。Python/Bash语法、

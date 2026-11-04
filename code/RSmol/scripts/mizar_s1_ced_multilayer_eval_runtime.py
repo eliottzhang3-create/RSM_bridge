@@ -21,6 +21,8 @@ REMOTE_OUTPUT_ROOT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol")
 PROMPT_TOKENS, MAX_NEW_TOKENS, AUDIO_TOKENS = 256, 300, 126
 PREFIX_TOKENS, HIDDEN_SIZE = 383, 576
 TEXT_MODEL_SCHEDULE = tuple(list(range(15)) + list(range(5, 15)) + list(range(15, 20)))
+LOOP_LORA_TARGETS = ("self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj",
+                     "self_attn.o_proj", "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj")
 TRAINING_LOSS_REDUCTION = reference.TRAINING_LOSS_REDUCTION
 PROTOCOL = copy.deepcopy(reference.PROTOCOL)
 sha256_file = reference.sha256_file
@@ -40,6 +42,7 @@ for _family, _suffix, _version, _stamp, _kind, _count in (
     ("recursive_mesh", "layer8_4_inject", 1, "20261102_112040402999384", "inject84", 2444930),
     ("recursive_mesh", "layer4_8_audio7slot_split3_prompt_mix", 1, "20261102_132232677352730", "prompt_mix", 2802093),
     ("recursive_5_10_5", "layer8_4_inject_audio_reinject", 1, "20261102_112121702891801", "serial84", 2777859),
+    ("recursive_5_10_5", "layer8_4_inject_audio_reinject_loop_lora_r8", 1, "20261103_165410438279511", "serial84", 4406019),
 ):
     _variant = f"{_family}_{_suffix}"
     _mesh = _family == "recursive_mesh"
@@ -49,6 +52,7 @@ for _family, _suffix, _version, _stamp, _kind, _count in (
         "run_root": (REMOTE_OUTPUT_ROOT / f"mizar_s1_ced_small_gbs256_{_variant}_5090" / f"formal_{_stamp}"
                      if _stamp else None),
         "kind": _kind, "mesh": _mesh, "new_parameters": _count,
+        "loop_lora": _suffix.endswith("_loop_lora_r8"),
         "context_kind": ("seeds" if _kind == "prompt_mix" else "pair"
                          if _kind in ("inject48", "inject84", "serial84", "listen48", "audio7split3", "audio7split3_inject") else "grids"),
         "split_memory": _kind.startswith("audio7") or _kind == "prompt_mix",
@@ -107,6 +111,8 @@ def branch_contracts(route_contract, spec):
     if spec["kind"] == "serial84":
         result.update(audio_reinjection=dict(route_contract.AUDIO_REINJECTION),
                       serial_audio_injection=dict(route_contract.SERIAL_INJECTION_CONTRACT))
+    if spec.get("loop_lora"):
+        result["loop_lora"] = dict(route_contract.LOOP_LORA_CONTRACT)
     return result
 
 
@@ -179,7 +185,7 @@ def validate_checkpoint(saved, runtime, route_contract, expected_step,
         if contract.get(key) != branch:
             raise ValueError(f"CED {key} branch contract mismatch")
     for other in {"audio_cross_attention", "layer_injection", "audio_listen", "audio_reinjection",
-                  "prompt_mix", "serial_audio_injection"} - branches.keys():
+                  "prompt_mix", "serial_audio_injection", "loop_lora"} - branches.keys():
         if other in contract:
             raise ValueError(f"unexpected CED branch contract: {other}")
     return contract
@@ -282,11 +288,28 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
         if getattr(core, "collect_injection_stats" if kind in ("inject48", "inject84", "serial84") else "collect_listen_stats", True):
             raise ValueError("CED4/8 diagnostic mode must remain disabled")
     count = sum(p.numel() for module in extra for p in module.parameters())
+    lora_audit = None
+    if spec.get("loop_lora"):
+        lora = importlib.import_module("models.loop_lora")
+        if Path(lora.__file__).resolve() != (route_root / "models/loop_lora.py").resolve():
+            raise RuntimeError("LoRA implementation escaped the selected training route")
+        if tuple(lora.TARGETS) != LOOP_LORA_TARGETS or getattr(core, "gradient_checkpointing", True):
+            raise ValueError("evaluation requires all seven LoRA projections without gradient checkpointing")
+        # Training validator checks scope, shapes, independent storage, rank/scale
+        # and the original trainable W/A/B. Run before the inference-only freeze.
+        lora_audit = lora.validate_loop_lora(core)
+        lora_count = sum(p.numel() for name, p in core.named_parameters()
+                         if ".lora_A." in name or ".lora_B." in name)
+        if lora_count != 1628160 or lora_audit["parameter_count"] != lora_count:
+            raise ValueError("expected two independent loop LoRAs with 1,628,160 parameters")
+        # Count only A/B: the wrapped Linear W/bias still belong to the backbone.
+        count += lora_count
     if count != spec["new_parameters"]:
         raise ValueError(f"CED branch parameter count mismatch: {count}")
     if routers and len({id(r) for r in routers}) != len(routers):
         raise ValueError("original and added routers must be independent")
     return {"checkpoint": actual, "parameters": parameters, "branch": branch,
+            "loop_lora": lora_audit,
             "implementation": spec["implementation"], "new_parameter_count": count,
             "implementation_sha256": contract["recursive_model_source_sha256"],
             "memory_slots": spec["memory_slots"],
@@ -299,6 +322,7 @@ def install_recursive_trace_audit(lm, *, eval_variant):
     """Observe physical calls and real branch invocations without changing outputs."""
     spec = variant_spec(eval_variant)
     trace, events, compression, router_events, projections = [], [], [], [], []
+    lora_calls, lora_modules = [], []
     kind, core = spec["kind"], lm.model
     expected_schedule = list(spec["schedule"])
     layers = spec["interaction_layers"]
@@ -315,12 +339,20 @@ def install_recursive_trace_audit(lm, *, eval_variant):
              "text_memory_slots": spec["text_memory_slots"],
              "memory_policy": "fresh_per_full_sequence_forward" if spec["mesh"] else "none"}
 
+    def check_lora_idle():
+        if spec.get("loop_lora") and (not getattr(core, "loop_lora_enabled", False)
+                or getattr(core, "gradient_checkpointing", True)
+                or any(module.loop_index is not None for _, _, module in lora_modules)):
+            raise RuntimeError("LoRA must be enabled, reset between forwards and free of gradient checkpointing")
+
     def begin(_module, _inputs, kwargs):
         trace.clear()
         events.clear()
         compression.clear()
         router_events.clear()
         projections.clear()
+        lora_calls.clear()
+        check_lora_idle()
         if (kwargs.get("use_cache") is not False or kwargs.get("past_key_values") is not None
                 or kwargs.get("attention_mask") is not None or kwargs.get("labels") is not None):
             raise RuntimeError("CED evaluation requires full recomputation, no KV cache and attention_mask=None")
@@ -352,11 +384,37 @@ def install_recursive_trace_audit(lm, *, eval_variant):
             router_events.append([len(trace), name])
         return hook
 
+    def lora_projection(physical, target):
+        def hook(module, inputs):
+            logical = len(trace)
+            loop = 0 if 5 <= logical < 15 else 1 if 15 <= logical < 25 else None
+            if (loop is None or physical != expected_schedule[logical]
+                    or module.loop_index != loop):
+                raise RuntimeError("LoRA projection used the wrong physical layer or loop adapter")
+            lora_calls.append((logical, physical, target, module.loop_index, tuple(inputs[0].shape)))
+        return hook
+
     def finish(module, _inputs, output):
         if trace != expected_schedule:
             raise RuntimeError(f"CED actual physical schedule mismatch: {trace}")
         if output.past_key_values is not None:
             raise RuntimeError("CED evaluation unexpectedly returned a KV cache")
+        if spec.get("loop_lora"):
+            check_lora_idle()
+            expected_lora = [(logical, expected_schedule[logical], target,
+                              0 if logical < 15 else 1,
+                              (1, int(output.logits.shape[1]), width))
+                             for logical in range(5, 25)
+                             for target, width in lora_input_widths]
+            if sorted(lora_calls) != sorted(expected_lora):
+                raise RuntimeError("LoRA requires exactly 140 full-sequence projection calls per forward")
+            expected_trace = [(logical, expected_schedule[logical], 0 if logical < 15 else 1)
+                              for logical in range(5, 25)]
+            if list(core.last_loop_lora_trace) != expected_trace:
+                raise RuntimeError("LoRA internal loop trace disagrees with observed projections")
+            audit.update(loop_lora_projection_calls=len(lora_calls),
+                         loop_lora_calls_per_loop=[sum(call[3] == loop for call in lora_calls) for loop in (0, 1)],
+                         last_loop_lora_trace=[list(item) for item in expected_trace], loop_lora_indices_reset=True)
         if events != expected_events:
             raise RuntimeError(f"CED actual interaction order mismatch: {events}")
         if kind == "serial84":
@@ -395,6 +453,16 @@ def install_recursive_trace_audit(lm, *, eval_variant):
                      input_audio_projections=copy.deepcopy(projections),
                      last_router_events=copy.deepcopy(router_events))
 
+    if spec.get("loop_lora"):
+        for physical in range(5, 15):
+            for target in LOOP_LORA_TARGETS:
+                projection = core.layers[physical].get_submodule(target)
+                lora_modules.append((physical, target, projection))
+                projection.register_forward_pre_hook(lora_projection(physical, target))
+        # All layers have the same projection geometry; down_proj consumes the
+        # intermediate MLP width rather than hidden_size.
+        lora_input_widths = [(target, module.in_features) for physical, target, module in lora_modules if physical == 5]
+        check_lora_idle()
     lm.register_forward_pre_hook(begin, with_kwargs=True)
     for index, layer in enumerate(lm.model.layers):
         layer.register_forward_hook(record(index))

@@ -40,7 +40,7 @@ case "$EVAL_VARIANT" in
     JOB_NAME_PREFIX="mizar-ced-r515-${JOB_TAG}-mmar"
     JOB_LOG_PREFIX="mizar_s1_ced_small_${EVAL_VARIANT}_mmar_5090"
     ;;
-  recursive_5_10_5_layer36912_crossattn|recursive_5_10_5_layer36912_query32_crossattn|recursive_mesh_layer4_8_inject|recursive_mesh_layer4_8_listen|recursive_mesh_layer36912_listen|recursive_mesh_layer4_8_audio7slot_split3|recursive_mesh_layer4_8_audio7slot_split3_inject|recursive_mesh_layer8_4_inject|recursive_mesh_layer4_8_audio7slot_split3_prompt_mix|recursive_5_10_5_layer8_4_inject_audio_reinject|recursive_mesh_5_10x4_5)
+  recursive_5_10_5_layer36912_crossattn|recursive_5_10_5_layer36912_query32_crossattn|recursive_mesh_layer4_8_inject|recursive_mesh_layer4_8_listen|recursive_mesh_layer36912_listen|recursive_mesh_layer4_8_audio7slot_split3|recursive_mesh_layer4_8_audio7slot_split3_inject|recursive_mesh_layer8_4_inject|recursive_mesh_layer4_8_audio7slot_split3_prompt_mix|recursive_5_10_5_layer8_4_inject_audio_reinject|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8|recursive_mesh_5_10x4_5)
     RUN_STAMP=
     case "$EVAL_VARIANT" in
       recursive_5_10_5_layer36912_crossattn) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer36912_crossattn; RUN_STAMP=20261030_140459065784533; JOB_TAG=ca4 ;;
@@ -53,6 +53,7 @@ case "$EVAL_VARIANT" in
       recursive_mesh_layer8_4_inject) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer8_4_inject; RUN_STAMP=20261102_112040402999384; JOB_TAG=m84i ;;
       recursive_mesh_layer4_8_audio7slot_split3_prompt_mix) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_audio7slot_split3_prompt_mix; RUN_STAMP=20261102_132232677352730; JOB_TAG=m7pm ;;
       recursive_5_10_5_layer8_4_inject_audio_reinject) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer8_4_inject_audio_reinject; RUN_STAMP=20261102_112121702891801; JOB_TAG=r84ri ;;
+      recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer8_4_inject_audio_reinject_loop_lora_r8; RUN_STAMP=20261103_165410438279511; JOB_TAG=r84l8 ;;
       recursive_mesh_5_10x4_5) FAMILY=recursive_mesh; ROUTE_SUFFIX=; RUN_STAMP=20261103_093224843011222; JOB_TAG=mx4; DEFAULT_EXPECTED_STEP=34626; DEFAULT_EXPECTED_GEOMETRY=8,4,4 ;;
     esac
     DEFAULT_RUN_ROOT=

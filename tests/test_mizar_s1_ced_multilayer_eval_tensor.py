@@ -64,7 +64,8 @@ class MultilayerTensorTests(unittest.TestCase):
         t = self.torch
         t.manual_seed(1234)
         spec = adapter.variant_spec(variant)
-        cfg = self.config_class(vocab_size=32, hidden_size=width, intermediate_size=48,
+        cfg = self.config_class(vocab_size=32, hidden_size=width,
+            intermediate_size=1536 if spec.get("loop_lora") and width == 576 else 48,
             num_hidden_layers=len(spec["schedule"]), num_attention_heads=9, num_key_value_heads=3,
             max_position_embeddings=1024, pad_token_id=17, eos_token_id=0,
             use_cache=False, attention_dropout=0.)
@@ -107,6 +108,14 @@ class MultilayerTensorTests(unittest.TestCase):
                 for router in list(core.audio_listen_write_routers) + list(core.audio_listen_read_routers):
                     router.weight[5].add_(.03)
                     router.bias[6].add_(.4)
+        if spec.get("loop_lora"):
+            core.enable_loop_lora()
+            with t.no_grad():
+                for physical in range(5, 15):
+                    for target in adapter.LOOP_LORA_TARGETS:
+                        projection = core.layers[physical].get_submodule(target)
+                        for loop, matrix in enumerate(projection.lora_B):
+                            matrix.normal_(0., .03 * (loop + 1))
         return lm.eval()
 
     def inputs(self, variant, width=36):
@@ -317,8 +326,13 @@ class MultilayerTensorTests(unittest.TestCase):
             with self.assertRaises(RuntimeError): restored.load_state_dict(state, strict=True)
 
     def test_serial_nonzero_input_residual_precedes_layer_gate_and_uses_raw_prefix_projection(self):
+        self.assert_serial_residual("recursive_5_10_5_layer8_4_inject_audio_reinject")
+
+    def test_loop_lora_retains_serial_input_then_ced8_and_ced4_residuals(self):
+        self.assert_serial_residual("recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8")
+
+    def assert_serial_residual(self, variant):
         t = self.torch
-        variant = "recursive_5_10_5_layer8_4_inject_audio_reinject"
         with t.inference_mode():
             lm, (prefix, context) = self.model(variant), self.inputs(variant)
             core, projected, gate_inputs = lm.model, [], []
@@ -340,6 +354,69 @@ class MultilayerTensorTests(unittest.TestCase):
                 expected = before + t.tanh(core.audio_gate(before)) * information
                 t.testing.assert_close(gate_inputs[index + 1], expected, rtol=0, atol=0)
                 self.assertFalse(t.equal(gate_inputs[index + 1], before))
+
+    def test_loop_lora_strict_restore_covers_shared_base_and_both_active_adapter_sets(self):
+        t = self.torch
+        variant = "recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8"
+        with t.inference_mode():
+            lm, (prefix, context) = self.model(variant), self.inputs(variant)
+            projection = lm.model.layers[5].get_submodule("self_attn.q_proj")
+            projection.weight.add_(.013)
+            projection.lora_A[0].add_(.021)
+            projection.lora_B[1].add_(.034)
+            state = copy.deepcopy(lm.state_dict())
+            matrices = [p for name, p in lm.named_parameters() if ".lora_A." in name or ".lora_B." in name]
+            self.assertEqual(len(matrices), 280)
+            self.assertEqual(len({p.untyped_storage().data_ptr() for p in matrices}), 280)
+            expected = self.call(lm, prefix, context).logits.clone()
+            restored = self.model(variant)
+            restored.load_state_dict(state, strict=True)
+            self.assertTrue(t.equal(self.call(restored, prefix, context).logits, expected))
+            for key, value in restored.state_dict().items(): self.assertTrue(t.equal(value, state[key]), key)
+            for suffix in ("weight", "lora_A.0", "lora_A.1", "lora_B.0", "lora_B.1"):
+                incomplete = dict(state)
+                incomplete.pop("model.layers.5.self_attn.q_proj." + suffix)
+                with self.subTest(suffix=suffix), self.assertRaises(RuntimeError):
+                    restored.load_state_dict(incomplete, strict=True)
+            for physical in range(5, 15):
+                for target in adapter.LOOP_LORA_TARGETS:
+                    module = lm.model.layers[physical].get_submodule(target)
+                    module.lora_B[0].zero_(); module.lora_B[1].zero_()
+            self.assertFalse(t.equal(self.call(lm, prefix, context).logits[:, 382], expected[:, 382]))
+            lm.load_state_dict(state, strict=True)
+            for physical in range(5, 15):
+                for target in adapter.LOOP_LORA_TARGETS:
+                    module = lm.model.layers[physical].get_submodule(target)
+                    for matrices in (module.lora_A, module.lora_B):
+                        first, second = matrices[0].clone(), matrices[1].clone()
+                        matrices[0].copy_(second); matrices[1].copy_(first)
+            self.assertFalse(t.equal(self.call(lm, prefix, context).logits[:, 382], expected[:, 382]))
+
+    def test_loop_lora_hooks_after_eval_freeze_reject_wrong_loop_and_reset_after_exception(self):
+        t = self.torch
+        variant = "recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8"
+        with t.inference_mode():
+            lm, (prefix, context) = self.model(variant), self.inputs(variant)
+            lm.requires_grad_(False)
+            with patch.object(adapter, "HIDDEN_SIZE", 36):
+                audit = adapter.install_recursive_trace_audit(lm, eval_variant=variant)
+                expected = self.call(lm, prefix, context).logits.clone()
+                self.call(lm, prefix * -2, context)
+                self.assertTrue(t.equal(self.call(lm, prefix, context).logits, expected))
+                self.assertEqual(audit["loop_lora_projection_calls"], 140)
+                self.assertEqual(audit["loop_lora_calls_per_loop"], [70, 70])
+                projection = lm.model.layers[5].get_submodule("self_attn.q_proj")
+                handle = projection.register_forward_pre_hook(lambda module, _inputs: setattr(module, "loop_index", 1), prepend=True)
+                try:
+                    with self.assertRaisesRegex(RuntimeError, "wrong physical layer or loop"):
+                        self.call(lm, prefix, context)
+                finally:
+                    handle.remove()
+                for physical in range(5, 15):
+                    for target in adapter.LOOP_LORA_TARGETS:
+                        self.assertIsNone(lm.model.layers[physical].get_submodule(target).loop_index)
+                self.assertTrue(t.equal(self.call(lm, prefix, context).logits, expected))
+                self.assertTrue(audit["loop_lora_indices_reset"])
 
     def test_four_loop_mesh_uses_full_sequence_seven_slots_five_transitions_and_fresh_memory(self):
         t = self.torch

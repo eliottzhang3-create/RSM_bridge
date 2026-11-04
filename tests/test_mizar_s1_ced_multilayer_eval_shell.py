@@ -1,4 +1,4 @@
-"""Exercise all 22 submissions with fake vc and the real compute wrapper."""
+"""Exercise all 24 submissions with fake vc and the real compute wrapper."""
 from __future__ import annotations
 
 import importlib.util
@@ -25,6 +25,7 @@ SPECS = {
     "recursive_mesh_layer8_4_inject": ("recursive_mesh", "layer8_4_inject", "20261102_112040402999384", "m84i"),
     "recursive_mesh_layer4_8_audio7slot_split3_prompt_mix": ("recursive_mesh", "layer4_8_audio7slot_split3_prompt_mix", "20261102_132232677352730", "m7pm"),
     "recursive_5_10_5_layer8_4_inject_audio_reinject": ("recursive_5_10_5", "layer8_4_inject_audio_reinject", "20261102_112121702891801", "r84ri"),
+    "recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8": ("recursive_5_10_5", "layer8_4_inject_audio_reinject_loop_lora_r8", "20261103_165410438279511", "r84l8"),
     "recursive_mesh_5_10x4_5": ("recursive_mesh_5_10x4_5", "", "20261103_093224843011222", "mx4"),
 }
 
