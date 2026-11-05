@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "code/RSmol/scripts"))
 import mizar_s1_ced_multilayer_eval_runtime as adapter
 
 HAS_TENSORS = all(importlib.util.find_spec(name) is not None for name in ("torch", "transformers"))
+LORA_VARIANTS = tuple(variant for variant, spec in adapter.ROUTE_SPECS.items() if spec.get("loop_lora"))
 
 
 def load_module(name, path):
@@ -84,10 +85,10 @@ class MultilayerTensorTests(unittest.TestCase):
         if kind in ("crossattn", "query32"):
             core.enable_audio_cross_attention()
             gate_modules = [core.audio_crossattn.gate2]
-        elif kind in ("inject48", "inject84", "serial84"):
+        elif kind in ("inject48", "inject84", "serial"):
             core.enable_layer_injection()
             gate_modules = list(core.audio_gates.values())
-            if kind == "serial84":
+            if kind == "serial":
                 core.enable_audio_reinjection()
                 gate_modules.append(core.audio_gate)
         elif kind == "mesh_x4":
@@ -331,7 +332,10 @@ class MultilayerTensorTests(unittest.TestCase):
     def test_loop_lora_retains_serial_input_then_ced8_and_ced4_residuals(self):
         self.assert_serial_residual("recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8")
 
-    def assert_serial_residual(self, variant):
+    def test_loop_lora_retains_serial_input_then_ced4_and_ced8_residuals(self):
+        self.assert_serial_residual("recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8", order=(4, 8))
+
+    def assert_serial_residual(self, variant, order=(8, 4)):
         t = self.torch
         with t.inference_mode():
             lm, (prefix, context) = self.model(variant), self.inputs(variant)
@@ -345,7 +349,9 @@ class MultilayerTensorTests(unittest.TestCase):
                     self.call(lm, prefix, context)
             finally:
                 for handle in handles: handle.remove()
-            self.assertEqual(audit["last_branch_events"], [[5, "input"], [5, "layer8"], [15, "input"], [15, "layer4"]])
+            expected_events = [event for boundary, layer in zip((5, 15), order)
+                               for event in ([boundary, "input"], [boundary, f"layer{layer}"])]
+            self.assertEqual(audit["last_branch_events"], expected_events)
             self.assertEqual(len(projected), 1)
             t.testing.assert_close(projected[0], prefix[:, :126], rtol=0, atol=0)
             information = core.audio_linear(prefix[:, :126])
@@ -356,8 +362,11 @@ class MultilayerTensorTests(unittest.TestCase):
                 self.assertFalse(t.equal(gate_inputs[index + 1], before))
 
     def test_loop_lora_strict_restore_covers_shared_base_and_both_active_adapter_sets(self):
+        for variant in LORA_VARIANTS:
+            with self.subTest(variant=variant): self.assert_loop_lora_strict_restore(variant)
+
+    def assert_loop_lora_strict_restore(self, variant):
         t = self.torch
-        variant = "recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8"
         with t.inference_mode():
             lm, (prefix, context) = self.model(variant), self.inputs(variant)
             projection = lm.model.layers[5].get_submodule("self_attn.q_proj")
@@ -393,8 +402,11 @@ class MultilayerTensorTests(unittest.TestCase):
             self.assertFalse(t.equal(self.call(lm, prefix, context).logits[:, 382], expected[:, 382]))
 
     def test_loop_lora_hooks_after_eval_freeze_reject_wrong_loop_and_reset_after_exception(self):
+        for variant in LORA_VARIANTS:
+            with self.subTest(variant=variant): self.assert_loop_lora_hooks_after_freeze(variant)
+
+    def assert_loop_lora_hooks_after_freeze(self, variant):
         t = self.torch
-        variant = "recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8"
         with t.inference_mode():
             lm, (prefix, context) = self.model(variant), self.inputs(variant)
             lm.requires_grad_(False)
@@ -417,6 +429,59 @@ class MultilayerTensorTests(unittest.TestCase):
                         self.assertIsNone(lm.model.layers[physical].get_submodule(target).loop_index)
                 self.assertTrue(t.equal(self.call(lm, prefix, context).logits, expected))
                 self.assertTrue(audit["loop_lora_indices_reset"])
+
+    def test_mesh_loop_lora_preserves_five_slots_router_queries_and_post_read_ced4_then_ced8(self):
+        t = self.torch
+        variant = "recursive_mesh_layer4_8_inject_loop_lora_r8"
+        with t.inference_mode():
+            lm, (prefix, context) = self.model(variant), self.inputs(variant)
+            core, gate_inputs = lm.model, {}
+            self.assertFalse(hasattr(core, "audio_linear"))
+            self.assertFalse(hasattr(core, "audio_gate"))
+            self.assertEqual(len(core.write_routers) + len(core.read_routers), 6)
+            core.audit_mode = True
+            def capture(layer):
+                return lambda _m, values: gate_inputs.setdefault(layer, []).append(values[0].clone())
+            handles = [core.audio_gates[str(layer)].register_forward_pre_hook(capture(layer)) for layer in (4, 8)]
+            try:
+                expected_logits = self.call(lm, prefix, context).logits.clone()
+            finally:
+                for handle in handles: handle.remove()
+            memory = core.last_initial_memory.clone()
+            self.assertEqual(tuple(memory.shape), (1, 5, 383, 36))
+            t.testing.assert_close(memory[:, 0], prefix, rtol=0, atol=0)
+            self.assertEqual(int(t.count_nonzero(memory[:, 1:])), 0)
+            self.assertEqual(len(core.last_router_queries), 6)
+            self.assertEqual(len(core.last_memory_write_history), 3)
+            self.assertEqual(core.last_injection_trace, ((5, 4), (15, 8)))
+            self.assertEqual(list(core.last_loop_lora_trace),
+                             [(i, i if i < 15 else i - 10, 0 if i < 15 else 1) for i in range(5, 25)])
+            for stage, suffix in enumerate(("pre", "0", "1")):
+                query = core.last_prefix_output if stage == 0 else core.last_core_inputs[stage - 1]
+                value = core.last_prefix_output if stage == 0 else core.last_core_outputs[stage - 1]
+                for action in ("write", "read"):
+                    t.testing.assert_close(core.last_router_queries[f"{action}_{suffix}"], query, rtol=0, atol=0)
+                memory += value.unsqueeze(1) * core.last_router_weights[f"write_{suffix}"].transpose(1, 2).unsqueeze(-1)
+                t.testing.assert_close(memory, core.last_memory_write_history[stage], rtol=0, atol=0)
+                read = (memory * core.last_router_weights[f"read_{suffix}"].transpose(1, 2).unsqueeze(-1)).sum(1)
+                if stage < 2:
+                    layer = (4, 8)[stage]
+                    self.assertEqual(len(gate_inputs[layer]), 1)
+                    t.testing.assert_close(gate_inputs[layer][0], read[:, :126], rtol=0, atol=0)
+                    audio = read[:, :126] + t.tanh(core.audio_gates[str(layer)](read[:, :126])) * context["audio_information"][stage]
+                    combined = t.cat((audio, read[:, 126:]), dim=1)
+                    t.testing.assert_close(core.last_core_inputs[stage], combined, rtol=0, atol=0)
+                    t.testing.assert_close(core.last_core_inputs[stage][:, 126:], read[:, 126:], rtol=0, atol=0)
+            self.call(lm, prefix * -2, context)
+            self.assertTrue(t.equal(self.call(lm, prefix, context).logits, expected_logits))
+            core.audit_mode = False
+            with patch.object(adapter, "HIDDEN_SIZE", 36):
+                audit = adapter.install_recursive_trace_audit(lm, eval_variant=variant)
+                self.assertTrue(t.equal(self.call(lm, prefix, context).logits, expected_logits))
+                extended = t.cat((prefix, t.randn(1, 1, 36)), dim=1)
+                self.call(lm, extended, context)
+                self.assertEqual(audit["last_sequence_tokens"], 384)
+                self.assertEqual(audit["loop_lora_calls_per_loop"], [70, 70])
 
     def test_four_loop_mesh_uses_full_sequence_seven_slots_five_transitions_and_fresh_memory(self):
         t = self.torch

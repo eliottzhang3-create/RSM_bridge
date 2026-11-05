@@ -1,7 +1,7 @@
-# 十二条 CED 交互/四循环路线的 MMAU test-mini / MMAR 评测
+# 十四条 CED 交互/四循环路线的 MMAU test-mini / MMAR 评测
 
 两个既有提交入口 `run_mizar_s1_ced_small_mmau_eval_5090.sh`、
-`run_mizar_s1_ced_small_mmar_eval_5090.sh` 支持以下十二个
+`run_mizar_s1_ced_small_mmar_eval_5090.sh` 支持以下十四个
 `RSMOL_MIZAR_CED_EVAL_VARIANT`。新增实现位于训练目录外：
 
 ```text
@@ -29,13 +29,15 @@ scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh
 | `recursive_mesh_layer4_8_audio7slot_split3_prompt_mix` | v1 | 2,802,093 | 有效 prompt 输入 embedding 池化并 softmax 得到三权重；E_mix 作音频 prefix，三份加权 E/A4/A8 作为七槽 memory 种子 |
 | `recursive_5_10_5_layer8_4_inject_audio_reinject` | v1 | 2,777,859 | 非 MeSH；每次 LM forward 一次共享 input 投影，边界5/15先 input 残差，再分别 A8/A4 残差 |
 | `recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8` | v1 | 4,406,019 | 同样的非 MeSH 串行注入；中间物理层5..14的七种投影分别使用两轮独立 LoRA，基础 W 共享；rank8/alpha16/scale2/dropout0 |
+| `recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8` | v1 | 4,406,019 | 非 MeSH；边界5/15先 input 残差，再分别 A4/A8；中间 gate 读取 post-input hidden；双循环独立 LoRA |
+| `recursive_mesh_layer4_8_inject_loop_lora_r8` | v1 | 4,073,090 | 原五槽/六 routers，三次 write/read；前两次 read 后注入 A4/A8；双循环独立 LoRA，无额外 input 残差 |
 | `recursive_mesh_5_10x4_5` | v1 | 0（无额外音频分支） | 20物理层/50次执行、四轮中段循环、全序列七槽和10个独立 routers，GBS128 |
 
 query32 路线 README 的母本遗留描述不作为架构身份：实际 `contract.py` 是
 `ced_small_mizar_s1_fixed20_gbs256_recursive_5_10_5_layer36912_query32_crossattn_v1`。
 其32个摘要只用于交互分支，输入 prefix 保持383。
 
-十二条训练目录分别是训练根
+十四条训练目录分别是训练根
 `mellow_official_training_c8204d8_adamw_cosine/` 下的：
 
 ```text
@@ -50,6 +52,8 @@ mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer8_4_inject
 mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer4_8_audio7slot_split3_prompt_mix
 mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject
 mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject_loop_lora_r8
+mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer4_8_inject_audio_reinject_loop_lora_r8
+mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer4_8_inject_loop_lora_r8
 mizar_stage1_fixed20_gbs128_3epochs_recursive_mesh_5_10x4_5_ced_small
 ```
 
@@ -72,6 +76,8 @@ runtime 均为同 run 的 `formal/runtime.json`：
 | `recursive_mesh_layer4_8_audio7slot_split3_prompt_mix` | `mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_audio7slot_split3_prompt_mix_5090/formal_20261102_132232677352730` |
 | `recursive_5_10_5_layer8_4_inject_audio_reinject` | `mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_5090/formal_20261102_112121702891801` |
 | `recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8` | `mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8_5090/formal_20261103_165410438279511` |
+| `recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8` | `mizar_s1_ced_small_gbs256_recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8_5090/formal_20261104_131843931946322` |
+| `recursive_mesh_layer4_8_inject_loop_lora_r8` | `mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_inject_loop_lora_r8_5090/formal_20261104_161727489909082` |
 | `recursive_mesh_5_10x4_5` | `mizar_s1_ced_small_gbs128_recursive_mesh_5_10x4_5_5090/formal_20261103_093224843011222` |
 
 没有默认值的路线不猜测训练时间戳，也不自动选择 latest。未指定 run 或完整路径时，
@@ -80,7 +86,7 @@ checkpoint 精确选择指定 step 文件并核对其内部 step；同目录的�
 
 ## 与原 CED 相同的推理和评分协议
 
-| 项目 | 十二条路线的统一设置 |
+| 项目 | 十四条路线的统一设置 |
 |---|---|
 | 数据 | MMAU test-mini / MMAR 各完整1000条；原 metadata、音频查找逻辑、原数据和选项顺序 |
 | 音频 | mono、32 kHz；fixed20 中心裁剪/右补零至20秒，再分成两个10秒半段；重拼20秒后才进入 CED |
@@ -156,7 +162,8 @@ tokenizer 沿用原训练检查，不增长词表、不 resize embedding。
 - MeSH 原 routers 和额外 routers 独立且按各训练模型顺序调用。
 - 七槽路线在5、15、25各执行音频write/read router、文本write/read router，共12次调用。
 - query32 每次 LM forward 一次压缩，输入 query `[4,32,576]`、音频 bank `[4,126,576]`。
-- 串行8→4检查共享 input 投影一次及四次 gate 调用顺序，三条内部 trace 与实际 hook 一致。
+- 串行8→4与4→8按各自路线检查共享 input 投影一次及四次 gate 调用顺序，三条内部 trace 与实际 hook 一致。
+- 五槽 MeSH 注入路线合并观察 router/gate 调用顺序：边界5/15先 write/read routers 再 A4/A8（或A8/A4）gate，边界25只有 write/read routers。实际 memory 操作另外由真实 tensor 测试核对。
 - 双 LoRA 在严格完整加载后、推理冻结前验证70个真实 wrapper、280份独立 A/B矩阵与1,628,160参数；每次 forward 观察140次全序列投影，分别使用 loop0/1各70次，检查调用后索引复位及禁止 gradient checkpointing。音频分支2,777,859参数继续单独保留，不合并或重新初始化 LoRA。
 - 四循环按50次真实层调用及五次边界检查10个 routers，每次 forward 禁止两循环 ablation。
 
@@ -279,10 +286,63 @@ RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_5_10_5_layer8_4_inject_audio_reinject_loo
 两轮 A/B 缺键拒绝、禁用/交换适配器的数值差异、推理冻结后 hooks 及异常后复位。
 未读取远程 checkpoint/runtime，也未提交真实评测作业。
 
+## 2026-11-05：非 MeSH 串行4→8与 MeSH 4→8 的双 LoRA 评测
+
+新增两个 variant，均使用各自实际训练目录中的模型、严格完整 checkpoint 加载和原评测协议：
+
+| variant | 默认 run | 训练 geometry / checkpoint step |
+|---|---|---|
+| `recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8` | `formal_20261104_131843931946322` | 8×8×4 / 17313 |
+| `recursive_mesh_layer4_8_inject_loop_lora_r8` | `formal_20261104_161727489909082` | 8×8×4 / 17313 |
+
+非 MeSH 保留 `[[5,"input"],[5,"layer4"],[15,"input"],[15,"layer8"]]`；
+共享 input projection 每次完整 forward 一次，两处 CED gate 读取 post-input hidden。
+MeSH 每次完整 forward 以原 input embeddings 初始化五槽 memory 的槽0，其余四槽为零，
+保留六个独立 routers 和三次 write/read。首组 query/value 为 prefix output；
+后两组 query 为对应循环输入，write value 为循环输出。只在前两次 read 后分别注入 A4/A8。
+
+两条路线的七种中间层投影均使用两轮独立 LoRA，rank8/alpha16/scale2/dropout0；
+保留共享基础 W/bias、两套已训练 A/B 与原 mapper/MLP/gates/routers，不合并、不重新初始化。
+每次完整 forward 检查30次层调用、140次全序列 LoRA 投影及两轮各70次调用，检查索引复位。
+每样本编码一次 CED，显式复用同一对 `(A4,A8)`；memory 不跨完整 forward 或样本复用。
+新增参数分别为2,777,859+1,628,160=4,406,019和2,444,930+1,628,160=4,073,090。
+
+本地修改提交并推送至 GitHub 后，在远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+
+# 非 MeSH 串行4→8 + 双 LoRA：MMAU test-mini、MMAR
+RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8 bash run_mizar_s1_ced_small_mmau_eval_5090.sh
+RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8 bash run_mizar_s1_ced_small_mmar_eval_5090.sh
+
+# MeSH 4→8 + 双 LoRA：MMAU test-mini、MMAR
+RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_mesh_layer4_8_inject_loop_lora_r8 bash run_mizar_s1_ced_small_mmau_eval_5090.sh
+RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_mesh_layer4_8_inject_loop_lora_r8 bash run_mizar_s1_ced_small_mmar_eval_5090.sh
+```
+
+每条命令提交一个完整1000条评测作业，无自动前置任务；沿用原队列/资源/环境。
+精确读取指定 run 的 step17313 和 `formal/runtime.json`，其他中间 checkpoint 不参与选择。
+两个 run 各自产出 `eval/mmau_test_mini_step17313/`、`eval/mmar_step17313/`，共四项结果。
+使用默认命令前应清除当前 shell 中遗留的 `RSMOL_MIZAR_CED_*` 路径或 step/geometry 覆盖变量。
+本轮未提交真实作业或读取远程 checkpoint/runtime。
+
+统一验证223项实际检查通过，28项真实 tensor 检查因缺 Torch/Transformers 跳过
+（当前适配19项、旧回归9项）；Python/Bash语法通过。
+覆盖十四条路线/28种完整1000条模拟流程与假提交、两个非 MeSH 顺序及 MeSH 双 LoRA
+实际训练源码的 NumPy 行为、strict 加载接口、错轮/漏调用/重复调用/残留索引拒绝，
+以及 gate 先于 write/read routers 调用的拒绝检查。原评测与官方 Mizar 提交分支回归通过。
+真实 tensor 测试扩展到三个双 LoRA 版本，检查非零 LoRA 的 adapter/direct logits/token、
+首答案对齐、共享 W 和两轮 A/B strict restore、禁用/交换适配器数值差异、异常后复位，
+另核对非 MeSH 4→8 的 post-input gate，以及 MeSH 五槽 memory、三次写入、循环输入 query
+和两次 post-read gate 的数值与跨样本隔离。
+
 ## 路径与 step 覆盖
 
 替换产物时可用 `--run-root /path/to/actual_run` 等 CLI 参数。标准
-`<run>/formal/checkpoints/<file>` checkpoint 路径可推导其 run；对十二条路线，
+`<run>/formal/checkpoints/<file>` checkpoint 路径可推导其 run；对十四条路线，
 显式 run 优先，其次是显式标准 checkpoint 所属 run，最后才使用已知默认 run。
 非标准 checkpoint 路径应同时提供 `--checkpoint`、`--runtime-config`、`--output-dir`。
 新路径解析兼容 `--option value` 和 `--option=value`。
@@ -331,6 +391,8 @@ python -B tests/validate_mizar_s1_ced_multilayer_eval.py
 ```
 
 汇总报告是 `audit_reports/mizar_s1_ced_multilayer_eval_validation.json`。
+2026-11-05扩展覆盖十四条路线/28种完整1000条模拟流程与提交组合；
+223项实际检查通过，28项真实 tensor 检查因缺 Torch/Transformers 跳过，详见上方本次扩展说明。
 2026-11-03扩展覆盖十一条路线/22种完整1000条模拟流程与提交组合，
 并执行 prompt_mix、串行8→4和四循环的训练源码行为检查及官方 Mizar 提交分支回归。
 177项实际检查通过，23项真实 tensor 检查因缺 Torch/Transformers 跳过
@@ -349,7 +411,7 @@ Torch/Transformers跳过（本次新增9项、旧回归9项），Python/Bash语�
 显式上下文、NumPy 解码检查、十种1000条模拟流程、续跑、官方 scorer 成败分母、
 十种提交组合/路径覆盖及旧 evaluator 回归。
 
-当前有17项真实 CPU PyTorch/Transformers 测试，使用实际训练模型、非零 gates、非零双 LoRA 及偏离初始化的七槽 router 行，
+当前有19项真实 CPU PyTorch/Transformers 测试，使用实际训练模型、非零 gates、非零双 LoRA 及偏离初始化的七槽 router 行，
 检查 adapter/direct logits 与 tokens、训练683/评测383首答案对齐、strict restore、
 跨样本隔离、query32 压缩、七槽种子/读写/循环query和post-read gate，以及 MeSH 实际操作顺序。多数使用缩小 LM 宽度/词表，
 保留20物理层、30/50执行和383 prefix；结构检查另外使用生产 hidden576。

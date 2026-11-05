@@ -1,4 +1,4 @@
-"""Exercise all 24 submissions with fake vc and the real compute wrapper."""
+"""Exercise all 28 submissions with fake vc and the real compute wrapper."""
 from __future__ import annotations
 
 import importlib.util
@@ -26,6 +26,8 @@ SPECS = {
     "recursive_mesh_layer4_8_audio7slot_split3_prompt_mix": ("recursive_mesh", "layer4_8_audio7slot_split3_prompt_mix", "20261102_132232677352730", "m7pm"),
     "recursive_5_10_5_layer8_4_inject_audio_reinject": ("recursive_5_10_5", "layer8_4_inject_audio_reinject", "20261102_112121702891801", "r84ri"),
     "recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8": ("recursive_5_10_5", "layer8_4_inject_audio_reinject_loop_lora_r8", "20261103_165410438279511", "r84l8"),
+    "recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8": ("recursive_5_10_5", "layer4_8_inject_audio_reinject_loop_lora_r8", "20261104_131843931946322", "r48l8"),
+    "recursive_mesh_layer4_8_inject_loop_lora_r8": ("recursive_mesh", "layer4_8_inject_loop_lora_r8", "20261104_161727489909082", "m48l8"),
     "recursive_mesh_5_10x4_5": ("recursive_mesh_5_10x4_5", "", "20261103_093224843011222", "mx4"),
 }
 
@@ -43,7 +45,7 @@ class MultilayerCedShellTests(unittest.TestCase):
         self.bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
         if not self.bash: self.skipTest("Bash is unavailable")
 
-    def test_twenty_two_submissions_bind_variant_checkpoint_runtime_route_and_resources(self):
+    def test_twenty_eight_submissions_bind_variant_checkpoint_runtime_route_and_resources(self):
         for variant, (family, suffix, stamp, tag) in SPECS.items():
             for benchmark in ("mmau", "mmar"):
                 with self.subTest(variant=variant, benchmark=benchmark), tempfile.TemporaryDirectory() as directory:

@@ -61,13 +61,14 @@ class MultilayerEvaluationTests(unittest.TestCase):
         return adapter.validate_checkpoint(saved, runtime, self.route, self.spec["default_step"],
                                            eval_variant=self.variant, **kwargs)
 
-    def test_twelve_actual_contracts_accept_completed_checkpoints_and_bind_eleven_runs(self):
+    def test_fourteen_actual_contracts_accept_completed_checkpoints_and_bind_thirteen_runs(self):
         stamps = ("20261030_140459065784533", "20261030_162028139130855", None,
                   "20261030_172450546025072", "20261101_113133327944502",
                   "20261101_170211458358358", "20261102_002211827036990", "20261102_112040402999384",
-                  "20261102_132232677352730", "20261102_112121702891801", "20261103_165410438279511", "20261103_093224843011222")
-        counts = (4892741, 6241733, 2444930, 2450700, 3552788, 2468010, 2469164, 2444930, 2802093, 2777859, 4406019, 0)
-        self.assertEqual(len(VARIANTS), 12)
+                  "20261102_132232677352730", "20261102_112121702891801", "20261103_165410438279511",
+                  "20261104_131843931946322", "20261104_161727489909082", "20261103_093224843011222")
+        counts = (4892741, 6241733, 2444930, 2450700, 3552788, 2468010, 2469164, 2444930, 2802093, 2777859, 4406019, 4406019, 4073090, 0)
+        self.assertEqual(len(VARIANTS), 14)
         for variant, stamp, count in zip(VARIANTS, stamps, counts):
             self.select(variant)
             contract, saved, runtime = self.fixture()
@@ -143,29 +144,30 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 with self.subTest(variant=variant, field=name), self.assertRaises(ValueError):
                     self.validate(saved, runtime)
             contract, saved, runtime = self.fixture()
-            contract["audio_cross_attention" if self.spec["kind"] == "serial84" else "audio_reinjection"] = {}
+            contract["audio_cross_attention" if self.spec["kind"] == "serial" else "audio_reinjection"] = {}
             self.resign(saved, runtime)
             with self.assertRaises(ValueError): self.validate(saved, runtime)
 
     def test_loop_lora_contract_is_required_and_cannot_be_added_to_parent(self):
-        parent = "recursive_5_10_5_layer8_4_inject_audio_reinject"
-        self.select(parent + "_loop_lora_r8")
-        for key, value in (("rank", 4), ("alpha", 8), ("targets", []),
-                           ("physical_layers_0based", list(range(20))), ("loops", 1)):
+        for variant in (v for v in VARIANTS if adapter.variant_spec(v).get("loop_lora")):
+            self.select(variant)
+            for key, value in (("rank", 4), ("alpha", 8), ("targets", []),
+                               ("physical_layers_0based", list(range(20))), ("loops", 1)):
+                contract, saved, runtime = self.fixture()
+                contract["loop_lora"][key] = value
+                self.resign(saved, runtime)
+                with self.subTest(variant=variant, field=key), self.assertRaisesRegex(ValueError, "loop_lora"):
+                    self.validate(saved, runtime)
             contract, saved, runtime = self.fixture()
-            contract["loop_lora"][key] = value
+            lora_contract = contract.pop("loop_lora")
             self.resign(saved, runtime)
-            with self.subTest(field=key), self.assertRaisesRegex(ValueError, "loop_lora"):
-                self.validate(saved, runtime)
-        contract, saved, runtime = self.fixture()
-        lora_contract = contract.pop("loop_lora")
-        self.resign(saved, runtime)
-        with self.assertRaisesRegex(ValueError, "loop_lora"): self.validate(saved, runtime)
-        self.select(parent)
-        contract, saved, runtime = self.fixture()
-        contract["loop_lora"] = lora_contract
-        self.resign(saved, runtime)
-        with self.assertRaisesRegex(ValueError, "unexpected CED branch"): self.validate(saved, runtime)
+            with self.assertRaisesRegex(ValueError, "loop_lora"): self.validate(saved, runtime)
+        for parent in ("recursive_5_10_5_layer8_4_inject_audio_reinject", "recursive_mesh_layer4_8_inject"):
+            self.select(parent)
+            contract, saved, runtime = self.fixture()
+            contract["loop_lora"] = lora_contract
+            self.resign(saved, runtime)
+            with self.assertRaisesRegex(ValueError, "unexpected CED branch"): self.validate(saved, runtime)
 
     def test_original_protocol_and_fifteen_runner_functions_are_unchanged(self):
         def functions(path):
@@ -336,7 +338,8 @@ class MultilayerEvaluationTests(unittest.TestCase):
             core.last_injection_trace = core.last_listen_trace = tuple(zip((5, 15), self.spec["interaction_layers"]))
             core.last_crossattn_trace = (5, 15)
             core.last_reinject_trace = (5, 15)
-            core.last_serial_injection_trace = ((5, "input"), (5, "layer8"), (15, "input"), (15, "layer4"))
+            core.last_serial_injection_trace = tuple(event for boundary, layer in zip((5, 15), self.spec["interaction_layers"])
+                                                     for event in ((boundary, "input"), (boundary, f"layer{layer}")))
             lora_projections = {}
             if self.spec.get("loop_lora"):
                 core.loop_lora_enabled, core.gradient_checkpointing = True, False
@@ -353,9 +356,10 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 self.assertIsNone(module.register_forward_hook.call_args.args[0](module, inputs, None))
             def execute(*, bad_order=False, bad_compression=False, reverse_injection=False, omit_audio_router=False,
                         reverse_serial=False, duplicate_projection=False, wrong_loop=False,
-                        omit_lora=False, duplicate_lora=False):
+                        omit_lora=False, duplicate_lora=False, early_mesh_injection=False,
+                        wrong_internal_order=False):
                 begin(lm, (), {"use_cache": False, "attention_mask": None})
-                if kind == "serial84":
+                if kind == "serial":
                     for _ in range(2 if duplicate_projection else 1):
                         hook(core.audio_linear, (types.SimpleNamespace(shape=(1, 126, 576)),))
                 if kind == "query32":
@@ -365,6 +369,8 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 for logical, physical in enumerate(self.spec["schedule"]):
                     if logical >= 5 and (logical - 5) % 10 == 0 and self.spec["mesh"]:
                         index = (logical - 5) // 10
+                        if early_mesh_injection and index < 2:
+                            hook(core.audio_gates[str(self.spec["interaction_layers"][index])])
                         if self.spec["split_memory"]:
                             hook(core.audio_listen_write_routers[index])
                             if not omit_audio_router: hook(core.audio_listen_read_routers[index])
@@ -377,12 +383,12 @@ class MultilayerEvaluationTests(unittest.TestCase):
                                 hook(core.audio_listen, (None, None, None, None, index, None))
                             elif self.spec["interaction_layers"]:
                                 layer = str(self.spec["interaction_layers"][1 - index if reverse_injection else index])
-                                hook(core.audio_gates[layer])
+                                if not early_mesh_injection: hook(core.audio_gates[layer])
                                 if kind == "listen48": hook(core.listen_routers[layer])
                     elif logical in (5, 15):
-                        if kind == "serial84":
+                        if kind == "serial":
                             if not reverse_serial: hook(core.audio_gate)
-                            order = (4, 8) if reverse_injection else (8, 4)
+                            order = self.spec["interaction_layers"][::-1] if reverse_injection else self.spec["interaction_layers"]
                             hook(core.audio_gates[str(order[(logical - 5) // 10])])
                             if reverse_serial: hook(core.audio_gate)
                         else:
@@ -400,7 +406,12 @@ class MultilayerEvaluationTests(unittest.TestCase):
                             for projection in lora_projections[physical].values(): projection.loop_index = None
                     else:
                         hook(core.layers[physical])
-                finish(lm, (), output)
+                original = core.last_injection_trace
+                try:
+                    if wrong_internal_order: core.last_injection_trace = tuple(zip((5, 15), self.spec["interaction_layers"][::-1]))
+                    finish(lm, (), output)
+                finally:
+                    core.last_injection_trace = original
             execute()
             execute()
             self.assertEqual(audit["checked_forwards"], 2)
@@ -418,9 +429,12 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "interaction order"): execute(reverse_injection=True)
             if kind == "query32":
                 with self.assertRaisesRegex(RuntimeError, "compress"): execute(bad_compression=True)
-            if kind == "serial84":
+            if kind == "serial":
                 with self.assertRaisesRegex(RuntimeError, "interaction order"): execute(reverse_serial=True)
                 with self.assertRaisesRegex(RuntimeError, "projected once"): execute(duplicate_projection=True)
+                with self.assertRaisesRegex(RuntimeError, "serial input/layer injection trace"): execute(wrong_internal_order=True)
+            if self.spec["mesh"] and kind in ("inject48", "inject84"):
+                with self.assertRaisesRegex(RuntimeError, "follow the write/read router calls"): execute(early_mesh_injection=True)
             if self.spec.get("loop_lora"):
                 self.assertEqual(audit["loop_lora_projection_calls"], 140)
                 self.assertEqual(audit["loop_lora_calls_per_loop"], [70, 70])

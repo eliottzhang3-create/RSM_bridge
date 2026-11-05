@@ -41,8 +41,10 @@ for _family, _suffix, _version, _stamp, _kind, _count in (
     ("recursive_mesh", "layer4_8_audio7slot_split3_inject", 1, "20261102_002211827036990", "audio7split3_inject", 2469164),
     ("recursive_mesh", "layer8_4_inject", 1, "20261102_112040402999384", "inject84", 2444930),
     ("recursive_mesh", "layer4_8_audio7slot_split3_prompt_mix", 1, "20261102_132232677352730", "prompt_mix", 2802093),
-    ("recursive_5_10_5", "layer8_4_inject_audio_reinject", 1, "20261102_112121702891801", "serial84", 2777859),
-    ("recursive_5_10_5", "layer8_4_inject_audio_reinject_loop_lora_r8", 1, "20261103_165410438279511", "serial84", 4406019),
+    ("recursive_5_10_5", "layer8_4_inject_audio_reinject", 1, "20261102_112121702891801", "serial", 2777859),
+    ("recursive_5_10_5", "layer8_4_inject_audio_reinject_loop_lora_r8", 1, "20261103_165410438279511", "serial", 4406019),
+    ("recursive_5_10_5", "layer4_8_inject_audio_reinject_loop_lora_r8", 1, "20261104_131843931946322", "serial", 4406019),
+    ("recursive_mesh", "layer4_8_inject_loop_lora_r8", 1, "20261104_161727489909082", "inject48", 4073090),
 ):
     _variant = f"{_family}_{_suffix}"
     _mesh = _family == "recursive_mesh"
@@ -54,16 +56,16 @@ for _family, _suffix, _version, _stamp, _kind, _count in (
         "kind": _kind, "mesh": _mesh, "new_parameters": _count,
         "loop_lora": _suffix.endswith("_loop_lora_r8"),
         "context_kind": ("seeds" if _kind == "prompt_mix" else "pair"
-                         if _kind in ("inject48", "inject84", "serial84", "listen48", "audio7split3", "audio7split3_inject") else "grids"),
+                         if _kind in ("inject48", "inject84", "serial", "listen48", "audio7split3", "audio7split3_inject") else "grids"),
         "split_memory": _kind.startswith("audio7") or _kind == "prompt_mix",
         "memory_slots": 5 if _mesh else 0,
         "audio_memory_slots": 7 if _kind.startswith("audio7") or _kind == "prompt_mix" else 5 if _mesh else 0,
         "text_memory_slots": 5 if _mesh else 0,
         "loops": 2, "schedule": TEXT_MODEL_SCHEDULE,
         "default_step": 17313, "default_geometry": (8, 8, 4),
-        "interaction_layers": ((8, 4) if _kind in ("inject84", "serial84") else (4, 8)
-                               if _kind in ("inject48", "listen48", "audio7split3_inject") else ()),
-        "implementation": ("models.recursive_layer_inject" if _kind in ("inject48", "inject84", "serial84") else
+        "interaction_layers": ((8, 4) if _kind == "inject84" or (_kind == "serial" and _suffix.startswith("layer8_4_"))
+                               else (4, 8) if _kind in ("inject48", "serial", "listen48", "audio7split3_inject") else ()),
+        "implementation": ("models.recursive_layer_inject" if _kind in ("inject48", "inject84", "serial") else
                            "models.recursive_mesh_listen" if _mesh else "models.recursive_crossattn"),
         "text_contract": "logical_30_physical_20_5_10x2_5" if _mesh else "logical_30_physical_20_5_10_5_loops_2_no_mesh",
         "text_architecture": "logical_30_physical_20_5_10x2_5_mesh" if _mesh else "logical_30_physical_20_5_10_5_loops_2_no_mesh",
@@ -94,7 +96,7 @@ def branch_contract(route_contract, spec):
     kind = spec["kind"]
     if kind in ("crossattn", "query32"):
         return "audio_cross_attention", route_contract.cross_attention_contract()
-    if kind in ("inject48", "inject84", "serial84"):
+    if kind in ("inject48", "inject84", "serial"):
         return "layer_injection", dict(route_contract.INJECTION_CONTRACT)
     if kind in ("listen48", "audio7split3", "audio7split3_inject", "prompt_mix"):
         return "audio_listen", dict(route_contract.LISTEN_CONTRACT)
@@ -108,7 +110,7 @@ def branch_contracts(route_contract, spec):
     result = {key: value} if key is not None else {}
     if spec["kind"] == "prompt_mix":
         result["prompt_mix"] = dict(route_contract.PROMPT_MIX_CONTRACT)
-    if spec["kind"] == "serial84":
+    if spec["kind"] == "serial":
         result.update(audio_reinjection=dict(route_contract.AUDIO_REINJECTION),
                       serial_audio_injection=dict(route_contract.SERIAL_INJECTION_CONTRACT))
     if spec.get("loop_lora"):
@@ -253,8 +255,8 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
                 or parameters.get("router_objects_independent") is not True):
             raise ValueError("four-loop MeSH requires all 50 logical executions and ten independent routers")
     else:
-        if kind in ("inject48", "inject84", "serial84"):
-            branch = (loader.validate_serial_injection(lm) if kind == "serial84"
+        if kind in ("inject48", "inject84", "serial"):
+            branch = (loader.validate_serial_injection(lm) if kind == "serial"
                       else loader.validate_layer_injection(lm))
         elif spec["split_memory"]:
             # Trained router rows/gates must not be checked against initialization.
@@ -281,11 +283,11 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
                     or tuple(mixer[2].bias.shape) != (3,)):
                 raise ValueError("prompt mixture requires the trained hidden576/GELU/3 MLP")
             extra.append(mixer)
-        if kind == "serial84":
+        if kind == "serial":
             extra += [core.audio_linear, core.audio_gate]
             if getattr(core, "collect_reinject_stats", True):
                 raise ValueError("serial input reinjection diagnostic mode must remain disabled")
-        if getattr(core, "collect_injection_stats" if kind in ("inject48", "inject84", "serial84") else "collect_listen_stats", True):
+        if getattr(core, "collect_injection_stats" if kind in ("inject48", "inject84", "serial") else "collect_listen_stats", True):
             raise ValueError("CED4/8 diagnostic mode must remain disabled")
     count = sum(p.numel() for module in extra for p in module.parameters())
     lora_audit = None
@@ -322,12 +324,14 @@ def install_recursive_trace_audit(lm, *, eval_variant):
     """Observe physical calls and real branch invocations without changing outputs."""
     spec = variant_spec(eval_variant)
     trace, events, compression, router_events, projections = [], [], [], [], []
+    boundary_events = []
     lora_calls, lora_modules = [], []
     kind, core = spec["kind"], lm.model
     expected_schedule = list(spec["schedule"])
     layers = spec["interaction_layers"]
-    if kind == "serial84":
-        expected_events = [[5, "input"], [5, "layer8"], [15, "input"], [15, "layer4"]]
+    if kind == "serial":
+        expected_events = [event for boundary, layer in zip((5, 15), layers)
+                           for event in ([boundary, "input"], [boundary, f"layer{layer}"])]
     elif layers:
         expected_events = [[boundary, layer] for boundary, layer in zip((5, 15), layers)]
     else:
@@ -350,6 +354,7 @@ def install_recursive_trace_audit(lm, *, eval_variant):
         events.clear()
         compression.clear()
         router_events.clear()
+        boundary_events.clear()
         projections.clear()
         lora_calls.clear()
         check_lora_idle()
@@ -371,6 +376,8 @@ def install_recursive_trace_audit(lm, *, eval_variant):
     def pair_event(layer):
         def hook(_module, _inputs, _output):
             events.append([len(trace), layer])
+            if spec["mesh"]:
+                boundary_events.append([len(trace), f"layer{layer}"])
         return hook
 
     def compressed(_module, inputs, _output):
@@ -382,6 +389,7 @@ def install_recursive_trace_audit(lm, *, eval_variant):
     def router_event(name):
         def hook(_module, _inputs, _output):
             router_events.append([len(trace), name])
+            boundary_events.append([len(trace), name])
         return hook
 
     def lora_projection(physical, target):
@@ -417,9 +425,9 @@ def install_recursive_trace_audit(lm, *, eval_variant):
                          last_loop_lora_trace=[list(item) for item in expected_trace], loop_lora_indices_reset=True)
         if events != expected_events:
             raise RuntimeError(f"CED actual interaction order mismatch: {events}")
-        if kind == "serial84":
+        if kind == "serial":
             if ([list(item) for item in core.last_serial_injection_trace] != expected_events
-                    or [list(item) for item in core.last_injection_trace] != [[5, 8], [15, 4]]
+                    or [list(item) for item in core.last_injection_trace] != [list(item) for item in zip((5, 15), layers)]
                     or list(core.last_reinject_trace) != [5, 15]):
                 raise RuntimeError("CED serial input/layer injection trace mismatch")
             if projections != [[0, [1, AUDIO_TOKENS, HIDDEN_SIZE]]]:
@@ -441,6 +449,15 @@ def install_recursive_trace_audit(lm, *, eval_variant):
                     expected_routers.append([boundary, f"listen_{index}"])
             if router_events != expected_routers:
                 raise RuntimeError(f"CED MeSH router invocation order mismatch: {router_events}")
+            if kind in ("inject48", "inject84"):
+                expected_boundaries = []
+                for index in range(3):
+                    boundary = 5 + 10 * index
+                    expected_boundaries += [[boundary, f"write_{index}"], [boundary, f"read_{index}"]]
+                    if index < 2:
+                        expected_boundaries.append([boundary, f"layer{layers[index]}"])
+                if boundary_events != expected_boundaries:
+                    raise RuntimeError("MeSH layer injection must follow the write/read router calls at each boundary")
             if spec["kind"] == "listen36912" and core.audio_listen.last_rounds != [0, 1]:
                 raise RuntimeError("CED four-depth listen round trace mismatch")
         if spec["kind"] == "query32":
@@ -451,6 +468,7 @@ def install_recursive_trace_audit(lm, *, eval_variant):
                      last_physical_schedule=list(trace), last_branch_events=copy.deepcopy(events),
                      query_compression=copy.deepcopy(compression),
                      input_audio_projections=copy.deepcopy(projections),
+                     last_boundary_events=copy.deepcopy(boundary_events),
                      last_router_events=copy.deepcopy(router_events))
 
     if spec.get("loop_lora"):
@@ -485,11 +503,11 @@ def install_recursive_trace_audit(lm, *, eval_variant):
         for index, router in enumerate(core.audio_listen.listen_routers):
             router.register_forward_hook(router_event(f"listen_{index}"))
     elif spec["interaction_layers"]:
-        if kind == "serial84":
+        if kind == "serial":
             core.audio_gate.register_forward_hook(pair_event("input"))
             core.audio_linear.register_forward_hook(projected)
         for layer in (4, 8):
-            core.audio_gates[str(layer)].register_forward_hook(pair_event(f"layer{layer}" if kind == "serial84" else layer))
+            core.audio_gates[str(layer)].register_forward_hook(pair_event(f"layer{layer}" if kind == "serial" else layer))
         if kind == "listen48":
             for index, layer in enumerate((4, 8)):
                 core.listen_routers[str(layer)].register_forward_hook(router_event(f"listen_{index}"))

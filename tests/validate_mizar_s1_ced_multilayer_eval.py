@@ -1,4 +1,4 @@
-"""Validate the twelve-route CED evaluator, existing recursive and base/MeSH regressions.
+"""Validate the fourteen-route CED evaluator, existing recursive and base/MeSH regressions.
 
 No downloads, production weights, CUDA or job submission. --require-tensors
 turns any missing tensor dependency or skipped tensor check into failure.
@@ -29,6 +29,7 @@ TEST_FILES = (
     "test_mizar_s1_mesh_ced_audio7slot_split3_prompt_mix_behavior.py",
     "test_mizar_s1_ced_layer84_audio_reinject_behavior.py",
     "test_mizar_s1_ced_loop_lora_behavior.py",
+    "test_mizar_s1_mesh_ced_loop_lora_behavior.py",
     "test_mizar_s1_mesh_x4_ced_small_behavior.py",
     "test_mizar_s1_ced_recursive_eval.py",
     "test_mizar_s1_ced_recursive_eval_workflow.py",
@@ -68,13 +69,17 @@ def main():
                             "output": completed.stdout + completed.stderr})
         else:
             results.append({"check": path.name, "status": "FAIL", "output": "Bash is required"})
-    for name in TEST_FILES:
+    cases = [(name, None) for name in TEST_FILES]
+    cases.append(("test_mizar_s1_ced_loop_lora_behavior.py", "48"))
+    for name, order in cases:
+        # Exercise both non-MeSH serial orders in separate import namespaces.
+        case_environment = dict(environment, RSM_LORA_ORDER=order or "84")
         completed = subprocess.run([sys.executable, "-B", str(ROOT / "tests" / name), "-v"],
-            cwd=ROOT, env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+            cwd=ROOT, env=case_environment, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         output = completed.stdout + completed.stderr
         count = re.search(r"Ran (\d+) tests?", output)
         skipped = re.search(r"skipped=(\d+)", output)
-        result = {"check": name, "status": "PASS" if completed.returncode == 0 and count else "FAIL",
+        result = {"check": name + (f" [order{order}]" if order else ""), "status": "PASS" if completed.returncode == 0 and count else "FAIL",
                   "tests": int(count[1]) if count else 0, "skipped": int(skipped[1]) if skipped else 0,
                   "exit_code": completed.returncode, "output": output}
         if result["status"] == "PASS" and result["tests"] == result["skipped"]:
