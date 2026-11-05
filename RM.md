@@ -1,3 +1,82 @@
+## 2026-11-05：仅文本 MeSH + 音频串行8→4，四套模态/循环 LoRA rank8
+
+从 `run_mizar_s1_gbs256_recursive_textmesh_ced_small_layer8_4_inject_audio_reinject_loop_lora_r16_5090.sh`
+对应实现完整复制隔离，见[正式训练实现、提交及恢复说明](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_textmesh_ced_small_layer8_4_inject_audio_reinject_loop_modality_lora_r8/README.md)。
+只将每轮完整序列的一套rank16/alpha32改为独立audio/text两套rank8/alpha16；两轮共四套。
+物理层5..14的q/k/v/o、gate/up/down按位置0..125选audio，126起（含SEP）选text，按轮次索引0/1；
+无需可学习的LoRA模态router，基础W共享并继续全量训练，self-attention仍覆盖完整多模态序列。
+四套各814,080参数，共3,256,320参数/560份独立A/B张量，与母本两套rank16总参数量相同。
+
+原文本五槽MeSH、六routers、三次write/read、prefix output-query/value及loop input-query/output-value全部保留；
+音频不进memory/router，prelude输出后input→CED8，loop1输出后input→CED4，loop2输出直接进suffix。
+共享input projection每forward一次，CED gate仍读取post-input hidden；20物理层/30次执行、683-token布局、
+FP32、8×8×4=GBS256、3epochs/17313updates/866warmup、原数据/AdamW/LambdaLR/GradNorm/staging/保存恢复保持。
+四套LoRA均使用maxLR6e-4、scale2/dropout0、A Kaiming/B零，纳入独立优化器角色、梯度及完整保存恢复。
+保留原初始化资产：MeSH文本checkpoint-009244与CED-small；不从母本rank16音频checkpoint恢复。
+
+本地代码提交并推送至GitHub后，在远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_textmesh_ced_small_layer8_4_inject_audio_reinject_loop_modality_lora_r8_5090.sh --stage-workers 4
+```
+
+沿用mellow_c8204d8、pdgpu-5090 / 32CPU / 256G / 8GPU / 1node，直接提交一个formal，无自动smoke/tensor前置任务。
+新训练目录、launcher、route、output、job、日志、index-cache、tmpfs和resume身份独立；原版训练与评测保持。
+母本textmesh rank16等旧checkpoint不能full resume到本路线；现有MMAU/MMAR evaluator需要单独适配四套LoRA。
+
+`python -B tests/validate_mizar_s1_textmesh_modality_lora_r8.py`：92项实际本地检查通过，
+24项真实CPU tensor检查因缺依赖跳过（新版9项）。覆盖真实Bash模拟提交、位置125/126边界、四分支有限差分、
+梯度/调用审计及原母本回归；Python/Bash语法、121原文件SHA保护、19复制文件除名称外一致、完整骨干/train AST对照通过。
+报告为`audit_reports/mizar_s1_textmesh_modality_lora_r8_validation.json`；手动加`--require-tensors`可禁止skip。
+本轮未执行git commit/push、远程权重读取、真实GPU训练或八卡恢复，不登记远程PASS。
+
+## 2026-11-05：六槽 MeSH + CED-small / 官方 mapper，GBS256 独立正式训练
+
+从原五槽 `mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small` 完整复制隔离，
+见[六槽音频训练实现、GitHub同步与提交/恢复说明](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_6slot_ced_small/README.md)。
+文本初始化固定为用户指定的
+`stage4_5_10x2_5_mesh_6slot/formal_1epoch_fp32_20261031_124955519529617/checkpoint-009244`，
+显式使用既有 `recursive_model_5_10x2_5_mesh_6slot.py`，FP32严格加载完整LM与已训练routers。
+hidden576、20物理层/30次执行、两次中段循环、六个瞬时memory槽、三组write/read及六个独立routers；
+memory覆盖完整多模态序列，训练为`[B,6,683,576]`，首槽为原始input embeddings，其余五槽为零。
+保持prelude output-query/value、循环input-query/output-value及三次write/read。
+只加载文本模型/tokenizer作为新音频训练初始化，不恢复文本optimizer、scheduler、RNG或数据游标。
+
+CED冻结/eval、官方freq_merge_126 mapper随机初始化并训练，完整LM/router可训练；
+hybrid 1,477,492行、fixed20、683-token布局、原answer-only CE/PAD/EOS/attention、
+FP32/GradScaler、8×8×4=GBS256、3epochs/17313updates/866warmup、
+原AdamW/LambdaLR/GradNorm、数据顺序、保存与后台staging全部保留。
+按用户要求资源改为`pdgpu-3090 / 64 CPU / 256G / 8 GPU / 1 node`，沿用mellow_c8204d8及原容器。
+新目录、入口、route、output、job、日志、index-cache、tmpfs与resume身份隔离；
+原五槽训练、六槽文本实现及现有评测器保持原样。
+
+本地改动提交/推送至GitHub后，在远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_mesh_6slot_ced_small_3090.sh --stage-workers 4
+```
+
+直接提交一个formal，无自动smoke/tensor前置任务。默认输出为
+`outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_6slot_3090/formal_<timestamp>/`，
+最终产物为其下`formal/checkpoints/model--step-17313.ckpt`及`model--epo-3.ckpt`。
+完整resume只接受本六槽音频路线相同源码/资产/数据/配方的正式checkpoint和原run输出root；
+上述文本checkpoint及旧五槽音频checkpoint均不能当完整resume。
+
+`python -B tests/validate_mizar_s1_mesh_6slot_ced_small.py`：56项实际检查通过，
+24项真实CPU tensor检查因缺依赖跳过（新音频路线5项、继承runtime16项、六槽文本3项）。
+Python/Bash语法、真实Bash假提交/拒绝、43个原文件SHA保护、23个复制文件一致性、
+完整train/contract受限AST对照、全17314个LR位置、严格加载/实际router形状拒绝、
+staging与原五槽回归通过。首次沙箱运行遇Windows临时目录权限问题，沙箱外同命令复验通过。
+报告为`audit_reports/mizar_s1_mesh_6slot_ced_small_validation.json`，手动加`--require-tensors`可禁止skip。
+未执行git commit/push、远程checkpoint读取、真实GPU训练或八卡恢复，不登记远程PASS。
+现有五槽MMAU/MMAR evaluator尚未适配六槽合同，需要另行扩展。
+
 ## 2026-11-05：仅文本 MeSH 五槽 + 音频串行8→4 + 双循环 LoRA rank16
 
 从原 MeSH `layer4_8_inject_loop_lora_r8` 母本完整复制隔离，

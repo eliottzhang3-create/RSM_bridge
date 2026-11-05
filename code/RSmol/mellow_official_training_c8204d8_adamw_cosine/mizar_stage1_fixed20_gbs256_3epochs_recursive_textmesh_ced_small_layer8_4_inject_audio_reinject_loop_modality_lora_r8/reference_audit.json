@@ -1,0 +1,209 @@
+{
+  "status": "PASS",
+  "scope": "local source audit; no real assets or GPU execution",
+  "route_code_sha256": "a0b6839a2230e47ef99836c9ad7cde3d8bbde4ddfa240ee3ff2638c1c93ae2b5",
+  "protected_originals": {
+    "files": 121,
+    "all_unchanged": true
+  },
+  "identical_source_files_except_route_names": [
+    "check_ced_assets.py",
+    "data/audio_paths.py",
+    "data/audiotext_dataset.py",
+    "data/fixed20.py",
+    "data/indexed_jsonl.py",
+    "data/prepared_index.py",
+    "data/sampler.py",
+    "data/staging.py",
+    "data/template.py",
+    "models/audio.py",
+    "models/ced.py",
+    "models/ced_offline.py",
+    "models/decoder.py",
+    "models/mellow.py",
+    "models/recursive_text.py",
+    "prepare_index.py",
+    "run.sh",
+    "stage_data.py",
+    "utils/audio_io.py"
+  ],
+  "preserved_functions": {
+    "train.py": [
+      "collective_require",
+      "rng_state",
+      "restore_rng",
+      "tensor_digest",
+      "role_snapshots",
+      "validate_trainable_model",
+      "weights_changed",
+      "move_batch",
+      "answer_loss",
+      "inspect_tokenizer",
+      "audit_checkpoint_tokenizer",
+      "probe_sources",
+      "save_checkpoint",
+      "reload_audit",
+      "main"
+    ],
+    "contract.py": [
+      "geometry",
+      "lr_factor",
+      "data_order",
+      "rank_seed",
+      "raw_references",
+      "recursive_checkpoint_contract",
+      "validate_ced_assets",
+      "validate_tokenizer_contract",
+      "validate_checkpoint_tokenizer",
+      "code_digest",
+      "recursive_model_source_sha256"
+    ]
+  },
+  "training_parity": {
+    "entire_train_function_ast_equal_after_explicit_audits": true,
+    "explicit_additions": [
+      "message",
+      "execution_diagnostic",
+      "message"
+    ]
+  },
+  "backbone_parity": {
+    "entire_backbone_ast_equal_after_metadata_reset": true,
+    "explicit_additions": [
+      "reset_import",
+      "metadata_reset"
+    ]
+  },
+  "common_recipe_equal": true,
+  "loop_lora": {
+    "contract": "four_independent_audio_text_loop_lora_on_shared_trainable_middle_v1",
+    "physical_layers_0based": [
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "logical_ranges_0based_inclusive": [
+      [
+        5,
+        14
+      ],
+      [
+        15,
+        24
+      ]
+    ],
+    "targets": [
+      "self_attn.q_proj",
+      "self_attn.k_proj",
+      "self_attn.v_proj",
+      "self_attn.o_proj",
+      "mlp.gate_proj",
+      "mlp.up_proj",
+      "mlp.down_proj"
+    ],
+    "rank": 8,
+    "alpha": 16,
+    "scale": 2.0,
+    "dropout": 0.0,
+    "loops": 2,
+    "A_init": "kaiming_uniform_a_sqrt5",
+    "B_init": "zeros",
+    "initialization_rng": "isolated_cpu",
+    "base_trainable": true,
+    "shared_base_between_loops": true,
+    "independent_per_layer_projection_loop": true,
+    "prefix_suffix_lora": false,
+    "positions": "fixed_audio_text_slices",
+    "max_lr": 0.0006,
+    "modalities": [
+      "audio",
+      "text"
+    ],
+    "audio_positions": [
+      0,
+      126
+    ],
+    "text_start": 126,
+    "text_includes_separator": true,
+    "adapter_sets": 4,
+    "matrix_count": 560,
+    "parameters_per_set": 814080,
+    "selection": "fixed_token_positions_no_learned_router",
+    "independent_per_modality": true,
+    "base_projection": "full_sequence_once",
+    "weight_decay": 0.01,
+    "new_parameters": 3256320,
+    "use_cache": false,
+    "gradient_checkpointing": false,
+    "merge_adapters": false
+  },
+  "serial_injection": {
+    "contract": "mapped_input_residual_then_ced_layer8_4_residual_v1",
+    "order": [
+      "audio_input_embeddings",
+      "ced_intermediate"
+    ],
+    "logical_indices_0based": [
+      5,
+      15
+    ],
+    "ced_layers_1based": [
+      8,
+      4
+    ],
+    "input_gate_condition": "audio_hidden_before_input_residual",
+    "intermediate_gate_condition": "audio_hidden_after_input_residual",
+    "trace": [
+      [
+        5,
+        "input"
+      ],
+      [
+        5,
+        "layer8"
+      ],
+      [
+        15,
+        "input"
+      ],
+      [
+        15,
+        "layer4"
+      ]
+    ],
+    "shared_input_projection_and_gate": true,
+    "independent_intermediate_mlps_and_gates": true,
+    "audio_positions": [
+      0,
+      126
+    ],
+    "additional_normalization": false,
+    "additional_scale": false,
+    "detach_residuals": false,
+    "new_parameters": 2777859
+  },
+  "text_memory": {
+    "scope": "text_positions_only",
+    "audio_positions": [
+      0,
+      126
+    ],
+    "text_start": 126,
+    "includes_separator": true,
+    "slots": 5,
+    "routers": 6,
+    "interactions": 3,
+    "initialization": "text_input_embeddings_in_slot0_other_slots_zero",
+    "router_queries": "prefix_output_then_each_loop_input",
+    "write_values": "prefix_output_then_each_loop_output",
+    "audio_memory": false,
+    "persistent": false
+  }
+}
