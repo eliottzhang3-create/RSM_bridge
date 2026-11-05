@@ -1,3 +1,33 @@
+## 2026-11-05：非 MeSH 串行8→4双循环 LoRA 扩展为 rank16 / alpha32
+
+从原8→4的rank8/alpha16正式训练路线完整复制隔离，
+见[实现、恢复说明与正式提交命令](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject_loop_lora_r16/README.md)。
+仅物理层5..14的q/k/v/o和gate/up/down增加两套独立LoRA，两轮基础W共享且全量训练。
+rank16、alpha32、scale2、dropout0、LoRA max_lr6e-4；两套LoRA共3,256,320参数，
+加原串行音频分支2,777,859后，相对普通CED循环母本新增合计6,034,179。
+保留两轮input→CED8 / input→CED4、post-input gate、全部初始化与训练流程。
+数据、FP32、8×8×4=GBS256、3epochs/17313updates/866warmup、原优化器/调度/GradNorm及保存/staging保持。
+新目录、启动器、route、output、job、日志、index-cache、tmpfs与恢复合同均隔离。
+原rank8两顺序、MeSH路线、共享模型和现有评测实现保持原样。
+
+本地代码经GitHub提交/推送后，远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject_loop_lora_r16_5090.sh --stage-workers 4
+```
+
+沿用mellow_c8204d8、pdgpu-5090 / 32CPU / 256G / 8GPU / 1node，直接提交formal。
+从原文本checkpoint-step-009244初始化，rank8音频checkpoint不能直接full resume。
+`python -B tests/validate_mizar_s1_ced_loop_lora_r16.py`：108项实际检查通过，
+33项真实CPU tensor检查因缺依赖跳过（新版7项）。Python/Bash语法、179原文件SHA保护、
+26复制源码文件受限差异校验及完整train/optim/骨干/loader AST对照通过。
+报告为 `audit_reports/mizar_s1_ced_loop_lora_r16_validation.json`；手动加 `--require-tensors` 禁止skip。
+本次未执行git commit/push、远程资产读取、真实GPU训练或分布式恢复，不登记远程PASS。
+现有MMAU/MMAR评测器需要另行适配rank16/alpha32合同。
+
 ## 2026-11-05：非 MeSH 串行4→8与 MeSH 4→8 的双 LoRA MMAU/MMAR 评测
 
 两个原 CED 评测入口新增以下路线，见[完整说明与四项提交命令](code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md)：
