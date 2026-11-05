@@ -1,3 +1,38 @@
+## 2026-11-05：仅文本 MeSH 五槽 + 音频串行8→4 + 双循环 LoRA rank16
+
+从原 MeSH `layer4_8_inject_loop_lora_r8` 母本完整复制隔离，
+见[实现、恢复说明与正式提交命令](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_textmesh_ced_small_layer8_4_inject_audio_reinject_loop_lora_r16/README.md)。
+同一20物理层/30次执行的模型中，仅位置126起的SEP及文本参与五槽memory和六个routers；
+memory实际为`[B,5,L-126,576]`，slot0取原始文本侧embeddings，其余为零，每次forward重建。
+保留三次write/read；prelude query/value均为prefix文本输出，后两组query为循环输入、write value为循环输出。
+音频不分配memory、不调用routers、不直接参与记忆读写；prelude audio输出先input残差再CED8，
+第一轮audio输出先input残差再CED4，第二轮audio输出直接进入末五层。
+共享input projection/gate、每次LM forward一次投影，CED4/8 MLP/gate独立，CED gate读取post-input hidden。
+两轮中间十层七种投影使用独立LoRA，rank16/alpha32/scale2/dropout0，共3,256,320参数；
+基础W共享且全量训练，六个文本routers继续训练；串行音频2,777,859与LoRA共新增6,034,179参数。
+
+数据、FP32、8×8×4=GBS256、3epochs/17313updates/866warmup及原优化器/调度/GradNorm、保存和staging保持。
+严格加载原MeSH文本checkpoint-009244及routers后注册新增模块，隔离CPU RNG；默认从文本初始化开始音频训练。
+12类优化器角色、三门控及双LoRA梯度解锁、实际memory/router形状、注入/轮次轨迹纳入审计。
+新目录、启动器、route、output、job、日志、index-cache、tmpfs与恢复合同全部隔离，旧音频checkpoint不能full resume。
+
+本地代码经GitHub提交/推送后，在远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_textmesh_ced_small_layer8_4_inject_audio_reinject_loop_lora_r16_5090.sh --stage-workers 4
+```
+
+沿用mellow_c8204d8、pdgpu-5090 / 32CPU / 256G / 8GPU / 1node，直接提交formal，无自动smoke/tensor前置任务。
+`python -B tests/validate_mizar_s1_textmesh_ced_loop_lora_r16.py`：85项实际检查通过，22项真实CPU tensor检查因缺依赖跳过（新路线8项）。
+Python/Bash语法、真实Bash假提交/拒绝、189原文件SHA保护、18复制源码受限差异、完整train AST及母本/rank16回归通过。
+NumPy执行真实源码验证文本memory/query/write、音频串行门控及最终直通、LoRA轮次和梯度审计失败用例；不冒充PyTorch autograd。
+报告为`audit_reports/mizar_s1_textmesh_ced_loop_lora_r16_validation.json`；可手动加`--require-tensors`禁止skip。
+未执行git commit/push、远程权重读取、真实GPU训练或八卡恢复，不登记远程PASS。
+现有MMAU/MMAR evaluator尚未适配该hybrid/rank16合同，需要单独适配。
+
 ## 2026-11-05：非 MeSH 串行8→4双循环 LoRA 扩展为 rank16 / alpha32
 
 从原8→4的rank8/alpha16正式训练路线完整复制隔离，
