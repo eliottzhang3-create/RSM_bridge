@@ -1,3 +1,48 @@
+## 2026-11-06：官方 Mizar final → 5+20×2+5，首阶段审计与转换代码
+
+见[官方完整Mizar递归转换说明](code/RSmol/mizar_official_recursive_5_20x2_5/README.md)。
+本次仅交付独立模型定义、来源/产物审计、CPU转换和严格重载接口；trainer与现有评测器接入留待下一阶段。
+继续遵循本地仅代码、远程Linux存权重/数据、GitHub同步流程。
+
+来源固定为远程 `models/Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt`，
+完整继承官方final的LM、mapper、CED，不用assets中的基础LM权重替代final。
+保留30个物理层与identity映射，前5层、中20层两轮、后5层，执行顺序 `0..24,5..24,25..29` 共50次。
+中段5..24的七种投影加两套独立rank8/alpha16/scale2/dropout0 LoRA，A Kaiming、B零，基础权重也训练。
+逻辑5/25仅音频位置0..125依次注入共享input残差，再分别注入CED8/CED4残差；
+CED gate读取post-input hidden。输入取原final mapper输出，共享projection每LM forward一次；
+CED每批一次，4/8块独立MLP，CED冻结/eval，无memory/router。
+LoRA新增3,256,320、音频新增2,777,859，共6,034,179；完整模型165,334,019独立参数、1038份state tensor。
+
+已记录用户确认的未来训练配置：S1 hybrid 1,477,492条、3epochs、8×4×4=GBS128，
+11,542updates/epoch、34,626总步、1,731warmup；FP32及683-token布局沿参考。
+循环基础权重（含norm）与全部新增参数maxLR6e-4；原mapper、prelude/coda、embedding/最终norm/lm_head为3e-4。
+本轮仅提供参数角色审计，不构造训练optimizer或启动训练。
+
+转换强制核对18个官方文件SHA/大小、454份plain state、严格加载后才注册新增模块，逐tensor核对继承值；
+分别检查同30层单遍数值对齐、真实50次执行轨迹、完整20秒音频/683-token前向，保存后重构并精确核对全部tensor和logits。
+零gate/B不意味着递归50次等于官方30次。产物打包原CED构造资产/tokenizer、完整model-only权重与报告/manifest；
+不含optimizer、scheduler、训练RNG或游标。默认拒绝覆盖、源目标嵌套及Git checkout内权重输出；
+独占锁、私有staging、Linux no-replace原子发布，失败保留诊断且不发布最终目录。
+
+代码经GitHub同步后，远程checkout根目录执行：
+
+```bash
+bash code/RSmol/scripts/mizar_official_recursive_5_20x2_5.sh audit
+bash code/RSmol/scripts/mizar_official_recursive_5_20x2_5.sh convert --seed 0 --threads 8
+bash code/RSmol/scripts/mizar_official_recursive_5_20x2_5.sh verify --tensors --threads 8
+```
+
+wrapper沿用mellow_c8204d8 / Transformers4.54.1，强制离线、CPU、无调度器；默认输出远程
+`models/Mizar159M-5-20x2-5-serial84-looplora-r8`，可用`--source/--output`指定独立目录。
+显式`reload_verified()`重载，不能用标准AutoModel直接读取递归产物；旧MMAU/MMAR evaluator尚未适配。
+
+`python -B tests/validate_mizar_official_recursive_conversion.py`：24项实际本地文件/合同检查通过，
+9项真实CPU tensor检查因本机缺Torch/Transformers跳过；15个Python语法及Bash语法/LF通过。
+覆盖官方mapper AST、30层映射/LR边界、真实文件SHA/篡改/缺失、路径安全、拒绝覆盖/原子发布、完整配置与产物身份。
+Windows沙箱临时目录和Bash signal pipe受限后，在沙箱外同流程验证通过。
+报告`audit_reports/mizar_official_recursive_conversion_validation.json`；`--require-tensors`禁止任何tensor skip。
+未执行git commit/push、远程真实权重读取/生产转换、GPU训练，不登记远程PASS。
+
 ## 2026-11-06：两循环、四记忆槽 MeSH 文本转换与 BF16 完整一轮训练
 
 从六槽文本路线完整复制隔离，见[四槽文本转换、正式训练及恢复说明](code/RSmol/text_5_10x2_5_mesh_4slot/README.md)。

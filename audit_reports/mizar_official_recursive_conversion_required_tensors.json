@@ -1,0 +1,52 @@
+{
+  "status": "FAIL",
+  "scope": "local_code_only_no_production_weights",
+  "executed_tests": 24,
+  "skipped_tests": 9,
+  "missing_tensor_dependencies": [
+    "torch",
+    "transformers"
+  ],
+  "remote_weights_audited": false,
+  "production_conversion_executed": false,
+  "gpu_training_executed": false,
+  "checks": [
+    {
+      "check": "python_syntax",
+      "status": "PASS",
+      "files": 15
+    },
+    {
+      "check": "bash_syntax_and_LF",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "test_mizar_official_recursive_conversion.py",
+      "status": "PASS",
+      "tests": 24,
+      "skipped": 0,
+      "output": "test_all_source_config_fields_preserved_without_mutation (test_mizar_official_recursive_conversion.ContractTests.test_all_source_config_fields_preserved_without_mutation) ... ok\ntest_ced_feature_mapper_and_compatibility_helpers_preserved (test_mizar_official_recursive_conversion.ContractTests.test_ced_feature_mapper_and_compatibility_helpers_preserved) ... ok\ntest_full_thirty_layer_schedule_and_serial_boundaries (test_mizar_official_recursive_conversion.ContractTests.test_full_thirty_layer_schedule_and_serial_boundaries) ... ok\ntest_gbs128_training_intent_is_not_resume (test_mizar_official_recursive_conversion.ContractTests.test_gbs128_training_intent_is_not_resume) ... ok\ntest_help_has_no_tensor_dependency (test_mizar_official_recursive_conversion.ContractTests.test_help_has_no_tensor_dependency) ... ok\ntest_invalid_parameter_roles_fail_closed (test_mizar_official_recursive_conversion.ContractTests.test_invalid_parameter_roles_fail_closed) ... ok\ntest_learning_rates_and_layer_norm_boundaries (test_mizar_official_recursive_conversion.ContractTests.test_learning_rates_and_layer_norm_boundaries) ... ok\ntest_original_mapper_ast_matches_official_release (test_mizar_official_recursive_conversion.ContractTests.test_original_mapper_ast_matches_official_release) ... ok\ntest_pinned_official_release_inventory (test_mizar_official_recursive_conversion.ContractTests.test_pinned_official_release_inventory) ... ok\ntest_rank8_counts_from_projection_geometries (test_mizar_official_recursive_conversion.ContractTests.test_rank8_counts_from_projection_geometries) ... ok\ntest_wrong_geometry_cache_or_schedule_rejected (test_mizar_official_recursive_conversion.ContractTests.test_wrong_geometry_cache_or_schedule_rejected) ... ok\ntest_any_implementation_change_is_refused_before_deserialization (test_mizar_official_recursive_conversion.FileTests.test_any_implementation_change_is_refused_before_deserialization) ... ok\ntest_artifact_identity_tamper_rejected_before_tensor_load (test_mizar_official_recursive_conversion.FileTests.test_artifact_identity_tamper_rejected_before_tensor_load) ... ok\ntest_artifact_inventory_and_config_byte_tamper_are_detected (test_mizar_official_recursive_conversion.FileTests.test_artifact_inventory_and_config_byte_tamper_are_detected) ... ok\ntest_atomic_publish_preserves_content_and_refuses_any_existing_output (test_mizar_official_recursive_conversion.FileTests.test_atomic_publish_preserves_content_and_refuses_any_existing_output) ... ok\ntest_ced_label_indices_and_geometry_reject_incompatible_assets (test_mizar_official_recursive_conversion.FileTests.test_ced_label_indices_and_geometry_reject_incompatible_assets) ... ok\ntest_config_must_preserve_all_source_fields_even_after_rehash (test_mizar_official_recursive_conversion.FileTests.test_config_must_preserve_all_source_fields_even_after_rehash) ... ok\ntest_duplicate_manifest_entry_rejected (test_mizar_official_recursive_conversion.FileTests.test_duplicate_manifest_entry_rejected) ... ok\ntest_existing_output_and_source_overlap_rejected (test_mizar_official_recursive_conversion.FileTests.test_existing_output_and_source_overlap_rejected) ... ok\ntest_files_only_source_audit_never_claims_tensor_pass (test_mizar_official_recursive_conversion.FileTests.test_files_only_source_audit_never_claims_tensor_pass) ... ok\ntest_incomplete_reload_report_is_not_a_published_artifact (test_mizar_official_recursive_conversion.FileTests.test_incomplete_reload_report_is_not_a_published_artifact) ... ok\ntest_output_inside_git_checkout_rejected (test_mizar_official_recursive_conversion.FileTests.test_output_inside_git_checkout_rejected) ... ok\ntest_real_sha256_missing_and_tampered_files (test_mizar_official_recursive_conversion.FileTests.test_real_sha256_missing_and_tampered_files) ... ok\ntest_traversal_absolute_and_nonportable_paths_rejected (test_mizar_official_recursive_conversion.FileTests.test_traversal_absolute_and_nonportable_paths_rejected) ... ok\n\n----------------------------------------------------------------------\nRan 24 tests in 1.155s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_official_recursive_tensor.py",
+      "status": "SKIPPED",
+      "tests": 9,
+      "skipped": 9,
+      "output": "test_cached_masked_missing_audio_and_single_pass_training_rejected (test_mizar_official_recursive_tensor.TensorTests.test_cached_masked_missing_audio_and_single_pass_training_rejected) ... skipped 'requires real torch + transformers; no downloads or mocked tensor PASS'\ntest_exact_tensor_and_logits_save_reload_for_all_thirty_layers_and_new_branches (test_mizar_official_recursive_tensor.TensorTests.test_exact_tensor_and_logits_save_reload_for_all_thirty_layers_and_new_branches) ... skipped 'requires real torch + transformers; no downloads or mocked tensor PASS'\ntest_full_fifty_layer_trace_and_independent_loop_calls (test_mizar_official_recursive_tensor.TensorTests.test_full_fifty_layer_trace_and_independent_loop_calls) ... skipped 'requires real torch + transformers; no downloads or mocked tensor PASS'\ntest_nonzero_branches_backward_both_lora_loops_and_shared_base (test_mizar_official_recursive_tensor.TensorTests.test_nonzero_branches_backward_both_lora_loops_and_shared_base) ... skipped 'requires real torch + transformers; no downloads or mocked tensor PASS'\ntest_real_single_pass_matches_strict_standard_thirty_layers (test_mizar_official_recursive_tensor.TensorTests.test_real_single_pass_matches_strict_standard_thirty_layers) ... skipped 'requires real torch + transformers; no downloads or mocked tensor PASS'\ntest_scope_is_reset_after_decoder_exception (test_mizar_official_recursive_tensor.TensorTests.test_scope_is_reset_after_decoder_exception) ... skipped 'requires real torch + transformers; no downloads or mocked tensor PASS'\ntest_serial_gate_reads_post_input_hidden_and_only_audio_positions_change (test_mizar_official_recursive_tensor.TensorTests.test_serial_gate_reads_post_input_hidden_and_only_audio_positions_change) ... skipped 'requires real torch + transformers; no downloads or mocked tensor PASS'\ntest_strict_load_before_extensions_and_preserve_all_inherited_objects (test_mizar_official_recursive_tensor.TensorTests.test_strict_load_before_extensions_and_preserve_all_inherited_objects) ... skipped 'requires real torch + transformers; no downloads or mocked tensor PASS'\ntest_zero_gates_zero_B_initialize_with_staged_gradient_unlock (test_mizar_official_recursive_tensor.TensorTests.test_zero_gates_zero_B_initialize_with_staged_gradient_unlock) ... skipped 'requires real torch + transformers; no downloads or mocked tensor PASS'\n\n----------------------------------------------------------------------\nRan 9 tests in 0.000s\n\nOK (skipped=9)\n"
+    },
+    {
+      "check": "required_real_cpu_tensors",
+      "status": "FAIL",
+      "missing": [
+        "torch",
+        "transformers"
+      ]
+    },
+    {
+      "check": "reference_sources_unchanged",
+      "status": "PASS",
+      "files": 30
+    }
+  ]
+}
