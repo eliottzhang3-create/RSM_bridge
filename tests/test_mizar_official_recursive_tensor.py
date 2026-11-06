@@ -20,9 +20,10 @@ class TensorTests(unittest.TestCase):
     def setUpClass(cls):
         import torch
         from transformers import LlamaConfig, LlamaForCausalLM
-        from mizar_official_recursive_5_20x2_5 import contract, model, loop_lora
+        from mizar_official_recursive_5_20x2_5 import contract, model, loop_lora, tensor_runtime
         cls.torch, cls.LlamaConfig, cls.Reference = torch, LlamaConfig, LlamaForCausalLM
         cls.contract, cls.module, cls.lora = contract, model, loop_lora
+        cls.runtime = tensor_runtime
         torch.set_num_threads(1)
 
     def lm(self, enabled=True):
@@ -36,14 +37,33 @@ class TensorTests(unittest.TestCase):
                      recursive_prefix_layer_count=5, recursive_middle_layer_count=20,
                      recursive_suffix_layer_count=5, logical_to_physical=list(self.contract.SCHEDULE),
                      recursive_loops_scope="middle_only", recursive_source_layer_indices_0based=list(range(30)))
-        cfg = self.LlamaConfig.from_dict(value)
-        cfg._attn_implementation = "eager"
+        cfg = self.runtime.config_from_dict(value)
         lm = self.module.MizarRecursiveForCausalLM(cfg).float()
         if enabled: lm.model.enable_new_modules()
         return lm
 
     def inputs(self):
         return self.torch.randn(1, 130, 24), tuple(self.torch.randn(1, 126, 24) for _ in range(2))
+
+    def test_real_transformers_constructor_preserves_canonical_config_exactly(self):
+        import json
+        value = self.lm(enabled=False).config.to_dict()
+        value.pop("attn_implementation", None)
+        value["custom_preserved"] = {"sentinel": 42}
+        before = copy.deepcopy(value)
+        runtime = self.runtime.config_from_dict(value)
+        self.assertEqual(value, before)
+        self.assertEqual(json.loads(json.dumps(value)), before)
+        self.assertEqual(runtime._attn_implementation, "eager")
+
+    def test_real_runtime_config_nested_values_do_not_alias_canonical_dict(self):
+        value = self.lm(enabled=False).config.to_dict()
+        value["custom_preserved"] = {"sentinel": 42}
+        before = copy.deepcopy(value)
+        runtime = self.runtime.config_from_dict(value)
+        runtime.custom_preserved["sentinel"] = -1
+        runtime.logical_to_physical[0] = 29
+        self.assertEqual(value, before)
 
     def test_strict_load_before_extensions_and_preserve_all_inherited_objects(self):
         torch = self.torch

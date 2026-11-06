@@ -1,3 +1,21 @@
+## 2026-11-06：官方 Mizar 5+20×2+5，第5步配置重载失败修复
+
+用户反馈远程转换进入第5步后报 `recursive config must preserve every original source config field`，
+失败staging为 `Mizar159M-5-20x2-5-serial84-looplora-r8.staging-aaic8a79`，最终目录尚未发布。
+按现有控制流，反馈日志表示来源校验、官方严格加载及首次单遍对齐/完整50次执行前向已完成；
+完整保存重载和发布尚未通过，不能登记整条转换PASS。
+
+原因：`config_from_dict()` 将待保存字典直接传入 Transformers，库的from_dict会原地加入
+`attn_implementation` 等运行时字段，导致随后保存的配置与严格预期不一致。
+修复为传入deepcopy；保留完整字段校验，并在保存前提前校验，报错列出extra/missing/changed。
+新增3项本地回归（含可变配置构造→JSON保存→真实文件审计）及2项可选真实Transformers配置测试。
+本地27项通过、11项真实依赖检查因缺Torch/Transformers跳过，Python/Bash及原母本保护检查通过。
+报告仍为 `audit_reports/mizar_official_recursive_conversion_validation.json`。
+
+修复经GitHub同步后重跑原CPU `convert --seed 0 --threads 8`；旧staging可保留，不需删原始Mizar。
+不手动改旧manifest/配置来绕过实现身份与完整字段检查。远程本次重跑、重载和发布仍待用户执行确认。
+未执行commit/push、远程命令或训练。
+
 ## 2026-11-06：官方 Mizar final → 5+20×2+5，首阶段审计与转换代码
 
 见[官方完整Mizar递归转换说明](code/RSmol/mizar_official_recursive_5_20x2_5/README.md)。

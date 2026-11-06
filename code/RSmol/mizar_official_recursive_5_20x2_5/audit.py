@@ -6,8 +6,8 @@ from pathlib import Path, PurePosixPath
 
 from .assets import validate_ced_assets
 from .contract import (RELEASE_FILE, ROUTE, SCHEMA, TOKENIZER_FILES, architecture,
-                       build_text_config, implementation_identity, sha256_file, training_intent,
-                       validate_source_text_config, validate_text_config)
+                       implementation_identity, sha256_file, training_intent,
+                       validate_config_preservation, validate_source_text_config, validate_text_config)
 
 
 def read_json(path):
@@ -111,8 +111,7 @@ def audit_artifact(directory, *, _pending_reload=False):
         raise ValueError("artifact contains unlisted files (training state is not allowed)")
     verify_files(root, expected_assets)
     validate_text_config(read_json(root / "config.json"))
-    if read_json(root / "config.json") != build_text_config(read_json(root / "tokenizer/config.json")):
-        raise ValueError("recursive config must preserve every original source config field")
+    validate_config_preservation(read_json(root / "config.json"), read_json(root / "tokenizer/config.json"))
     report = read_json(root / "conversion_report.json")
     source = read_json(root / "source_audit.json")
     if (report.get("status") != "PASS" or report.get("scope") != "full_conversion"

@@ -110,6 +110,17 @@ def build_text_config(source):
     return value
 
 
+def validate_config_preservation(value, source):
+    """Keep the exact persistence contract; report which top-level fields differ."""
+    expected = build_text_config(source)
+    if value != expected:
+        extra = sorted(set(value) - set(expected))
+        missing = sorted(set(expected) - set(value))
+        changed = sorted(key for key in set(value) & set(expected) if value[key] != expected[key])
+        raise ValueError("recursive config must preserve every original source config field; "
+                         f"extra={extra}; missing={missing}; changed={changed}")
+
+
 def validate_text_config(value, *, production=True):
     expected = {"num_hidden_layers": 50, "recursive_layer_count": 30,
                 "recursive_loops": 2, "recursive_prefix_layer_count": 5,

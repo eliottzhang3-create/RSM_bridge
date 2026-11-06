@@ -85,6 +85,19 @@ python -B tests/validate_mizar_official_recursive_conversion.py
 python -B tests/validate_mizar_official_recursive_conversion.py --require-tensors
 ```
 
-文件测试使用合成小文件验证实际SHA256、缺失/篡改/路径穿越/覆盖拒绝、原子发布、产物身份、完整配置保留及官方mapper AST；不读取远程权重。九项可选真实CPU测试使用小hidden维度但完整30物理/50逻辑层，覆盖独立LoRA、串行注入边界和post-input门控、梯度解锁、异常scope复位、strict重载及数值对齐。
+文件测试使用合成小文件验证实际SHA256、缺失/篡改/路径穿越/覆盖拒绝、原子发布、产物身份、完整配置保留及官方mapper AST；不读取远程权重。十一项可选真实CPU测试覆盖配置构造/嵌套字典隔离，以及小hidden维度但完整30物理/50逻辑层的独立LoRA、串行注入边界和post-input门控、梯度解锁、异常scope复位、strict重载及数值对齐。
 
-本地缺少Torch/Transformers时，这九项必须明确记为 **SKIPPED**；不会以mock张量登记PASS。统一报告为 `audit_reports/mizar_official_recursive_conversion_validation.json`。远程实际来源审计、生产转换及数值PASS以远程命令产生的报告为准。
+本地缺少Torch/Transformers时，这十一项必须明确记为 **SKIPPED**；不会以mock张量登记PASS。统一报告为 `audit_reports/mizar_official_recursive_conversion_validation.json`。远程实际来源审计、生产转换及数值PASS以远程命令产生的报告为准。
+
+## 第5步配置校验失败的修复
+
+旧版可能在第5步报 `recursive config must preserve every original source config field`。
+构造模型时直接把将要保存的字典传给 `LlamaConfig.from_dict()`，上游[4.54系列配置实现](https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/configuration_utils.py#L712)会原地写入 `attn_implementation`。
+因此运行时字段进入了待保存配置，与由原始tokenizer配置生成的严格预期不同。该错误发生在重载的文件校验阶段，最终目录尚未发布。
+
+修复为：配置构造入口使用深拷贝，隔离源配置、待保存配置与运行时对象的嵌套字段；保存权重前提前校验完整配置；失败时列出extra/missing/changed字段。原来的完整字段一致性检查保留。
+本地新增3项配置回归测试（其中一项实际走构造→JSON保存→产物文件审计；配置库用可变行为替身，不模拟张量），另有2项真实Transformers配置测试。本地27项检查通过，11项真实依赖检查因缺依赖跳过。
+
+将修复经GitHub同步到远程后，重跑原 `convert --seed 0 --threads 8` 命令即可。
+原失败的 `.staging-*` 目录可保留，不会作为正式产物复用，也不会阻止新转换；不需要删除原始Mizar159M。
+此次代码改变了实现身份，因此应重新转换，而非手动修改旧staging的配置或manifest来绕过检查。远程完整重载与最终发布仍需本次重跑确认。

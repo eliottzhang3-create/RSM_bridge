@@ -12,7 +12,8 @@ import traceback
 from .audit import (artifact_asset_records, audit_source, file_record, release_manifest,
                     validate_output_location)
 from .contract import (HERE, RELEASE_FILE, ROUTE, SCHEMA, architecture,
-                       implementation_identity, sha256_file, training_intent, write_json)
+                       implementation_identity, sha256_file, training_intent,
+                       validate_config_preservation, write_json)
 
 
 def atomic_publish(staging, output):
@@ -64,6 +65,7 @@ def convert(source, output, *, seed=0, threads=8, progress=print):
         equal_inherited(model, inherited)
         # No gradients, optimizer, scheduler, train RNG or data cursor are serialized.
         progress("[4/6] Saving model-only state and exact local constructor/tokenizer assets.")
+        validate_config_preservation(config, source_config)
         torch.save(model.state_dict(), staging / "model.ckpt")
         write_json(staging / "config.json", config)
         for entry in artifact_asset_records():

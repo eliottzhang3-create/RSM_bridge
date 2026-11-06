@@ -1,6 +1,7 @@
 """CPU tensor validation, strict model construction and artifact reload API."""
 from __future__ import annotations
 
+import copy
 import os
 from collections import Counter
 from collections.abc import Mapping
@@ -31,7 +32,10 @@ def dependencies(threads=8):
 
 def config_from_dict(value):
     from transformers import LlamaConfig
-    config = LlamaConfig.from_dict(value)
+    # Transformers from_dict can insert runtime keys into its input dictionary;
+    # constructors can also retain/mutate nested values. Never pass the canonical
+    # source/persisted config itself across that mutable boundary.
+    config = LlamaConfig.from_dict(copy.deepcopy(value))
     config._attn_implementation = "eager"
     return config
 

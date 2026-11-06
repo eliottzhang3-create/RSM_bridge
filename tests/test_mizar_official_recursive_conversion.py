@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
@@ -17,6 +18,7 @@ sys.path.insert(0, str(ROOT / "code/RSmol"))
 from mizar_official_recursive_5_20x2_5 import audit, contract
 from mizar_official_recursive_5_20x2_5.assets import CED_EXPECTED_CONFIG, validate_ced_config
 from mizar_official_recursive_5_20x2_5.conversion import atomic_publish
+from mizar_official_recursive_5_20x2_5.tensor_runtime import config_from_dict
 
 REF = ROOT / ("code/RSmol/mellow_official_training_c8204d8_adamw_cosine/"
               "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject_loop_lora_r8")
@@ -32,6 +34,23 @@ def definition(path, name):
     node = next(n for n in ast.parse(path.read_text(encoding="utf-8")).body
                 if isinstance(n, (ast.ClassDef, ast.FunctionDef)) and n.name == name)
     return ast.dump(node, include_attributes=False)
+
+
+def mutating_config_library():
+    """Configuration-only test double; does not simulate tensors or model PASS."""
+    module = types.ModuleType("transformers")
+
+    class MutatingLlamaConfig:
+        @classmethod
+        def from_dict(cls, value):
+            # Reproduce the library's top-level mutation and exercise nested
+            # ownership too, so a shallow dict(value) fix cannot pass.
+            value["attn_implementation"] = None
+            value["custom_preserved"]["sentinel"] = -1
+            return types.SimpleNamespace(**value)
+
+    module.LlamaConfig = MutatingLlamaConfig
+    return patch.dict(sys.modules, {"transformers": module})
 
 
 class ContractTests(unittest.TestCase):
@@ -84,6 +103,22 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(converted["custom_preserved"], original["custom_preserved"])
         self.assertEqual(converted["recursive_source_layer_indices_0based"], list(range(30)))
         contract.validate_text_config(converted)
+
+    def test_config_constructor_mutation_cannot_reach_persisted_or_source_dict(self):
+        for value in (source_config(), contract.build_text_config(source_config())):
+            before = copy.deepcopy(value)
+            with mutating_config_library():
+                runtime = config_from_dict(value)
+            self.assertEqual(value, before)
+            self.assertEqual(runtime._attn_implementation, "eager")
+            self.assertEqual(runtime.custom_preserved["sentinel"], -1)
+            self.assertNotIn("attn_implementation", value)
+
+    def test_preservation_error_reports_runtime_fields_without_allowing_them(self):
+        value = contract.build_text_config(source_config())
+        value["attn_implementation"] = None
+        with self.assertRaisesRegex(ValueError, r"extra=\['attn_implementation'\]"):
+            contract.validate_config_preservation(value, source_config())
 
     def test_wrong_geometry_cache_or_schedule_rejected(self):
         for name, value in (("hidden_size", 768), ("use_cache", True), ("num_hidden_layers", 30),
@@ -262,6 +297,18 @@ class FileTests(unittest.TestCase):
             (self.root / "optimizer.pt").unlink()
             (self.root / "config.json").write_text("{}")
             with self.assertRaisesRegex(ValueError, "SHA256"): audit.audit_artifact(self.root)
+
+    def test_constructor_then_json_save_still_passes_strict_artifact_config_check(self):
+        manifest, assets = self.fixture_artifact()
+        value = audit.read_json(self.root / "config.json")
+        with mutating_config_library():
+            config_from_dict(value)
+        # Follow the actual conversion order: construct first, serialize the
+        # original canonical dictionary later, then run the strict file audit.
+        contract.write_json(self.root / "config.json", value)
+        self.refresh_fixture_manifest(manifest)
+        with patch.object(audit, "artifact_asset_records", return_value=assets):
+            self.assertEqual(audit.audit_artifact(self.root)["tensor_audit"], "NOT_RUN")
 
     def test_config_must_preserve_all_source_fields_even_after_rehash(self):
         manifest, assets = self.fixture_artifact()
