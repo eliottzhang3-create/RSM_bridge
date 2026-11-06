@@ -1,0 +1,375 @@
+{
+  "status": "PASS_WITH_SKIPS",
+  "scope": "local checks; synthetic files and mock submissions; no production assets or GPU training",
+  "remote_conversion_verified": false,
+  "remote_assets_loaded": false,
+  "remote_gpu_training_verified": false,
+  "source_audit": {
+    "status": "PASS",
+    "scope": "local source/stdlib only; no real assets or GPU training",
+    "route_code_sha256": "39a400637e2ccbd1b3396ade3877aea3176cacc000f8236e6ad5b3a5cc247083",
+    "geometry": {
+      "rows": 1477492,
+      "world_size": 8,
+      "microbatch": 8,
+      "gradient_accumulation_steps": 4,
+      "global_batch_size": 256,
+      "rank_samples_per_optimizer_step": 32,
+      "samples_per_rank": 184686,
+      "steps_per_epoch": 5771,
+      "total_steps": 17313,
+      "warmup_steps": 866,
+      "dropped_rows_per_epoch": 116
+    },
+    "protected_original_files": 206,
+    "parent_route_audit": {
+      "byte_identical_files": [
+        "check_ced_assets.py",
+        "data/audio_paths.py",
+        "data/audiotext_dataset.py",
+        "data/fixed20.py",
+        "data/indexed_jsonl.py",
+        "data/prepared_index.py",
+        "data/sampler.py",
+        "data/staging.py",
+        "data/template.py",
+        "LICENSE",
+        "licenses/Mizar-ClearBSD.txt",
+        "models/audio.py",
+        "models/ced.py",
+        "models/ced_offline.py",
+        "models/decoder.py",
+        "models/mellow.py",
+        "NOTICE",
+        "optim.py",
+        "prepare_index.py",
+        "runtime_checks.py",
+        "utils/audio_io.py",
+        "write_config.py"
+      ],
+      "optimizer_epoch_loop": "identical including gradient diagnostic",
+      "whole_trainer": "identical except read-only seven-slot-v2 geometry audit",
+      "contract": "identical except route, geometry, model source and final-text provenance",
+      "strict_loader": "identical except seven-slot-v2 class and geometry",
+      "staging": "identical except isolated tmpfs prefix"
+    },
+    "recipe": {
+      "changed_fields": [
+        "code_sha256",
+        "recursive_model_source_sha256",
+        "route",
+        "text_model_architecture",
+        "text_model_contract"
+      ],
+      "identical_fields": [
+        "adamw",
+        "answer_tokens",
+        "attention_mask",
+        "audio_encoder",
+        "audio_policy",
+        "audio_read_policy",
+        "autocast",
+        "ced_model_dir",
+        "eos_suffix",
+        "forward_dtype",
+        "geometry",
+        "grad_scaler",
+        "gradient_accumulation",
+        "gradient_clip",
+        "loss",
+        "mapper",
+        "mapping_sha256",
+        "order",
+        "pad_token",
+        "prefix",
+        "rank_rng",
+        "rows_canonical_sha256",
+        "sample_rate",
+        "scheduler",
+        "seed",
+        "source_rows",
+        "sync_batchnorm",
+        "text_model_dir",
+        "text_model_schedule",
+        "workers"
+      ]
+    },
+    "official_mapper_lineage": {
+      "parent_source_identity_verified": true,
+      "official_mapper_class_asts_equal": [
+        "CEDFrequencyMerger",
+        "CEDTemporalMapper"
+      ],
+      "mapper": "normalized-LF identical to the audited parent"
+    },
+    "checkpoint_steps": [
+      2886,
+      5771,
+      8656,
+      11542,
+      14428,
+      17313
+    ]
+  },
+  "require_tensors": false,
+  "source_sha256": {
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/audit_reference.py": "e49c27e39b5e7289ad37b412d4effde46504dac436e0795d69601e86337cf4e6",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/check_ced_assets.py": "075b49dc02eca6d5293f1abaadce736fece46a2fc67661324ac9b45913466367",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/check_text_checkpoint.py": "49668d165d544fbd1b0d2ba77376ac9caa8f6ecb0a8fa6da0982924b1f29b90c",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/contract.py": "40b809a9d3fc0de326e310400fbbfb4082053221be1f565a979caa28f5c4c85a",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/data/audio_paths.py": "f65433f8db88a59bf1d7701ce9b0bfe85e8c00affa673b69246684ae34596685",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/data/audiotext_dataset.py": "f41bbd8edf863c906d8ef996da87b726edaedae7987fa5507416e03113b5bf8b",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/data/fixed20.py": "f4580fdaf1b75acd54bbd12dbfc72f18e2906e1dbcebd8ff8e5d1ff355ac6a5c",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/data/indexed_jsonl.py": "1fac5952ad67609cc050d9b05cfac8c9cb16f4bf520b9eabbcfb0dee3af82e8a",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/data/prepared_index.py": "9852107e00223c91bb07a4bf05347089884bbfcff9d5075cc60ef53086af57e3",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/data/sampler.py": "66be929c5f5458816c64b12bec058791a173698290ea1e7a5ef80a730aa02525",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/data/staging.py": "db7a465e90deb6be5aa0342afbb6cb56279fbea20081cd09f79c42db2fac4515",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/data/template.py": "0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/models/audio.py": "de8394e231c4ee67d6a9baaad864032e2825c717f7e5c6c838543a613619ebb4",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/models/ced.py": "67c101680a14ee8391568f892cf33f1748443af4c182ba5b3270707e210d3517",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/models/ced_offline.py": "94a0d5ede90337b4b88b112dfaad3db0144e644458dcc1a744096c6f19f248af",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/models/decoder.py": "f7733393540929f5c6da8dd1e6b2f37f453bddffb75cd93be36953d538973511",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/models/mellow.py": "1990fe5eacd412a027fabd76f193975ddd5e22c9e02e7c371dc077030e07bdcf",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/models/recursive_text.py": "f94f1f120f713816f8a5b453459ac44fddc7010394c6ff6a2771048b57cbf9ee",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/optim.py": "e0bd421eb5edf6dfc60a4e6e14e3d221de450ad94c4829c234e7c6058319036e",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/prepare_index.py": "daf059301ff5cb2550a11e6f35cb53fe655b17b6b92cb0974da8f3da55f337e2",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/runtime_checks.py": "f464fac7735e7b97909bdd11f9c79cff228de66d704c2d53ae7340eb88b5853a",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/stage_data.py": "036b8e2312e7a92e836ce2b5dc01268da96d1ca791afa48974625dbdf434aad6",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/text_checkpoint.py": "e81472f6621535af1590707710f0236f32733fca3a91aa5f60ee0f7427e7030f",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/train.py": "56372c562ae2a58de62266ee2444e05ccf402612db57ede1681c3b1be65ae4ba",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/utils/audio_io.py": "67f3680af4b8bb5cbc30426c54d71155d2b65f8cdd5c4fb89af08a374e63f311",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/write_config.py": "dd93ddece983958a5241d6277999eacb685e294c24b5f66817feed02ea9b80ad",
+    "code/RSmol/recursive_model_5_10x2_5_mesh_7slot_v2.py": "79c5ed25a740524f00cf3fe733edd1ed8dc9d3fcc3075423880575332b4ad9a3",
+    "code/RSmol/scripts/convert_stepwise_5_10x2_5_mesh_7slot_v2.py": "5ba7710574c9391579774a48d224315bebd71f6fcfc3d2ac91181f66ffdd5462",
+    "code/RSmol/scripts/train_stage4_5_10x2_5_mesh_7slot_v2_ddp.py": "4e7cc2d37c4a6111505946494d72d64497c58b03f242f297524bee79c28b5fc7",
+    "tests/mesh_7slot_v2_test_support.py": "fecd57ece769b8b318dcf1d01dca65a460c562e95ca366290830d7c2c12169d5",
+    "tests/test_mesh_7slot_v2_handoff.py": "41726583568fef0c93469b911d1b6d9958d5c15639a2e027b5da335f7ac94cfb",
+    "tests/test_mizar_s1_mesh_7slot_v2_ced_small_behavior.py": "18c3dc654c7086e2052d8d8274018e860507d9f2226a6aa9f004064c6dbae0c9",
+    "tests/test_mizar_s1_mesh_7slot_v2_ced_small_route.py": "d21cdeee10f00140b49771facc1063a81d147ba28254a52625a63235987332ad",
+    "tests/test_mizar_s1_mesh_7slot_v2_ced_small_shared_start.py": "d909b5ed8e2d9fb02df58da8a73749a64cb739289a515cad3132df86d7106e86",
+    "tests/test_mizar_s1_mesh_7slot_v2_ced_small_tensor.py": "fb22ee9fd50e4becba6b358b607bb05ad1f903bae877c959d108a59d8dc41170",
+    "tests/test_text_5_10x2_5_mesh_7slot_v2_contract.py": "e4e1f3cc799a92beb509f6e4809b826245883992781eb4e702550e6f599fa08d",
+    "tests/test_text_5_10x2_5_mesh_7slot_v2_shell.py": "c23e0f050d4a2bc884e397ba09a70459b78c392e71c7ffb73f34dddf8518eaab",
+    "tests/test_text_5_10x2_5_mesh_7slot_v2_tensor.py": "40bc3a47f4f4c6518c3f787d34ba280af9dc40819f51e47362e3e11e87fc050f",
+    "tests/test_text_5_10x2_5_mesh_7slot_v2_training.py": "110fd8b1cb42fd3f819dc9a2b518da66663717c08a5b26c9b454d570177bc429",
+    "tests/validate_mesh_7slot_v2.py": "85138cb6adac746125922616a34fd865990abbb67a1645fbebe138ffa4b03cab",
+    "code/RSmol/run_mizar_s1_gbs256_recursive_mesh_7slot_v2_ced_small_3090.sh": "538ae67aa4a49f376670c458b2260662f727e0f0b1c5f1426dd900925a9ce3ff",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_7slot_v2_3090.sh": "36784f51a8fd6466ea5647090a0a4c5ab8eb91b8696c57a3ade34d1524861389",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_7slot_v2_formal_3090.sh": "fac526b693a072780dfbc539e0c5c8d848d4473953af4ee88b0396ff4df1c8f3",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_7slot_v2_resume_3090.sh": "70b416e9b2bb5cc82c44a7e5de5c2ee4df950b3072f0b739a3e1d60ae681c196",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_7slot_v2_smoke_3090.sh": "dff3f9d263cd024be74f75f7b900abb2c65f04ba63cc6bf1c45adf03ddfbe4e7",
+    "code/RSmol/scripts/convert_stepwise_5_10x2_5_mesh_7slot_v2.sh": "3176fc3e045aea3601e6327bfe64a418a1335b539e896690ace3ab6b21c37e9b",
+    "code/RSmol/scripts/train_stage4_5_10x2_5_mesh_7slot_v2_ddp.sh": "847cfbf6fbdea353a53e83e6a9ca24cd82ae5b1340bc7b7acaf5c82ad139c55f",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/run.sh": "93b2f2173217a2417385c58ead45da47910821b3f7e6c36a9d52c6c14d0f1330"
+  },
+  "missing_dependencies": [
+    "torch",
+    "torchaudio",
+    "transformers",
+    "soundfile",
+    "safetensors"
+  ],
+  "executed_tests": 116,
+  "skipped_tests": 52,
+  "checks": [
+    {
+      "check": "python_syntax",
+      "status": "PASS",
+      "files": 40
+    },
+    {
+      "check": "run_mizar_s1_gbs256_recursive_mesh_7slot_v2_ced_small_3090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "run_stage4_5_10x2_5_mesh_7slot_v2_3090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "run_stage4_5_10x2_5_mesh_7slot_v2_formal_3090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "run_stage4_5_10x2_5_mesh_7slot_v2_resume_3090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "run_stage4_5_10x2_5_mesh_7slot_v2_smoke_3090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "convert_stepwise_5_10x2_5_mesh_7slot_v2.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "train_stage4_5_10x2_5_mesh_7slot_v2_ddp.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "run.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "documented_bash_commands",
+      "status": "PASS",
+      "blocks": 7
+    },
+    {
+      "check": "original_sources_and_parent_parity",
+      "status": "PASS",
+      "output": "{\n  \"status\": \"PASS\",\n  \"scope\": \"local source/stdlib only; no real assets or GPU training\",\n  \"route_code_sha256\": \"39a400637e2ccbd1b3396ade3877aea3176cacc000f8236e6ad5b3a5cc247083\",\n  \"geometry\": {\n    \"rows\": 1477492,\n    \"world_size\": 8,\n    \"microbatch\": 8,\n    \"gradient_accumulation_steps\": 4,\n    \"global_batch_size\": 256,\n    \"rank_samples_per_optimizer_step\": 32,\n    \"samples_per_rank\": 184686,\n    \"steps_per_epoch\": 5771,\n    \"total_steps\": 17313,\n    \"warmup_steps\": 866,\n    \"dropped_rows_per_epoch\": 116\n  },\n  \"protected_original_files\": 206,\n  \"parent_route_audit\": {\n    \"byte_identical_files\": [\n      \"check_ced_assets.py\",\n      \"data/audio_paths.py\",\n      \"data/audiotext_dataset.py\",\n      \"data/fixed20.py\",\n      \"data/indexed_jsonl.py\",\n      \"data/prepared_index.py\",\n      \"data/sampler.py\",\n      \"data/staging.py\",\n      \"data/template.py\",\n      \"LICENSE\",\n      \"licenses/Mizar-ClearBSD.txt\",\n      \"models/audio.py\",\n      \"models/ced.py\",\n      \"models/ced_offline.py\",\n      \"models/decoder.py\",\n      \"models/mellow.py\",\n      \"NOTICE\",\n      \"optim.py\",\n      \"prepare_index.py\",\n      \"runtime_checks.py\",\n      \"utils/audio_io.py\",\n      \"write_config.py\"\n    ],\n    \"optimizer_epoch_loop\": \"identical including gradient diagnostic\",\n    \"whole_trainer\": \"identical except read-only seven-slot-v2 geometry audit\",\n    \"contract\": \"identical except route, geometry, model source and final-text provenance\",\n    \"strict_loader\": \"identical except seven-slot-v2 class and geometry\",\n    \"staging\": \"identical except isolated tmpfs prefix\"\n  },\n  \"recipe\": {\n    \"changed_fields\": [\n      \"code_sha256\",\n      \"recursive_model_source_sha256\",\n      \"route\",\n      \"text_model_architecture\",\n      \"text_model_contract\"\n    ],\n    \"identical_fields\": [\n      \"adamw\",\n      \"answer_tokens\",\n      \"attention_mask\",\n      \"audio_encoder\",\n      \"audio_policy\",\n      \"audio_read_policy\",\n      \"autocast\",\n      \"ced_model_dir\",\n      \"eos_suffix\",\n      \"forward_dtype\",\n      \"geometry\",\n      \"grad_scaler\",\n      \"gradient_accumulation\",\n      \"gradient_clip\",\n      \"loss\",\n      \"mapper\",\n      \"mapping_sha256\",\n      \"order\",\n      \"pad_token\",\n      \"prefix\",\n      \"rank_rng\",\n      \"rows_canonical_sha256\",\n      \"sample_rate\",\n      \"scheduler\",\n      \"seed\",\n      \"source_rows\",\n      \"sync_batchnorm\",\n      \"text_model_dir\",\n      \"text_model_schedule\",\n      \"workers\"\n    ]\n  },\n  \"official_mapper_lineage\": {\n    \"parent_source_identity_verified\": true,\n    \"official_mapper_class_asts_equal\": [\n      \"CEDFrequencyMerger\",\n      \"CEDTemporalMapper\"\n    ],\n    \"mapper\": \"normalized-LF identical to the audited parent\"\n  },\n  \"checkpoint_steps\": [\n    2886,\n    5771,\n    8656,\n    11542,\n    14428,\n    17313\n  ]\n}\n"
+    },
+    {
+      "check": "test_text_5_10x2_5_mesh_7slot_v2_contract.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_checkpoint_rejects_cross_route_step_mismatch_or_missing_rank (__main__.SevenSlotV2CheckpointContractTest.test_checkpoint_rejects_cross_route_step_mismatch_or_missing_rank) ... ok\ntest_data_and_optimizer_math_match_five_slot_parent (__main__.SevenSlotV2CheckpointContractTest.test_data_and_optimizer_math_match_five_slot_parent) ... ok\ntest_fresh_training_requires_clean_seven_slot_v2_conversion_provenance (__main__.SevenSlotV2CheckpointContractTest.test_fresh_training_requires_clean_seven_slot_v2_conversion_provenance) ... ok\ntest_loaded_model_requires_seven_slot_v2s_and_independent_routers (__main__.SevenSlotV2CheckpointContractTest.test_loaded_model_requires_seven_slot_v2s_and_independent_routers) ... ok\ntest_rng_roundtrip_includes_python_cpu_and_cuda (__main__.SevenSlotV2CheckpointContractTest.test_rng_roundtrip_includes_python_cpu_and_cuda) ... ok\ntest_clean_twenty_layer_conversion_is_copied_without_remapping_again (__main__.SevenSlotV2ConversionContractTest.test_clean_twenty_layer_conversion_is_copied_without_remapping_again) ... ok\ntest_converter_refuses_model_artifacts_inside_checkout (__main__.SevenSlotV2ConversionContractTest.test_converter_refuses_model_artifacts_inside_checkout) ... ok\ntest_model_routing_and_loop_implementation_matches_six_slot_parent (__main__.SevenSlotV2ConversionContractTest.test_model_routing_and_loop_implementation_matches_six_slot_parent) ... ok\ntest_original_thirty_layer_mapping_and_seven_slot_v2_config (__main__.SevenSlotV2ConversionContractTest.test_original_thirty_layer_mapping_and_seven_slot_v2_config) ... ok\ntest_tied_embedding_alias_is_restored (__main__.SevenSlotV2ConversionContractTest.test_tied_embedding_alias_is_restored) ... ok\ntest_trained_or_existing_mesh_sources_are_rejected (__main__.SevenSlotV2ConversionContractTest.test_trained_or_existing_mesh_sources_are_rejected) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 0.315s\n\nOK\n"
+    },
+    {
+      "check": "test_text_5_10x2_5_mesh_7slot_v2_training.py",
+      "status": "PASS",
+      "tests": 8,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_autocast_uses_bf16_and_backward_and_ce_are_outside_the_context (__main__.TextMeshX2SevenSlotV2TrainingTest.test_autocast_uses_bf16_and_backward_and_ce_are_outside_the_context) ... ok\ntest_bf16_configuration_requires_supported_cuda_and_fp32_parameters (__main__.TextMeshX2SevenSlotV2TrainingTest.test_bf16_configuration_requires_supported_cuda_and_fp32_parameters) ... ok\ntest_formal_schedule_uses_full_epoch_and_five_percent_warmup (__main__.TextMeshX2SevenSlotV2TrainingTest.test_formal_schedule_uses_full_epoch_and_five_percent_warmup) ... ok\ntest_production_loop_stops_at_9244_without_starting_second_epoch (__main__.TextMeshX2SevenSlotV2TrainingTest.test_production_loop_stops_at_9244_without_starting_second_epoch) ... ok\ntest_resume_at_each_batch_boundary_has_no_repeated_or_missing_rows (__main__.TextMeshX2SevenSlotV2TrainingTest.test_resume_at_each_batch_boundary_has_no_repeated_or_missing_rows) ... ok\ntest_resume_rejects_changed_shards_and_invalid_row_offsets (__main__.TextMeshX2SevenSlotV2TrainingTest.test_resume_rejects_changed_shards_and_invalid_row_offsets) ... ok\ntest_resume_rejects_old_precision_or_schedule (__main__.TextMeshX2SevenSlotV2TrainingTest.test_resume_rejects_old_precision_or_schedule) ... ok\ntest_second_epoch_is_deterministic_and_keeps_rank_assignment (__main__.TextMeshX2SevenSlotV2TrainingTest.test_second_epoch_is_deterministic_and_keeps_rank_assignment) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.192s\n\nOK\n"
+    },
+    {
+      "check": "test_text_5_10x2_5_mesh_7slot_v2_shell.py",
+      "status": "PASS",
+      "tests": 8,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_all_bash_sources_parse_and_use_lf (__main__.SevenSlotV2ShellTest.test_all_bash_sources_parse_and_use_lf) ... ok\ntest_conversion_wrapper_disables_cuda_and_forwards_clean_source (__main__.SevenSlotV2ShellTest.test_conversion_wrapper_disables_cuda_and_forwards_clean_source) ... ok\ntest_default_bf16_output_and_job_ignore_old_route_environment (__main__.SevenSlotV2ShellTest.test_default_bf16_output_and_job_ignore_old_route_environment) ... ok\ntest_explicit_formal_resume_is_forwarded (__main__.SevenSlotV2ShellTest.test_explicit_formal_resume_is_forwarded) ... ok\ntest_formal_runtime_arguments_cover_full_epoch (__main__.SevenSlotV2ShellTest.test_formal_runtime_arguments_cover_full_epoch) ... ok\ntest_formal_submission_resources_quoting_and_fresh_initialization (__main__.SevenSlotV2ShellTest.test_formal_submission_resources_quoting_and_fresh_initialization) ... ok\ntest_runtime_rejects_nonempty_output (__main__.SevenSlotV2ShellTest.test_runtime_rejects_nonempty_output) ... ok\ntest_smoke_and_resume_wrappers_keep_diagnostic_gates (__main__.SevenSlotV2ShellTest.test_smoke_and_resume_wrappers_keep_diagnostic_gates) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 2.575s\n\nOK\n"
+    },
+    {
+      "check": "test_text_5_10x2_5_mesh_7slot_v2_tensor.py",
+      "status": "PASS_WITH_SKIPS",
+      "tests": 5,
+      "skipped": 5,
+      "exit_code": 0,
+      "output": "test_conversion_inherits_exact_weights_and_reloads_seven_slot_v2_routers (__main__.SevenSlotV2TensorTest.test_conversion_inherits_exact_weights_and_reloads_seven_slot_v2_routers) ... skipped 'requires torch, transformers and safetensors in remote rsmol'\ntest_cpu_bf16_autocast_preserves_memory_queries_and_fp32_master_state (__main__.SevenSlotV2TensorTest.test_cpu_bf16_autocast_preserves_memory_queries_and_fp32_master_state) ... skipped 'requires torch, transformers and safetensors in remote rsmol'\ntest_cuda_bf16_forward_backward_with_production_autocast_context (__main__.SevenSlotV2TensorTest.test_cuda_bf16_forward_backward_with_production_autocast_context) ... skipped 'requires torch, transformers and safetensors in remote rsmol'\ntest_real_checkpoint_roundtrip_preserves_optimizer_and_rank_rng (__main__.SevenSlotV2TensorTest.test_real_checkpoint_roundtrip_preserves_optimizer_and_rank_rng) ... skipped 'requires torch, transformers and safetensors in remote rsmol'\ntest_real_forward_memory_schedule_and_both_loop_gradients (__main__.SevenSlotV2TensorTest.test_real_forward_memory_schedule_and_both_loop_gradients) ... skipped 'requires torch, transformers and safetensors in remote rsmol'\n\n----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK (skipped=5)\n"
+    },
+    {
+      "check": "test_text_5_10x2_5_mesh_4slot_contract.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_checkpoint_rejects_cross_route_step_mismatch_or_missing_rank (__main__.FourSlotCheckpointContractTest.test_checkpoint_rejects_cross_route_step_mismatch_or_missing_rank) ... ok\ntest_data_and_optimizer_math_match_five_slot_parent (__main__.FourSlotCheckpointContractTest.test_data_and_optimizer_math_match_five_slot_parent) ... ok\ntest_fresh_training_requires_clean_four_slot_conversion_provenance (__main__.FourSlotCheckpointContractTest.test_fresh_training_requires_clean_four_slot_conversion_provenance) ... ok\ntest_loaded_model_requires_four_slots_and_independent_routers (__main__.FourSlotCheckpointContractTest.test_loaded_model_requires_four_slots_and_independent_routers) ... ok\ntest_rng_roundtrip_includes_python_cpu_and_cuda (__main__.FourSlotCheckpointContractTest.test_rng_roundtrip_includes_python_cpu_and_cuda) ... ok\ntest_clean_twenty_layer_conversion_is_copied_without_remapping_again (__main__.FourSlotConversionContractTest.test_clean_twenty_layer_conversion_is_copied_without_remapping_again) ... ok\ntest_converter_refuses_model_artifacts_inside_checkout (__main__.FourSlotConversionContractTest.test_converter_refuses_model_artifacts_inside_checkout) ... ok\ntest_model_routing_and_loop_implementation_matches_six_slot_parent (__main__.FourSlotConversionContractTest.test_model_routing_and_loop_implementation_matches_six_slot_parent) ... ok\ntest_original_thirty_layer_mapping_and_four_slot_config (__main__.FourSlotConversionContractTest.test_original_thirty_layer_mapping_and_four_slot_config) ... ok\ntest_tied_embedding_alias_is_restored (__main__.FourSlotConversionContractTest.test_tied_embedding_alias_is_restored) ... ok\ntest_trained_or_existing_mesh_sources_are_rejected (__main__.FourSlotConversionContractTest.test_trained_or_existing_mesh_sources_are_rejected) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 0.326s\n\nOK\n"
+    },
+    {
+      "check": "test_text_5_10x2_5_mesh_4slot_training.py",
+      "status": "PASS",
+      "tests": 8,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_autocast_uses_bf16_and_backward_and_ce_are_outside_the_context (__main__.TextMeshX2FourSlotTrainingTest.test_autocast_uses_bf16_and_backward_and_ce_are_outside_the_context) ... ok\ntest_bf16_configuration_requires_supported_cuda_and_fp32_parameters (__main__.TextMeshX2FourSlotTrainingTest.test_bf16_configuration_requires_supported_cuda_and_fp32_parameters) ... ok\ntest_formal_schedule_uses_full_epoch_and_five_percent_warmup (__main__.TextMeshX2FourSlotTrainingTest.test_formal_schedule_uses_full_epoch_and_five_percent_warmup) ... ok\ntest_production_loop_stops_at_9244_without_starting_second_epoch (__main__.TextMeshX2FourSlotTrainingTest.test_production_loop_stops_at_9244_without_starting_second_epoch) ... ok\ntest_resume_at_each_batch_boundary_has_no_repeated_or_missing_rows (__main__.TextMeshX2FourSlotTrainingTest.test_resume_at_each_batch_boundary_has_no_repeated_or_missing_rows) ... ok\ntest_resume_rejects_changed_shards_and_invalid_row_offsets (__main__.TextMeshX2FourSlotTrainingTest.test_resume_rejects_changed_shards_and_invalid_row_offsets) ... ok\ntest_resume_rejects_old_precision_or_schedule (__main__.TextMeshX2FourSlotTrainingTest.test_resume_rejects_old_precision_or_schedule) ... ok\ntest_second_epoch_is_deterministic_and_keeps_rank_assignment (__main__.TextMeshX2FourSlotTrainingTest.test_second_epoch_is_deterministic_and_keeps_rank_assignment) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.193s\n\nOK\n"
+    },
+    {
+      "check": "test_text_5_10x2_5_mesh_4slot_shell.py",
+      "status": "PASS",
+      "tests": 8,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_all_bash_sources_parse_and_use_lf (__main__.FourSlotShellTest.test_all_bash_sources_parse_and_use_lf) ... ok\ntest_conversion_wrapper_disables_cuda_and_forwards_clean_source (__main__.FourSlotShellTest.test_conversion_wrapper_disables_cuda_and_forwards_clean_source) ... ok\ntest_default_bf16_output_and_job_ignore_old_route_environment (__main__.FourSlotShellTest.test_default_bf16_output_and_job_ignore_old_route_environment) ... ok\ntest_explicit_formal_resume_is_forwarded (__main__.FourSlotShellTest.test_explicit_formal_resume_is_forwarded) ... ok\ntest_formal_runtime_arguments_cover_full_epoch (__main__.FourSlotShellTest.test_formal_runtime_arguments_cover_full_epoch) ... ok\ntest_formal_submission_resources_quoting_and_fresh_initialization (__main__.FourSlotShellTest.test_formal_submission_resources_quoting_and_fresh_initialization) ... ok\ntest_runtime_rejects_nonempty_output (__main__.FourSlotShellTest.test_runtime_rejects_nonempty_output) ... ok\ntest_smoke_and_resume_wrappers_keep_diagnostic_gates (__main__.FourSlotShellTest.test_smoke_and_resume_wrappers_keep_diagnostic_gates) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 2.481s\n\nOK\n"
+    },
+    {
+      "check": "test_text_5_10x2_5_mesh_4slot_tensor.py",
+      "status": "PASS_WITH_SKIPS",
+      "tests": 5,
+      "skipped": 5,
+      "exit_code": 0,
+      "output": "test_conversion_inherits_exact_weights_and_reloads_four_slot_routers (__main__.FourSlotTensorTest.test_conversion_inherits_exact_weights_and_reloads_four_slot_routers) ... skipped 'requires torch, transformers and safetensors in remote rsmol'\ntest_cpu_bf16_autocast_preserves_memory_queries_and_fp32_master_state (__main__.FourSlotTensorTest.test_cpu_bf16_autocast_preserves_memory_queries_and_fp32_master_state) ... skipped 'requires torch, transformers and safetensors in remote rsmol'\ntest_cuda_bf16_forward_backward_with_production_autocast_context (__main__.FourSlotTensorTest.test_cuda_bf16_forward_backward_with_production_autocast_context) ... skipped 'requires torch, transformers and safetensors in remote rsmol'\ntest_real_checkpoint_roundtrip_preserves_optimizer_and_rank_rng (__main__.FourSlotTensorTest.test_real_checkpoint_roundtrip_preserves_optimizer_and_rank_rng) ... skipped 'requires torch, transformers and safetensors in remote rsmol'\ntest_real_forward_memory_schedule_and_both_loop_gradients (__main__.FourSlotTensorTest.test_real_forward_memory_schedule_and_both_loop_gradients) ... skipped 'requires torch, transformers and safetensors in remote rsmol'\n\n----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK (skipped=5)\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_7slot_v2_ced_small_route.py",
+      "status": "PASS",
+      "tests": 7,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_assets_validate_geometry_without_onnx_and_reject_incompatible_config (__main__.CEDRouteTests.test_assets_validate_geometry_without_onnx_and_reject_incompatible_config) ... ok\ntest_default_checkpoint_output_and_precision_are_exactly_the_requested_route (__main__.CEDRouteTests.test_default_checkpoint_output_and_precision_are_exactly_the_requested_route) ... ok\ntest_formal_schedule_and_shorter_sequence (__main__.CEDRouteTests.test_formal_schedule_and_shorter_sequence) ... ok\ntest_launcher_resources_arguments_and_rejections_before_submit (__main__.CEDRouteTests.test_launcher_resources_arguments_and_rejections_before_submit) ... ok\ntest_optimizer_classifies_only_mapper_and_full_lm (__main__.CEDRouteTests.test_optimizer_classifies_only_mapper_and_full_lm) ... ok\ntest_parent_data_and_real_update_loop_preserved (__main__.CEDRouteTests.test_parent_data_and_real_update_loop_preserved) ... ok\ntest_resume_contract_separates_routes_and_is_independent_of_staging_root (__main__.CEDRouteTests.test_resume_contract_separates_routes_and_is_independent_of_staging_root) ... ok\n\n----------------------------------------------------------------------\nRan 7 tests in 1.953s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_7slot_v2_ced_small_shared_start.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[cpu-index] verifying manifest/audit TSV SHA256; no raw audio scan\n[cpu-index] manifest/audit TSV contents verified\n[staging] phase=COPYING staged 0/1 files (0.00/0.00 GiB) ready_through_batch=0 MiB_per_second=0.0 cgroup_remaining_bytes=None\n[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues\n[staging] training can start: read_policy=shared_until_complete prefill_steps=0 ready_through_batch=0 report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmp25hkeyx0\\report.json\n[staging] phase=COMPLETE staged 1/1 files (0.00/0.00 GiB) ready_through_batch=5771 MiB_per_second=0.0 cgroup_remaining_bytes=None\ntest_content_check_identifies_size_change_and_keeps_expected_paths (__main__.CEDSharedStartTests.test_content_check_identifies_size_change_and_keeps_expected_paths) ... ok\ntest_copy_failure_dead_process_and_stale_heartbeat_still_abort (__main__.CEDSharedStartTests.test_copy_failure_dead_process_and_stale_heartbeat_still_abort) ... ok\ntest_cpu_index_reuses_mapping_and_rejects_changed_inputs (__main__.CEDSharedStartTests.test_cpu_index_reuses_mapping_and_rejects_changed_inputs) ... ok\ntest_final_report_requires_full_copy_even_in_shared_mode (__main__.CEDSharedStartTests.test_final_report_requires_full_copy_even_in_shared_mode) ... ok\ntest_formal_config_is_created_with_zero_staged_files (__main__.CEDSharedStartTests.test_formal_config_is_created_with_zero_staged_files) ... ok\ntest_legacy_timestamp_only_identity_requires_rebuild (__main__.CEDSharedStartTests.test_legacy_timestamp_only_identity_requires_rebuild) ... ok\ntest_runner_starts_real_training_during_copy_and_cleans_on_failure (__main__.CEDSharedStartTests.test_runner_starts_real_training_during_copy_and_cleans_on_failure) ... ok\ntest_shared_path_remains_selected_until_explicit_boundary_switch (__main__.CEDSharedStartTests.test_shared_path_remains_selected_until_explicit_boundary_switch) ... ok\ntest_source_identity_change_is_rejected_and_partial_copy_removed (__main__.CEDSharedStartTests.test_source_identity_change_is_rejected_and_partial_copy_removed) ... ok\ntest_switch_is_collective_before_loading_all_four_microbatches (__main__.CEDSharedStartTests.test_switch_is_collective_before_loading_all_four_microbatches) ... ok\ntest_training_starts_before_first_copy_and_crosses_epoch_without_waiting (__main__.CEDSharedStartTests.test_training_starts_before_first_copy_and_crosses_epoch_without_waiting) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 1.817s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_7slot_v2_ced_small_behavior.py",
+      "status": "PASS",
+      "tests": 8,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_actual_forward_trace_audit_rejects_partial_execution_or_shared_routers (__main__.BehaviorTests.test_actual_forward_trace_audit_rejects_partial_execution_or_shared_routers) ... ok\ntest_completion_check_executes_dynamic_steps_and_rejects_old_step (__main__.BehaviorTests.test_completion_check_executes_dynamic_steps_and_rejects_old_step) ... ok\ntest_entire_parent_recipe_update_loop_and_original_sources (__main__.BehaviorTests.test_entire_parent_recipe_update_loop_and_original_sources) ... ok\ntest_gbs256_config_checkpoint_steps_and_complete_horizon_lr (__main__.BehaviorTests.test_gbs256_config_checkpoint_steps_and_complete_horizon_lr) ... ok\ntest_resume_guard_requires_this_route_same_code_data_and_recipe (__main__.BehaviorTests.test_resume_guard_requires_this_route_same_code_data_and_recipe) ... ok\ntest_seven_slot_v2_checkpoint_contract_rejects_other_slots_schedule_and_missing_assets (__main__.BehaviorTests.test_seven_slot_v2_checkpoint_contract_rejects_other_slots_schedule_and_missing_assets) ... ok\ntest_staging_guard_accepts_only_exact_new_direct_tmpfs_prefix (__main__.BehaviorTests.test_staging_guard_accepts_only_exact_new_direct_tmpfs_prefix) ... ok\ntest_strict_seven_slot_v2_loader_executes_actual_rejection_paths (__main__.BehaviorTests.test_strict_seven_slot_v2_loader_executes_actual_rejection_paths) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.314s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_7slot_v2_ced_small_tensor.py",
+      "status": "PASS_WITH_SKIPS",
+      "tests": 21,
+      "skipped": 21,
+      "exit_code": 0,
+      "output": "test_accumulated_gradient_is_mean_of_microbatch_means (__main__.RuntimeChecks.test_accumulated_gradient_is_mean_of_microbatch_means) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_ced_frozen_eval_and_mapper_gradient_with_whole20_splits (__main__.RuntimeChecks.test_ced_frozen_eval_and_mapper_gradient_with_whole20_splits) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_ced_temporal_grid_preserves_chunk_frequency_time_order (__main__.RuntimeChecks.test_ced_temporal_grid_preserves_chunk_frequency_time_order) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_decode_averages_every_channel_then_resamples (__main__.RuntimeChecks.test_decode_averages_every_channel_then_resamples) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_fixed20_single_order_and_right_padding (__main__.RuntimeChecks.test_fixed20_single_order_and_right_padding) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_fixed20_true_pair_is_independent (__main__.RuntimeChecks.test_fixed20_true_pair_is_independent) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_gbs256_optimizer_geometry (__main__.RuntimeChecks.test_gbs256_optimizer_geometry) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_gradnorm_ema_common_scale_and_restore (__main__.RuntimeChecks.test_gradnorm_ema_common_scale_and_restore) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_loader_is_offline_strict_and_keeps_only_frozen_encoder (__main__.RuntimeChecks.test_loader_is_offline_strict_and_keeps_only_frozen_encoder) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_mellow_rejoins_both_halves_before_encoding (__main__.RuntimeChecks.test_mellow_rejoins_both_halves_before_encoding) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_mesh_loss_matches_ced_baseline_with_tokenizer_masks (__main__.RuntimeChecks.test_mesh_loss_matches_ced_baseline_with_tokenizer_masks) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_one_separator_padding_visibility_and_next_token_ce (__main__.RuntimeChecks.test_one_separator_padding_visibility_and_next_token_ce) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_online_db_matches_individual_cache_extraction (__main__.RuntimeChecks.test_online_db_matches_individual_cache_extraction) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_optimizer_groups_scheduler_step_order_and_full_resume (__main__.RuntimeChecks.test_optimizer_groups_scheduler_step_order_and_full_resume) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_sampler_staging_and_consumed_cursor_agree (__main__.RuntimeChecks.test_sampler_staging_and_consumed_cursor_agree) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_text_metadata_fallback_and_cot_preservation (__main__.RuntimeChecks.test_text_metadata_fallback_and_cot_preservation) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_actual_ced_prefix_seven_slot_v2_forward_gradients_and_lr_groups (__main__.SevenSlotV2TensorTests.test_actual_ced_prefix_seven_slot_v2_forward_gradients_and_lr_groups) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_both_recurrent_boundaries_receive_gradients (__main__.SevenSlotV2TensorTests.test_both_recurrent_boundaries_receive_gradients) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_full_checkpoint_resume_matches_next_optimizer_update (__main__.SevenSlotV2TensorTests.test_full_checkpoint_resume_matches_next_optimizer_update) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_memory_has_seven_slot_v2s_and_is_rebuilt_each_forward (__main__.SevenSlotV2TensorTests.test_memory_has_seven_slot_v2s_and_is_rebuilt_each_forward) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_real_strict_seven_slot_v2_checkpoint_preserves_all_parameters_and_routers (__main__.SevenSlotV2TensorTests.test_real_strict_seven_slot_v2_checkpoint_preserves_all_parameters_and_routers) ... skipped 'requires torch/torchaudio/transformers/soundfile'\n\n----------------------------------------------------------------------\nRan 21 tests in 0.001s\n\nOK (skipped=21)\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_4slot_ced_small_route.py",
+      "status": "PASS",
+      "tests": 7,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_assets_validate_geometry_without_onnx_and_reject_incompatible_config (__main__.CEDRouteTests.test_assets_validate_geometry_without_onnx_and_reject_incompatible_config) ... ok\ntest_default_checkpoint_output_and_precision_are_exactly_the_requested_route (__main__.CEDRouteTests.test_default_checkpoint_output_and_precision_are_exactly_the_requested_route) ... ok\ntest_formal_schedule_and_shorter_sequence (__main__.CEDRouteTests.test_formal_schedule_and_shorter_sequence) ... ok\ntest_launcher_resources_arguments_and_rejections_before_submit (__main__.CEDRouteTests.test_launcher_resources_arguments_and_rejections_before_submit) ... ok\ntest_optimizer_classifies_only_mapper_and_full_lm (__main__.CEDRouteTests.test_optimizer_classifies_only_mapper_and_full_lm) ... ok\ntest_parent_data_and_real_update_loop_preserved (__main__.CEDRouteTests.test_parent_data_and_real_update_loop_preserved) ... ok\ntest_resume_contract_separates_routes_and_is_independent_of_staging_root (__main__.CEDRouteTests.test_resume_contract_separates_routes_and_is_independent_of_staging_root) ... ok\n\n----------------------------------------------------------------------\nRan 7 tests in 1.650s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_4slot_ced_small_shared_start.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[cpu-index] verifying manifest/audit TSV SHA256; no raw audio scan\n[cpu-index] manifest/audit TSV contents verified\n[staging] phase=COPYING staged 0/1 files (0.00/0.00 GiB) ready_through_batch=0 MiB_per_second=0.0 cgroup_remaining_bytes=None\n[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues\n[staging] training can start: read_policy=shared_until_complete prefill_steps=0 ready_through_batch=0 report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmpu5j0740q\\report.json\n[staging] phase=COMPLETE staged 1/1 files (0.00/0.00 GiB) ready_through_batch=5771 MiB_per_second=0.0 cgroup_remaining_bytes=None\ntest_content_check_identifies_size_change_and_keeps_expected_paths (__main__.CEDSharedStartTests.test_content_check_identifies_size_change_and_keeps_expected_paths) ... ok\ntest_copy_failure_dead_process_and_stale_heartbeat_still_abort (__main__.CEDSharedStartTests.test_copy_failure_dead_process_and_stale_heartbeat_still_abort) ... ok\ntest_cpu_index_reuses_mapping_and_rejects_changed_inputs (__main__.CEDSharedStartTests.test_cpu_index_reuses_mapping_and_rejects_changed_inputs) ... ok\ntest_final_report_requires_full_copy_even_in_shared_mode (__main__.CEDSharedStartTests.test_final_report_requires_full_copy_even_in_shared_mode) ... ok\ntest_formal_config_is_created_with_zero_staged_files (__main__.CEDSharedStartTests.test_formal_config_is_created_with_zero_staged_files) ... ok\ntest_legacy_timestamp_only_identity_requires_rebuild (__main__.CEDSharedStartTests.test_legacy_timestamp_only_identity_requires_rebuild) ... ok\ntest_runner_starts_real_training_during_copy_and_cleans_on_failure (__main__.CEDSharedStartTests.test_runner_starts_real_training_during_copy_and_cleans_on_failure) ... ok\ntest_shared_path_remains_selected_until_explicit_boundary_switch (__main__.CEDSharedStartTests.test_shared_path_remains_selected_until_explicit_boundary_switch) ... ok\ntest_source_identity_change_is_rejected_and_partial_copy_removed (__main__.CEDSharedStartTests.test_source_identity_change_is_rejected_and_partial_copy_removed) ... ok\ntest_switch_is_collective_before_loading_all_four_microbatches (__main__.CEDSharedStartTests.test_switch_is_collective_before_loading_all_four_microbatches) ... ok\ntest_training_starts_before_first_copy_and_crosses_epoch_without_waiting (__main__.CEDSharedStartTests.test_training_starts_before_first_copy_and_crosses_epoch_without_waiting) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 2.179s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_4slot_ced_small_behavior.py",
+      "status": "PASS",
+      "tests": 8,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_actual_forward_trace_audit_rejects_partial_execution_or_shared_routers (__main__.BehaviorTests.test_actual_forward_trace_audit_rejects_partial_execution_or_shared_routers) ... ok\ntest_completion_check_executes_dynamic_steps_and_rejects_old_step (__main__.BehaviorTests.test_completion_check_executes_dynamic_steps_and_rejects_old_step) ... ok\ntest_entire_parent_recipe_update_loop_and_original_sources (__main__.BehaviorTests.test_entire_parent_recipe_update_loop_and_original_sources) ... ok\ntest_four_slot_checkpoint_contract_rejects_other_slots_schedule_and_missing_assets (__main__.BehaviorTests.test_four_slot_checkpoint_contract_rejects_other_slots_schedule_and_missing_assets) ... ok\ntest_gbs256_config_checkpoint_steps_and_complete_horizon_lr (__main__.BehaviorTests.test_gbs256_config_checkpoint_steps_and_complete_horizon_lr) ... ok\ntest_resume_guard_requires_this_route_same_code_data_and_recipe (__main__.BehaviorTests.test_resume_guard_requires_this_route_same_code_data_and_recipe) ... ok\ntest_staging_guard_accepts_only_exact_new_direct_tmpfs_prefix (__main__.BehaviorTests.test_staging_guard_accepts_only_exact_new_direct_tmpfs_prefix) ... ok\ntest_strict_four_slot_loader_executes_actual_rejection_paths (__main__.BehaviorTests.test_strict_four_slot_loader_executes_actual_rejection_paths) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.263s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_mesh_4slot_ced_small_tensor.py",
+      "status": "PASS_WITH_SKIPS",
+      "tests": 21,
+      "skipped": 21,
+      "exit_code": 0,
+      "output": "test_actual_ced_prefix_four_slot_forward_gradients_and_lr_groups (__main__.FourSlotTensorTests.test_actual_ced_prefix_four_slot_forward_gradients_and_lr_groups) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_both_recurrent_boundaries_receive_gradients (__main__.FourSlotTensorTests.test_both_recurrent_boundaries_receive_gradients) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_full_checkpoint_resume_matches_next_optimizer_update (__main__.FourSlotTensorTests.test_full_checkpoint_resume_matches_next_optimizer_update) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_memory_has_four_slots_and_is_rebuilt_each_forward (__main__.FourSlotTensorTests.test_memory_has_four_slots_and_is_rebuilt_each_forward) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_real_strict_four_slot_checkpoint_preserves_all_parameters_and_routers (__main__.FourSlotTensorTests.test_real_strict_four_slot_checkpoint_preserves_all_parameters_and_routers) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_accumulated_gradient_is_mean_of_microbatch_means (__main__.RuntimeChecks.test_accumulated_gradient_is_mean_of_microbatch_means) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_ced_frozen_eval_and_mapper_gradient_with_whole20_splits (__main__.RuntimeChecks.test_ced_frozen_eval_and_mapper_gradient_with_whole20_splits) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_ced_temporal_grid_preserves_chunk_frequency_time_order (__main__.RuntimeChecks.test_ced_temporal_grid_preserves_chunk_frequency_time_order) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_decode_averages_every_channel_then_resamples (__main__.RuntimeChecks.test_decode_averages_every_channel_then_resamples) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_fixed20_single_order_and_right_padding (__main__.RuntimeChecks.test_fixed20_single_order_and_right_padding) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_fixed20_true_pair_is_independent (__main__.RuntimeChecks.test_fixed20_true_pair_is_independent) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_gbs256_optimizer_geometry (__main__.RuntimeChecks.test_gbs256_optimizer_geometry) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_gradnorm_ema_common_scale_and_restore (__main__.RuntimeChecks.test_gradnorm_ema_common_scale_and_restore) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_loader_is_offline_strict_and_keeps_only_frozen_encoder (__main__.RuntimeChecks.test_loader_is_offline_strict_and_keeps_only_frozen_encoder) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_mellow_rejoins_both_halves_before_encoding (__main__.RuntimeChecks.test_mellow_rejoins_both_halves_before_encoding) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_mesh_loss_matches_ced_baseline_with_tokenizer_masks (__main__.RuntimeChecks.test_mesh_loss_matches_ced_baseline_with_tokenizer_masks) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_one_separator_padding_visibility_and_next_token_ce (__main__.RuntimeChecks.test_one_separator_padding_visibility_and_next_token_ce) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_online_db_matches_individual_cache_extraction (__main__.RuntimeChecks.test_online_db_matches_individual_cache_extraction) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_optimizer_groups_scheduler_step_order_and_full_resume (__main__.RuntimeChecks.test_optimizer_groups_scheduler_step_order_and_full_resume) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_sampler_staging_and_consumed_cursor_agree (__main__.RuntimeChecks.test_sampler_staging_and_consumed_cursor_agree) ... skipped 'requires torch/torchaudio/transformers/soundfile'\ntest_text_metadata_fallback_and_cot_preservation (__main__.RuntimeChecks.test_text_metadata_fallback_and_cot_preservation) ... skipped 'requires torch/torchaudio/transformers/soundfile'\n\n----------------------------------------------------------------------\nRan 21 tests in 0.001s\n\nOK (skipped=21)\n"
+    },
+    {
+      "check": "test_mesh_7slot_v2_handoff.py",
+      "status": "PASS",
+      "tests": 4,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "{\"config\": \"C:\\\\Users\\\\69327\\\\AppData\\\\Local\\\\Temp\\\\tmpd2k2ddff\\\\runtime.json\", \"mode\": \"formal\", \"contract_sha256\": \"cd0c9522a02cff8ed0d3dbaf7e82efd9f4d8163907036d1cb15f13092699c16b\", \"geometry\": {\"rows\": 1477492, \"world_size\": 8, \"microbatch\": 8, \"gradient_accumulation_steps\": 4, \"global_batch_size\": 256, \"rank_samples_per_optimizer_step\": 32, \"samples_per_rank\": 184686, \"steps_per_epoch\": 5771, \"total_steps\": 17313, \"warmup_steps\": 866, \"dropped_rows_per_epoch\": 116}}\ntest_actual_text_writer_is_accepted_by_audio_config_and_cpu_cli (__main__.HandoffTests.test_actual_text_writer_is_accepted_by_audio_config_and_cpu_cli) ... ok\ntest_complete_text_model_converter_and_trainer_preserve_four_slot_parent (__main__.HandoffTests.test_complete_text_model_converter_and_trainer_preserve_four_slot_parent) ... ok\ntest_final_manifest_rejects_empty_files_and_path_escape (__main__.HandoffTests.test_final_manifest_rejects_empty_files_and_path_escape) ... ok\ntest_final_provenance_rejects_wrong_route_step_precision_or_missing_files (__main__.HandoffTests.test_final_provenance_rejects_wrong_route_step_precision_or_missing_files) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.495s\n\nOK\n"
+    },
+    {
+      "check": "test_text_5_10x2_5_mesh_7slot_static.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_converter_contract_and_router_initialization (__main__.TextMeshX2SevenSlotStaticTest.test_converter_contract_and_router_initialization) ... ok\ntest_model_is_x2_with_seven_slots_and_three_router_groups (__main__.TextMeshX2SevenSlotStaticTest.test_model_is_x2_with_seven_slots_and_three_router_groups) ... ok\ntest_python_sources_parse (__main__.TextMeshX2SevenSlotStaticTest.test_python_sources_parse) ... ok\ntest_shell_scripts_are_strict_unix_scripts (__main__.TextMeshX2SevenSlotStaticTest.test_shell_scripts_are_strict_unix_scripts) ... ok\ntest_submission_wrappers_use_3090_and_isolated_contract (__main__.TextMeshX2SevenSlotStaticTest.test_submission_wrappers_use_3090_and_isolated_contract) ... ok\ntest_training_contract_and_isolated_paths (__main__.TextMeshX2SevenSlotStaticTest.test_training_contract_and_isolated_paths) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.023s\n\nOK\n"
+    }
+  ]
+}

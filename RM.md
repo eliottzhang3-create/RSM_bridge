@@ -1,3 +1,73 @@
+## 2026-11-07：七槽 v2，两阶段隔离转换、BF16文本训练与CED-small音频训练
+
+按用户确认计划从当前四槽两阶段实现复制隔离，见[七槽v2转换、文本正式训练与音频衔接](code/RSmol/text_5_10x2_5_mesh_7slot_v2/README.md)和[七槽v2音频正式训练与恢复](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small/README.md)。
+本地仅维护代码，GitHub中转；权重、数据、CPU生产转换和真实GPU作业均在远程Linux。
+原四/六槽、历史七槽3081步路线、音频七槽/文本五槽特征槽实验及评测器保持原样。
+新类为RecursiveLlama5_10x2_5Mesh7SlotV2ForCausalLM，架构合同logical_30_physical_20_5_10x2_5_mesh_7slot_v2_3router，
+新模型/源码/环境变量/训练合同/output/job/log/index-cache/tmpfs及恢复身份均独立。
+
+hidden576、20物理/30逻辑、5+10×2+5、两轮中段共享保持；每forward重建[B,7,L,576]，
+slot0原始embeddings，其余六槽零。三组write/read、六个独立Linear(576,7)、12份参数共24,234；
+prefix output-query/value和loop input-query/output-value、原读写公式保持，初始化std=sqrt(2/(7×hidden))。
+转换默认从干净models/SmolLM2-5-10-5，亦接受原30层SmolLM2；保留30→20映射，20层来源不再次抽层。
+逐tensor继承核对、tied alias与tokenizer保持，只新建七槽routers；CPU/offline，默认拒绝已有目标/训练态来源/checkout模型输出。
+默认产物models/SmolLM2-5-10x2-5-mesh-7slot-v2。
+
+文本为FP32参数/AdamW状态+BF16 autocast前向，FP32 loss/router softmax，无GradScaler、TF32关闭，
+CE/全局token归一化/backward在autocast外；必须CUDA BF16，CPU只允许Gate A诊断。
+沿四槽8×micro8×GA16=GBS1024、context1024、完整一轮9244步/463warmup、LR8e-4→8e-5、原AdamW/clip1。
+原Parquet/shard/行序和全局有效token归一化保持，每500步及最终保存、保留三份；完整各rank游标/RNG恢复。
+正式入口直接提交，提供独立可选10+2诊断，不作为正式前置门槛。
+
+音频入口必须显式--text-model-dir指向本次最终checkpoint-009244。登录节点CPU预检最终9244步、
+本v2架构/训练合同、完整一轮BF16 precision policy、完整manifest/marker/文件；计算节点再查并绑定模型/tokenizer/config SHA及provenance。
+strict/offline FP32加载LM和已训练routers，仅作新音频初始化，不恢复文本optimizer/scheduler/RNG/游标。
+CED-small冻结/eval，官方freq_merge_126 mapper随机初始化训练；全LM/router训练。
+原hybrid1477492、fixed20、audio126+SEP1+prompt256+answer300、answer-only CE、PAD/EOS、attention_mask=None及use_cache=False保持。
+音频仍FP32前向、无autocast、原GradScaler/AdamW/LambdaLR/GradNorm/TF32关闭；文本BF16不改变音频配方。
+8×micro8×GA4=GBS256，3epochs/17313步/866warmup，LM/router maxLR3e-4及mapper6e-4；
+loss保持rank-local microbatch有效token均值→GA均值→DDP均值。七槽memory覆盖完整683个多模态位置。
+沿母本initial_steps=0共享路径立即训练、后台单producer默认4workers复制raw bytes，全部文件/字节检查完成后，
+八rank在optimizer边界、读取四个microbatch前all_reduce(MIN)一致切换本地；producer失败/死亡/心跳异常中止，先reap再清理本token tmpfs。
+每次resume重新staging并从shared开始；音频完整恢复只接受本v2同代码/资产/数据/配方，使用原output root和原文本绝对路径。
+
+本地提交推送GitHub后，远程登录节点执行转换：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/scripts/convert_stepwise_5_10x2_5_mesh_7slot_v2.sh
+```
+
+转换成功后提交文本正式训练，并保存TEXT_RUN：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+TEXT_RUN="/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh_7slot_v2/formal_1epoch_bf16_$(date +%Y%m%d_%H%M%S%N)"
+RSMOL_5_10X2_5_MESH_7SLOT_V2_OUTPUT_DIR="$TEXT_RUN" \
+bash run_stage4_5_10x2_5_mesh_7slot_v2_formal_3090.sh
+printf 'Audio text initialization: %s/checkpoint-009244\n' "$TEXT_RUN"
+```
+
+确认文本实际完成后，使用同一TEXT_RUN提交音频（新shell需手动恢复实际路径）：
+
+```bash
+bash run_mizar_s1_gbs256_recursive_mesh_7slot_v2_ced_small_3090.sh \
+  --text-model-dir "$TEXT_RUN/checkpoint-009244" \
+  --stage-workers 4
+```
+
+两阶段均pdgpu-3090/64CPU/256G/8GPU/1node、原容器；文本rsmol，音频mellow_c8204d8。
+音频默认outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_7slot_v2_3090/formal_<timestamp>/，
+最终formal/checkpoints/model--step-17313.ckpt和model--epo-3.ckpt；恢复命令见README。
+
+python -B tests/validate_mesh_7slot_v2.py：116项实际本地检查通过，52项真实tensor检查缺依赖跳过（新路线26、四槽回归26）。
+覆盖实际文本checkpoint writer→音频CPU preflight/runtime、错槽/历史七槽/短训练/精度/不完整产物拒绝、
+完整model/converter/text trainer与音频更新循环受限AST对照、206原文件SHA保护、22复制文件一致、
+真实Bash假提交/资源/参数转发/共享启动/失败清理/集体切换、四槽与历史七槽回归；Python/Bash/LF及文档命令语法检查通过。
+报告audit_reports/mesh_7slot_v2_validation.json；--require-tensors禁止所有tensor skip（含CUDA）。
+首次Windows沙箱临时目录权限失败后，沙箱外同流程复验通过。未执行commit/push、远程生产资产读取/转换、GPU训练或八卡恢复，不登记远程PASS。
+
 ## 2026-11-07：四槽 MeSH + CED-small，GBS256独立音频正式训练
 
 按已确认计划从六槽音频母本完整复制隔离，见[四槽音频正式训练与恢复说明](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_4slot_ced_small/README.md)。
