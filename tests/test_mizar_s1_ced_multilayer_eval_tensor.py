@@ -115,8 +115,10 @@ class MultilayerTensorTests(unittest.TestCase):
                 for physical in range(5, 15):
                     for target in adapter.LOOP_LORA_TARGETS:
                         projection = core.layers[physical].get_submodule(target)
-                        for loop, matrix in enumerate(projection.lora_B):
-                            matrix.normal_(0., .03 * (loop + 1))
+                        groups = (projection.lora_B.values() if spec.get("modality_lora") else (projection.lora_B,))
+                        for group in groups:
+                            for loop, matrix in enumerate(group):
+                                matrix.normal_(0., .03 * (loop + 1))
         return lm.eval()
 
     def inputs(self, variant, width=36):
@@ -335,6 +337,11 @@ class MultilayerTensorTests(unittest.TestCase):
     def test_loop_lora_retains_serial_input_then_ced4_and_ced8_residuals(self):
         self.assert_serial_residual("recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8", order=(4, 8))
 
+    def test_rank16_and_modality_routes_retain_serial_post_input_ced_gates(self):
+        for variant in LORA_VARIANTS:
+            if adapter.variant_spec(variant)["new_parameters"] == 6034179:
+                with self.subTest(variant=variant): self.assert_serial_residual(variant)
+
     def assert_serial_residual(self, variant, order=(8, 4)):
         t = self.torch
         with t.inference_mode():
@@ -371,18 +378,25 @@ class MultilayerTensorTests(unittest.TestCase):
             lm, (prefix, context) = self.model(variant), self.inputs(variant)
             projection = lm.model.layers[5].get_submodule("self_attn.q_proj")
             projection.weight.add_(.013)
-            projection.lora_A[0].add_(.021)
-            projection.lora_B[1].add_(.034)
+            modality = adapter.variant_spec(variant).get("modality_lora")
+            a_groups = list(projection.lora_A.values()) if modality else [projection.lora_A]
+            b_groups = list(projection.lora_B.values()) if modality else [projection.lora_B]
+            for a, b in zip(a_groups, b_groups):
+                a[0].add_(.021)
+                b[1].add_(.034)
             state = copy.deepcopy(lm.state_dict())
             matrices = [p for name, p in lm.named_parameters() if ".lora_A." in name or ".lora_B." in name]
-            self.assertEqual(len(matrices), 280)
-            self.assertEqual(len({p.untyped_storage().data_ptr() for p in matrices}), 280)
+            count = adapter.variant_spec(variant)["loop_lora_config"]["matrix_count"]
+            self.assertEqual(len(matrices), count)
+            self.assertEqual(len({p.untyped_storage().data_ptr() for p in matrices}), count)
             expected = self.call(lm, prefix, context).logits.clone()
             restored = self.model(variant)
             restored.load_state_dict(state, strict=True)
             self.assertTrue(t.equal(self.call(restored, prefix, context).logits, expected))
             for key, value in restored.state_dict().items(): self.assertTrue(t.equal(value, state[key]), key)
-            for suffix in ("weight", "lora_A.0", "lora_A.1", "lora_B.0", "lora_B.1"):
+            suffixes = ["weight"] + [f"lora_{matrix}.{region}{loop}" for matrix in ("A", "B")
+                for region in (("audio.", "text.") if modality else ("",)) for loop in (0, 1)]
+            for suffix in suffixes:
                 incomplete = dict(state)
                 incomplete.pop("model.layers.5.self_attn.q_proj." + suffix)
                 with self.subTest(suffix=suffix), self.assertRaises(RuntimeError):
@@ -390,15 +404,17 @@ class MultilayerTensorTests(unittest.TestCase):
             for physical in range(5, 15):
                 for target in adapter.LOOP_LORA_TARGETS:
                     module = lm.model.layers[physical].get_submodule(target)
-                    module.lora_B[0].zero_(); module.lora_B[1].zero_()
+                    for group in (module.lora_B.values() if modality else (module.lora_B,)):
+                        group[0].zero_(); group[1].zero_()
             self.assertFalse(t.equal(self.call(lm, prefix, context).logits[:, 382], expected[:, 382]))
             lm.load_state_dict(state, strict=True)
             for physical in range(5, 15):
                 for target in adapter.LOOP_LORA_TARGETS:
                     module = lm.model.layers[physical].get_submodule(target)
-                    for matrices in (module.lora_A, module.lora_B):
-                        first, second = matrices[0].clone(), matrices[1].clone()
-                        matrices[0].copy_(second); matrices[1].copy_(first)
+                    for bank in (module.lora_A, module.lora_B):
+                        for matrices in (bank.values() if modality else (bank,)):
+                            first, second = matrices[0].clone(), matrices[1].clone()
+                            matrices[0].copy_(second); matrices[1].copy_(first)
             self.assertFalse(t.equal(self.call(lm, prefix, context).logits[:, 382], expected[:, 382]))
 
     def test_loop_lora_hooks_after_eval_freeze_reject_wrong_loop_and_reset_after_exception(self):
@@ -483,6 +499,91 @@ class MultilayerTensorTests(unittest.TestCase):
                 self.assertEqual(audit["last_sequence_tokens"], 384)
                 self.assertEqual(audit["loop_lora_calls_per_loop"], [70, 70])
 
+    def test_textmesh_memory_values_queries_final_audio_bypass_and_generated_text_growth(self):
+        t = self.torch
+        for variant in LORA_VARIANTS:
+            if not adapter.variant_spec(variant).get("text_only_memory"): continue
+            with self.subTest(variant=variant), t.inference_mode():
+                lm, (prefix, context) = self.model(variant), self.inputs(variant)
+                core, suffix_inputs = lm.model, []
+                core.audit_mode = True
+                handle = core.layers[15].register_forward_pre_hook(lambda _m, values: suffix_inputs.append(values[0].clone()))
+                try:
+                    expected = self.call(lm, prefix, context).logits.clone()
+                finally:
+                    handle.remove()
+                memory = core.last_initial_memory.clone()
+                self.assertEqual(tuple(memory.shape), (1, 5, 257, 36))
+                t.testing.assert_close(memory[:, 0], prefix[:, 126:], rtol=0, atol=0)
+                self.assertEqual(int(t.count_nonzero(memory[:, 1:])), 0)
+                for stage, suffix in enumerate(("pre", "0", "1")):
+                    query = core.last_prefix_output if stage == 0 else core.last_core_inputs[stage - 1]
+                    value = core.last_prefix_output if stage == 0 else core.last_core_outputs[stage - 1]
+                    for action in ("write", "read"):
+                        t.testing.assert_close(core.last_router_queries[f"{action}_{suffix}"], query[:, 126:], rtol=0, atol=0)
+                    memory += value[:, 126:].unsqueeze(1) * core.last_router_weights[f"write_{suffix}"].transpose(1, 2).unsqueeze(-1)
+                    t.testing.assert_close(memory, core.last_memory_write_history[stage], rtol=0, atol=0)
+                    read = (memory * core.last_router_weights[f"read_{suffix}"].transpose(1, 2).unsqueeze(-1)).sum(1)
+                    target = core.last_core_inputs[stage] if stage < 2 else suffix_inputs[0]
+                    t.testing.assert_close(target[:, 126:], read, rtol=0, atol=0)
+                t.testing.assert_close(suffix_inputs[0][:, :126], core.last_core_outputs[1][:, :126], rtol=0, atol=0)
+                core.audit_mode = False
+                lm.requires_grad_(False)
+                with patch.object(adapter, "HIDDEN_SIZE", 36):
+                    audit = adapter.install_recursive_trace_audit(lm, eval_variant=variant)
+                    extended = t.cat((prefix, t.randn(1, 2, 36)), dim=1)
+                    self.call(lm, extended, context)
+                    self.assertEqual(audit["last_text_memory_shape"], [1, 5, 259, 36])
+                    if adapter.variant_spec(variant)["modality_lora"]:
+                        self.assertEqual(audit["modality_lora_execution"]["text_tokens"], 259)
+                    self.assertTrue(t.equal(self.call(lm, prefix, context).logits, expected))
+                    self.assertEqual(audit["last_text_memory_shape"], [1, 5, 257, 36])
+
+    def test_modality_lora_projection_boundary_includes_separator_padding_and_generated_tokens(self):
+        t = self.torch
+        variant = "recursive_textmesh_layer8_4_inject_audio_reinject_loop_modality_lora_r8"
+        lm = self.model(variant)
+        with t.inference_mode():
+            for physical in range(5, 15):
+                for target in adapter.LOOP_LORA_TARGETS:
+                    module = lm.model.layers[physical].get_submodule(target)
+                    inputs = t.randn(1, 385, module.in_features)
+                    base = t.nn.functional.linear(inputs, module.weight, module.bias)
+                    state = {m: [b.clone() for b in module.lora_B[m]] for m in ("audio", "text")}
+                    try:
+                        for loop in (0, 1):
+                            for modality, region, other in (("audio", slice(None, 126), slice(126, None)),
+                                                            ("text", slice(126, None), slice(None, 126))):
+                                for m in ("audio", "text"):
+                                    for b in module.lora_B[m]: b.zero_()
+                                module.lora_B[modality][loop].copy_(state[modality][loop])
+                                module.loop_index = loop
+                                actual = module(inputs)
+                                delta = t.nn.functional.linear(t.nn.functional.linear(inputs[:, region],
+                                    module.lora_A[modality][loop]), module.lora_B[modality][loop])
+                                t.testing.assert_close(actual[:, region], base[:, region] + 2 * delta, rtol=0, atol=0)
+                                t.testing.assert_close(actual[:, other], base[:, other], rtol=0, atol=0)
+                                self.assertFalse(t.equal(actual[:, region], base[:, region]))
+                                if modality == "text":
+                                    for position in (126, 382, 383, 384):
+                                        self.assertFalse(t.equal(actual[:, position], base[:, position]))
+                    finally:
+                        module.loop_index = None
+                        for m in ("audio", "text"):
+                            for b, saved in zip(module.lora_B[m], state[m]): b.copy_(saved)
+
+    def test_rank8_rank16_and_modality_checkpoints_cannot_cross_load(self):
+        nonmesh16 = "recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r16"
+        pairs = (("recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8", nonmesh16),
+                 ("recursive_textmesh_layer8_4_inject_audio_reinject_loop_lora_r16",
+                  "recursive_textmesh_layer8_4_inject_audio_reinject_loop_modality_lora_r8"))
+        for first, second in pairs:
+            a, b = self.model(first), self.model(second)
+            with self.subTest(pair=(first, second)), self.assertRaises(RuntimeError):
+                a.load_state_dict(b.state_dict(), strict=True)
+            with self.subTest(pair=(second, first)), self.assertRaises(RuntimeError):
+                b.load_state_dict(a.state_dict(), strict=True)
+
     def test_four_loop_mesh_uses_full_sequence_seven_slots_five_transitions_and_fresh_memory(self):
         t = self.torch
         variant = "recursive_mesh_5_10x4_5"
@@ -543,7 +644,7 @@ class MultilayerTensorTests(unittest.TestCase):
                 elif spec["kind"] == "mesh_x4":
                     self.assertEqual(events, ["write", "read"] * 5)
                 else:
-                    boundary = ["write", "read", "inject"] if spec["kind"] in ("inject48", "inject84") else ["write", "listen", "read"]
+                    boundary = ["write", "read", "inject"] if spec["kind"] in ("inject48", "inject84", "serial") else ["write", "listen", "read"]
                     self.assertEqual(events, boundary * 2 + ["write", "read"])
 
     def test_context_rejects_wrong_features_masks_dtype_device_and_nonfinite_values(self):

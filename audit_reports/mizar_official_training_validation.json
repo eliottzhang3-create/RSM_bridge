@@ -1,0 +1,55 @@
+{
+  "status": "PASS",
+  "scope": "local file/protocol/Bash fixtures and optional small CPU tensors; no remote weights or GPU/DDP PASS",
+  "executed_tests": 21,
+  "skipped_tests": 5,
+  "missing_dependencies": [
+    "torch",
+    "transformers",
+    "torchaudio",
+    "soundfile",
+    "safetensors"
+  ],
+  "require_tensors": false,
+  "checks": [
+    {
+      "check": "python_compile",
+      "status": "PASS",
+      "files": 23
+    },
+    {
+      "check": "bash_syntax/run_mizar_official_final_s1_gbs128_5_20x2_5_5090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "bash_syntax/run.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "test_mizar_official_training.py",
+      "status": "PASS",
+      "tests": 17,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[staging-start] phase=COPYING elapsed=0.0s\n[staging] training can start: read_policy=shared_until_complete prefill_steps=0 ready_through_batch=0 report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmp1vviwfr7\\report.json\n[staging] phase=COPYING staged 0/1 files (0.00/0.00 GiB) ready_through_batch=0 MiB_per_second=0.0 cgroup_remaining_bytes=None\n[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues\n[staging] phase=COMPLETE staged 1/1 files (0.00/0.00 GiB) ready_through_batch=10 MiB_per_second=0.0 cgroup_remaining_bytes=None\ntest_all_route_local_import_targets_are_present (__main__.RecipeTests.test_all_route_local_import_targets_are_present) ... ok\ntest_all_scheduler_steps_match_original_function (__main__.RecipeTests.test_all_scheduler_steps_match_original_function) ... ok\ntest_collective_switch_stays_before_fetch_and_outside_microbatches (__main__.RecipeTests.test_collective_switch_stays_before_fetch_and_outside_microbatches) ... ok\ntest_contract_import_does_not_import_tensor_libraries (__main__.RecipeTests.test_contract_import_does_not_import_tensor_libraries) ... ok\ntest_geometry_schedule_saves (__main__.RecipeTests.test_geometry_schedule_saves) ... ok\ntest_gpu_loader_never_calls_cpu_dependencies (__main__.RecipeTests.test_gpu_loader_never_calls_cpu_dependencies) ... ok\ntest_lr_roles_include_recurrent_norms_and_outer_boundaries (__main__.RecipeTests.test_lr_roles_include_recurrent_norms_and_outer_boundaries) ... ok\ntest_originals_unchanged_and_copied_data_math_match (__main__.RecipeTests.test_originals_unchanged_and_copied_data_math_match) ... ok\ntest_sampler_priority_uses_sixteen_samples_per_update_and_resume (__main__.RecipeTests.test_sampler_priority_uses_sixteen_samples_per_update_and_resume) ... ok\ntest_epoch_boundary_cursor_is_accepted (__main__.ResumeTests.test_epoch_boundary_cursor_is_accepted) ... ok\ntest_model_only_cannot_resume (__main__.ResumeTests.test_model_only_cannot_resume) ... ok\ntest_wrong_route_partial_state_cursor_rng_and_recipe_are_rejected (__main__.ResumeTests.test_wrong_route_partial_state_cursor_rng_and_recipe_are_rejected) ... ok\ntest_complete_counts_identity_failure_heartbeat_and_dead_producer (__main__.StagingTests.test_complete_counts_identity_failure_heartbeat_and_dead_producer) ... ok\ntest_copy_detects_changed_source_and_never_publishes_partial (__main__.StagingTests.test_copy_detects_changed_source_and_never_publishes_partial) ... ok\ntest_local_path_escape_and_partial_and_unowned_cleanup_rejected (__main__.StagingTests.test_local_path_escape_and_partial_and_unowned_cleanup_rejected) ... ok\ntest_resume_waits_for_this_allocation_report (__main__.StagingTests.test_resume_waits_for_this_allocation_report) ... ok\ntest_training_reads_shared_while_real_background_copy_is_blocked (__main__.StagingTests.test_training_reads_shared_while_real_background_copy_is_blocked) ... ok\n\n----------------------------------------------------------------------\nRan 17 tests in 0.651s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_official_training_shell.py",
+      "status": "PASS",
+      "tests": 4,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_compute_starts_torchrun_before_copier_completion_and_reaps_before_cleanup (__main__.ShellTests.test_compute_starts_torchrun_before_copier_completion_and_reaps_before_cleanup) ... ok\ntest_fresh_submit_has_correct_resources_one_model_argument_and_no_prerequisite_job (__main__.ShellTests.test_fresh_submit_has_correct_resources_one_model_argument_and_no_prerequisite_job) ... ok\ntest_nonempty_fresh_output_and_invalid_workers_never_submit (__main__.ShellTests.test_nonempty_fresh_output_and_invalid_workers_never_submit) ... ok\ntest_resume_infers_original_output_and_rejects_other_root (__main__.ShellTests.test_resume_infers_original_output_and_rejects_other_root) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 2.075s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_official_training_tensor.py",
+      "status": "PASS",
+      "tests": 5,
+      "skipped": 5,
+      "exit_code": 0,
+      "output": "test_answer_only_shift_mask_and_microbatch_mean_are_preserved (__main__.TensorTests.test_answer_only_shift_mask_and_microbatch_mean_are_preserved) ... skipped 'real Torch/Transformers/audio dependencies unavailable; no mocked tensor PASS'\ntest_exact_adamw_scheduler_gradnorm_and_cpu_rng_resume (__main__.TensorTests.test_exact_adamw_scheduler_gradnorm_and_cpu_rng_resume) ... skipped 'real Torch/Transformers/audio dependencies unavailable; no mocked tensor PASS'\ntest_optimizer_covers_each_unique_parameter_and_correct_norm_lr_decay (__main__.TensorTests.test_optimizer_covers_each_unique_parameter_and_correct_norm_lr_decay) ... skipped 'real Torch/Transformers/audio dependencies unavailable; no mocked tensor PASS'\ntest_resume_rejects_wrong_named_groups_lr_and_moment_shape (__main__.TensorTests.test_resume_rejects_wrong_named_groups_lr_and_moment_shape) ... skipped 'real Torch/Transformers/audio dependencies unavailable; no mocked tensor PASS'\ntest_zero_branch_gradients_unlock_after_real_first_adamw_update (__main__.TensorTests.test_zero_branch_gradients_unlock_after_real_first_adamw_update) ... skipped 'real Torch/Transformers/audio dependencies unavailable; no mocked tensor PASS'\n\n----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK (skipped=5)\n"
+    }
+  ]
+}

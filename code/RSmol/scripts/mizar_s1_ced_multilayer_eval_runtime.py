@@ -45,21 +45,35 @@ for _family, _suffix, _version, _stamp, _kind, _count in (
     ("recursive_5_10_5", "layer8_4_inject_audio_reinject_loop_lora_r8", 1, "20261103_165410438279511", "serial", 4406019),
     ("recursive_5_10_5", "layer4_8_inject_audio_reinject_loop_lora_r8", 1, "20261104_131843931946322", "serial", 4406019),
     ("recursive_mesh", "layer4_8_inject_loop_lora_r8", 1, "20261104_161727489909082", "inject48", 4073090),
+    ("recursive_5_10_5", "layer8_4_inject_audio_reinject_loop_lora_r16", 1, "20261105_173212933623545", "serial", 6034179),
+    ("recursive_textmesh", "layer8_4_inject_audio_reinject_loop_lora_r16", 1, "20261105_154241055340068", "serial", 6034179),
+    ("recursive_textmesh", "layer8_4_inject_audio_reinject_loop_modality_lora_r8", 1, "20261105_173710754949913", "serial", 6034179),
 ):
     _variant = f"{_family}_{_suffix}"
-    _mesh = _family == "recursive_mesh"
+    _text_only = _family == "recursive_textmesh"
+    _mesh = _family in ("recursive_mesh", "recursive_textmesh")
+    _modality_lora = "_loop_modality_lora_" in _suffix
+    _loop_lora = "_loop_lora_" in _suffix or _modality_lora
+    _rank = 16 if _suffix.endswith("_r16") else 8
     ROUTE_SPECS[_variant] = {
         "route": f"ced_small_mizar_s1_fixed20_gbs256_{_variant}_v{_version}",
         "route_root": TRAINING_ROOT / f"mizar_stage1_fixed20_gbs256_3epochs_{_family}_ced_small_{_suffix}",
         "run_root": (REMOTE_OUTPUT_ROOT / f"mizar_s1_ced_small_gbs256_{_variant}_5090" / f"formal_{_stamp}"
                      if _stamp else None),
         "kind": _kind, "mesh": _mesh, "new_parameters": _count,
-        "loop_lora": _suffix.endswith("_loop_lora_r8"),
+        "loop_lora": _loop_lora,
+        "loop_lora_config": ({"rank": _rank, "alpha": 2 * _rank, "scale": 2., "dropout": 0.,
+                              "loops": 2, "matrix_count": 560 if _modality_lora else 280,
+                              "parameter_count": 3256320 if _modality_lora or _rank == 16 else 1628160}
+                             if _loop_lora else None),
+        "modality_lora": _modality_lora, "text_only_memory": _text_only,
+        "serial_contract_key": "serial_injection" if _text_only else "serial_audio_injection",
         "context_kind": ("seeds" if _kind == "prompt_mix" else "pair"
                          if _kind in ("inject48", "inject84", "serial", "listen48", "audio7split3", "audio7split3_inject") else "grids"),
         "split_memory": _kind.startswith("audio7") or _kind == "prompt_mix",
         "memory_slots": 5 if _mesh else 0,
-        "audio_memory_slots": 7 if _kind.startswith("audio7") or _kind == "prompt_mix" else 5 if _mesh else 0,
+        "audio_memory_slots": (0 if _text_only else 7 if _kind.startswith("audio7") or _kind == "prompt_mix"
+                               else 5 if _mesh else 0),
         "text_memory_slots": 5 if _mesh else 0,
         "loops": 2, "schedule": TEXT_MODEL_SCHEDULE,
         "default_step": 17313, "default_geometry": (8, 8, 4),
@@ -111,10 +125,12 @@ def branch_contracts(route_contract, spec):
     if spec["kind"] == "prompt_mix":
         result["prompt_mix"] = dict(route_contract.PROMPT_MIX_CONTRACT)
     if spec["kind"] == "serial":
-        result.update(audio_reinjection=dict(route_contract.AUDIO_REINJECTION),
-                      serial_audio_injection=dict(route_contract.SERIAL_INJECTION_CONTRACT))
+        result["audio_reinjection"] = dict(route_contract.AUDIO_REINJECTION)
+        result[spec["serial_contract_key"]] = dict(route_contract.SERIAL_INJECTION_CONTRACT)
     if spec.get("loop_lora"):
         result["loop_lora"] = dict(route_contract.LOOP_LORA_CONTRACT)
+    if spec.get("text_only_memory"):
+        result["text_memory"] = dict(route_contract.TEXT_MEMORY_CONTRACT)
     return result
 
 
@@ -187,7 +203,7 @@ def validate_checkpoint(saved, runtime, route_contract, expected_step,
         if contract.get(key) != branch:
             raise ValueError(f"CED {key} branch contract mismatch")
     for other in {"audio_cross_attention", "layer_injection", "audio_listen", "audio_reinjection",
-                  "prompt_mix", "serial_audio_injection", "loop_lora"} - branches.keys():
+                  "prompt_mix", "serial_audio_injection", "serial_injection", "loop_lora", "text_memory"} - branches.keys():
         if other in contract:
             raise ValueError(f"unexpected CED branch contract: {other}")
     return contract
@@ -237,6 +253,11 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
             raise ValueError("MeSH transient slots or independent original router geometry mismatch")
         if any("memory_slot" in name or name.endswith(".memory") for name in lm.state_dict()):
             raise ValueError("MeSH memory must not persist in the checkpoint")
+    text_memory_audit = None
+    if spec.get("text_only_memory"):
+        text_memory_audit = loader.validate_text_memory(lm)
+        if text_memory_audit != route_contract.TEXT_MEMORY_CONTRACT:
+            raise ValueError("text-only memory structure does not match the training contract")
     kind = spec["kind"]
     if kind in ("crossattn", "query32"):
         branch = loader.validate_audio_cross_attention(lm)
@@ -302,8 +323,13 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
         lora_audit = lora.validate_loop_lora(core)
         lora_count = sum(p.numel() for name, p in core.named_parameters()
                          if ".lora_A." in name or ".lora_B." in name)
-        if lora_count != 1628160 or lora_audit["parameter_count"] != lora_count:
-            raise ValueError("expected two independent loop LoRAs with 1,628,160 parameters")
+        if (lora_count != spec["loop_lora_config"]["parameter_count"]
+                or any(lora_audit.get(key) != value for key, value in spec["loop_lora_config"].items())):
+            raise ValueError("loop LoRA rank, scale, matrix count or parameter count differs from the selected route")
+        if spec.get("modality_lora") and any(lora_audit.get(key) != value for key, value in {
+                "modalities": ["audio", "text"], "adapter_sets": 4, "audio_positions": [0, 126],
+                "text_start": 126, "parameter_count_per_set": 814080}.items()):
+            raise ValueError("modality LoRA requires four independent fixed audio/text adapter sets")
         # Count only A/B: the wrapped Linear W/bias still belong to the backbone.
         count += lora_count
     if count != spec["new_parameters"]:
@@ -312,6 +338,7 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
         raise ValueError("original and added routers must be independent")
     return {"checkpoint": actual, "parameters": parameters, "branch": branch,
             "loop_lora": lora_audit,
+            "text_memory": text_memory_audit,
             "implementation": spec["implementation"], "new_parameter_count": count,
             "implementation_sha256": contract["recursive_model_source_sha256"],
             "memory_slots": spec["memory_slots"],
@@ -324,7 +351,7 @@ def install_recursive_trace_audit(lm, *, eval_variant):
     """Observe physical calls and real branch invocations without changing outputs."""
     spec = variant_spec(eval_variant)
     trace, events, compression, router_events, projections = [], [], [], [], []
-    boundary_events = []
+    boundary_events, router_shapes = [], []
     lora_calls, lora_modules = [], []
     kind, core = spec["kind"], lm.model
     expected_schedule = list(spec["schedule"])
@@ -341,6 +368,7 @@ def install_recursive_trace_audit(lm, *, eval_variant):
              "expected_branch_indices": sorted({event[0] for event in expected_events}),
              "audio_memory_slots": spec["audio_memory_slots"],
              "text_memory_slots": spec["text_memory_slots"],
+             "memory_scope": "text_positions_from_126" if spec.get("text_only_memory") else "full_sequence" if spec["mesh"] else "none",
              "memory_policy": "fresh_per_full_sequence_forward" if spec["mesh"] else "none"}
 
     def check_lora_idle():
@@ -355,6 +383,7 @@ def install_recursive_trace_audit(lm, *, eval_variant):
         compression.clear()
         router_events.clear()
         boundary_events.clear()
+        router_shapes.clear()
         projections.clear()
         lora_calls.clear()
         check_lora_idle()
@@ -377,7 +406,7 @@ def install_recursive_trace_audit(lm, *, eval_variant):
         def hook(_module, _inputs, _output):
             events.append([len(trace), layer])
             if spec["mesh"]:
-                boundary_events.append([len(trace), f"layer{layer}"])
+                boundary_events.append([len(trace), str(layer) if kind == "serial" else f"layer{layer}"])
         return hook
 
     def compressed(_module, inputs, _output):
@@ -387,9 +416,11 @@ def install_recursive_trace_audit(lm, *, eval_variant):
         projections.append([len(trace), list(inputs[0].shape)])
 
     def router_event(name):
-        def hook(_module, _inputs, _output):
+        def hook(_module, inputs, _output):
             router_events.append([len(trace), name])
             boundary_events.append([len(trace), name])
+            if spec.get("text_only_memory"):
+                router_shapes.append(tuple(inputs[0].shape))
         return hook
 
     def lora_projection(physical, target):
@@ -423,6 +454,15 @@ def install_recursive_trace_audit(lm, *, eval_variant):
             audit.update(loop_lora_projection_calls=len(lora_calls),
                          loop_lora_calls_per_loop=[sum(call[3] == loop for call in lora_calls) for loop in (0, 1)],
                          last_loop_lora_trace=[list(item) for item in expected_trace], loop_lora_indices_reset=True)
+            if spec.get("modality_lora"):
+                shape = (1, AUDIO_TOKENS, int(output.logits.shape[1]) - AUDIO_TOKENS)
+                if any(module.audio_tokens != AUDIO_TOKENS or module.forward_counts != [1, 1]
+                       or module.last_token_shapes != [shape, shape] for _, _, module in lora_modules):
+                    raise RuntimeError("modality LoRA requires both fixed audio/text regions once per projection and loop")
+                audit["modality_lora_execution"] = {
+                    "projection_calls": 140, "adapter_calls": 280,
+                    "calls_per_set": {f"loop{loop + 1}_{modality}": 70 for loop in (0, 1) for modality in ("audio", "text")},
+                    "audio_tokens": shape[1], "text_tokens": shape[2], "scope_reset": True}
         if events != expected_events:
             raise RuntimeError(f"CED actual interaction order mismatch: {events}")
         if kind == "serial":
@@ -449,15 +489,25 @@ def install_recursive_trace_audit(lm, *, eval_variant):
                     expected_routers.append([boundary, f"listen_{index}"])
             if router_events != expected_routers:
                 raise RuntimeError(f"CED MeSH router invocation order mismatch: {router_events}")
-            if kind in ("inject48", "inject84"):
+            if kind in ("inject48", "inject84", "serial"):
                 expected_boundaries = []
                 for index in range(3):
                     boundary = 5 + 10 * index
                     expected_boundaries += [[boundary, f"write_{index}"], [boundary, f"read_{index}"]]
                     if index < 2:
+                        if kind == "serial":
+                            expected_boundaries.append([boundary, "input"])
                         expected_boundaries.append([boundary, f"layer{layers[index]}"])
                 if boundary_events != expected_boundaries:
                     raise RuntimeError("MeSH layer injection must follow the write/read router calls at each boundary")
+            if spec.get("text_only_memory"):
+                sequence_length = int(output.logits.shape[1])
+                expected_shape = (1, spec["memory_slots"], sequence_length - AUDIO_TOKENS, HIDDEN_SIZE)
+                if (core.last_memory_shape != expected_shape or core.last_sequence_length != sequence_length
+                        or router_shapes != [(1, sequence_length - AUDIO_TOKENS, HIDDEN_SIZE)] * 6):
+                    raise RuntimeError("text-only MeSH memory and all routers must cover exactly positions 126 onwards")
+                audit.update(last_text_memory_shape=list(expected_shape),
+                             last_router_query_shapes=[list(shape) for shape in router_shapes])
             if spec["kind"] == "listen36912" and core.audio_listen.last_rounds != [0, 1]:
                 raise RuntimeError("CED four-depth listen round trace mismatch")
         if spec["kind"] == "query32":

@@ -40,7 +40,7 @@ case "$EVAL_VARIANT" in
     JOB_NAME_PREFIX="mizar-ced-r515-${JOB_TAG}-mmau"
     JOB_LOG_PREFIX="mizar_s1_ced_small_${EVAL_VARIANT}_mmau_5090"
     ;;
-  recursive_5_10_5_layer36912_crossattn|recursive_5_10_5_layer36912_query32_crossattn|recursive_mesh_layer4_8_inject|recursive_mesh_layer4_8_listen|recursive_mesh_layer36912_listen|recursive_mesh_layer4_8_audio7slot_split3|recursive_mesh_layer4_8_audio7slot_split3_inject|recursive_mesh_layer8_4_inject|recursive_mesh_layer4_8_audio7slot_split3_prompt_mix|recursive_5_10_5_layer8_4_inject_audio_reinject|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8|recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8|recursive_mesh_layer4_8_inject_loop_lora_r8|recursive_mesh_5_10x4_5)
+  recursive_5_10_5_layer36912_crossattn|recursive_5_10_5_layer36912_query32_crossattn|recursive_mesh_layer4_8_inject|recursive_mesh_layer4_8_listen|recursive_mesh_layer36912_listen|recursive_mesh_layer4_8_audio7slot_split3|recursive_mesh_layer4_8_audio7slot_split3_inject|recursive_mesh_layer8_4_inject|recursive_mesh_layer4_8_audio7slot_split3_prompt_mix|recursive_5_10_5_layer8_4_inject_audio_reinject|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8|recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8|recursive_mesh_layer4_8_inject_loop_lora_r8|recursive_mesh_5_10x4_5|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r16|recursive_textmesh_layer8_4_inject_audio_reinject_loop_lora_r16|recursive_textmesh_layer8_4_inject_audio_reinject_loop_modality_lora_r8)
     RUN_STAMP=
     case "$EVAL_VARIANT" in
       recursive_5_10_5_layer36912_crossattn) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer36912_crossattn; RUN_STAMP=20261030_140459065784533; JOB_TAG=ca4 ;;
@@ -56,6 +56,9 @@ case "$EVAL_VARIANT" in
       recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer8_4_inject_audio_reinject_loop_lora_r8; RUN_STAMP=20261103_165410438279511; JOB_TAG=r84l8 ;;
       recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer4_8_inject_audio_reinject_loop_lora_r8; RUN_STAMP=20261104_131843931946322; JOB_TAG=r48l8 ;;
       recursive_mesh_layer4_8_inject_loop_lora_r8) FAMILY=recursive_mesh; ROUTE_SUFFIX=layer4_8_inject_loop_lora_r8; RUN_STAMP=20261104_161727489909082; JOB_TAG=m48l8 ;;
+      recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r16) FAMILY=recursive_5_10_5; ROUTE_SUFFIX=layer8_4_inject_audio_reinject_loop_lora_r16; RUN_STAMP=20261105_173212933623545; JOB_TAG=r84l16 ;;
+      recursive_textmesh_layer8_4_inject_audio_reinject_loop_lora_r16) FAMILY=recursive_textmesh; ROUTE_SUFFIX=layer8_4_inject_audio_reinject_loop_lora_r16; RUN_STAMP=20261105_154241055340068; JOB_TAG=t84l16 ;;
+      recursive_textmesh_layer8_4_inject_audio_reinject_loop_modality_lora_r8) FAMILY=recursive_textmesh; ROUTE_SUFFIX=layer8_4_inject_audio_reinject_loop_modality_lora_r8; RUN_STAMP=20261105_173710754949913; JOB_TAG=t84ml8 ;;
       recursive_mesh_5_10x4_5) FAMILY=recursive_mesh; ROUTE_SUFFIX=; RUN_STAMP=20261103_093224843011222; JOB_TAG=mx4; DEFAULT_EXPECTED_STEP=34626; DEFAULT_EXPECTED_GEOMETRY=8,4,4 ;;
     esac
     DEFAULT_RUN_ROOT=

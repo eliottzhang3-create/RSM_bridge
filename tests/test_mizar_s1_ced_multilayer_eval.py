@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import hashlib
 import importlib.util
 import json
 import sys
@@ -61,14 +62,16 @@ class MultilayerEvaluationTests(unittest.TestCase):
         return adapter.validate_checkpoint(saved, runtime, self.route, self.spec["default_step"],
                                            eval_variant=self.variant, **kwargs)
 
-    def test_fourteen_actual_contracts_accept_completed_checkpoints_and_bind_thirteen_runs(self):
+    def test_all_actual_contracts_accept_completed_checkpoints_and_bind_exact_runs(self):
         stamps = ("20261030_140459065784533", "20261030_162028139130855", None,
                   "20261030_172450546025072", "20261101_113133327944502",
                   "20261101_170211458358358", "20261102_002211827036990", "20261102_112040402999384",
                   "20261102_132232677352730", "20261102_112121702891801", "20261103_165410438279511",
-                  "20261104_131843931946322", "20261104_161727489909082", "20261103_093224843011222")
-        counts = (4892741, 6241733, 2444930, 2450700, 3552788, 2468010, 2469164, 2444930, 2802093, 2777859, 4406019, 4406019, 4073090, 0)
-        self.assertEqual(len(VARIANTS), 14)
+                  "20261104_131843931946322", "20261104_161727489909082", "20261105_173212933623545",
+                  "20261105_154241055340068", "20261105_173710754949913", "20261103_093224843011222")
+        counts = (4892741, 6241733, 2444930, 2450700, 3552788, 2468010, 2469164, 2444930, 2802093, 2777859, 4406019, 4406019, 4073090,
+                  6034179, 6034179, 6034179, 0)
+        self.assertEqual(len(VARIANTS), 17)
         for variant, stamp, count in zip(VARIANTS, stamps, counts):
             self.select(variant)
             contract, saved, runtime = self.fixture()
@@ -184,6 +187,79 @@ class MultilayerEvaluationTests(unittest.TestCase):
             expected = ast.dump(ast.parse((adapter.reference.ROUTE_ROOT / relative).read_text(encoding="utf-8-sig")))
             for spec in adapter.ROUTE_SPECS.values():
                 self.assertEqual(ast.dump(ast.parse((spec["route_root"] / relative).read_text(encoding="utf-8-sig"))), expected)
+
+    def test_training_snapshots_preserve_every_file_outside_authorized_evaluator_extension(self):
+        authorized = {"code/RSmol/run_mizar_s1_ced_small_mmau_eval_5090.sh",
+                      "code/RSmol/run_mizar_s1_ced_small_mmar_eval_5090.sh",
+                      "code/RSmol/scripts/mizar_s1_ced_multilayer_eval_runtime.py",
+                      "code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md"}
+        for name in ("mizar_s1_textmesh_ced_loop_lora_r16_parent_baseline.json",
+                     "mizar_s1_textmesh_modality_lora_r8_parent_baseline.json"):
+            files = json.loads((ROOT / "audit_reports" / name).read_text(encoding="utf-8"))["files"]
+            self.assertTrue(authorized <= files.keys())
+            for path, expected in files.items():
+                if path in authorized: continue
+                with self.subTest(baseline=name, path=path):
+                    self.assertEqual(hashlib.sha256((ROOT / path).read_bytes().replace(b"\r\n", b"\n")).hexdigest(), expected)
+            variant = ("recursive_textmesh_layer8_4_inject_audio_reinject_loop_modality_lora_r8" if "modality" in name
+                       else "recursive_textmesh_layer8_4_inject_audio_reinject_loop_lora_r16")
+            self.select(variant)
+            # Run the entire original parity audit. Only its obsolete evaluator
+            # snapshot clause is replaced by the explicit byte checks above.
+            with patch.dict(sys.modules, {"contract": self.route}):
+                audit = load_module("eval_training_parity_" + variant, self.spec["route_root"] / "audit_reference.py")
+            checked = {"files": len(files), "unchanged_files": len(files) - len(authorized),
+                       "authorized_evaluator_updates": sorted(authorized)}
+            with patch.object(audit, "protected_parents", return_value=checked):
+                result = audit.audit()
+            self.assertEqual(result["status"], "PASS")
+            self.assertTrue(result["common_recipe_equal"])
+            self.assertTrue(result["training_parity"]["entire_train_function_ast_equal_after_explicit_audits"])
+
+    def test_textmesh_contract_requires_exact_text_memory_and_rejects_it_on_other_routes(self):
+        for variant in (v for v in VARIANTS if adapter.variant_spec(v).get("text_only_memory")):
+            self.select(variant)
+            self.assertEqual((self.spec["audio_memory_slots"], self.spec["text_memory_slots"]), (0, 5))
+            for key, value in (("text_start", 127), ("audio_memory", True), ("includes_separator", False),
+                               ("persistent", True), ("slots", 7), ("router_queries", "loop_output")):
+                _, saved, runtime = self.fixture()
+                saved["contract"]["text_memory"][key] = value
+                self.resign(saved, runtime)
+                with self.subTest(variant=variant, field=key), self.assertRaisesRegex(ValueError, "text_memory"):
+                    self.validate(saved, runtime)
+            _, saved, runtime = self.fixture()
+            saved["contract"].pop("text_memory")
+            self.resign(saved, runtime)
+            with self.assertRaisesRegex(ValueError, "text_memory"): self.validate(saved, runtime)
+        text_memory = dict(self.route.TEXT_MEMORY_CONTRACT)
+        for variant in (v for v in VARIANTS if not adapter.variant_spec(v).get("text_only_memory")):
+            self.select(variant)
+            _, saved, runtime = self.fixture()
+            saved["contract"]["text_memory"] = text_memory
+            self.resign(saved, runtime)
+            with self.subTest(variant=variant), self.assertRaisesRegex(ValueError, "unexpected CED branch"):
+                self.validate(saved, runtime)
+
+    def test_rank16_and_four_modality_rank8_have_equal_counts_but_distinct_contracts(self):
+        variants = [v for v in VARIANTS if (adapter.variant_spec(v).get("loop_lora_config") or {}).get("parameter_count") == 3256320]
+        self.assertEqual(len(variants), 3)
+        for variant in variants:
+            self.select(variant)
+            config = self.spec["loop_lora_config"]
+            self.assertEqual(config["parameter_count"], self.route.LOOP_LORA_CONTRACT["new_parameters"])
+            for key in ("rank", "alpha"):
+                self.assertEqual(config[key], self.route.LOOP_LORA_CONTRACT[key])
+            if self.spec["modality_lora"]:
+                self.assertEqual((config["rank"], config["matrix_count"]), (8, 560))
+                for key, value in (("text_start", 127), ("adapter_sets", 2), ("modalities", ["text", "audio"]),
+                                   ("base_projection", "split_base"), ("text_includes_separator", False)):
+                    _, saved, runtime = self.fixture()
+                    saved["contract"]["loop_lora"][key] = value
+                    self.resign(saved, runtime)
+                    with self.subTest(field=key), self.assertRaisesRegex(ValueError, "loop_lora"):
+                        self.validate(saved, runtime)
+            else:
+                self.assertEqual((config["rank"], config["alpha"], config["matrix_count"]), (16, 32, 280))
 
     def run_loader(self, fixture):
         args, model, modules, packages = fixture
@@ -335,6 +411,7 @@ class MultilayerEvaluationTests(unittest.TestCase):
             core.listen_routers = {str(k): Mock() for k in (4, 8)}
             core.audio_listen.listen_routers = [Mock() for _ in range(2)]
             core.audio_listen.last_rounds = [0, 1]
+            core.last_memory_shape, core.last_sequence_length = (1, 5, 257, 576), 383
             core.last_injection_trace = core.last_listen_trace = tuple(zip((5, 15), self.spec["interaction_layers"]))
             core.last_crossattn_trace = (5, 15)
             core.last_reinject_trace = (5, 15)
@@ -353,12 +430,20 @@ class MultilayerEvaluationTests(unittest.TestCase):
             finish = lm.register_forward_hook.call_args.args[0]
             output = types.SimpleNamespace(past_key_values=None, logits=types.SimpleNamespace(shape=(1, 383, 576)))
             def hook(module, inputs=()):
+                if self.spec.get("text_only_memory") and module in core.write_routers + core.read_routers and not inputs:
+                    inputs = (types.SimpleNamespace(shape=(1, 257, 576)),)
                 self.assertIsNone(module.register_forward_hook.call_args.args[0](module, inputs, None))
             def execute(*, bad_order=False, bad_compression=False, reverse_injection=False, omit_audio_router=False,
                         reverse_serial=False, duplicate_projection=False, wrong_loop=False,
                         omit_lora=False, duplicate_lora=False, early_mesh_injection=False,
-                        wrong_internal_order=False):
+                        wrong_internal_order=False, wrong_router_region=False, bad_memory=False,
+                        bad_modality_lengths=False, missing_modality_call=False):
                 begin(lm, (), {"use_cache": False, "attention_mask": None})
+                for modules in lora_projections.values():
+                    for projection in modules.values():
+                        projection.audio_tokens = 126
+                        projection.forward_counts = [0, 0]
+                        projection.last_token_shapes = [None, None]
                 if kind == "serial":
                     for _ in range(2 if duplicate_projection else 1):
                         hook(core.audio_linear, (types.SimpleNamespace(shape=(1, 126, 576)),))
@@ -370,12 +455,14 @@ class MultilayerEvaluationTests(unittest.TestCase):
                     if logical >= 5 and (logical - 5) % 10 == 0 and self.spec["mesh"]:
                         index = (logical - 5) // 10
                         if early_mesh_injection and index < 2:
+                            if kind == "serial": hook(core.audio_gate)
                             hook(core.audio_gates[str(self.spec["interaction_layers"][index])])
                         if self.spec["split_memory"]:
                             hook(core.audio_listen_write_routers[index])
                             if not omit_audio_router: hook(core.audio_listen_read_routers[index])
                         if bad_order: hook(core.read_routers[index])
-                        hook(core.write_routers[index])
+                        router_inputs = (types.SimpleNamespace(shape=(1, 383, 576)),) if wrong_router_region else ()
+                        hook(core.write_routers[index], router_inputs)
                         if not bad_order: hook(core.read_routers[index])
                         if index < 2:
                             if kind == "listen36912":
@@ -383,7 +470,9 @@ class MultilayerEvaluationTests(unittest.TestCase):
                                 hook(core.audio_listen, (None, None, None, None, index, None))
                             elif self.spec["interaction_layers"]:
                                 layer = str(self.spec["interaction_layers"][1 - index if reverse_injection else index])
+                                if kind == "serial" and not reverse_serial and not early_mesh_injection: hook(core.audio_gate)
                                 if not early_mesh_injection: hook(core.audio_gates[layer])
+                                if kind == "serial" and reverse_serial: hook(core.audio_gate)
                                 if kind == "listen48": hook(core.listen_routers[layer])
                     elif logical in (5, 15):
                         if kind == "serial":
@@ -401,6 +490,9 @@ class MultilayerEvaluationTests(unittest.TestCase):
                                 for _ in range(2 if duplicate_lora else 1):
                                     projection.register_forward_pre_hook.call_args.args[0](projection,
                                         (types.SimpleNamespace(shape=(1, 383, projection.in_features)),))
+                                    loop = 0 if logical < 15 else 1
+                                    projection.forward_counts[loop] += 1
+                                    projection.last_token_shapes[loop] = (1, 126, 257)
                             hook(core.layers[physical])
                         finally:
                             for projection in lora_projections[physical].values(): projection.loop_index = None
@@ -408,6 +500,11 @@ class MultilayerEvaluationTests(unittest.TestCase):
                         hook(core.layers[physical])
                 original = core.last_injection_trace
                 try:
+                    core.last_memory_shape = (1, 5, 383 if bad_memory else 257, 576)
+                    if self.spec.get("modality_lora"):
+                        projection = lora_projections[5]["self_attn.q_proj"]
+                        if bad_modality_lengths: projection.last_token_shapes[0] = (1, 127, 256)
+                        if missing_modality_call: projection.forward_counts[0] = 0
                     if wrong_internal_order: core.last_injection_trace = tuple(zip((5, 15), self.spec["interaction_layers"][::-1]))
                     finish(lm, (), output)
                 finally:
@@ -433,8 +530,16 @@ class MultilayerEvaluationTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "interaction order"): execute(reverse_serial=True)
                 with self.assertRaisesRegex(RuntimeError, "projected once"): execute(duplicate_projection=True)
                 with self.assertRaisesRegex(RuntimeError, "serial input/layer injection trace"): execute(wrong_internal_order=True)
-            if self.spec["mesh"] and kind in ("inject48", "inject84"):
+            if self.spec["mesh"] and kind in ("inject48", "inject84", "serial"):
                 with self.assertRaisesRegex(RuntimeError, "follow the write/read router calls"): execute(early_mesh_injection=True)
+            if self.spec.get("text_only_memory"):
+                self.assertEqual(audit["last_text_memory_shape"], [1, 5, 257, 576])
+                for kwargs in ({"wrong_router_region": True}, {"bad_memory": True}):
+                    with self.assertRaisesRegex(RuntimeError, "exactly positions 126 onwards"): execute(**kwargs)
+            if self.spec.get("modality_lora"):
+                self.assertEqual(audit["modality_lora_execution"]["adapter_calls"], 280)
+                for kwargs in ({"bad_modality_lengths": True}, {"missing_modality_call": True}):
+                    with self.assertRaisesRegex(RuntimeError, "fixed audio/text regions"): execute(**kwargs)
             if self.spec.get("loop_lora"):
                 self.assertEqual(audit["loop_lora_projection_calls"], 140)
                 self.assertEqual(audit["loop_lora_calls_per_loop"], [70, 70])

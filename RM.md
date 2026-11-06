@@ -1,3 +1,81 @@
+## 2026-11-06：非 MeSH rank16、textmesh rank16与四套模态rank8的MMAU/MMAR评测
+
+按用户授权扩展原评测入口，见[评测实现与六条提交命令](code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md)。
+继续本地改核心代码、GitHub同步、远程Linux保存权重/数据与执行评测。
+新增三个variant及默认formal run：
+
+| variant | 默认formal run |
+|---|---|
+| recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r16 | 20261105_173212933623545 |
+| recursive_textmesh_layer8_4_inject_audio_reinject_loop_lora_r16 | 20261105_154241055340068 |
+| recursive_textmesh_layer8_4_inject_audio_reinject_loop_modality_lora_r8 | 20261105_173710754949913 |
+
+均精确选择各run的formal/checkpoints/model--step-17313.ckpt和formal/runtime.json，中间checkpoint不参与选择。
+第二个相对outputs路径按训练启动器补全到/hpc_stor03/sjtu_home/jinwei.zhang/下。
+真实训练模型直接导入，完整state_dict strict加载，route/runtime/资产/训练及模型源码SHA/step/geometry严格校验保持。
+三条均保留30次执行、共享input投影一次、边界5的input→CED8及边界15的input→CED4，CED gate读取post-input hidden。
+两套rank16/alpha32为280份A/B；四套模态rank8/alpha16为560份A/B；LoRA均3,256,320、串行分支共6,034,179参数。
+textmesh仅位置126起的SEP/文本/padding/生成答案进入五槽memory，音频绕过memory/router；
+每完整forward重建[B,5,L-126,576]，六routers保持prelude-output及loop-input query、loop-output write。
+四套模态LoRA按固定音频126/文本L-126选择；每forward验证140投影/280低秩分支、四套各70次及索引复位。
+
+原fixed20、prompt256/prefix383、首答案logit382、FP32/单GPU/batch1/seed1234/TF32关闭、
+无cache/attention_mask=None/argmax/300tokens/首EOS停止、原始输出和官方scorer/各1000条保持。
+沿用mellow_c8204d8和pdgpu-5090/8CPU/32G/1GPU/1node，无自动前置测试作业。
+输出为各run的eval/mmau_test_mini_step17313/与eval/mmar_step17313/。
+
+python -B tests/validate_mizar_s1_ced_multilayer_eval.py：282项实际检查通过，32项真实tensor检查缺Torch/Transformers跳过，
+含当前适配23项、旧回归9项；覆盖17路线/34种千条模拟流程与假提交、训练源码NumPy行为、原协议AST及旧分支回归。
+两条textmesh历史训练快照含本次获授权修改的四个评测文件，统一验证明确替代该历史快照条款，
+其余185/117文件字节保护和完整训练AST/配方对照通过；不改训练快照或生产源码SHA检查。
+报告audit_reports/mizar_s1_ced_multilayer_eval_validation.json；--require-tensors可禁止skip。
+本地Windows沙箱临时目录受限后，沙箱外同流程验证通过。
+未执行git commit/push、远程checkpoint/runtime读取、真实GPU评测或作业提交，不登记远程PASS。
+
+## 2026-11-06：官方 Mizar final 5+20×2+5，S1 GBS128独立训练实现
+
+按用户授权实施，见[正式训练与恢复说明](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_official_final_s1_gbs128_5_20x2_5/README.md)。
+继续本地改代码、GitHub中转、远程Linux保存权重/数据与运行训练。原转换包与参考训练路线保持原样。
+
+从完整 `models/Mizar159M-5-20x2-5-serial84-looplora-r8` 初始化，严格加载全部1038份state，
+完整保留官方final的LM/mapper/CED和转换时保存的新参数，不重新初始化覆盖LoRA/MLP/gates。
+GPU-safe加载入口与CPU转换入口分开，不调用会清空CUDA_VISIBLE_DEVICES的转换dependencies/reload_verified。
+30物理层、50次执行、逻辑5/25串行input→CED8/4、两套独立rank8/alpha16 LoRA、CED冻结/eval保持。
+
+循环基础权重（包括norm）及全部新增参数maxLR6e-4；原mapper、prelude/coda、embedding/最终norm/lm_head为3e-4。
+原S1 hybrid1,477,492条、3epochs，8×microbatch4×GA4=GBS128，11542updates/epoch、34626总步、1731warmup。
+FP32、无autocast/TF32、参考GradScaler/AdamW/LambdaLR/GradNorm保留；683token及原answer-only CE保持：
+rank-local microbatch有效token均值→四次GA均值→DDP均值，不改成全局有效token加权。
+
+按用户再次强调的要求：计算节点只等待本次路径metadata/owner就绪，initial_steps=0，
+先直接读共享原始音频训练，同时单producer/默认4workers后台复制raw bytes到独立tmpfs。
+producer全部完成且文件/字节计数通过后，八rank在optimizer边界、取microbatches之前all_reduce(MIN)，共同切到节点本地。
+无音频prefill/watermark等待；producer失败/死亡/心跳异常中止；先停止/reap producer再清理本token拥有的tmpfs。
+
+六个半epoch保存点5771/11542/17313/23084/28855/34626及epoch3 final均存完整状态；
+同代码/依赖/资产/数据/配方/本路线和原output root才可full resume，保存八rank RNG与明确游标。
+恢复时重建当前节点staging，重新从shared开始，不接受旧分配report；校验参数名/顺序、moments、LR/scheduler/GradNorm。
+launcher直接提交formal，无自动smoke/tensor前置作业，沿参考pdgpu-5090/32CPU/256G/8GPU/1node与mellow_c8204d8。
+训练目录、输出、日志、job、index-cache、tmpfs与resume身份独立。
+
+本地代码提交并推送GitHub后，在远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_official_final_s1_gbs128_5_20x2_5_5090.sh --stage-workers 4
+```
+
+默认输出为`outputs/RSmol/mizar_official_final_s1_gbs128_5_20x2_5_5090/formal_<timestamp>/formal/`。
+恢复入口同脚本，传`--resume-checkpoint /原root/formal/checkpoints/model--step-5771.ckpt`，自动推导原output root。
+`python -B tests/validate_mizar_official_training.py`检查实际文件/后台线程协议、真实Bash夹具、原50文件SHA保护、
+数据/loss/clipping AST、所有调度位置与恢复合同；`--require-tensors`要求真实小尺寸CPU tensor检查且禁止skip。
+本机缺Torch/Transformers/audio依赖，真实tensor检查明确跳过；不登记远程完整模型/八卡GPU/收敛/恢复PASS。
+报告`audit_reports/mizar_official_training_validation.json`。Windows沙箱临时目录/Bash受限后，在沙箱外复验。
+既有转换产物training_intent.implemented=False保留其历史含义，实际trainer合同另存；旧MMAU/MMAR evaluator仍需单独适配。
+本轮未执行commit/push、远程数据/权重访问、真实作业提交或训练。
+
 ## 2026-11-06：官方 Mizar 5+20×2+5，第6步CloudStor发布兼容与续发布
 
 用户新日志已到第6步，staging为 `Mizar159M-5-20x2-5-serial84-looplora-r8.staging-q492wvyj`，
