@@ -1,3 +1,52 @@
+## 2026-11-07：四槽 MeSH + CED-small，GBS256独立音频正式训练
+
+按已确认计划从六槽音频母本完整复制隔离，见[四槽音频正式训练与恢复说明](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_4slot_ced_small/README.md)。
+默认文本初始化固定为用户指定的
+`stage4_5_10x2_5_mesh_4slot/formal_1epoch_bf16_20261106_103531451890103/checkpoint-009244`，
+显式使用既有 `recursive_model_5_10x2_5_mesh_4slot.py`，offline/FP32严格加载完整LM和已训练routers。
+无需重新转换，禁止截取六槽权重或重新初始化已训练routers；检查真实20层和六个独立router及weight[4,576]/bias[4]。
+文本阶段BF16 autocast的参数和保存权重仍为FP32；本音频训练按母本使用FP32前向、无autocast、
+原GradScaler/AdamW/LambdaLR/GradNorm、TF32关闭。仅继承文本模型/tokenizer，不继承文本优化器/调度/RNG/游标。
+
+hidden576、20物理层/30次执行、`5+10×2+5` 保持，四槽瞬时memory覆盖完整多模态序列，
+训练为[B,4,683,576]，首槽原始input embeddings、其余三槽零；三组write/read、六routers、
+12份参数共13,848；prefix output-query/value、loop input-query/output-value与读写公式保持。
+CED-small冻结/eval，官方freq_merge_126 mapper随机初始化并训练，完整LM/router继续训练；构建顺序沿母本。
+原hybrid1,477,492行、fixed20、audio126/SEP1/prompt256/answer300、原answer-only CE/PAD/EOS/attention保持。
+loss仍为rank-local microbatch有效token均值→四次GA均值→DDP均值，不引入文本预训练的全局token归一化。
+8×8×4=GBS256、3epochs/17313updates/866warmup、LM/router maxLR3e-4及mapper6e-4、原保存点与数据顺序保持。
+
+当前共享路径启动流程原样保留：登录节点CPU索引准备，计算节点initial_steps=0，无音频prefill等待；
+共享原始音频立即用于训练，单producer/默认4workers后台复制raw bytes；完整文件/字节校验后，
+八rank在optimizer边界、读取四个microbatch前all_reduce(MIN)，一致切换至节点本地。
+producer失败/死亡/心跳异常中止；先停止并reap producer再清理本token拥有tmpfs；每次resume重新staging且从shared开始。
+新训练目录、route/output/log/job/index-cache/tmpfs与恢复身份独立；原五/六槽、四槽文本和评测代码保持。
+
+本地代码提交并推送GitHub后，远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_mesh_4slot_ced_small_3090.sh --stage-workers 4
+```
+
+沿用mellow_c8204d8、原容器及pdgpu-3090/64CPU/256G/8GPU/1node，直接提交一个formal，无自动smoke/tensor前置任务。
+默认输出`outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_4slot_3090/formal_<timestamp>/`，
+最终为其下`formal/checkpoints/model--step-17313.ckpt`与`model--epo-3.ckpt`。
+完整resume只接受本四槽音频路线同代码/资产/数据/配方的完整正式checkpoint，按README传原run root和--resume-checkpoint；
+指定文本checkpoint及旧五/六槽音频checkpoint均不能当音频full resume。
+
+`python -B tests/validate_mizar_s1_mesh_4slot_ced_small.py`：64项实际本地检查通过，
+47项真实tensor检查缺依赖跳过（四槽音频5、继承runtime16、六槽音频21、四槽文本5）。
+覆盖真实Bash假提交、严格加载/错槽与dtype拒绝、共享启动/失败清理/集体切换、全部17314个LR位置与保存恢复合同；
+94个当前Git原文件SHA保护、22个复制文件一致性及完整trainer/loader/contract受限AST对照通过。
+快照以本轮开始时当前源码为准，包括先前已更新的两个评测入口；母本历史快照不修改。
+六槽route/shared-start/tensor参与回归，旧behavior的历史评测SHA条款由新94文件快照覆盖。
+报告`audit_reports/mizar_s1_mesh_4slot_ced_small_validation.json`；--require-tensors可禁止skip。
+Windows沙箱临时目录访问失败后，沙箱外同一流程复验通过。未执行git commit/push、远程生产资产读取、
+真实GPU训练或八卡恢复，不登记远程PASS。现有MMAU/MMAR evaluator仍需单独适配四槽音频合同。
+
 ## 2026-11-06：非 MeSH rank16、textmesh rank16与四套模态rank8的MMAU/MMAR评测
 
 按用户授权扩展原评测入口，见[评测实现与六条提交命令](code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md)。
