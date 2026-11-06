@@ -1,0 +1,102 @@
+{
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "validation_time_utc": "2026-11-06T01:57:57.703381+00:00",
+  "scope": "local syntax, production contract helpers, Parquet cursor simulation and real Bash mock submissions; optional tensor tests",
+  "production_weights_read": false,
+  "remote_conversion_verified": false,
+  "remote_gpu_training_verified": false,
+  "protected_original_files": {
+    "code/RSmol/recursive_model_5_10x2_5_mesh_6slot.py": "896e278c28a3adff620317f398b46c320fbaa488861cec900deada164bf48354",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_6slot_3090.sh": "cba909b5daa7a6c3890ff033d1c2ff2823af1b600add5c96bb62c861b64dc655",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_6slot_formal_3090.sh": "38a6f47b0d4ff6afb84044b1d101457a3ae5a4c2cf3bf4b95470341f1f1b2a8d",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_6slot_resume_3090.sh": "ef2767f192b2127a62ecd8b544a9cdf45d631b2efcc89df2dce6991da7fdae70",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_6slot_smoke_3090.sh": "b2f400d25a5fd0ee423efe714787f411f63b5df9d751b62511ba169615d815e5",
+    "code/RSmol/scripts/convert_stepwise_5_10x2_5_mesh_6slot.py": "d6e91f544dc9462dc63fd126b6148cb77588261ae3274b02bd2b97340f2fb2db",
+    "code/RSmol/scripts/convert_stepwise_5_10x2_5_mesh_6slot.sh": "631aae5cac058fa952ec38df7a777bc47e7bbac651c27dc49796176b026cc968",
+    "code/RSmol/scripts/train_stage4_5_10x2_5_mesh_6slot_ddp.py": "3ce1ba20754aa0e1499cea02bcea62478924ea8d1e8f2f4df53251e3af51001e",
+    "code/RSmol/scripts/train_stage4_5_10x2_5_mesh_6slot_ddp.sh": "002742fc78cdc909275e84906bfadbbdff5f129e0abc9ce4a9d58fd1b5c9d144",
+    "code/RSmol/text_5_10x2_5_mesh_6slot/README.md": "97843fa2a1ff524f6a751c63c58b1be8997bbc8c8aa66ea92b69f0978f3240ec",
+    "tests/test_text_5_10x2_5_mesh_6slot_contract.py": "8b59143350bb7afaba6b15425e084edb4837f2715af4bbb366ae9c84259d7410",
+    "tests/test_text_5_10x2_5_mesh_6slot_shell.py": "5c2f1775f7ff91b5e4a14642c71fcf12d76cf632439aef0095cf823d3a372bad",
+    "tests/test_text_5_10x2_5_mesh_6slot_tensor.py": "43bb26d3ae0aa831a195698592c410871256f85b57438c579ff0f546bb64f3ef",
+    "tests/test_text_5_10x2_5_mesh_6slot_training.py": "874f41a2499ee1300b59e491636eb5709b44f88acd86420ed7d2d40d4ac22330"
+  },
+  "protected_files_changed": [],
+  "python_syntax_files": [
+    "code/RSmol/recursive_model_5_10x2_5_mesh_4slot.py",
+    "code/RSmol/scripts/convert_stepwise_5_10x2_5_mesh_4slot.py",
+    "code/RSmol/scripts/train_stage4_5_10x2_5_mesh_4slot_ddp.py",
+    "tests/test_text_5_10x2_5_mesh_4slot_contract.py",
+    "tests/test_text_5_10x2_5_mesh_4slot_shell.py",
+    "tests/test_text_5_10x2_5_mesh_4slot_tensor.py",
+    "tests/test_text_5_10x2_5_mesh_4slot_training.py",
+    "tests/validate_text_mesh_4slot_bf16.py"
+  ],
+  "source_sha256": {
+    "code/RSmol/recursive_model_5_10x2_5_mesh_4slot.py": "decadd3094b6c4ef2c7c3fe400f29435f85cc264886d7e4012192e0dbf8c027b",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_4slot_3090.sh": "13d0492f6db05286348b9773a54b8e80b058d258d33b11813520e8119bb85371",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_4slot_formal_3090.sh": "2c5d9a4578fcbc11b55875676657675572c5c1292cfbb9dcc317260d6f9e34fa",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_4slot_resume_3090.sh": "da95ab4c22573f245ec4532426a7d4ededda5ee15341c6b529fcc22053ca0fe7",
+    "code/RSmol/run_stage4_5_10x2_5_mesh_4slot_smoke_3090.sh": "092253c6d3774911a7d0befc35052fb7f928951712c908e863f1d462c1cf75ff",
+    "code/RSmol/scripts/convert_stepwise_5_10x2_5_mesh_4slot.py": "95052b0207fa7f7274ba678985de1a7f3e6807426964d0a60569fa557fcbb312",
+    "code/RSmol/scripts/convert_stepwise_5_10x2_5_mesh_4slot.sh": "0295b6c25f3ec4975396c231aa9f0040089e518c99f7144736a050e6625d56a5",
+    "code/RSmol/scripts/train_stage4_5_10x2_5_mesh_4slot_ddp.py": "b46a92b9d637a1a477ffbc5fdc3b5d0befe773f16ab21069a7c680a19ea2d79d",
+    "code/RSmol/scripts/train_stage4_5_10x2_5_mesh_4slot_ddp.sh": "331dac1aea94a022bc24cbbec750d89f4934e013251fc8ba0ad510f258fc32c3",
+    "tests/test_text_5_10x2_5_mesh_4slot_contract.py": "84adffa06a67a3879cc7059710347562586d5116322fd111c52407a85750ccd3",
+    "tests/test_text_5_10x2_5_mesh_4slot_shell.py": "0b22d8b5c5b5f748039a0f47efa0c2ae28277cc13c4d702acfb179da50b7698c",
+    "tests/test_text_5_10x2_5_mesh_4slot_tensor.py": "19b66dba9dabe79d59e176f38ee5bd49ac78f7589d4de1d587852a3350021df6",
+    "tests/test_text_5_10x2_5_mesh_4slot_training.py": "9bca015e6781ce866723990921c23def4ec1d00821adeb563fcea22a55e00b6e",
+    "tests/validate_text_mesh_4slot_bf16.py": "c35dfba72c7bebe2467383f1f46675d839b4ecfc4b124681d47f41735df846cc",
+    "code/RSmol/text_5_10x2_5_mesh_4slot/README.md": "e83fbe14a5d2668ffe5183fb03528fdfda04b754d859eff6bc5edba91ba742dd"
+  },
+  "suites": {
+    "4slot": {
+      "run": 32,
+      "passed": 27,
+      "skipped": [
+        {
+          "test": "test_text_5_10x2_5_mesh_4slot_tensor.FourSlotTensorTest.test_conversion_inherits_exact_weights_and_reloads_four_slot_routers",
+          "reason": "requires torch, transformers and safetensors in remote rsmol"
+        },
+        {
+          "test": "test_text_5_10x2_5_mesh_4slot_tensor.FourSlotTensorTest.test_cpu_bf16_autocast_preserves_memory_queries_and_fp32_master_state",
+          "reason": "requires torch, transformers and safetensors in remote rsmol"
+        },
+        {
+          "test": "test_text_5_10x2_5_mesh_4slot_tensor.FourSlotTensorTest.test_cuda_bf16_forward_backward_with_production_autocast_context",
+          "reason": "requires torch, transformers and safetensors in remote rsmol"
+        },
+        {
+          "test": "test_text_5_10x2_5_mesh_4slot_tensor.FourSlotTensorTest.test_real_checkpoint_roundtrip_preserves_optimizer_and_rank_rng",
+          "reason": "requires torch, transformers and safetensors in remote rsmol"
+        },
+        {
+          "test": "test_text_5_10x2_5_mesh_4slot_tensor.FourSlotTensorTest.test_real_forward_memory_schedule_and_both_loop_gradients",
+          "reason": "requires torch, transformers and safetensors in remote rsmol"
+        }
+      ],
+      "failures": [],
+      "errors": []
+    },
+    "6slot": {
+      "run": 26,
+      "passed": 23,
+      "skipped": [
+        {
+          "test": "test_text_5_10x2_5_mesh_6slot_tensor.SixSlotTensorTest.test_conversion_inherits_exact_weights_and_reloads_six_slot_routers",
+          "reason": "requires torch, transformers and safetensors in remote rsmol"
+        },
+        {
+          "test": "test_text_5_10x2_5_mesh_6slot_tensor.SixSlotTensorTest.test_real_checkpoint_roundtrip_preserves_optimizer_and_rank_rng",
+          "reason": "requires torch, transformers and safetensors in remote rsmol"
+        },
+        {
+          "test": "test_text_5_10x2_5_mesh_6slot_tensor.SixSlotTensorTest.test_real_forward_memory_schedule_and_both_loop_gradients",
+          "reason": "requires torch, transformers and safetensors in remote rsmol"
+        }
+      ],
+      "failures": [],
+      "errors": []
+    }
+  }
+}

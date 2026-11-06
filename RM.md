@@ -1,3 +1,53 @@
+## 2026-11-06：两循环、四记忆槽 MeSH 文本转换与 BF16 完整一轮训练
+
+从六槽文本路线完整复制隔离，见[四槽文本转换、正式训练及恢复说明](code/RSmol/text_5_10x2_5_mesh_4slot/README.md)。
+新增独立 `recursive_model_5_10x2_5_mesh_4slot.py`、转换/训练器及四个提交入口；
+类名、架构/训练/精度合同、`RSMOL_5_10X2_5_MESH_4SLOT_*`、模型、输出与日志隔离。
+hidden576、20物理层/30次执行、`5+10×2+5` 保持；memory 为 `[B,4,L,576]`，
+首槽取原始 input embeddings，其余三槽为零，每 forward 重建。三组 write/read、六个独立
+`Linear(576,4)`、12份权重/偏置共13,848参数；初始化仍为 `sqrt(2/(slots×hidden))`。
+保留 prefix output-query/value、循环 input-query/output-value 及原记忆读写公式。
+
+采用历史五槽 BF16 autocast 方式：FP32 参数/AdamW 状态，模型前向 BF16 autocast，
+FP32 CE/router softmax、无 GradScaler、TF32关闭；CE/归一化与 backward 在 autocast 外。
+启动检查 CUDA BF16 支持；正式/短验证训练不允许 CPU 或静默精度回退，Gate A 可显式CPU诊断。
+FP32 embedding/residual/memory 语义保留；checkpoint 的 `config.torch_dtype=float32` 是权重精度，
+完整 precision policy 另存于 metadata/training state/report。旧五槽和六槽当前仍为FP32，未修改。
+
+默认从远程干净的 `models/SmolLM2-5-10-5` 转换，亦支持原30层 `models/SmolLM2`；
+保持原30→20层映射，20层源不二次抽层。只新初始化四槽 routers，逐tensor核对继承权重和tied embedding，
+保留 tokenizer；默认拒绝训练态/已有MeSH源、Git checkout产物及已有模型目录覆盖。
+转换wrapper激活 `rsmol`、离线且清空 `CUDA_VISIBLE_DEVICES`，仅CPU运行。
+
+正式训练保留原Parquet/分片/行序、全局有效token CE归一化、AdamW和梯度裁剪、
+8×8×16=GBS1024、context1024、9244updates/1epoch、463warmup、LR8e-4→8e-5、save500/retain3。
+按已确认计划使用 `pdgpu-3090 / 64 CPU / 256G / 8 GPU / 1 node`，原容器与rsmol。
+直接提交formal，无自动smoke/tensor前置任务。只接受同四槽BF16合同的完整formal checkpoint恢复；
+校验precision policy、每rank游标/RNG、manifest、batch与调度。fresh只接受干净四槽转换来源。
+
+本地代码提交并推送GitHub后，远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/scripts/convert_stepwise_5_10x2_5_mesh_4slot.sh
+cd code/RSmol
+bash run_stage4_5_10x2_5_mesh_4slot_formal_3090.sh
+```
+
+转换产物为 `models/SmolLM2-5-10x2-5-mesh-4slot`；正式输出为
+`outputs/RSmol/stage4_5_10x2_5_mesh_4slot/formal_1epoch_bf16_<timestamp>/checkpoint-009244`。
+这些路径均以 `/hpc_stor03/sjtu_home/jinwei.zhang/` 为根。
+
+`python -B tests/validate_text_mesh_4slot_bf16.py`：50项实际本地检查通过（四槽27、原六槽23），
+8项真实tensor检查因本地缺Torch/Transformers/safetensors跳过（四槽5、六槽3）。
+覆盖真实Bash模拟转换/提交、CPU-only转换、64CPU、精度/旧路线隔离及正式恢复拒绝、
+Parquet游标、全9244步LR、原骨干/数据核心AST对照；8个Python与6个四槽Bash语法/LF检查通过，
+14个母本原文件SHA保持。报告为 `audit_reports/text_mesh_4slot_bf16_validation.json`。
+Windows沙箱临时目录访问失败后，在沙箱外同一流程复验通过；可加 `--require-tensors` 禁止任何skip。
+未执行git commit/push、远程生产权重读取/转换、真实BF16 GPU训练或八卡恢复，不登记远程PASS。
+四槽音频训练及现有MMAU/MMAR evaluator适配不包含在本轮。
+
 ## 2026-11-05：仅文本 MeSH + 音频串行8→4，四套模态/循环 LoRA rank8
 
 从 `run_mizar_s1_gbs256_recursive_textmesh_ced_small_layer8_4_inject_audio_reinject_loop_lora_r16_5090.sh`
