@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import os
 from pathlib import Path
 import shutil
@@ -9,29 +10,154 @@ import sys
 import tempfile
 import traceback
 
-from .audit import (artifact_asset_records, audit_source, file_record, release_manifest,
-                    validate_output_location)
+from .audit import (artifact_asset_records, audit_artifact, audit_source, checked_path,
+                    file_record, read_json, release_manifest, validate_output_location)
 from .contract import (HERE, RELEASE_FILE, ROUTE, SCHEMA, architecture,
                        implementation_identity, sha256_file, training_intent,
                        validate_config_preservation, write_json)
 
 
+def _linux_noreplace(staging, output):
+    libc = ctypes.CDLL(None, use_errno=True)
+    if not hasattr(libc, "renameat2"):
+        raise OSError(errno.ENOSYS, "libc has no renameat2", str(output))
+    rename = libc.renameat2
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(-100, os.fsencode(staging), -100, os.fsencode(output), 1):
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(output))
+
+
+def _reserved_posix_rename(staging, output):
+    """Claim a NEW empty destination, then atomically replace our own reservation.
+
+    POSIX rename needs no renameat2 flags. mkdir rejects existing destinations,
+    including empty directories. Readers see either an empty reservation (which
+    fails artifact validation) or the entire verified artifact. Never remove a
+    nonempty or replaced reservation when handling failure.
+    """
+    output.mkdir(mode=0o700)
+    owner = output.lstat()
+
+    def still_owned():
+        try:
+            current = output.lstat()
+            return (not output.is_symlink()
+                    and (current.st_dev, current.st_ino) == (owner.st_dev, owner.st_ino))
+        except FileNotFoundError:
+            return False
+
+    try:
+        if not still_owned():
+            raise FileExistsError(f"publication reservation was replaced: {output}")
+        os.rename(staging, output)
+    except BaseException:
+        if still_owned():
+            try:
+                output.rmdir()  # Empty, owned reservation only; no recursive delete.
+            except OSError:
+                pass
+        raise
+
+
 def atomic_publish(staging, output):
-    """Rename a complete directory atomically, never replacing an existing path."""
+    """Install sibling directories; existing outputs are always rejected."""
+    staging, output = Path(staging).resolve(strict=True), Path(output).absolute()
+    if output.exists() or output.is_symlink():
+        raise FileExistsError(f"refusing existing output: {output}")
+    output = output.parent.resolve() / output.name
+    if not staging.is_dir() or staging.parent != output.parent:
+        raise ValueError("publication requires a staging directory beside its output")
     if sys.platform.startswith("linux"):
-        libc = ctypes.CDLL(None, use_errno=True)
-        if not hasattr(libc, "renameat2"):
-            raise RuntimeError("atomic publication requires Linux renameat2(RENAME_NOREPLACE)")
-        rename = libc.renameat2
-        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-        rename.restype = ctypes.c_int
-        if rename(-100, os.fsencode(staging), -100, os.fsencode(output), 1):
-            error = ctypes.get_errno()
-            raise OSError(error, os.strerror(error), str(output))
+        try:
+            _linux_noreplace(staging, output)
+            return "linux_renameat2_noreplace"
+        except OSError as error:
+            unsupported = {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP, errno.ENOTSUP}
+            if error.errno not in unsupported:
+                raise
+        _reserved_posix_rename(staging, output)
+        return "posix_rename_into_exclusive_empty_reservation"
     elif sys.platform == "win32":
         os.rename(staging, output)  # Windows rename rejects an existing destination.
+        return "windows_rename"
     else:
         raise RuntimeError("atomic no-replace publication currently supports Linux and Windows")
+
+
+def publish_staged(staging, output, *, progress=print):
+    """Finish only publication of a fully audited stage; no tensor recomputation.
+
+    Explicitly migrate publisher/CLI/file-audit code identity only. Every model,
+    contract, library helper, license and source-release hash must still match.
+    Preserve original metadata/diagnostics outside the artifact before migration.
+    """
+    staging = Path(staging).resolve(strict=True)
+    output = validate_output_location(staging, output)
+    if not staging.is_dir() or staging.parent != output.parent:
+        raise ValueError("--staging must be a directory beside the final output")
+    lock = output.with_name(output.name + ".conversion.lock")
+    with lock.open("x", encoding="utf-8") as handle:
+        handle.write(f"publish pid={os.getpid()}\n")
+    originals, backup = {}, None
+    try:
+        progress("[publish 1/3] Verifying saved bytes, completed tensor audits and model implementation identity.")
+        manifest = read_json(staging / "manifest.json")
+        previous, current = manifest.get("implementation"), implementation_identity()
+        if not isinstance(previous, dict):
+            raise ValueError("staging is missing its implementation identity")
+        changed = sorted(key for key in set(previous) | set(current) if previous.get(key) != current.get(key))
+        allowed = {"conversion.py", "audit.py", "__main__.py"}
+        if set(changed) - allowed:
+            raise ValueError(f"model/contract implementation changed; cannot reuse this stage: {changed}")
+        audit_artifact(staging, _expected_implementation=previous, _extra_files=("failure.json",))
+        report = read_json(staging / "conversion_report.json")
+        reload = report.get("reload", {})
+        if (reload.get("all_saved_tensors_equal") != 1038
+                or reload.get("full_683_token_logits_equal") is not True
+                or reload.get("strict_state_dict") is not True
+                or report.get("source_alignment", {}).get("status") != "PASS"
+                or report.get("recursive_forward", {}).get("status") != "PASS"):
+            raise ValueError("publication requires completed source, forward, tensor and logits reload audits")
+        for name in ("manifest.json", "conversion_report.json", "failure.json"):
+            path = checked_path(staging, name)
+            if path.exists():
+                originals[name] = path.read_bytes()
+        backup = Path(tempfile.mkdtemp(prefix=staging.name + ".publication-backup-", dir=staging.parent))
+        for name, value in originals.items():
+            with (backup / name).open("xb") as handle:
+                handle.write(value)
+        progress("[publish 2/3] Preserving diagnostics and recording publisher-only identity migration.")
+        report["publication_recovery"] = {
+            "previous_implementation": previous, "changed_files": changed,
+            "previous_manifest_sha256": sha256_file(staging / "manifest.json"),
+            "diagnostics_backup": str(backup), "tensor_reexecution": False}
+        write_json(staging / "conversion_report.json", report)
+        manifest["implementation"] = current
+        manifest["files"] = [file_record(staging, staging / item["path"])
+                             if item["path"] == "conversion_report.json" else item
+                             for item in manifest["files"]]
+        write_json(staging / "manifest.json", manifest)
+        if "failure.json" in originals:
+            (staging / "failure.json").unlink()
+        audit_artifact(staging)
+        progress("[publish 3/3] Installing the fully verified directory without repeating conversion.")
+        method = atomic_publish(staging, output)
+        return {"status": "PASS", "scope": "publication_only", "output": str(output),
+                "publication_method": method, "diagnostics_backup": str(backup),
+                "tensor_reexecution": False}
+    except BaseException as error:
+        if backup is not None and staging.exists():
+            # Restore the original, already-audited metadata if publication fails.
+            for name, value in originals.items():
+                (staging / name).write_bytes(value)
+            write_json(staging / "failure.json", {"status": "FAIL", "error": str(error),
+                       "traceback": traceback.format_exc(), "published": False,
+                       "diagnostics_backup": str(backup)})
+        raise
+    finally:
+        lock.unlink()
 
 
 def convert(source, output, *, seed=0, threads=8, progress=print):
@@ -118,9 +244,10 @@ def convert(source, output, *, seed=0, threads=8, progress=print):
         from .audit import audit_artifact
         audit_artifact(staging)
         progress("[6/6] Atomically publishing the fully verified artifact.")
-        atomic_publish(staging, output)
+        method = atomic_publish(staging, output)
         return {"status": "PASS", "scope": "full_conversion", "output": str(output),
-                "report": str(output / "conversion_report.json"), "seed": seed}
+                "report": str(output / "conversion_report.json"), "seed": seed,
+                "publication_method": method}
     except BaseException as error:
         if staging is not None and staging.exists():
             write_json(staging / "failure.json", {"status": "FAIL", "error": str(error),

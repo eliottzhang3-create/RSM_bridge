@@ -22,14 +22,17 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     for name, help_text in (("audit", "Read-only source audit; files-only unless --tensors"),
                             ("convert", "Strict conversion; all numerical/reload gates are mandatory"),
-                            ("verify", "Verify a converted artifact; add --tensors for full forward")):
+                            ("verify", "Verify a converted artifact; add --tensors for full forward"),
+                            ("publish", "Finish publication of a stage with completed tensor/logits audits")):
         child = commands.add_parser(name, help=help_text)
         child.add_argument("--report", type=Path, help="Optional new JSON report path (never overwrite)")
         child.add_argument("--threads", type=positive, default=8, help="CPU tensor threads (default8)")
         if name in ("audit", "convert"):
             child.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
-        if name in ("convert", "verify"):
+        if name in ("convert", "verify", "publish"):
             child.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+        if name == "publish":
+            child.add_argument("--staging", type=Path, required=True)
         if name in ("audit", "verify"):
             child.add_argument("--tensors", action="store_true", help="Requires local Torch/Transformers/audio deps")
         if name == "convert":
@@ -41,6 +44,9 @@ def main(argv=None):
         if args.command == "convert":
             from .conversion import convert
             result = convert(args.source, args.output, seed=args.seed, threads=args.threads)
+        elif args.command == "publish":
+            from .conversion import publish_staged
+            result = publish_staged(args.staging, args.output)
         elif args.command == "audit":
             result = audit_source(args.source)
             if args.tensors:

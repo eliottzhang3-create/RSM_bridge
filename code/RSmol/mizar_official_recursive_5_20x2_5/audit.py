@@ -90,13 +90,14 @@ def artifact_asset_records():
     return result
 
 
-def audit_artifact(directory, *, _pending_reload=False):
+def audit_artifact(directory, *, _pending_reload=False, _expected_implementation=None, _extra_files=()):
     root = Path(directory).resolve()
     manifest = read_json(root / "manifest.json")
     if (manifest.get("schema") != SCHEMA or manifest.get("route") != ROUTE
             or manifest.get("architecture") != architecture()
             or manifest.get("training_intent") != training_intent()
-            or manifest.get("implementation") != implementation_identity()
+            or manifest.get("implementation") != (_expected_implementation if _expected_implementation is not None
+                                                   else implementation_identity())
             or manifest.get("source_release_manifest_sha256") != sha256_file(RELEASE_FILE)):
         raise ValueError("artifact schema/route/architecture/implementation/source identity mismatch")
     files = verify_files(root, manifest["files"])
@@ -107,7 +108,7 @@ def audit_artifact(directory, *, _pending_reload=False):
     if set(files) != expected_names:
         raise ValueError("artifact inventory differs from the complete model-only contract")
     actual_names = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
-    if actual_names != expected_names | {"manifest.json"}:
+    if actual_names - set(_extra_files) != expected_names | {"manifest.json"}:
         raise ValueError("artifact contains unlisted files (training state is not allowed)")
     verify_files(root, expected_assets)
     validate_text_config(read_json(root / "config.json"))

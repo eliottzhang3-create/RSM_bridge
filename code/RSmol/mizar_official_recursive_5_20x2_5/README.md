@@ -75,7 +75,7 @@ model, audit = reload_verified("/path/Mizar159M-5-20x2-5-serial84-looplora-r8", 
 # 同一进程中，此loader会设置CPU/offline环境与Torch线程数。
 ```
 
-默认拒绝已有输出、源/目标嵌套及Git checkout内的模型产物，且没有overwrite选项。独占锁防止同名转换同时执行；Linux用 `renameat2(RENAME_NOREPLACE)` 原子发布。失败时保留 `*.staging-*/failure.json`，最终目录不发布；普通verify拒绝未完成重载或含额外文件的产物。进程被强制杀死可能留下 `.conversion.lock`，确认无对应进程后再人工处置。实现的Python源码及官方manifest哈希均进入产物身份；源码变化会拒绝旧产物，需审查变动并重新转换。
+默认拒绝已有输出、源/目标嵌套及Git checkout内的模型产物，且没有overwrite选项。独占锁防止同名转换同时执行；Linux优先用 `renameat2(RENAME_NOREPLACE)`。底层文件系统不支持其标志（EINVAL/ENOSYS/EOPNOTSUPP）时，先独占mkdir创建全新空目标，再用普通POSIX rename原子替换本进程的空目录占位；已有目标不会进入该分支，权限等错误也不触发兼容回退。读者在发布前看到的空占位无法通过产物校验。失败时只尝试rmdir仍归本进程所有的空占位，不递归删除目标，保留staging及诊断。普通verify拒绝未完成重载或含额外文件的产物。进程被强制杀死可能留下 `.conversion.lock`，确认无对应进程后再人工处置。实现的Python源码及官方manifest哈希均进入产物身份；模型/合同源码变化需要重新转换；仅发布相关源码的兼容恢复见下文。
 
 ## 本地验证与边界
 
@@ -100,4 +100,28 @@ python -B tests/validate_mizar_official_recursive_conversion.py --require-tensor
 
 将修复经GitHub同步到远程后，重跑原 `convert --seed 0 --threads 8` 命令即可。
 原失败的 `.staging-*` 目录可保留，不会作为正式产物复用，也不会阻止新转换；不需要删除原始Mizar159M。
-此次代码改变了实现身份，因此应重新转换，而非手动修改旧staging的配置或manifest来绕过检查。远程完整重载与最终发布仍需本次重跑确认。
+这次配置修复改变了模型构造/合同源码身份，因此第5步失败的旧stage需要重新转换，不能用发布恢复入口复用。
+
+## 第6步发布失败：从已验收staging继续发布
+
+用户反馈新一轮已进入 `[6/6]`，随后在 `/mnt/cloudstorfs/...` 报 `[Errno 22] Invalid argument`。
+按控制流，此时完整权重、单遍对齐、50次执行及保存后逐tensor/完整logits重载检查均已完成。
+错误发生在目录发布，符合底层文件系统不支持 `RENAME_NOREPLACE` 的情形；该标志需要[文件系统支持](https://man7.org/linux/man-pages/man2/rename.2.html)。新版本已增加上述POSIX兼容分支。
+
+此次修复经GitHub同步后，在远程仓库根目录直接执行：
+
+```bash
+bash code/RSmol/scripts/mizar_official_recursive_5_20x2_5.sh publish \
+  --staging /mnt/cloudstorfs/sjtu_home/jinwei.zhang/models/Mizar159M-5-20x2-5-serial84-looplora-r8.staging-q492wvyj
+bash code/RSmol/scripts/mizar_official_recursive_5_20x2_5.sh verify
+```
+
+`publish` 是CPU终端入口，不导入Torch，不重新构造模型、不重新跑前向、不复制模型权重；只核对保存文件哈希、配置、来源、完整验收记录和模型实现身份，再安装现有目录。
+必须有1038份tensor精确相等、完整683-token logits精确相等及strict重载的完成记录；早先第5步失败的 `staging-aaic8a79` 不符合条件。
+
+恢复只允许 `conversion.py`、`audit.py`、`__main__.py` 这三个发布/文件审计/CLI实现身份迁移；模型、tensor runtime、配置合同、LoRA、CED、license和官方来源身份必须逐项一致。
+原manifest、转换报告和failure诊断会先备份到旁边的 `*.publication-backup-*`，然后记录迁移来源、只更新发布相关元数据，并把旧failure从正式产物移出。模型权重、config和tokenizer等资产不变。
+发布再次失败会恢复原manifest/报告，保留新的failure和诊断备份；已有正式目录（即使为空）会拒绝覆盖。目标默认仍为远程 `models/Mizar159M-5-20x2-5-serial84-looplora-r8`，可显式指定 `--output`，且必须与staging同级。
+
+`cat` 需要指向文件，例如 `cat /path/model.staging-xxx/failure.json`；staging本身是目录。
+本地39项检查通过，包含Linux标志不支持的模拟、已有目标拒绝、空占位清理/外部内容保留、失败还原、旧stage恢复和无Torch的真实CLI调用。Windows测试对POSIX替换空目录的系统调用作了适配模拟，不冒充CloudStor验证。11项真实依赖检查仍因本地缺依赖跳过；远程发布结果待用户执行确认。

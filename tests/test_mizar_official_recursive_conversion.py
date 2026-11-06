@@ -3,19 +3,24 @@ from __future__ import annotations
 
 import ast
 import copy
+import errno
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import types
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "code/RSmol"))
 from mizar_official_recursive_5_20x2_5 import audit, contract
+from mizar_official_recursive_5_20x2_5 import conversion
 from mizar_official_recursive_5_20x2_5.assets import CED_EXPECTED_CONFIG, validate_ced_config
 from mizar_official_recursive_5_20x2_5.conversion import atomic_publish
 from mizar_official_recursive_5_20x2_5.tensor_runtime import config_from_dict
@@ -229,6 +234,64 @@ class FileTests(unittest.TestCase):
             with self.assertRaises(OSError): atomic_publish(stage, target)
             self.assertTrue(stage.exists())
 
+    @staticmethod
+    def emulate_posix_empty_directory_replace(source, destination):
+        # Windows cannot replace an empty directory. Emulate just that POSIX
+        # primitive to exercise the Linux reservation path on this local host.
+        destination = Path(destination)
+        destination.rmdir()
+        FileTests.native_rename(source, destination)
+
+    native_rename = staticmethod(os.rename)
+
+    def test_linux_unsupported_rename_flags_use_reservation_with_real_file_content(self):
+        for number in (errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP):
+            staging, output = self.root / f"stage-{number}", self.root / f"out-{number}"
+            staging.mkdir()
+            (staging / "model").write_bytes(b"verified-model-fixture")
+            with patch.object(conversion.sys, "platform", "linux"), \
+                    patch.object(conversion, "_linux_noreplace", side_effect=OSError(number, "unsupported")), \
+                    patch.object(conversion.os, "rename", side_effect=self.emulate_posix_empty_directory_replace):
+                method = atomic_publish(staging, output)
+            self.assertEqual(method, "posix_rename_into_exclusive_empty_reservation")
+            self.assertEqual((output / "model").read_bytes(), b"verified-model-fixture")
+            self.assertFalse(staging.exists())
+
+    def test_linux_permission_failure_does_not_trigger_compatibility_fallback(self):
+        staging, output = self.root / "stage", self.root / "out"
+        staging.mkdir()
+        with patch.object(conversion.sys, "platform", "linux"), \
+                patch.object(conversion, "_linux_noreplace", side_effect=OSError(errno.EACCES, "denied")), \
+                patch.object(conversion, "_reserved_posix_rename") as fallback:
+            with self.assertRaises(PermissionError): atomic_publish(staging, output)
+            fallback.assert_not_called()
+        self.assertTrue(staging.exists())
+        self.assertFalse(output.exists())
+
+    def test_failed_posix_rename_removes_only_its_empty_reservation_and_keeps_stage(self):
+        staging, output = self.root / "stage", self.root / "out"
+        staging.mkdir()
+        (staging / "model").write_bytes(b"preserve")
+        with patch.object(conversion.sys, "platform", "linux"), \
+                patch.object(conversion, "_linux_noreplace", side_effect=OSError(errno.EINVAL, "flags")), \
+                patch.object(conversion.os, "rename", side_effect=OSError(errno.EIO, "I/O")):
+            with self.assertRaises(OSError): atomic_publish(staging, output)
+        self.assertFalse(output.exists())
+        self.assertEqual((staging / "model").read_bytes(), b"preserve")
+
+    def test_foreign_content_in_reservation_survives_failed_publication(self):
+        staging, output = self.root / "stage", self.root / "out"
+        staging.mkdir()
+        def fail_after_foreign_write(*args):
+            (output / "foreign").write_text("preserve")
+            raise OSError(errno.ENOTEMPTY, "directory is no longer empty")
+        with patch.object(conversion.sys, "platform", "linux"), \
+                patch.object(conversion, "_linux_noreplace", side_effect=OSError(errno.EINVAL, "flags")), \
+                patch.object(conversion.os, "rename", side_effect=fail_after_foreign_write):
+            with self.assertRaises(OSError): atomic_publish(staging, output)
+        self.assertEqual((output / "foreign").read_text(), "preserve")
+        self.assertTrue(staging.exists())
+
     def test_ced_label_indices_and_geometry_reject_incompatible_assets(self):
         config = {**CED_EXPECTED_CONFIG, "model_type": "ced", "auto_map": {
             "AutoConfig": "configuration_ced.CedConfig",
@@ -336,6 +399,120 @@ class FileTests(unittest.TestCase):
         manifest["implementation"]["model.py"] = "0" * 64
         contract.write_json(self.root / "manifest.json", manifest)
         with self.assertRaisesRegex(ValueError, "identity mismatch"): audit.audit_artifact(self.root)
+
+    def completed_stage_fixture(self):
+        outer = self.root
+        staging = outer / "model.staging-verified"
+        staging.mkdir()
+        try:
+            self.root = staging
+            manifest, assets = self.fixture_artifact()
+            # Simulate the previous publisher implementation, keeping every
+            # architecture/model/config/helper identity exactly current.
+            manifest["implementation"]["conversion.py"] = "0" * 64
+            report = audit.read_json(staging / "conversion_report.json")
+            report.update(source_alignment={"status": "PASS"}, recursive_forward={"status": "PASS"})
+            report["reload"].update(all_saved_tensors_equal=1038, full_683_token_logits_equal=True,
+                                    strict_state_dict=True)
+            contract.write_json(staging / "conversion_report.json", report)
+            self.refresh_fixture_manifest(manifest)
+            contract.write_json(staging / "failure.json", {"status": "FAIL", "error": "[Errno 22] Invalid argument"})
+        finally:
+            self.root = outer
+        return staging, outer / "model", assets
+
+    def test_publication_only_reuses_completed_stage_and_preserves_diagnostics(self):
+        staging, output, assets = self.completed_stage_fixture()
+        weights = (staging / "model.ckpt").read_bytes()
+        with patch.object(audit, "artifact_asset_records", return_value=assets):
+            result = conversion.publish_staged(staging, output, progress=lambda x: None)
+            self.assertEqual(audit.audit_artifact(output)["status"], "PASS")
+        self.assertEqual(result["scope"], "publication_only")
+        self.assertFalse(result["tensor_reexecution"])
+        self.assertFalse(staging.exists())
+        self.assertEqual((output / "model.ckpt").read_bytes(), weights)
+        self.assertFalse((output / "failure.json").exists())
+        backup = Path(result["diagnostics_backup"])
+        self.assertTrue((backup / "failure.json").is_file())
+        self.assertEqual(audit.read_json(backup / "manifest.json")["implementation"]["conversion.py"], "0" * 64)
+        self.assertFalse(output.with_name("model.conversion.lock").exists())
+
+    def test_publication_only_rejects_model_identity_change(self):
+        staging, output, assets = self.completed_stage_fixture()
+        manifest = audit.read_json(staging / "manifest.json")
+        manifest["implementation"]["model.py"] = "0" * 64
+        contract.write_json(staging / "manifest.json", manifest)
+        with self.assertRaisesRegex(ValueError, "model/contract implementation changed"):
+            conversion.publish_staged(staging, output, progress=lambda x: None)
+        self.assertFalse(output.exists())
+        self.assertTrue((staging / "failure.json").exists())
+
+    def test_publication_only_rejects_prior_incomplete_reload(self):
+        staging, output, assets = self.completed_stage_fixture()
+        report = audit.read_json(staging / "conversion_report.json")
+        report["reload"] = "PENDING"
+        contract.write_json(staging / "conversion_report.json", report)
+        manifest = audit.read_json(staging / "manifest.json")
+        manifest["files"] = [audit.file_record(staging, staging / i["path"]) for i in manifest["files"]]
+        contract.write_json(staging / "manifest.json", manifest)
+        with patch.object(audit, "artifact_asset_records", return_value=assets), \
+                self.assertRaisesRegex(ValueError, "mandatory tensor/logits reload"):
+            conversion.publish_staged(staging, output, progress=lambda x: None)
+        self.assertFalse(output.exists())
+
+    def test_publication_only_requires_actual_completed_reload_fields_beyond_pass_label(self):
+        staging, output, assets = self.completed_stage_fixture()
+        report = audit.read_json(staging / "conversion_report.json")
+        report["reload"] = {"status": "PASS"}
+        contract.write_json(staging / "conversion_report.json", report)
+        manifest = audit.read_json(staging / "manifest.json")
+        manifest["files"] = [audit.file_record(staging, staging / i["path"]) for i in manifest["files"]]
+        contract.write_json(staging / "manifest.json", manifest)
+        with patch.object(audit, "artifact_asset_records", return_value=assets), \
+                self.assertRaisesRegex(ValueError, "completed source, forward, tensor and logits"):
+            conversion.publish_staged(staging, output, progress=lambda x: None)
+        self.assertFalse(output.exists())
+
+    def test_cli_publish_runs_without_importing_tensor_dependencies(self):
+        from mizar_official_recursive_5_20x2_5.__main__ import main
+        staging, output, assets = self.completed_stage_fixture()
+        captured, errors = io.StringIO(), io.StringIO()
+        with patch.object(audit, "artifact_asset_records", return_value=assets), \
+                patch.dict(sys.modules, {"torch": None, "transformers": None, "torchaudio": None}), \
+                redirect_stdout(captured), redirect_stderr(errors):
+            result = main(["publish", "--staging", str(staging), "--output", str(output)])
+        self.assertEqual(result, 0, errors.getvalue())
+        self.assertIn('"tensor_reexecution": false', captured.getvalue())
+        self.assertTrue((output / "model.ckpt").is_file())
+
+    def test_publication_only_detects_saved_weight_tamper(self):
+        staging, output, assets = self.completed_stage_fixture()
+        (staging / "model.ckpt").write_text("tampered")
+        with patch.object(audit, "artifact_asset_records", return_value=assets), \
+                self.assertRaisesRegex(ValueError, "SHA256/size mismatch"):
+            conversion.publish_staged(staging, output, progress=lambda x: None)
+        self.assertFalse(output.exists())
+
+    def test_publication_failure_restores_metadata_and_preserves_new_diagnostics(self):
+        staging, output, assets = self.completed_stage_fixture()
+        manifest_before = (staging / "manifest.json").read_bytes()
+        report_before = (staging / "conversion_report.json").read_bytes()
+        with patch.object(audit, "artifact_asset_records", return_value=assets), \
+                patch.object(conversion, "atomic_publish", side_effect=OSError(errno.EIO, "failed publish")), \
+                self.assertRaises(OSError):
+            conversion.publish_staged(staging, output, progress=lambda x: None)
+        self.assertEqual((staging / "manifest.json").read_bytes(), manifest_before)
+        self.assertEqual((staging / "conversion_report.json").read_bytes(), report_before)
+        self.assertIn("failed publish", audit.read_json(staging / "failure.json")["error"])
+        self.assertFalse(output.exists())
+
+    def test_publication_only_rejects_existing_empty_final_directory(self):
+        staging, output, assets = self.completed_stage_fixture()
+        output.mkdir()
+        with self.assertRaises(FileExistsError):
+            conversion.publish_staged(staging, output, progress=lambda x: None)
+        self.assertTrue(staging.exists())
+        self.assertEqual(list(output.iterdir()), [])
 
 
 if __name__ == "__main__":

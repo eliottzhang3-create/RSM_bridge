@@ -1,3 +1,28 @@
+## 2026-11-06：官方 Mizar 5+20×2+5，第6步CloudStor发布兼容与续发布
+
+用户新日志已到第6步，staging为 `Mizar159M-5-20x2-5-serial84-looplora-r8.staging-q492wvyj`，
+随后目录发布报 `[Errno 22] Invalid argument`。按控制流，模型完整转换、首次前向及保存重载全部已完成；
+正式目录发布尚未通过，不登记整条流程最终PASS。错误符合CloudStor不支持renameat2的RENAME_NOREPLACE标志。
+
+`atomic_publish()`对EINVAL/ENOSYS/EOPNOTSUPP增加兼容：独占mkdir全新空目标，再用普通POSIX rename
+原子替换本进程占位。已有目标拒绝；权限等错误不回退；失败只rmdir仍归自己的空占位，保留非空/被替换目录。
+新增独立 `publish --staging ...`，只验证已有文件/完成验收记录并发布，不导入Torch、不重跑模型、不复制模型权重。
+恢复仅允许conversion.py/audit.py/__main__.py的发布相关身份迁移，模型/合同/所有其他身份需一致；
+原manifest/report/failure先备份到旁边publication-backup目录，再记录迁移；失败恢复原元数据。
+要求strict、1038 tensor及683-token logits完整重载记录，因此旧第5步失败stage不可复用。
+
+经GitHub同步修复后，远程仓库根目录执行：
+
+```bash
+bash code/RSmol/scripts/mizar_official_recursive_5_20x2_5.sh publish --staging /mnt/cloudstorfs/sjtu_home/jinwei.zhang/models/Mizar159M-5-20x2-5-serial84-looplora-r8.staging-q492wvyj
+bash code/RSmol/scripts/mizar_official_recursive_5_20x2_5.sh verify
+```
+
+本地39项通过、11项真实依赖检查跳过，15个Python/Bash语法与原母本保护检查通过。
+新增覆盖Linux不支持标志模拟、空占位/外部内容保护、失败恢复、完成记录/字节/模型身份拒绝、旧stage兼容与无Torch CLI。
+Windows对POSIX替换空目录调用有适配模拟，尚未实测CloudStor发布，不冒充远程PASS。
+未执行commit/push、远程命令或训练。诊断应cat目录内的failure.json，不能cat staging目录本身。
+
 ## 2026-11-06：官方 Mizar 5+20×2+5，第5步配置重载失败修复
 
 用户反馈远程转换进入第5步后报 `recursive config must preserve every original source config field`，
