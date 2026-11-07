@@ -1,0 +1,165 @@
+{
+  "status": "PASS",
+  "scope": "local source audit; no real assets or GPU execution",
+  "route_code_sha256": "c8d5f71229fc4595e88ba607df709c0cbdb2e43591af320dc818df4c652c54ed",
+  "protected_originals": {
+    "files": 257,
+    "all_unchanged": true
+  },
+  "checked_copied_sources": [
+    "audit_reference.py",
+    "check_ced_assets.py",
+    "contract.py",
+    "data/audio_paths.py",
+    "data/audiotext_dataset.py",
+    "data/fixed20.py",
+    "data/indexed_jsonl.py",
+    "data/prepared_index.py",
+    "data/sampler.py",
+    "data/staging.py",
+    "data/template.py",
+    "models/audio.py",
+    "models/ced.py",
+    "models/ced_offline.py",
+    "models/decoder.py",
+    "models/loop_lora.py",
+    "models/mellow.py",
+    "models/recursive_layer_inject.py",
+    "models/recursive_text.py",
+    "optim.py",
+    "prepare_index.py",
+    "run.sh",
+    "runtime_checks.py",
+    "stage_data.py",
+    "train.py",
+    "utils/audio_io.py",
+    "write_config.py"
+  ],
+  "identical_source_files_except_route_names": [
+    "check_ced_assets.py",
+    "data/audio_paths.py",
+    "data/audiotext_dataset.py",
+    "data/fixed20.py",
+    "data/indexed_jsonl.py",
+    "data/prepared_index.py",
+    "data/sampler.py",
+    "data/staging.py",
+    "data/template.py",
+    "models/audio.py",
+    "models/ced.py",
+    "models/ced_offline.py",
+    "models/decoder.py",
+    "models/mellow.py",
+    "models/recursive_layer_inject.py",
+    "models/recursive_text.py",
+    "prepare_index.py",
+    "run.sh",
+    "stage_data.py",
+    "utils/audio_io.py"
+  ],
+  "training_parity": {
+    "entire_train_function_ast_equal_after_explicit_audits": true,
+    "entire_train_module_equal_after_role_and_gradient_audit_changes": true
+  },
+  "backbone_parity": {
+    "entire_backbone_ast_equal_after_metadata": true,
+    "entire_parent_backbone_ast_equal": true
+  },
+  "common_recipe_equal": true,
+  "launcher_resources_and_arguments_equal": true,
+  "loop_lora": {
+    "contract": "loop_specific_shared_attention_shared_plus_modality_mlp_lora_v1",
+    "physical_layers_0based": [
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "logical_ranges_0based_inclusive": [
+      [
+        5,
+        14
+      ],
+      [
+        15,
+        24
+      ]
+    ],
+    "targets": [
+      "self_attn.q_proj",
+      "self_attn.k_proj",
+      "self_attn.v_proj",
+      "self_attn.o_proj",
+      "mlp.gate_proj",
+      "mlp.up_proj",
+      "mlp.down_proj"
+    ],
+    "rank": 8,
+    "alpha_by_family": {
+      "attention_shared": 16,
+      "mlp_shared": 8,
+      "mlp_audio": 8,
+      "mlp_text": 8
+    },
+    "scale_by_family": {
+      "attention_shared": 2.0,
+      "mlp_shared": 1.0,
+      "mlp_audio": 1.0,
+      "mlp_text": 1.0
+    },
+    "dropout": 0.0,
+    "loops": 2,
+    "A_init": "kaiming_uniform_a_sqrt5",
+    "B_init": "zeros",
+    "initialization_rng": "isolated_cpu",
+    "base_trainable": true,
+    "shared_base_between_loops": true,
+    "independent_per_layer_projection_loop": true,
+    "prefix_suffix_lora": false,
+    "positions": "shared_attention_full_sequence_mlp_shared_plus_fixed_audio_text_slices",
+    "max_lr": 0.0006,
+    "attention_sharing": "audio_text_shared_per_layer_projection_loop",
+    "mlp_sharing": "shared_plus_audio_text_independent_per_layer_projection_loop",
+    "mlp_composition": "parallel_shared_plus_own_modality_from_same_projection_input",
+    "mlp_active_branches_per_token": 2,
+    "mlp_sum_scale_coefficients": 2.0,
+    "attention_targets": [
+      "self_attn.q_proj",
+      "self_attn.k_proj",
+      "self_attn.v_proj",
+      "self_attn.o_proj"
+    ],
+    "mlp_targets": [
+      "mlp.gate_proj",
+      "mlp.up_proj",
+      "mlp.down_proj"
+    ],
+    "audio_positions": [
+      0,
+      126
+    ],
+    "text_start": 126,
+    "text_includes_separator": true,
+    "selection": "fixed_token_positions_no_learned_router",
+    "base_projection": "full_sequence_once",
+    "matrix_count": 520,
+    "adapter_pairs": 260,
+    "parameters_by_family": {
+      "attention_shared": 614400,
+      "mlp_shared": 1013760,
+      "mlp_audio": 1013760,
+      "mlp_text": 1013760
+    },
+    "weight_decay": 0.01,
+    "new_parameters": 3655680,
+    "use_cache": false,
+    "gradient_checkpointing": false,
+    "merge_adapters": false
+  }
+}

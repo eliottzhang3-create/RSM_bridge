@@ -1,0 +1,153 @@
+"""Dependency-free, fixed conversion and future-training contracts."""
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+RSMOL = HERE.parent
+RELEASE_FILE = RSMOL / "mizar_official_eval/release_manifest.json"
+DEFAULT_SOURCE = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M")
+DEFAULT_OUTPUT = DEFAULT_SOURCE.with_name("Mizar159M-5-20x2-5-input-reinject")
+ROUTE = "mizar_official_final_5_20x2_5_input_reinject_gbs128_v1"
+SCHEMA = "mizar_recursive_model_only_initialization_v1"
+SCHEDULE = tuple(range(25)) + tuple(range(5, 25)) + tuple(range(25, 30))
+SINGLE_PASS_SCHEDULE = tuple(range(30))
+MIDDLE_LAYERS = tuple(range(5, 25))
+INJECTION_INDICES = (5, 25)
+INPUT_TRACE = (5, 25)
+AUDIO_TOKENS = 126
+BASE_PARAMETERS = 159299840
+AUDIO_PARAMETERS = 332929
+TOTAL_PARAMETERS = BASE_PARAMETERS + AUDIO_PARAMETERS
+NEW_TENSORS = 4
+TOKENIZER_FILES = ("config.json", "generation_config.json", "merges.txt",
+                   "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json", "vocab.json")
+
+
+def sha256_file(path):
+    value = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(4 * 1024**2), b""):
+            value.update(block)
+    return value.hexdigest()
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def write_json(path, value):
+    Path(path).write_text(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
+                          + "\n", encoding="utf-8", newline="\n")
+
+
+def implementation_identity():
+    files = {p.name: hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+             for p in sorted(HERE.glob("*.py"))}
+    for name in ("LICENSE", "NOTICE", "licenses/Mizar-ClearBSD.txt"):
+        files[name] = hashlib.sha256((HERE / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    files["../mizar_official_eval/release_manifest.json"] = sha256_file(RELEASE_FILE)
+    return files
+
+
+def architecture():
+    return {"physical_layers": 30, "logical_layers": 50, "loops": 2,
+            "prelude": [0, 4], "middle": [5, 24], "coda": [25, 29],
+            "schedule": list(SCHEDULE), "source_layer_mapping": list(range(30)),
+            "memory_slots": 0, "routers": 0, "hidden_size": 576,
+            "lora": False, "encoder_intermediate_injection": False,
+            "injection": {"indices": list(INJECTION_INDICES), "trace": list(INPUT_TRACE),
+                          "audio_tokens": AUDIO_TOKENS,
+                          "input_source": "original_final_mapper_audio_embeddings",
+                          "input_projection_and_gate_shared": True,
+                          "input_projection_once_per_lm_forward": True,
+                          "gate_condition": "current_audio_hidden_before_residual",
+                          "gate": "tanh_Linear_hidden_1_per_token",
+                          "gate_initialization": "zero_weight_and_bias",
+                          "linear_bias_initialization": "zero",
+                          "linear_weight_initialization": "torch_nn_Linear_default_uniform",
+                          "detach_residual": False, "parameters": AUDIO_PARAMETERS},
+            "use_cache": False, "gradient_checkpointing": False}
+
+
+def training_intent():
+    """Record user choices; conversion is not a completed/resumable train run."""
+    return {"implemented": False, "rows": 1477492, "epochs": 3, "world_size": 8,
+            "microbatch": 4, "accumulation": 4, "global_batch": 128,
+            "steps_per_epoch": 11542, "total_steps": 34626, "warmup_steps": 1731,
+            "warmup_rounding": "round_5pct_like_reference", "precision": "float32",
+            "lr": {"recurrent_base": 6e-4, "new_parameters": 6e-4,
+                   "mapper": 3e-4, "other_inherited_lm": 3e-4},
+            "ced": "frozen_eval", "optimizer_state": "not_in_initialization_artifact"}
+
+
+def validate_source_text_config(config):
+    expected = {"model_type": "llama", "num_hidden_layers": 30, "hidden_size": 576,
+                "intermediate_size": 1536, "num_attention_heads": 9,
+                "num_key_value_heads": 3, "vocab_size": 49152, "tie_word_embeddings": True}
+    problems = {key: (config.get(key), value) for key, value in expected.items()
+                if config.get(key) != value}
+    if problems:
+        raise ValueError(f"official source text configuration mismatch: {problems}")
+
+
+def build_text_config(source):
+    import copy
+    value = copy.deepcopy(source)
+    validate_source_text_config(value)
+    value.update(num_hidden_layers=50, recursive_layer_count=30, recursive_loops=2,
+                 recursive_prefix_layer_count=5, recursive_middle_layer_count=20,
+                 recursive_suffix_layer_count=5, logical_to_physical=list(SCHEDULE),
+                 recursive_source_layer_indices_0based=list(range(30)),
+                 recursive_loops_scope="middle_only", use_cache=False,
+                 torch_dtype="float32", architectures=["MizarInputOnlyRecursiveForCausalLM"])
+    return value
+
+
+def validate_config_preservation(value, source):
+    """Keep the exact persistence contract; report which top-level fields differ."""
+    expected = build_text_config(source)
+    if value != expected:
+        extra = sorted(set(value) - set(expected))
+        missing = sorted(set(expected) - set(value))
+        changed = sorted(key for key in set(value) & set(expected) if value[key] != expected[key])
+        raise ValueError("recursive config must preserve every original source config field; "
+                         f"extra={extra}; missing={missing}; changed={changed}")
+
+
+def validate_text_config(value, *, production=True):
+    expected = {"num_hidden_layers": 50, "recursive_layer_count": 30,
+                "recursive_loops": 2, "recursive_prefix_layer_count": 5,
+                "recursive_middle_layer_count": 20, "recursive_suffix_layer_count": 5,
+                "logical_to_physical": list(SCHEDULE), "use_cache": False,
+                "recursive_loops_scope": "middle_only",
+                "recursive_source_layer_indices_0based": list(range(30))}
+    if any(value.get(key) != item for key, item in expected.items()):
+        raise ValueError("requires the exact logical50 / physical30 / 5+20x2+5 contract")
+    if production:
+        source = dict(value, num_hidden_layers=30)
+        validate_source_text_config(source)
+
+
+def parameter_role(name):
+    if name.startswith("audio_encoder.base.ced."):
+        return "frozen_ced", None
+    if name.startswith("audio_encoder.base.mapper."):
+        return "mapper", 3e-4
+    if name.startswith(("caption_decoder.lm.model.audio_linear.", "caption_decoder.lm.model.audio_gate.")):
+        return "new_audio", 6e-4
+    if name.startswith("caption_decoder.lm.model.layers."):
+        parts = name.split(".")
+        if not parts[4].isdigit() or not 0 <= int(parts[4]) < 30:
+            raise ValueError(f"invalid physical layer parameter: {name}")
+        middle = int(parts[4]) in MIDDLE_LAYERS
+        if ".lora_" in name:
+            raise ValueError(f"input-only model must not contain LoRA: {name}")
+        return ("recurrent_base", 6e-4) if middle else ("outer_lm", 3e-4)
+    if name.startswith(("caption_decoder.lm.model.embed_tokens.",
+                        "caption_decoder.lm.model.norm.", "caption_decoder.lm.lm_head.")):
+        return "other_inherited_lm", 3e-4
+    raise ValueError(f"unclassified model parameter: {name}")

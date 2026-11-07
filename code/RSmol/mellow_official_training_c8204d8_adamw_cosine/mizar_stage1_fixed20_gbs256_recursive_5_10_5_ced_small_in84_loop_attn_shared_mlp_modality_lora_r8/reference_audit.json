@@ -1,0 +1,188 @@
+{
+  "status": "PASS",
+  "scope": "local source audit; no real assets or GPU execution",
+  "route_code_sha256": "3ccc1b36ca7dab75b1557d337bb15e4280b6209b130d71071331ea949aa1b1a6",
+  "protected_originals": {
+    "files": 146,
+    "all_unchanged": true
+  },
+  "checked_copied_sources": [
+    "audit_reference.py",
+    "check_ced_assets.py",
+    "contract.py",
+    "data/audio_paths.py",
+    "data/audiotext_dataset.py",
+    "data/fixed20.py",
+    "data/indexed_jsonl.py",
+    "data/prepared_index.py",
+    "data/sampler.py",
+    "data/staging.py",
+    "data/template.py",
+    "models/audio.py",
+    "models/ced.py",
+    "models/ced_offline.py",
+    "models/decoder.py",
+    "models/loop_lora.py",
+    "models/mellow.py",
+    "models/recursive_layer_inject.py",
+    "models/recursive_text.py",
+    "optim.py",
+    "prepare_index.py",
+    "run.sh",
+    "runtime_checks.py",
+    "stage_data.py",
+    "train.py",
+    "utils/audio_io.py",
+    "write_config.py"
+  ],
+  "identical_source_files_except_route_names": [
+    "check_ced_assets.py",
+    "data/audio_paths.py",
+    "data/audiotext_dataset.py",
+    "data/fixed20.py",
+    "data/indexed_jsonl.py",
+    "data/prepared_index.py",
+    "data/sampler.py",
+    "data/staging.py",
+    "data/template.py",
+    "models/audio.py",
+    "models/ced.py",
+    "models/ced_offline.py",
+    "models/decoder.py",
+    "models/mellow.py",
+    "models/recursive_text.py",
+    "prepare_index.py",
+    "run.sh",
+    "stage_data.py",
+    "utils/audio_io.py"
+  ],
+  "preserved_functions": {
+    "train.py": [
+      "collective_require",
+      "rng_state",
+      "restore_rng",
+      "tensor_digest",
+      "role_snapshots",
+      "weights_changed",
+      "move_batch",
+      "answer_loss",
+      "inspect_tokenizer",
+      "audit_checkpoint_tokenizer",
+      "probe_sources",
+      "save_checkpoint",
+      "reload_audit",
+      "main"
+    ],
+    "contract.py": [
+      "geometry",
+      "lr_factor",
+      "data_order",
+      "rank_seed",
+      "raw_references",
+      "recursive_checkpoint_contract",
+      "validate_recursive_config_values",
+      "validate_ced_assets",
+      "validate_tokenizer_contract",
+      "validate_checkpoint_tokenizer",
+      "code_digest"
+    ]
+  },
+  "training_parity": {
+    "entire_train_function_ast_equal_after_explicit_audits": true,
+    "additions": [
+      "message",
+      "execution_diagnostic",
+      "message"
+    ]
+  },
+  "backbone_parity": {
+    "entire_backbone_ast_equal_after_metadata": true,
+    "additions": [
+      "reset_import",
+      "metadata_reset",
+      "shape_metadata"
+    ]
+  },
+  "common_recipe_equal": true,
+  "loop_lora": {
+    "contract": "loop_specific_shared_attention_modality_mlp_lora_v1",
+    "physical_layers_0based": [
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "logical_ranges_0based_inclusive": [
+      [
+        5,
+        14
+      ],
+      [
+        15,
+        24
+      ]
+    ],
+    "targets": [
+      "self_attn.q_proj",
+      "self_attn.k_proj",
+      "self_attn.v_proj",
+      "self_attn.o_proj",
+      "mlp.gate_proj",
+      "mlp.up_proj",
+      "mlp.down_proj"
+    ],
+    "rank": 8,
+    "alpha": 16,
+    "scale": 2.0,
+    "dropout": 0.0,
+    "loops": 2,
+    "A_init": "kaiming_uniform_a_sqrt5",
+    "B_init": "zeros",
+    "initialization_rng": "isolated_cpu",
+    "base_trainable": true,
+    "shared_base_between_loops": true,
+    "independent_per_layer_projection_loop": true,
+    "prefix_suffix_lora": false,
+    "positions": "shared_attention_full_sequence_mlp_fixed_audio_text_slices",
+    "max_lr": 0.0006,
+    "attention_sharing": "audio_text_shared_per_layer_projection_loop",
+    "mlp_sharing": "audio_text_independent_per_layer_projection_loop",
+    "attention_targets": [
+      "self_attn.q_proj",
+      "self_attn.k_proj",
+      "self_attn.v_proj",
+      "self_attn.o_proj"
+    ],
+    "mlp_targets": [
+      "mlp.gate_proj",
+      "mlp.up_proj",
+      "mlp.down_proj"
+    ],
+    "audio_positions": [
+      0,
+      126
+    ],
+    "text_start": 126,
+    "text_includes_separator": true,
+    "selection": "fixed_token_positions_no_learned_router",
+    "base_projection": "full_sequence_once",
+    "matrix_count": 400,
+    "adapter_pairs": 200,
+    "parameters_by_family": {
+      "attention_shared": 614400,
+      "mlp_audio": 1013760,
+      "mlp_text": 1013760
+    },
+    "weight_decay": 0.01,
+    "new_parameters": 2641920,
+    "use_cache": false,
+    "gradient_checkpointing": false,
+    "merge_adapters": false
+  }
+}

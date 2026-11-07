@@ -1,0 +1,23 @@
+Official Mizar final / 5+20x2+5 / input-only recursive initialization adaptation
+
+The model architecture is derived from Mellow, Copyright (c) 2024 Soham,
+under the MIT License retained in LICENSE.
+
+The CED mapper definitions and fixed20 online audio policy are derived from
+kaiyangli-ml/Mizar_159M and the project's isolated serial8->4 / loop-LoRA
+reference route. The fixed20 policy follows pipeline/build_ced_cache.py.
+
+Mizar: Copyright (c) 2026 NEC Laboratories America, Inc.
+All rights reserved. The Clear BSD License is retained in
+licenses/Mizar-ClearBSD.txt.
+
+The CEDFrequencyMerger and CEDTemporalMapper definitions and initialization
+are retained from Mizar runtime/stage1/models/ced.py. The CED encoder model
+code and weights are separate remote assets and retain their own terms.
+
+This route retains all thirty final-trained physical layers, executes the
+middle twenty twice, and adds only the shared mapped-input projection and
+zero-initialized tanh gate before both middle passes. There is no LoRA or
+encoder-intermediate injection. It supplies model-only audit, conversion and reload,
+without training or optimizer state. Implementation identities and release
+file hashes are recorded in the converted manifest and audit reports.

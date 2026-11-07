@@ -1,0 +1,30 @@
+Official-final Mizar / 5+20x2+5 / shared gated audio input reinjection only
+
+The model architecture is derived from Mellow, Copyright (c) 2024 Soham,
+under the MIT License retained in LICENSE.
+
+The Stage 1 text templates, text construction/tokenization semantics,
+distributed sampler, optimizer/scheduler and adaptive gradient clipping
+are derived from kaiyangli-ml/Mizar_159M. The fixed20 online audio policy
+is adapted from its pipeline/build_ced_cache.py.
+
+Mizar: Copyright (c) 2026 NEC Laboratories America, Inc.
+All rights reserved. The Clear BSD License is retained in
+licenses/Mizar-ClearBSD.txt.
+
+The CEDFrequencyMerger and CEDTemporalMapper definitions and initialization
+are retained from Mizar runtime/stage1/models/ced.py. The CED encoder model
+code and weights are separate remote assets and retain their own terms.
+
+This route adds CED online audio decoding/staging, explicit training
+audits, eight-GPU microbatch-four with four-step gradient accumulation,
+and complete-state checkpoints.
+Original source file identities are recorded in source_guard.json.
+
+Data, text, loss, sampler, AdamW, LambdaLR, gradient clipping and staging
+semantics are retained from the isolated serial CED8->4 loop-r8 S1 route.
+The complete model architecture is reused from the unchanged package
+mizar_official_recursive_5_20x2_5. It preserves all thirty physical layers,
+the trained official-final mapper/LM/CED and every converted input projection/gate tensor.
+Training code is separate so existing conversion artifact identity stays valid.
+This variant registers no LoRA or encoder-intermediate MLP/gate modules.
