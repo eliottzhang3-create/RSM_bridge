@@ -40,6 +40,41 @@ case "$EVAL_VARIANT" in
     JOB_NAME_PREFIX="mizar-ced-r515-${JOB_TAG}-mmar"
     JOB_LOG_PREFIX="mizar_s1_ced_small_${EVAL_VARIANT}_mmar_5090"
     ;;
+  recursive_mesh_4slot|recursive_mesh_6slot|recursive_mesh_7slot_v2|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r4|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_modality_lora_r8|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_shared_modality_lora_r8|official_final_s1_5_20x2_5)
+    case "$EVAL_VARIANT" in
+      recursive_mesh_4slot)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_4slot_3090/formal_20261107_203129899582015
+        DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_4slot_ced_small"
+        JOB_TAG=ext1; DEFAULT_EXPECTED_STEP=17313; DEFAULT_EXPECTED_GEOMETRY=8,8,4 ;;
+      recursive_mesh_6slot)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_6slot_3090/formal_20261106_092419698981503
+        DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_6slot_ced_small"
+        JOB_TAG=ext2; DEFAULT_EXPECTED_STEP=17313; DEFAULT_EXPECTED_GEOMETRY=8,8,4 ;;
+      recursive_mesh_7slot_v2)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_7slot_v2_3090/formal_20261107_215615398982617
+        DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small"
+        JOB_TAG=ext3; DEFAULT_EXPECTED_STEP=17313; DEFAULT_EXPECTED_GEOMETRY=8,8,4 ;;
+      recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r4)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r4_5090/formal_20261107_215916042121396
+        DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject_loop_lora_r4"
+        JOB_TAG=ext4; DEFAULT_EXPECTED_STEP=17313; DEFAULT_EXPECTED_GEOMETRY=8,8,4 ;;
+      recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_modality_lora_r8)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_modality_lora_r8_5090/formal_20261107_215838489409042
+        DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_recursive_5_10_5_ced_small_in84_loop_attn_shared_mlp_modality_lora_r8"
+        JOB_TAG=ext5; DEFAULT_EXPECTED_STEP=17313; DEFAULT_EXPECTED_GEOMETRY=8,8,4 ;;
+      recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_shared_modality_lora_r8)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_shared_modality_lora_r8_5090/formal_20261107_215949376143529
+        DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_recursive_5_10_5_ced_small_in84_loop_attn_shared_mlp_both_lora_r8"
+        JOB_TAG=ext6; DEFAULT_EXPECTED_STEP=17313; DEFAULT_EXPECTED_GEOMETRY=8,8,4 ;;
+      official_final_s1_5_20x2_5)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_official_final_s1_gbs128_5_20x2_5_5090/formal_20261107_003434623913704
+        DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_official_final_s1_gbs128_5_20x2_5"
+        JOB_TAG=ext7; DEFAULT_EXPECTED_STEP=34626; DEFAULT_EXPECTED_GEOMETRY=8,4,4 ;;
+    esac
+    EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh
+    JOB_NAME_PREFIX="mizar-ced-multi-${JOB_TAG}-mmar"
+    JOB_LOG_PREFIX="mizar_s1_ced_small_${EVAL_VARIANT}_mmar_5090"
+    ;;
   recursive_5_10_5_layer36912_crossattn|recursive_5_10_5_layer36912_query32_crossattn|recursive_mesh_layer4_8_inject|recursive_mesh_layer4_8_listen|recursive_mesh_layer36912_listen|recursive_mesh_layer4_8_audio7slot_split3|recursive_mesh_layer4_8_audio7slot_split3_inject|recursive_mesh_layer8_4_inject|recursive_mesh_layer4_8_audio7slot_split3_prompt_mix|recursive_5_10_5_layer8_4_inject_audio_reinject|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8|recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8|recursive_mesh_layer4_8_inject_loop_lora_r8|recursive_mesh_5_10x4_5|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r16|recursive_textmesh_layer8_4_inject_audio_reinject_loop_lora_r16|recursive_textmesh_layer8_4_inject_audio_reinject_loop_modality_lora_r8)
     RUN_STAMP=
     case "$EVAL_VARIANT" in

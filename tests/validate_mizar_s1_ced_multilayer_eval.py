@@ -1,4 +1,4 @@
-"""Validate the seventeen-route CED evaluator, existing recursive and base/MeSH regressions.
+"""Validate the twenty-four-route CED evaluator and existing recursive/base regressions.
 
 No downloads, production weights, CUDA or job submission. --require-tensors
 turns any missing tensor dependency or skipped tensor check into failure.
@@ -19,6 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RSMOL = ROOT / "code/RSmol"
 TEST_FILES = (
+    "test_mizar_s1_ced_eval_extensions.py",
+    "test_mizar_s1_ced_eval_extensions_tensor.py",
     "test_mizar_s1_ced_multilayer_eval.py",
     "test_mizar_s1_ced_multilayer_eval_workflow.py",
     "test_mizar_s1_ced_multilayer_eval_shell.py",
@@ -61,7 +63,8 @@ def main():
     args = parser.parse_args()
     results = []
     sources = [RSMOL / "scripts" / name for name in (
-        "evaluate_mizar_s1_ced_multilayer_benchmark.py", "mizar_s1_ced_multilayer_eval_runtime.py")]
+        "evaluate_mizar_s1_ced_multilayer_benchmark.py", "mizar_s1_ced_multilayer_eval_runtime.py",
+        "mizar_s1_ced_official_recursive_eval_runtime.py")]
     sources += [ROOT / "tests" / name for name in TEST_FILES] + [Path(__file__)]
     for path in sources:
         compile(path.read_text(encoding="utf-8-sig"), str(path), "exec")
@@ -104,7 +107,7 @@ def main():
             result["historical_snapshot_test_replaced"] = {
                 "test": HISTORICAL_SNAPSHOT_TEST,
                 "replacement": "test_training_snapshots_preserve_every_file_outside_authorized_evaluator_extension",
-                "reason": "authorized changes to two evaluation launchers, adapter and evaluation README; training snapshots unchanged"}
+                "reason": "authorized changes to evaluation launchers, adapters, runner identity and README; training snapshots unchanged"}
         if result["status"] == "PASS" and result["tests"] == result["skipped"]:
             result["status"] = "SKIPPED"
         results.append(result)

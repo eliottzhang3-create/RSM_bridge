@@ -19,7 +19,8 @@ sys.path.insert(0, str(ROOT / "code/RSmol/scripts"))
 import mizar_s1_ced_multilayer_eval_runtime as adapter
 
 HAS_TENSORS = all(importlib.util.find_spec(name) is not None for name in ("torch", "transformers"))
-LORA_VARIANTS = tuple(variant for variant, spec in adapter.ROUTE_SPECS.items() if spec.get("loop_lora"))
+LEGACY_SPECS = {name: spec for name, spec in adapter.ROUTE_SPECS.items() if not spec.get("extension")}
+LORA_VARIANTS = tuple(variant for variant, spec in LEGACY_SPECS.items() if spec.get("loop_lora"))
 
 
 def load_module(name, path):
@@ -40,7 +41,7 @@ class MultilayerTensorTests(unittest.TestCase):
         torch.set_num_threads(1)
         cls.modules = {}
         cls.namespaces = {}
-        for variant, spec in adapter.ROUTE_SPECS.items():
+        for variant, spec in LEGACY_SPECS.items():
             # Isolate the real same-named training packages for each route.
             with patch.dict(sys.modules):
                 for name in list(sys.modules):
@@ -91,7 +92,7 @@ class MultilayerTensorTests(unittest.TestCase):
             if kind == "serial":
                 core.enable_audio_reinjection()
                 gate_modules.append(core.audio_gate)
-        elif kind == "mesh_x4":
+        elif kind in ("mesh_x4", "plain_mesh"):
             gate_modules = []
         elif spec["context_kind"] in ("pair", "seeds"):
             core.enable_audio_listen()
@@ -115,7 +116,8 @@ class MultilayerTensorTests(unittest.TestCase):
                 for physical in range(5, 15):
                     for target in adapter.LOOP_LORA_TARGETS:
                         projection = core.layers[physical].get_submodule(target)
-                        groups = (projection.lora_B.values() if spec.get("modality_lora") else (projection.lora_B,))
+                        groups = (projection.lora_B.values() if spec.get("modality_lora") or spec.get("family_lora")
+                                  else (projection.lora_B,))
                         for group in groups:
                             for loop, matrix in enumerate(group):
                                 matrix.normal_(0., .03 * (loop + 1))
@@ -152,7 +154,7 @@ class MultilayerTensorTests(unittest.TestCase):
 
     def test_hooks_preserve_real_logits_state_and_transient_memory_for_all_routes(self):
         t = self.torch
-        for variant in adapter.ROUTE_SPECS:
+        for variant in LEGACY_SPECS:
             with self.subTest(variant=variant), t.inference_mode():
                 lm, (prefix, context) = self.model(variant), self.inputs(variant)
                 state = copy.deepcopy(lm.state_dict())
@@ -169,7 +171,7 @@ class MultilayerTensorTests(unittest.TestCase):
 
     def test_adapter_matches_direct_model_logits_and_tokens_at_every_decode_step(self):
         t = self.torch
-        for variant in adapter.ROUTE_SPECS:
+        for variant in LEGACY_SPECS:
             with self.subTest(variant=variant), t.inference_mode():
                 lm, (prefix, context) = self.model(variant), self.inputs(variant)
                 expected_logits, expected_ids, sequence = [], [], prefix
@@ -195,7 +197,7 @@ class MultilayerTensorTests(unittest.TestCase):
 
     def test_training_decoder_and_prefix_evaluation_first_answer_logits_align(self):
         t = self.torch
-        for variant in adapter.ROUTE_SPECS:
+        for variant in LEGACY_SPECS:
             with self.subTest(variant=variant), t.inference_mode():
                 decoder_class = self.modules[variant][3].DecoderModel
                 decoder = decoder_class.__new__(decoder_class)
@@ -223,7 +225,7 @@ class MultilayerTensorTests(unittest.TestCase):
 
     def test_strict_roundtrip_preserves_learned_branches_and_missing_keys_fail(self):
         t = self.torch
-        for variant in adapter.ROUTE_SPECS:
+        for variant in LEGACY_SPECS:
             with self.subTest(variant=variant), t.inference_mode():
                 lm, (prefix, context) = self.model(variant), self.inputs(variant)
                 restored = self.model(variant)
@@ -236,7 +238,7 @@ class MultilayerTensorTests(unittest.TestCase):
 
     def test_samples_and_prompt_masks_never_leak_across_full_forwards(self):
         t = self.torch
-        for variant in adapter.ROUTE_SPECS:
+        for variant in LEGACY_SPECS:
             with self.subTest(variant=variant), t.inference_mode():
                 lm, (prefix, context) = self.model(variant), self.inputs(variant)
                 original = prefix.clone()
@@ -617,7 +619,7 @@ class MultilayerTensorTests(unittest.TestCase):
 
     def test_mesh_actual_writes_listens_reads_and_injections_have_training_order(self):
         t = self.torch
-        for variant, spec in adapter.ROUTE_SPECS.items():
+        for variant, spec in LEGACY_SPECS.items():
             if not spec["mesh"]: continue
             with self.subTest(variant=variant), t.inference_mode():
                 lm, (prefix, context) = self.model(variant), self.inputs(variant)
@@ -649,7 +651,7 @@ class MultilayerTensorTests(unittest.TestCase):
 
     def test_context_rejects_wrong_features_masks_dtype_device_and_nonfinite_values(self):
         t = self.torch
-        for variant in adapter.ROUTE_SPECS:
+        for variant in LEGACY_SPECS:
             prefix, context = self.inputs(variant)
             with patch.object(adapter, "HIDDEN_SIZE", 36):
                 self.assertIs(adapter.validate_context(variant, context, prefix), context)
@@ -670,7 +672,7 @@ class MultilayerTensorTests(unittest.TestCase):
 
     def test_audio7_actual_seeds_router_queries_writes_and_post_read_injections(self):
         t = self.torch
-        for variant, spec in adapter.ROUTE_SPECS.items():
+        for variant, spec in LEGACY_SPECS.items():
             if not spec["split_memory"]: continue
             with self.subTest(variant=variant), t.inference_mode():
                 lm, (prefix, context) = self.model(variant), self.inputs(variant)
@@ -718,7 +720,7 @@ class MultilayerTensorTests(unittest.TestCase):
 
     def test_production_width_structure_audit_uses_actual_training_validators(self):
         t = self.torch
-        for variant, spec in adapter.ROUTE_SPECS.items():
+        for variant, spec in LEGACY_SPECS.items():
             contract, implementation, loader, _ = self.modules[variant]
             lm = self.model(variant, width=576)
             base = t.nn.Module()

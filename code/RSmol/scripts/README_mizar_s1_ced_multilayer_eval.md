@@ -1,7 +1,7 @@
-# 十七条 CED 交互/四循环路线的 MMAU test-mini / MMAR 评测
+# 二十四条 CED 交互/MeSH/官方循环路线的 MMAU test-mini / MMAR 评测
 
 两个既有提交入口 `run_mizar_s1_ced_small_mmau_eval_5090.sh`、
-`run_mizar_s1_ced_small_mmar_eval_5090.sh` 支持以下十七个
+`run_mizar_s1_ced_small_mmar_eval_5090.sh` 支持以下原十七个及文末新增七个
 `RSMOL_MIZAR_CED_EVAL_VARIANT`。新增实现位于训练目录外：
 
 ```text
@@ -66,7 +66,7 @@ mizar_stage1_fixed20_gbs128_3epochs_recursive_mesh_5_10x4_5_ced_small
 所有远程 run 均位于
 `/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/` 下。
 默认 checkpoint 为各 run 的 `formal/checkpoints/model--step-17313.ckpt`，
-四循环 MeSH 则为 `formal/checkpoints/model--step-34626.ckpt`。
+四循环 MeSH 和 `official_final_s1_5_20x2_5` 则为 `formal/checkpoints/model--step-34626.ckpt`。
 runtime 均为同 run 的 `formal/runtime.json`：
 
 | variant | 相对输出根的默认 run |
@@ -501,4 +501,76 @@ python -B tests/validate_mizar_s1_ced_multilayer_eval.py --require-tensors
 
 缺依赖或任一 tensor skip 会使该模式失败。本机缺 Torch/Transformers 时明确记录跳过，
 不得把 stand-in/NumPy 检查写成真实 Torch 检查通过。
-本次三份新远程 checkpoint 内部合同、配套 runtime 和六项 full 评测尚待服务器实际核验。
+此前三份远程 checkpoint 的历史验证范围不代表本次新增路线；最新范围见下方2026-11-08说明。
+
+## 2026-11-08：新增七条路线（共14项评测）
+
+推理、音频、prompt、解码和官方评分保持原 `ced_small_mizar_s1_fixed20_raw_greedy_v1` 协议。
+训练源码和共享模型实现均未修改；新适配器 `scripts/mizar_s1_ced_official_recursive_eval_runtime.py`
+仅处理官方训练合同、初始化产物审计和严格加载。原始 `official_mizar` 入口仍保持原用途。
+
+| variant | 默认 run（相对远程 outputs/RSmol） | step |
+|---|---|---:|
+| `recursive_mesh_4slot` | `mizar_s1_ced_small_gbs256_recursive_mesh_4slot_3090/formal_20261107_203129899582015` | 17313 |
+| `recursive_mesh_6slot` | `mizar_s1_ced_small_gbs256_recursive_mesh_6slot_3090/formal_20261106_092419698981503` | 17313 |
+| `recursive_mesh_7slot_v2` | `mizar_s1_ced_small_gbs256_recursive_mesh_7slot_v2_3090/formal_20261107_215615398982617` | 17313 |
+| `recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r4` | `mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r4_5090/formal_20261107_215916042121396` | 17313 |
+| `recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_modality_lora_r8` | `mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_modality_lora_r8_5090/formal_20261107_215838489409042` | 17313 |
+| `recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_shared_modality_lora_r8` | `mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_shared_modality_lora_r8_5090/formal_20261107_215949376143529` | 17313 |
+| `official_final_s1_5_20x2_5` | `mizar_official_final_s1_gbs128_5_20x2_5_5090/formal_20261107_003434623913704` | 34626 |
+
+前三个 MeSH 是全序列4/6/7槽，三组 write/read、六个独立router；不是音频七槽/文本五槽实验。
+七槽v2保留本路线文本checkpoint-009244及BF16文本训练来源校验，音频训练和评测均为FP32。
+三条非MeSH串行路线保持逻辑5/15的 input→CED8、input→CED4，显式 `(A4,A8)` 每步传入。
+rank4/alpha8共280份A/B、814,080 LoRA参数；Attention共享/MLP模态独立为400份、2,641,920参数。
+MLP共享+模态独立为520份、3,655,680参数；Attention scale2，MLP shared及private各scale1，
+从相同输入并行相加，基础Linear仅一次；不能按统一scale2或串行分支加载。
+
+官方路线是30物理层/50次执行 `0..24,5..24,25..29`，逻辑5/25串行8→4，
+中间20物理层使用两轮r8/alpha16/scale2 LoRA，共560份A/B、3,256,320参数。
+审计 `model_dir` 完整初始化manifest，调用GPU-safe训练loader后，严格覆盖训练checkpoint全部1038份state。
+不调用CPU转换依赖入口、不以初始化权重替代评测权重，不调用会拒绝已完成游标的训练resume校验。
+
+新增七条训练目录如下，其中两个Attention共享路线使用短名称：
+
+```text
+mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_4slot_ced_small
+mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_6slot_ced_small
+mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_7slot_v2_ced_small
+mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject_loop_lora_r4
+mizar_stage1_fixed20_gbs256_recursive_5_10_5_ced_small_in84_loop_attn_shared_mlp_modality_lora_r8
+mizar_stage1_fixed20_gbs256_recursive_5_10_5_ced_small_in84_loop_attn_shared_mlp_both_lora_r8
+mizar_official_final_s1_gbs128_5_20x2_5
+```
+
+本地提交并推送GitHub后，在远程登录节点执行以下命令，提交7×2个完整1000条评测：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+
+variants=(
+  recursive_mesh_4slot
+  recursive_mesh_6slot
+  recursive_mesh_7slot_v2
+  recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r4
+  recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_modality_lora_r8
+  recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_shared_modality_lora_r8
+  official_final_s1_5_20x2_5
+)
+for variant in "${variants[@]}"; do
+  RSMOL_MIZAR_CED_EVAL_VARIANT="$variant" bash run_mizar_s1_ced_small_mmau_eval_5090.sh
+  RSMOL_MIZAR_CED_EVAL_VARIANT="$variant" bash run_mizar_s1_ced_small_mmar_eval_5090.sh
+done
+```
+
+每条默认只读取表中run的精确step文件和同run的 `formal/runtime.json`，不搜索latest或其他中间checkpoint。
+结果位于各run的 `eval/mmau_test_mini_step<step>/` 和 `eval/mmar_step<step>/`。
+沿用pdgpu-5090、8CPU、32G、1GPU、1node、mellow_c8204d8；训练在3090不会更改评测资源。
+可继续通过既有 `--checkpoint`、`--run-root` 等参数覆盖；覆盖checkpoint会推导其对应runtime和输出目录。
+
+校验入口仍为 `python -B tests/validate_mizar_s1_ced_multilayer_eval.py`，新增合同、加载顺序、
+逐步执行、14项提交及覆盖路径检查，既有1000条流程覆盖全部24个variant。
+`--require-tensors` 要求所有真实张量用例执行，缺Torch/Transformers时失败，不把跳过记为张量PASS。
+本地检查不代表远程生产权重或GPU评测通过；以远程evaluation_report.json和official_evaluation.txt为准。

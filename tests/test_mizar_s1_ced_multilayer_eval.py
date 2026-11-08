@@ -20,7 +20,7 @@ sys.path.insert(0, str(SCRIPTS))
 import evaluate_mizar_s1_ced_multilayer_benchmark as runner
 
 adapter = runner.runtime_adapter
-VARIANTS = tuple(adapter.ROUTE_SPECS)
+VARIANTS = tuple(name for name, spec in adapter.ROUTE_SPECS.items() if not spec.get("extension"))
 
 
 def load_module(name, path):
@@ -185,13 +185,14 @@ class MultilayerEvaluationTests(unittest.TestCase):
         self.assertEqual(runner.EXPECTED_ROWS, 1000)
         for relative in ("data/fixed20.py", "data/audiotext_dataset.py", "models/ced_offline.py"):
             expected = ast.dump(ast.parse((adapter.reference.ROUTE_ROOT / relative).read_text(encoding="utf-8-sig")))
-            for spec in adapter.ROUTE_SPECS.values():
+            for spec in (adapter.variant_spec(name) for name in VARIANTS):
                 self.assertEqual(ast.dump(ast.parse((spec["route_root"] / relative).read_text(encoding="utf-8-sig"))), expected)
 
     def test_training_snapshots_preserve_every_file_outside_authorized_evaluator_extension(self):
         authorized = {"code/RSmol/run_mizar_s1_ced_small_mmau_eval_5090.sh",
                       "code/RSmol/run_mizar_s1_ced_small_mmar_eval_5090.sh",
                       "code/RSmol/scripts/mizar_s1_ced_multilayer_eval_runtime.py",
+                      "code/RSmol/scripts/evaluate_mizar_s1_ced_multilayer_benchmark.py",
                       "code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md"}
         for name in ("mizar_s1_textmesh_ced_loop_lora_r16_parent_baseline.json",
                      "mizar_s1_textmesh_modality_lora_r8_parent_baseline.json"):

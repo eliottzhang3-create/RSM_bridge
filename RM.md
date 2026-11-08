@@ -1,3 +1,82 @@
+## 2026-11-08：非MeSH CED4/8/12，input后串行音频CA正式训练
+
+按用户确认方案从原layer36912_crossattn完整复制隔离，串行input重注入参考8→4路线。
+见[架构、正式提交与完整恢复](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_recursive_5_10_5_ced_small_in_ca4812/README.md)。
+本地Windows维护核心代码、GitHub中转，权重/数据/正式GPU作业均在远程Linux。
+内部in_ca4812短路径兼容Windows；独立route/launcher/output/job/log/index-cache/tmpfs/resume身份。
+
+CED冻结/eval，单次编码提取raw block4/8/12（零基3/7/11，final LN前）。
+各自保留affine LN1536→Linear1536→576→affine LN576；三个bank每完整forward计算一次。
+原final mapper及20物理/30逻辑、5+10×2+5 schedule保持，无MeSH/memory/LoRA。
+原input音频E0经共享Linear576→576每forward只投影一次，不detach。
+逻辑5/15分别先用raw pre-input audio hidden的tanh gate注入input，再由post-input hidden
+逐音频token生成126组三层softmax，同时间混合三层作K/V；Q为LN(post-input audio hidden)，
+CA gate读取raw post-input hidden。MHA576/9heads/dropout0，每Q可看126音频K/V。
+两次残差都只写回0..125；SEP126及文本位置保留。删除轮次偏置、CA输出Norm及残差系数。
+全部新增模块两处共享；两个残差gate和depth gate零初始化；CA输出weight非零，CPU RNG隔离。
+相对普通CED循环母本新增4,334,405参数/32份tensor，全部新增及mapper maxLR6e-4，原LM3e-4。
+
+原hybrid1,477,492行/fixed20/683token/FP32/无autocast/TF32关闭/GradScaler保持；
+8×micro8×GA4=GBS256，3epochs/17313updates/866warmup；原AdamW/LambdaLR/GradNorm、
+answer-only rank-local token mean→GA→DDP、数据顺序、共享启动/默认4workers后台复制、
+optimizer边界全rank MIN切换、先reap后清理、完整checkpoint及八rank RNG恢复合同保持。
+首步审计两残差gate，开门后逐分支梯度审计；记录两轮depth权重和input/CA残差RMS。
+
+本地新增实现提交推送GitHub后，远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer4812_crossattn_audio_reinject_5090.sh --stage-workers 4
+```
+
+直接一个formal，无自动smoke/tensor前置作业；原容器/mellow_c8204d8，pdgpu-5090/32CPU/256G/8GPU/1node。
+默认outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer4812_crossattn_audio_reinject_5090/formal_<timestamp>/formal/，
+最终checkpoints/model--step-17313.ckpt及model--epo-3.ckpt；完整恢复仅同路线/源码/资产/数据/依赖/配方及原run root。
+原36912与串行8→4checkpoint不可full resume；既有MMAU/MMAR evaluator需另行适配新合同/state_dict。
+
+python -B tests/validate_mizar_s1_ced_ca4812_audio_reinject.py：118项实际本地检查通过，
+39项真实CPU tensor检查因缺Torch等依赖跳过（新路线12项）。覆盖原文件SHA保护、复制源码inventory、
+骨干/mapper/预处理/整个更新循环AST、实际NumPy逐token混合/raw gate输入/音频写回/CA幅度/因果性、
+LR与模块/梯度失败审计、真实Bash模拟提交/共享启动/后台复制/集体切换/清理及旧路线回归。
+Windows沙箱临时目录受限后，经授权在沙箱外运行同流程；报告audit_reports/mizar_s1_ced_ca4812_audio_reinject_validation.json。
+手动--require-tensors要求无skip。未执行git commit/push、生产资产读取、GPU训练、八卡恢复或作业提交，不登记远程PASS。
+
+<!-- CA4812_RECORD_END -->
+## 2026-11-08：七条新增训练产物的 MMAU test-mini / MMAR 评测适配
+
+已扩展既有两个CED评测提交入口，详细映射、精确默认run和14项提交命令见
+[二十四路线评测说明](code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md#2026-11-08新增七条路线共14项评测)。
+保持本地Windows改代码、GitHub同步、远程Linux保存权重/数据与执行评测。
+
+新增variant为recursive_mesh_4slot、recursive_mesh_6slot、recursive_mesh_7slot_v2，
+非MeSH串行8→4的loop_lora_r4、loop_attn_shared_mlp_modality_lora_r8、
+loop_attn_shared_mlp_shared_modality_lora_r8，以及official_final_s1_5_20x2_5。
+前三条指向用户提供的3090产物run；前六条精确读取step17313，官方版本step34626，
+同run配套formal/runtime.json，不搜索latest或中间checkpoint。
+
+直接复用训练模型，严格加载完整音频checkpoint；4/6/7槽为全序列memory，
+七槽v2保留最终9244步文本来源校验。两种Attention共享LoRA保留不同family布局，
+MLP共享+模态独立分支各scale1并行相加；rank4为alpha8/scale2。
+官方路线独立GPU-safe加载与manifest审计后严格覆盖1038份训练state，
+保留30物理层/50次执行、逻辑5/25的串行8→4和两轮r8 LoRA。
+训练源码、共享模型和生产身份SHA检查均未修改。
+
+原fixed20、383-token prefix、FP32/seed1234/TF32关闭、无KV cache、完整重算argmax、
+最多300新token/首次EOS停止及原始输出直接交官方scorer保持；各benchmark完整1000条。
+仍提交pdgpu-5090/8CPU/32G/1GPU/1node、mellow_c8204d8。
+
+python -B tests/validate_mizar_s1_ced_multilayer_eval.py：293项本地检查通过，
+35项真实CPU tensor检查因缺Torch/Transformers跳过（新增3项）。
+覆盖七条实际合同、全部跨路线拒绝、严格加载/冻结顺序、逐步执行与LoRA family验证、
+实际源码NumPy非零LoRA与缩放/基础投影一次、14项Bash假提交及checkpoint覆盖，
+全部24个variant双benchmark的1000条合成流程，以及旧路线回归。
+Windows沙箱临时目录/Bash受限后，在获准的沙箱外执行完整校验；报告
+ audit_reports/mizar_s1_ced_multilayer_eval_validation.json。
+--require-tensors要求真实张量检查无跳过。未执行git commit/push、远程权重/runtime读取或评测提交，
+未登记远程GPU评测PASS。
+
 ## 2026-11-07：非MeSH CED8→4，Attention共享＋MLP共享/模态独立并行LoRA
 
 按用户确认计划从Attention共享、MLP模态独立r8路线完整复制隔离，见[正式训练实现、提交与完整恢复说明](code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_recursive_5_10_5_ced_small_in84_loop_attn_shared_mlp_both_lora_r8/README.md)。

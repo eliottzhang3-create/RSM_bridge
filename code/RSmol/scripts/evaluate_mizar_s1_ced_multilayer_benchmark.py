@@ -319,6 +319,8 @@ def _identity(args: argparse.Namespace, scorer_key: str) -> dict[str, Any]:
     evaluation_code = {
         "benchmark_runner_sha256": runtime_adapter.sha256_file(Path(__file__)),
         "runtime_adapter_sha256": runtime_adapter.sha256_file(Path(runtime_adapter.__file__)),
+        "official_recursive_adapter_sha256": runtime_adapter.sha256_file(
+            SCRIPT_DIR / "mizar_s1_ced_official_recursive_eval_runtime.py"),
         "reference_ced_runtime_sha256": runtime_adapter.sha256_file(Path(runtime_adapter.reference.__file__)),
         "mmau_reference_io_sha256": runtime_adapter.sha256_file(Path(mmau.__file__)),
         "mmar_reference_io_sha256": runtime_adapter.sha256_file(Path(mmar.__file__)),
