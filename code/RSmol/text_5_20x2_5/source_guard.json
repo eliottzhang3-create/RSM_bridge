@@ -1,0 +1,12 @@
+{
+  "code/RSmol/recursive_model_5_10_5.py": "0208157d4bda977cfd1aac260f727df8f6f0dd2ed244a60c324bd5cbf4f1a5c9",
+  "code/RSmol/scripts/convert_stepwise_5_10_5.py": "251a4024b8420f36eb0b4511502627b4d048c28a2ad14645cfc1b639f5e21b15",
+  "code/RSmol/scripts/train_stage4_5_10_5_ddp.py": "85b16770a121b202892bf60fc40ba8a5b77232e54a6147ad4b4a9f121183f97e",
+  "code/RSmol/scripts/train_stage4_5_10_5_ddp.sh": "b79e69069983905378304b87e74ff1168eabccd580d5659b4a06e9773bbeca9f",
+  "code/RSmol/scripts/convert_stepwise_5_10_5.sh": "491b6552b7cca23deea996a8377a456f763b9c17238fedf2bffbfcc24f9af80e",
+  "code/RSmol/run_stage4_5_10_5_5090.sh": "bfa5a1cd7b41d19ef5ec748ca4867d74c757fd5c5f8f7d0678cbc2b4aab254a2",
+  "code/RSmol/run_stage4_5_10_5_training_5090.sh": "4d6335b0bbfc844fab9b03c5a641f7b6f174ebbb30c9def0687a46650d589e6b",
+  "code/RSmol/scripts/audit_stage4_dataset.py": "e9fa2f3135c9e9d37cb98a9c1dac2da7b108bf04ee727f688a64df86819a8d4c",
+  "code/RSmol/scripts/train_stage4_ddp.py": "3a6f14da93ae6f5c23bfa7af9f2e3974d4c40c155efbe1f61f6f0a4c985d9763",
+  "code/RSmol/__init__.py": "79bf62436fc7e9782697cb50440aadcf144f38bc1d9ce9c4d2fb51d23bc32e3a"
+}

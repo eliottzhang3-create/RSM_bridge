@@ -1,0 +1,94 @@
+{
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "time_utc": "2026-11-08T17:35:44.680253+00:00",
+  "suites": {
+    "test_text_5_20x2_5_*.py": {
+      "run": 29,
+      "passed": 21,
+      "skipped": [
+        {
+          "test": "test_text_5_20x2_5_tensor.TextTensorTest.test_actual_sixteen_microbatch_gradient_matches_global_token_mean",
+          "reason": "Real tensor checks require torch, transformers, safetensors and tokenizers"
+        },
+        {
+          "test": "test_text_5_20x2_5_tensor.TextTensorTest.test_checkpoint_optimizer_scheduler_and_rank_cursor_restore",
+          "reason": "Real tensor checks require torch, transformers, safetensors and tokenizers"
+        },
+        {
+          "test": "test_text_5_20x2_5_tensor.TextTensorTest.test_distinct_fifty_cache_slots_and_cached_logits_match_recompute",
+          "reason": "Real tensor checks require torch, transformers, safetensors and tokenizers"
+        },
+        {
+          "test": "test_text_5_20x2_5_tensor.TextTensorTest.test_full_converter_with_saved_local_assets_and_existing_output_rejection",
+          "reason": "Real tensor checks require torch, transformers, safetensors and tokenizers"
+        },
+        {
+          "test": "test_text_5_20x2_5_tensor.TextTensorTest.test_middle_gradient_is_sum_of_both_executions",
+          "reason": "Real tensor checks require torch, transformers, safetensors and tokenizers"
+        },
+        {
+          "test": "test_text_5_20x2_5_tensor.TextTensorTest.test_original_single_pass_parity_full_inheritance_and_recurrent_trace",
+          "reason": "Real tensor checks require torch, transformers, safetensors and tokenizers"
+        },
+        {
+          "test": "test_text_5_20x2_5_tensor.TextTensorTest.test_save_reload_tied_and_untied_logits",
+          "reason": "Real tensor checks require torch, transformers, safetensors and tokenizers"
+        },
+        {
+          "test": "test_text_5_20x2_5_tensor.TextTensorTest.test_wrong_geometry_and_conflicting_schedule_rejected",
+          "reason": "Real tensor checks require torch, transformers, safetensors and tokenizers"
+        }
+      ],
+      "failures": [],
+      "errors": []
+    },
+    "test_5_10_5_static.py": {
+      "run": 7,
+      "passed": 7,
+      "skipped": [],
+      "failures": [],
+      "errors": []
+    },
+    "test_stage4_static.py": {
+      "run": 17,
+      "passed": 17,
+      "skipped": [],
+      "failures": [],
+      "errors": []
+    }
+  },
+  "production_assets_read": false,
+  "remote_conversion_verified": false,
+  "gpu_training_verified": false,
+  "eight_rank_resume_verified": false,
+  "syntax_checked": [
+    "code/RSmol/recursive_model_5_20x2_5.py",
+    "code/RSmol/scripts/convert_stepwise_5_20x2_5.py",
+    "code/RSmol/scripts/prepare_text_5_20x2_5.py",
+    "code/RSmol/scripts/train_stage4_5_20x2_5_ddp.py",
+    "tests/test_text_5_20x2_5_shell.py",
+    "tests/test_text_5_20x2_5_static.py",
+    "tests/test_text_5_20x2_5_tensor.py",
+    "tests/validate_text_5_20x2_5.py"
+  ],
+  "source_sha256": {
+    "code/RSmol/recursive_model_5_20x2_5.py": "559b3a2e0064fa10509c58db40465eafaf87cc1a046b3c713151f3241fa8eee6",
+    "code/RSmol/scripts/convert_stepwise_5_20x2_5.py": "5e0f721b50bba784020ebf5441f036a871e0a481b6d80081991f70949495c936",
+    "code/RSmol/scripts/prepare_text_5_20x2_5.py": "3712838b9229161156c35383181aff999becfa5a1a292ecefada7280e2fb069e",
+    "code/RSmol/scripts/train_stage4_5_20x2_5_ddp.py": "949dbc2fde4dc1719af32a2a1770037613cffebfac4030f59323ad1a3eb9fd7a",
+    "tests/test_text_5_20x2_5_shell.py": "7ae1fb59c2aec5d0d04639c05753c8b1677b668334a6116e90ffa57c911cf90a",
+    "tests/test_text_5_20x2_5_static.py": "9abac76b8d0fa6e69d7707284926661fc8cfa0f2840cc1b327dfb6d177c3e0a2",
+    "tests/test_text_5_20x2_5_tensor.py": "621730614cf99308434b86659a26795c6a138728f427650d5976108744fdbb2d",
+    "tests/validate_text_5_20x2_5.py": "d14d29974b6b685eed47522f43654de013c57e2a5081f38fe944ad07081f28c5",
+    "code/RSmol/run_mizar_official_final_s1_gbs128_5_20x2_5_5090.sh": "8d90f002522c6bbd0348393e04350f09a7c203661f5fc069741f94bb1788ed18",
+    "code/RSmol/run_mizar_official_final_s1_gbs128_5_20x2_5_input_only_5090.sh": "828f07a1800614ff5267f267e2ebcb4ca21c4cbcb5c50c055f6c743253d7cd69",
+    "code/RSmol/run_stage4_5_20x2_5_5090.sh": "808d45d154c2b6b5bf4d89c472ba1680d3a4f40874dbf35e8d4666002fd12814",
+    "code/RSmol/run_stage4_5_20x2_5_training_5090.sh": "6fac86c58b03cb93a9e52461a742d616c975917658ee9e0840f67a6fed60ff59",
+    "code/RSmol/scripts/convert_stepwise_5_20x2_5.sh": "5ecc8baa6ab5e0dd1a1aeba5daeebc2d740125de6592180e7dbcd2f1a60da1e3",
+    "code/RSmol/scripts/mizar_official_recursive_5_20x2_5.sh": "83c345bbc2051e7cc77d59205e63750a94508fd87d98b4ec521c455a3fabfe02",
+    "code/RSmol/scripts/mizar_official_recursive_5_20x2_5_input_only.sh": "8aafd85af70a0f980458bd918679a7c27cb17a23c2e4efe01313db86a3a9fb80",
+    "code/RSmol/scripts/train_stage4_5_20x2_5_ddp.sh": "abc6bee56c04faac267aba52a7a639fece0616767c6673ca0f107524ff8a44f3",
+    "code/RSmol/text_5_20x2_5/README.md": "9bb5a6be99a51d527060dedb1887e027acef8aeefd079bb8746a24441e723ef7",
+    "code/RSmol/text_5_20x2_5/source_guard.json": "817e96ba850a529e095c0c708c59a94fefe82b404a0c5d4be5a0f70458b02bb6"
+  }
+}

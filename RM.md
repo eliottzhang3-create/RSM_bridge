@@ -1,3 +1,52 @@
+## 2026-11-09：纯文本 SmolLM2 5＋20×2＋5，GBS512 正式训练
+
+按已确认计划实现独立非MeSH纯文本路线，见[转换、正式训练与恢复说明](code/RSmol/text_5_20x2_5/README.md)。
+继续保持本地Windows只改核心代码、GitHub中转、远程Linux保存权重/数据和执行训练。
+母本为run_stage4_5_10_5_5090.sh；原training_5090同名入口只是该母本的兼容别名。
+原模型/转换/训练/CPU审计等10个文件SHA256记录于text_5_20x2_5/source_guard.json，母本均未修改。
+
+从远程models/SmolLM2原始30层初始化，源层0..29一一继承，不抽层、不平均。
+新recursive_model_5_20x2_5.py保存30物理层，执行0..4、5..24、5..24、25..29，共50次。
+两轮中间20层复用同一参数；KV分50逻辑槽，前后5层只执行一次。
+embedding/final norm/lm_head/权重绑定/tokenizer/RoPE与attention配置继承；全量训练，无MeSH/router/memory/LoRA/音频。
+转换器CPU离线8线程，拒绝已有输出和递归/训练源；严格tensor继承、源模型单遍30层一致性、50次trace、
+保存重载权重/logits/tokenizer检查后发布。失败staging保留诊断，显式专用模型类加载，不改全局AutoModel注册。
+
+8×micro4×GA16=GBS512，18,488updates/18,488 scheduler domain/925warmup，
+保持9,465,856样本预算（原9,244×1,024）。max/minLR8e-4/8e-5，原FP32参数/BF16 autocast/FP32 CE，
+context1024、单组AdamW(0.9,0.95)/eps1e-8/WD0.1/amsgrad false、clip1.0、seed0/buffer4096/workers0保持。
+原85片分配/片内shuffle/tokenize/padding及完整更新主体AST对照一致；
+文本loss仍为跨所有rank与16次累积的有效token总数加权，无额外GA除法；不采用音频microbatch均值损失。
+每片末尾不足microbatch仍丢弃；micro4可改变片尾丢弃数，因此保持样本预算与读取规则，不保证逐样本/token数完全一致。
+每500步及最终保存，保留最新3个完整checkpoint；正常最终保留17500、18000、18488。
+
+远程同步本地代码后，在登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash scripts/convert_stepwise_5_20x2_5.sh
+bash run_stage4_5_20x2_5_training_5090.sh
+```
+
+转换默认models/SmolLM2-5-20x2-5；训练默认outputs/RSmol/text_5_20x2_5_gbs512/formal_<timestamp>_<pid>/formal/。
+可用--audit-report复用兼容原CPU Gate B报告，否则先运行原CPU审计再提交一个FORMAL；
+检查85片路径/大小/行记录、tokenizer当前文件一致性、context与数据目录，重建seed0八卡分配并核对正式raw容量。
+采样内容不冒充全量有效行数证明。无自动GPU smoke，显式FORMAL，不会沿旧默认进入十步Gate D。
+独立模型/输出/log/job/tmp和RSMOL_5_20X2_5_环境变量；原rsmol、原容器、pdgpu-5090/32CPU/256G/8GPU/1node。
+最终formal/checkpoint-step-018488/；--resume-from指定本路线FORMAL完整checkpoint，--output-dir用新的空外部目录。
+恢复模型/optimizer/scheduler/计数/manifest/各rank cursor，拒绝旧5+10×2+5、MeSH、Gate D/E和不同配方。
+沿用文本母本限制：bounded shuffle不保存buffer，模型Python/Torch/CUDA RNG只存rank0，
+并非八rank独立RNG恢复；bounded_shuffle_bitwise_exact=false，不承诺逐样本连续或bitwise exact。
+
+python -B tests/validate_text_5_20x2_5.py：45项实际本地检查通过，8项真实CPU tensor检查缺依赖跳过。
+覆盖母本SHA、原更新/损失/数据及模型forward/attention/cache AST、50槽实际helper、全部18,489个LR位置、
+配方/恢复拒绝、真实micro4迭代/审计复用，以及实际Bash假vc/conda/torchrun转换/正式/恢复/失败传递。
+Windows沙箱临时目录受限后，经授权在沙箱外运行相同测试；报告audit_reports/text_5_20x2_5_validation.json。
+手动--require-tensors要求真实tensor用例无skip；未执行git commit/push、远程生产资产读取、模型转换或GPU作业提交，
+不登记生产转换、八卡训练或八卡恢复PASS。
+
 ## 2026-11-08：非MeSH CED4/8/12，input后串行音频CA正式训练
 
 按用户确认方案从原layer36912_crossattn完整复制隔离，串行input重注入参考8→4路线。
