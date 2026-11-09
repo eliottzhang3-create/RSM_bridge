@@ -1,3 +1,74 @@
+## 2026-11-09：新增两条隔离的固定三循环文本完整一轮训练
+
+按用户确认方案落代码：纯5＋10×3＋5，以及5＋10×3＋5 MeSH六槽、四组write/read routers（8个独立Linear模块）。
+两条均20物理层、40逻辑执行/缓存槽，中间十层共享参数执行三次；MeSH每forward重建[B,6,L,576]激活，
+槽0原始embedding、其余五槽零，prelude query/value均用prelude输出，三轮query用各轮输入、value用各轮输出。
+8个Linear(576,6,bias=True)共16个tensor/27,696参数；router softmax FP32，诊断非致命，无辅助loss。
+继续本地Windows编辑核心代码、GitHub同步、远程Linux保存全部权重/数据和运行任务。
+
+新增模型recursive_model_5_10x3_5.py、recursive_model_5_10x3_5_mesh_6slot.py，
+各自独立convert_stepwise、train_stage4_ddp、CPU转换shell、vc FORMAL提交器和完整恢复入口。
+默认干净models/SmolLM2-5-10-5二十层直接继承；亦支持原始models/SmolLM2三十层固定20层映射。
+不从旧训练checkpoint或已有MeSH/新递归路线初始化；转换CPU离线8线程，拒绝覆盖，验证继承tensor、
+40次forward、保存重载tensor/logits/tokenizer后发布，失败staging保留。两条使用专用模型类，无全局AutoModel注册调用。
+
+两条训练均独立复制七槽v2较新完整epoch母本：8×micro4×GA32=GBS1024，9244updates、9244scheduler、463warmup、
+epochs1/context1024/seed0/maxLR8e-4/minLR8e-5；FP32参数和AdamW状态、BF16仅forward、FP32 CE、
+全局有效token归一化梯度、clip1、无GradScaler/TF32。AdamW(.9,.95)/eps1e-8，矩阵WD.1、bias/norm/低维WD0。
+两条统一85片按文件名排序后index%8分rank、第一轮顺序读取、动态padding、不packing；沿用母本shard尾不足batch保留规则。
+此读取和decay分组与历史x2纯文本不同，已按用户确认统一两条新路线。
+项目一轮名义额度9244×1024=9,465,856，不声明严格遍历全部有效文本恰好一次。
+
+正式入口直接vc submit：pdgpu-3090/8GPU/64CPU/256G/1node，不加CPU数据扫描、Gate B或smoke前置门槛。
+模型目录/训练输出/日志/job/env/架构和训练合同完全分开；转换CONVERT_OUTPUT_DIR与训练OUTPUT_DIR分开。
+每500步和最终保存，保留8500/9000/9244三个完整checkpoint；完整恢复要求同路线同FORMAL配置，
+保存全部rank游标/Python/CPU/CUDA RNG、optimizer、scheduler、manifest，使用新空输出目录累计训练到9244。
+
+纯路线说明：code/RSmol/text_5_10x3_5/README.md；MeSH路线说明：code/RSmol/text_5_10x3_5_mesh_6slot/README.md。
+文档包含CPU转换、vc正式提交、同路线恢复、远程CPU验证和精确Git add/commit/push命令。
+远程同步后，分别执行（仓库根目录/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM）：
+
+```bash
+bash code/RSmol/scripts/convert_stepwise_5_10x3_5.sh
+bash code/RSmol/run_stage4_5_10x3_5_formal_3090.sh
+bash code/RSmol/scripts/convert_stepwise_5_10x3_5_mesh_6slot.sh
+bash code/RSmol/run_stage4_5_10x3_5_mesh_6slot_formal_3090.sh
+```
+
+python -B tests/validate_text_x3_routes.py：26项本地合同/游标/Bash模拟提交检查通过，9项真实CPU tensor因缺Torch等依赖跳过。
+含母本十文件归一化LF SHA保护、attention/cache/MeSH读写AST继承、两路线读取/更新主体一致性、
+全9245点LR曲线、错路线/错配方拒绝、实际row cursor跳过、vc环境转义和互不串线等检查。
+报告audit_reports/text_x3_routes_validation.json；远程rsmol可加--require-tensors跑合成CPU转换/梯度/cache/训练/恢复验证。
+临时目录/Bash测试因沙箱权限失败后，经授权在沙箱外执行相同本地验证。
+未代为git commit/push、读取生产权重/数据或提交真实GPU作业，不登记远程转换/训练/八rank恢复PASS。
+原母本不变，工作区既有Mizar评测改动未覆盖；本文仅前置本条记录，原内容和用户既有修改完整保留。
+
+## 2026-11-09：三层音频CA＋input重注入、官方input-only的MMAU/MMAR评测
+
+原两个CED评测入口已扩展至26条交互/MeSH/官方循环路线，见
+[精确产物映射、协议和四条提交命令](code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md)。
+继续本地Windows维护核心代码、GitHub同步，权重/数据与GPU作业均在远程Linux。
+
+新增recursive_5_10_5_layer4812_crossattn_audio_reinject绑定formal_20261109_005039335295104的step17313；
+短训练目录in_ca4812，20物理/30执行，CED单次编码提取raw4/8/12，逻辑5/15执行input→音频CA，
+完整加载4,334,405参数/32份分支tensor，三个audio banks和input投影每完整LM forward各一次。
+新增official_final_s1_5_20x2_5_input_only绑定formal_20261107_220147075105401的step34626；
+独立input-only模型、30物理/50执行，逻辑5/25只注入input，完整训练state458份tensor；
+GPU可用runtime构建后必须用训练checkpoint覆盖初始化bundle，不加载LoRA/中间层分支。
+
+评测侧规范化两项/三项prefix返回值，增加只读编码/真实交互/投影/物理层调用hooks；
+原训练、转换与模型源码及其生产SHA合同不改。精确选择对应step和同run的formal/runtime.json，
+同目录中间checkpoint不参与默认选择。训练geometry分别8,8,4与8,4,4；评测仍单GPU/batch1。
+原CED协议、数据及选项顺序、32k/fixed20、256prompt/383prefix/首logit382、FP32/seed1234/TF32关闭、
+mask=None/无KV/完整重算argmax/max300/EOS、原始输出/官方scorer/1000分母/零skip保持。
+
+python -B tests/validate_mizar_s1_ced_multilayer_eval.py：317项实际本地检查通过，
+39项真实CPU tensor检查缺Torch/Transformers跳过（本次新增4项）。覆盖两路线实际合同与加载顺序、
+CA真实源码NumPy数值行为、完整52种千条模拟流程、原续跑/评分/旧分支回归及Bash假提交。
+报告audit_reports/mizar_s1_ced_multilayer_eval_validation.json；--require-tensors要求无张量跳过。
+Windows沙箱临时目录受限后，经授权在沙箱外运行相同本地流程。
+未执行git commit/push、远程checkpoint/runtime读取或真实GPU作业提交，不登记远程评测PASS。
+
 ## 2026-11-09：修复纯文本5＋20×2＋5启动，取消新增CPU数据审计
 
 用户远程日志已完成模型forward_trace_done，随后被初版新增的

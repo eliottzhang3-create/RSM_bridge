@@ -1,4 +1,72 @@
-# 二十四条 CED 交互/MeSH/官方循环路线的 MMAU test-mini / MMAR 评测
+# 二十六条 CED 交互/MeSH/官方循环路线的 MMAU test-mini / MMAR 评测
+
+## 2026-11-09：新增三层音频 CA＋input 重注入和官方 input-only
+
+两个原提交入口继续使用原 CED `PROTOCOL`：两套 benchmark 各完整1000条、
+mono32k/fixed20、原小写选项模板及 tokenize/EOS/可见 `!` 右补256、383 prefix、
+首答案logit382、单GPU/batch1/FP32/seed1234/TF32关闭、mask=None、无KV cache、
+每token完整重算argmax、最多300新token/首次EOS停止。原始输出含EOS/大小写/空白直接交给原官方scorer；
+必须1000条generated、零skip并确认官方分母1000。资源仍为5090/8CPU/32G/1GPU/原容器和conda。
+
+| variant | 实际训练目录 | 精确默认 run（相对 outputs/RSmol） | checkpoint / 训练 geometry |
+|---|---|---|---|
+| `recursive_5_10_5_layer4812_crossattn_audio_reinject` | `mizar_stage1_fixed20_gbs256_recursive_5_10_5_ced_small_in_ca4812` | `mizar_s1_ced_small_gbs256_recursive_5_10_5_layer4812_crossattn_audio_reinject_5090/formal_20261109_005039335295104` | step17313 / 8,8,4 |
+| `official_final_s1_5_20x2_5_input_only` | `mizar_official_final_s1_gbs128_5_20x2_5_input_only` | `mizar_official_final_s1_gbs128_5_20x2_5_input_only_5090/formal_20261107_220147075105401` | step34626 / 8,4,4 |
+
+精确选择 `formal/checkpoints/model--step-17313.ckpt` 或 `model--step-34626.ckpt`，
+并读取同 run 的 `formal/runtime.json`；其他中间 checkpoint 不干扰选择。
+MMAU 输出为该 run 下 `eval/mmau_test_mini_step{step}/`，MMAR 为 `eval/mmar_step{step}/`。
+可用原 `--run-root`、`--checkpoint`、`--runtime-config`、`--output-dir` 覆盖。
+
+三层 CA 直接调用该训练目录的 `models.recursive_crossattn` / `models.multilayer_audio`。
+CED单次编码捕获raw block4/8/12（final norm前），传入三层 `[1,3,126,1536]` grids；
+20物理层执行 `0..14,5..14,15..19` 共30次，在逻辑5/15先input再音频CA。
+input gate读取raw pre-input hidden，depth softmax和CA gate读取post-input hidden，Q为其LN，
+同时间混合三层K/V，所有音频Q都可看126个音频key。残差只直接更新音频0..125，SEP和文本原值保留。
+三个LN1536→Linear→LN576和共享input投影每完整LM forward各计算一次；两处交互共享全部模块。
+没有MeSH/LoRA/固定γ/CA输出norm/额外FFN，prompt mask只兼容传递，不驱动本路线交互。
+新增分支4,334,405参数/32份tensor全部strict加载；合同位于 `audio_cross_attention`，不另套旧serial合同。
+
+官方 input-only 调用独立 `mizar_official_recursive_5_20x2_5_input_only` 模型和GPU可用训练runtime，
+30物理层执行 `0..24,5..24,25..29` 共50次，逻辑5/25只进行input残差；共享投影每完整forward一次。
+没有中间层capture/CA/LoRA/MeSH，input分支332,929参数/4份tensor，完整state458份tensor。
+评测侧规范化两项 `(prefix, output)` 返回值，不修改训练API，不伪造额外上下文。
+初始化bundle仅用于构建和来源核验，随后必须用训练checkpoint的完整458份tensor覆盖；
+核对形状/FP32/finite/tied embedding一致、真实模型类、159,632,769唯一参数及removed模块缺失。
+不调用会隐藏CUDA的转换dependencies，不调用拒绝完成checkpoint的训练resume校验。
+
+新增 `scripts/mizar_s1_ced_input_ca_eval_runtime.py` 的只读hooks记录每样本一次CED/12个原block、
+原始layout，以及每生成步的完整层轨迹、分支实际调用、投影次数和交互顺序，不改forward/输出。
+训练/转换源码与其SHA合同保持；新helper纳入评测输出身份，代码或资产身份变化时拒绝混用旧输出续跑。
+
+本地修改经GitHub同步到远程后，在登录节点提交四项full评测：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+
+RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_5_10_5_layer4812_crossattn_audio_reinject \
+  bash run_mizar_s1_ced_small_mmau_eval_5090.sh
+RSMOL_MIZAR_CED_EVAL_VARIANT=recursive_5_10_5_layer4812_crossattn_audio_reinject \
+  bash run_mizar_s1_ced_small_mmar_eval_5090.sh
+
+RSMOL_MIZAR_CED_EVAL_VARIANT=official_final_s1_5_20x2_5_input_only \
+  bash run_mizar_s1_ced_small_mmau_eval_5090.sh
+RSMOL_MIZAR_CED_EVAL_VARIANT=official_final_s1_5_20x2_5_input_only \
+  bash run_mizar_s1_ced_small_mmar_eval_5090.sh
+```
+
+本地验证入口仍为 `python -B tests/validate_mizar_s1_ced_multilayer_eval.py`；
+`--require-tensors` 要求真实张量用例不跳过。检查覆盖两项/三项API、完整训练权重覆盖顺序、
+实际合同/SHA/step/geometry拒错、两路线非零gate的直接训练模型与adapter logits/token对齐、
+三层混合/raw gate输入/音频写回/单次投影、input-only removed分支拒绝、四项Bash假提交、
+26路线×2benchmark的1000条模拟流程及原续跑/评分回归。缺依赖跳过与实际通过分别记录；
+本地验证不代表远程权重/runtime已核验或GPU评测已完成。
+
+本轮统一验证：317项实际执行通过，39项真实CPU张量用例因缺Torch/Transformers跳过（新增4项）；
+Python/Bash/LF检查通过。完整报告为 `audit_reports/mizar_s1_ced_multilayer_eval_validation.json`。
+Windows沙箱临时目录受限后已获授权在沙箱外执行同流程；未读取远程权重/runtime、未提交真实作业或git commit/push。
 
 两个既有提交入口 `run_mizar_s1_ced_small_mmau_eval_5090.sh`、
 `run_mizar_s1_ced_small_mmar_eval_5090.sh` 支持以下原十七个及文末新增七个

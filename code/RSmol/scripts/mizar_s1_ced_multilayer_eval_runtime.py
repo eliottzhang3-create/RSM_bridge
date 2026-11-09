@@ -171,6 +171,26 @@ ROUTE_SPECS["official_final_s1_5_20x2_5"] = {
                          "loops": 2, "matrix_count": 560, "parameter_count": 3256320},
 }
 
+ROUTE_SPECS["recursive_5_10_5_layer4812_crossattn_audio_reinject"] = {
+    **copy.deepcopy(ROUTE_SPECS["recursive_5_10_5_layer36912_crossattn"]),
+    "extension": True, "input_ca_extension": True, "kind": "audio_ca4812",
+    "route": "ced_small_mizar_s1_fixed20_gbs256_recursive_5_10_5_layer4812_crossattn_audio_reinject_v1",
+    "route_root": TRAINING_ROOT / "mizar_stage1_fixed20_gbs256_recursive_5_10_5_ced_small_in_ca4812",
+    "run_root": REMOTE_OUTPUT_ROOT / "mizar_s1_ced_small_gbs256_recursive_5_10_5_layer4812_crossattn_audio_reinject_5090" / "formal_20261109_005039335295104",
+    "grid_depths": 3, "new_parameters": 4334405,
+}
+ROUTE_SPECS["official_final_s1_5_20x2_5_input_only"] = {
+    **copy.deepcopy(ROUTE_SPECS["official_final_s1_5_20x2_5"]),
+    "input_ca_extension": True, "kind": "official_input_only",
+    "route": "official_final_mizar_s1_fixed20_gbs128_5_20x2_5_input_only_v1",
+    "route_root": TRAINING_ROOT / "mizar_official_final_s1_gbs128_5_20x2_5_input_only",
+    "run_root": REMOTE_OUTPUT_ROOT / "mizar_official_final_s1_gbs128_5_20x2_5_input_only_5090" / "formal_20261107_220147075105401",
+    "implementation": "mizar_official_recursive_5_20x2_5_input_only.model",
+    "text_contract": "official_final_physical30_logical50_5_20x2_5_input_only",
+    "context_kind": "none", "interaction_layers": (),
+    "new_parameters": 332929, "loop_lora": False, "loop_lora_config": None,
+}
+
 
 def variant_spec(eval_variant):
     if eval_variant not in ROUTE_SPECS:
@@ -180,8 +200,10 @@ def variant_spec(eval_variant):
 
 def branch_contract(route_contract, spec):
     kind = spec["kind"]
-    if kind in ("crossattn", "query32"):
+    if kind in ("crossattn", "query32", "audio_ca4812"):
         return "audio_cross_attention", route_contract.cross_attention_contract()
+    if kind == "official_input_only":
+        return "audio_reinjection", dict(route_contract.AUDIO_REINJECTION)
     if kind in ("inject48", "inject84", "serial", "official_serial"):
         return "layer_injection", dict(route_contract.INJECTION_CONTRACT)
     if kind in ("listen48", "audio7split3", "audio7split3_inject", "prompt_mix"):
@@ -337,7 +359,7 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
         if text_memory_audit != route_contract.TEXT_MEMORY_CONTRACT:
             raise ValueError("text-only memory structure does not match the training contract")
     kind = spec["kind"]
-    if kind in ("crossattn", "query32"):
+    if kind in ("crossattn", "query32", "audio_ca4812"):
         branch = loader.validate_audio_cross_attention(lm)
         extra = [core.audio_crossattn]
         if core.audio_crossattn.collect_diagnostics:
@@ -428,6 +450,9 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
 def install_recursive_trace_audit(lm, *, eval_variant):
     """Observe physical calls and real branch invocations without changing outputs."""
     spec = variant_spec(eval_variant)
+    if spec.get("input_ca_extension"):
+        from mizar_s1_ced_input_ca_eval_runtime import install_trace_audit
+        return install_trace_audit(lm, spec, audio_tokens=AUDIO_TOKENS, width=HIDDEN_SIZE)
     trace, events, compression, router_events, projections = [], [], [], [], []
     boundary_events, router_shapes = [], []
     lora_calls, lora_modules = [], []
@@ -759,13 +784,21 @@ def load_runtime(args):
     return model, tokenizer, device, text_encoder, modules["data.fixed20"], audit, modules
 
 
+def generate_prefix_inference(model, input_dict, *, eval_variant, audit):
+    spec = variant_spec(eval_variant)
+    if spec.get("input_ca_extension"):
+        from mizar_s1_ced_input_ca_eval_runtime import generate_prefix
+        return generate_prefix(model, input_dict, spec, audit)
+    return model.generate_prefix_inference(input_dict)
+
+
 def sample_context(eval_variant, audio_output, context, text_input):
     """Respect each training prefix API, including four-depth listen's None."""
     spec = variant_spec(eval_variant)
     kind = spec["kind"]
     if spec["context_kind"] == "none":
         if context is not None:
-            raise ValueError("plain MeSH prefix must not supply an audio interaction context")
+            raise ValueError("this route's prefix must not supply an audio interaction context")
         return {}
     if spec["context_kind"] == "seeds":
         return {"audio_memory_seeds": context}
@@ -793,7 +826,7 @@ def validate_context(eval_variant, context, prefix):
         raise ValueError("explicit per-sample CED context is required")
     if spec["context_kind"] == "none":
         if context:
-            raise ValueError("plain MeSH uses only the original full-sequence input embeddings")
+            raise ValueError("this route uses only the original full-sequence input embeddings")
     elif spec["context_kind"] in ("pair", "seeds"):
         key = "audio_information" if spec["context_kind"] == "pair" else "audio_memory_seeds"
         count = 2 if spec["context_kind"] == "pair" else 3
@@ -802,9 +835,10 @@ def validate_context(eval_variant, context, prefix):
                 or any(not tensor(value, (1, AUDIO_TOKENS, HIDDEN_SIZE)) for value in pair)):
             raise ValueError(f"CED context requires this sample's {count} finite aligned FP32 tensors in {key}")
     else:
+        depths = spec.get("grid_depths", 4)
         if (set(context) != {"audio_grids", "prompt_mask"}
-                or not tensor(context["audio_grids"], (1, 4, AUDIO_TOKENS, 1536))):
-            raise ValueError("four-depth CED context requires finite aligned [1,4,126,1536] grids")
+                or not tensor(context["audio_grids"], (1, depths, AUDIO_TOKENS, 1536))):
+            raise ValueError(f"CED context requires finite aligned [1,{depths},126,1536] grids")
         mask = context["prompt_mask"]
         if (not isinstance(mask, torch.Tensor) or tuple(mask.shape) != (1, PROMPT_TOKENS)
                 or mask.device != prefix.device or not bool(((mask == 0) | (mask == 1)).all())

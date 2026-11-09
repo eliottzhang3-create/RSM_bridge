@@ -1,0 +1,75 @@
+{
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "time_utc": "2026-11-09T03:17:30.641346+00:00",
+  "run": 35,
+  "passed": 26,
+  "skipped": [
+    {
+      "test": "test_text_x3_tensor.RealTensorChecks.test_clean_twenty_layer_source_is_not_subsampled_twice",
+      "reason": "requires torch, transformers, safetensors and tokenizers; run remotely with --require-tensors"
+    },
+    {
+      "test": "test_text_x3_tensor.RealTensorChecks.test_forty_cache_slots_and_cached_recompute",
+      "reason": "requires torch, transformers, safetensors and tokenizers; run remotely with --require-tensors"
+    },
+    {
+      "test": "test_text_x3_tensor.RealTensorChecks.test_full_checkpoint_next_update_matches_uninterrupted",
+      "reason": "requires torch, transformers, safetensors and tokenizers; run remotely with --require-tensors"
+    },
+    {
+      "test": "test_text_x3_tensor.RealTensorChecks.test_full_cpu_converters_both_routes_save_reload_and_reject_existing",
+      "reason": "requires torch, transformers, safetensors and tokenizers; run remotely with --require-tensors"
+    },
+    {
+      "test": "test_text_x3_tensor.RealTensorChecks.test_global_effective_token_gradient_matches_reference",
+      "reason": "requires torch, transformers, safetensors and tokenizers; run remotely with --require-tensors"
+    },
+    {
+      "test": "test_text_x3_tensor.RealTensorChecks.test_mesh_six_slots_four_queries_writes_and_all_gradients",
+      "reason": "requires torch, transformers, safetensors and tokenizers; run remotely with --require-tensors"
+    },
+    {
+      "test": "test_text_x3_tensor.RealTensorChecks.test_pure_middle_gradients_sum_three_uses",
+      "reason": "requires torch, transformers, safetensors and tokenizers; run remotely with --require-tensors"
+    },
+    {
+      "test": "test_text_x3_tensor.RealTensorChecks.test_real_cpu_training_control_flow_both_routes",
+      "reason": "requires torch, transformers, safetensors and tokenizers; run remotely with --require-tensors"
+    },
+    {
+      "test": "test_text_x3_tensor.RealTensorChecks.test_wrong_config_routes_rejected_and_meta_router_init_safe",
+      "reason": "requires torch, transformers, safetensors and tokenizers; run remotely with --require-tensors"
+    }
+  ],
+  "errors": [],
+  "production_assets_read": false,
+  "remote_conversion_verified": false,
+  "gpu_training_verified": false,
+  "eight_rank_resume_verified": false,
+  "source_sha256": {
+    "code/RSmol/recursive_model_5_10x3_5.py": "fa61bd3f1896a7ac963024a0f706240e259523abbd662ddf4cf420762c50e3b2",
+    "code/RSmol/scripts/convert_stepwise_5_10x3_5.py": "b01d895d150ab81879394638e18a29f73ca109b6c948bec8594d840d572ecfc6",
+    "code/RSmol/scripts/train_stage4_5_10x3_5_ddp.py": "18cd701fbdc3d94ee8f7acbf51b8b950d842705e5279759a952df0c0896a5df5",
+    "code/RSmol/text_5_10x3_5/README.md": "e2ab61ae7d368f4df4ea1b026282d9438ed99bf42df0191c0ae95b6fc14cbfd3",
+    "code/RSmol/text_5_10x3_5/source_guard.json": "f0dc9dab539c72e6cbfe55c294a6b4dc50158368a42191437c56f41277ce01cb",
+    "code/RSmol/run_stage4_5_10x3_5_3090.sh": "bf4ccb5ad7cbd49c5d2489fd3f85334b61b00a8f7f72a105be0add1014750ede",
+    "code/RSmol/run_stage4_5_10x3_5_formal_3090.sh": "f82c40c5afe5cdb5b029f15174284073685067e834f353a6f9ae9e3f3be3c4b5",
+    "code/RSmol/scripts/convert_stepwise_5_10x3_5.sh": "949ecb625f43c59bc502c6619e83b57e60271d5c8149ab6aee760fb18181e3b3",
+    "code/RSmol/scripts/train_stage4_5_10x3_5_ddp.sh": "235d5d2ed1c2ff032878fb64e730dffb67a8e1d4a4e3efffae895bc8fdc9d78c",
+    "code/RSmol/recursive_model_5_10x3_5_mesh_6slot.py": "bd86729f8bba608e15640660391e294914b2798379359975decdaa68ac44f6f6",
+    "code/RSmol/scripts/convert_stepwise_5_10x3_5_mesh_6slot.py": "bd4e5ccba2a898fdf6360f8ae3d1013eabfee738e0f43d89a1d2865b8c1b36f6",
+    "code/RSmol/scripts/train_stage4_5_10x3_5_mesh_6slot_ddp.py": "baf84f1268f868f4b4b4d6b0a81d038fec9f33efd7c650f36f21666dd55e5f06",
+    "code/RSmol/text_5_10x3_5_mesh_6slot/README.md": "ef39e0e1e411b72dd765a7104e41ea714236381f19e32812e377130346fcf73a",
+    "code/RSmol/text_5_10x3_5_mesh_6slot/source_guard.json": "f0dc9dab539c72e6cbfe55c294a6b4dc50158368a42191437c56f41277ce01cb",
+    "code/RSmol/run_stage4_5_10x3_5_mesh_6slot_3090.sh": "045819060997e973d67695fef6ff1219c531b957d4baba10e026cc3797dca57f",
+    "code/RSmol/run_stage4_5_10x3_5_mesh_6slot_formal_3090.sh": "d9f302ce2c3f7fbcc1572b5827a0ca8194503f641deb98302e44d3cf0077647c",
+    "code/RSmol/scripts/convert_stepwise_5_10x3_5_mesh_6slot.sh": "0adba867f30e2aafe70a66e6d49c8100b3912665b369049e83795caa9b8643f7",
+    "code/RSmol/scripts/train_stage4_5_10x3_5_mesh_6slot_ddp.sh": "40f6cf39829bc11a331bdcfd0fa4357fb0537eb38404644872c0ab5e2d5fced4",
+    "tests/test_text_x3_mesh_shell.py": "509c719245ba52fe67038d2255dcd25e510955594248cd758b035bc098520f79",
+    "tests/test_text_x3_pure_shell.py": "a84d7aa47a8b06d0b0932d409e94a9da1673504bcd547a56ea1b1a046584b9c6",
+    "tests/test_text_x3_routes.py": "e584d2663a32b3e04b8decbee5339f993ee1b18d41fd9cbd0b52f2a892e3db7b",
+    "tests/test_text_x3_tensor.py": "e0b465a6e54d5ed95f9f0d3b4755bb6462b6c59e4c3913efc42e1955b9013339",
+    "tests/text_x3_test_support.py": "3115d18d5337041ad9da0b1f58d6f94a38a7120fc268563179210fe3d9e71c2e",
+    "tests/validate_text_x3_routes.py": "2235e9d8d2d45daec2b52da68bf4f63e1d3a58319b6e3459bdc5e3236432fb9f"
+  }
+}

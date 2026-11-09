@@ -215,11 +215,11 @@ def generate(runtime: tuple, sample: Mapping[str, Any]) -> dict[str, Any]:
     started = time.monotonic()
     with torch.inference_mode():
         device_text_input = {key: value.to(device) for key, value in text_input.items()}
-        prefix, audio_output, context = model.generate_prefix_inference({
+        prefix, audio_output, context = runtime_adapter.generate_prefix_inference(model, {
             "audio1": first.unsqueeze(0).to(device),
             "audio2": second.unsqueeze(0).to(device),
             "input": device_text_input,
-        })
+        }, eval_variant=model_audit["eval_variant"], audit=model_audit)
         context = runtime_adapter.sample_context(
             model_audit["eval_variant"], audio_output, context, device_text_input)
         generated = runtime_adapter.greedy_decode(
@@ -321,6 +321,8 @@ def _identity(args: argparse.Namespace, scorer_key: str) -> dict[str, Any]:
         "runtime_adapter_sha256": runtime_adapter.sha256_file(Path(runtime_adapter.__file__)),
         "official_recursive_adapter_sha256": runtime_adapter.sha256_file(
             SCRIPT_DIR / "mizar_s1_ced_official_recursive_eval_runtime.py"),
+        "input_ca_adapter_sha256": runtime_adapter.sha256_file(
+            SCRIPT_DIR / "mizar_s1_ced_input_ca_eval_runtime.py"),
         "reference_ced_runtime_sha256": runtime_adapter.sha256_file(Path(runtime_adapter.reference.__file__)),
         "mmau_reference_io_sha256": runtime_adapter.sha256_file(Path(mmau.__file__)),
         "mmar_reference_io_sha256": runtime_adapter.sha256_file(Path(mmar.__file__)),

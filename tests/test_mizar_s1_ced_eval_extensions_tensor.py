@@ -14,7 +14,8 @@ sys.path.insert(0, str(ROOT / "code/RSmol/scripts"))
 import mizar_s1_ced_multilayer_eval_runtime as adapter
 
 AVAILABLE = all(importlib.util.find_spec(name) for name in ("torch", "transformers"))
-NEW = {name: spec for name, spec in adapter.ROUTE_SPECS.items() if spec.get("extension")}
+NEW = {name: spec for name, spec in adapter.ROUTE_SPECS.items()
+       if spec.get("extension") and not spec.get("input_ca_extension")}
 
 
 def load(name, relative):

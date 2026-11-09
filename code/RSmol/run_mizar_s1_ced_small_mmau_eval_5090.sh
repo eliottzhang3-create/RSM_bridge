@@ -40,6 +40,21 @@ case "$EVAL_VARIANT" in
     JOB_NAME_PREFIX="mizar-ced-r515-${JOB_TAG}-mmau"
     JOB_LOG_PREFIX="mizar_s1_ced_small_${EVAL_VARIANT}_mmau_5090"
     ;;
+  recursive_5_10_5_layer4812_crossattn_audio_reinject|official_final_s1_5_20x2_5_input_only)
+    case "$EVAL_VARIANT" in
+      recursive_5_10_5_layer4812_crossattn_audio_reinject)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer4812_crossattn_audio_reinject_5090/formal_20261109_005039335295104
+        DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_recursive_5_10_5_ced_small_in_ca4812"
+        JOB_TAG=inca4812 ;;
+      official_final_s1_5_20x2_5_input_only)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_official_final_s1_gbs128_5_20x2_5_input_only_5090/formal_20261107_220147075105401
+        DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_official_final_s1_gbs128_5_20x2_5_input_only"
+        JOB_TAG=official-input; DEFAULT_EXPECTED_STEP=34626; DEFAULT_EXPECTED_GEOMETRY=8,4,4 ;;
+    esac
+    EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh
+    JOB_NAME_PREFIX="mizar-ced-multi-${JOB_TAG}-mmau"
+    JOB_LOG_PREFIX="mizar_s1_ced_small_${EVAL_VARIANT}_mmau_5090"
+    ;;
   recursive_mesh_4slot|recursive_mesh_6slot|recursive_mesh_7slot_v2|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r4|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_modality_lora_r8|recursive_5_10_5_layer8_4_inject_audio_reinject_loop_attn_shared_mlp_shared_modality_lora_r8|official_final_s1_5_20x2_5)
     case "$EVAL_VARIANT" in
       recursive_mesh_4slot)

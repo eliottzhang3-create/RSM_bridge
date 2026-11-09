@@ -90,21 +90,25 @@ def audit_model(route, contract, model, spec):
     root = Path(route.__file__).resolve().parent
     runtime = importlib.import_module("runtime")
     implementation = importlib.import_module(spec["implementation"])
-    expected = root.parents[1] / "mizar_official_recursive_5_20x2_5/model.py"
+    input_only = spec["kind"] == "official_input_only"
+    expected = root.parents[1] / (spec["implementation"].replace(".", "/") + ".py")
+    model_class = implementation.MizarInputOnlyRecursive if input_only else implementation.MizarRecursive
     if (Path(runtime.__file__).resolve() != root / "runtime.py"
             or Path(implementation.__file__).resolve() != expected.resolve()
-            or not isinstance(model, implementation.MizarRecursive)):
+            or not isinstance(model, model_class)):
         raise RuntimeError("official recursive loader or model escaped selected implementation")
     # Run before the evaluation freeze; the original audit checks training
     # roles but does not require learned B/gates to retain zero initialization.
     report = runtime.model_audit(model)
     core = model.caption_decoder.lm.model
     if (tuple(core.logical_to_physical) != spec["schedule"]
-            or report.get("parameter_count") != 165334019 or len(model.state_dict()) != 1038
-            or any(report["loop_lora"].get(key) != value for key, value in spec["loop_lora_config"].items())):
-        raise ValueError("official complete state, schedule or loop LoRA structure mismatch")
+            or report.get("parameter_count") != (159632769 if input_only else 165334019)
+            or len(model.state_dict()) != (458 if input_only else 1038)):
+        raise ValueError("official complete state or schedule structure mismatch")
+    if not input_only and any(report["loop_lora"].get(key) != value for key, value in spec["loop_lora_config"].items()):
+        raise ValueError("official loop LoRA structure mismatch")
     return {"parameters": report, "implementation": spec["implementation"],
             "implementation_sha256": contract["recursive_model_source_sha256"],
             "new_parameter_count": spec["new_parameters"], "memory_slots": 0,
             "audio_memory_slots": 0, "text_memory_slots": 0,
-            "interaction_layers": [8, 4], "routers": 0}
+            "interaction_layers": list(spec["interaction_layers"]), "routers": 0}
