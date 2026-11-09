@@ -10,8 +10,8 @@ entry point implements the five historical gates plus an independent
 
 ``A`` synthetic 8-rank DDP audit, ``D`` the fixed ten-step real-data pilot,
 ``E`` a resume smoke, and ``FORMAL`` the 18,488-step training target. Gate B/C
-are intentionally unsupported here: reuse the existing Gate B audit JSON and
-do not rerun either audit from this entry point.
+are intentionally unsupported here. Fresh training directly assigns the known
+85 shards; an old Gate B JSON may be attached as optional historical metadata.
 
 Only reports/checkpoints under an explicitly external output directory are
 written.  In particular, neither the local checkout nor the remote Git
@@ -2751,48 +2751,46 @@ def _require_local_artifact_dir(path: Path, *, kind: str) -> Path:
     return candidate
 
 
-def validate_cpu_audit(report_path: Path, *, data_dir: Path, tokenizer_path: Path,
-                       world_size: int = 8, seed: int = 0, context_length: int = 1024) -> dict[str, Any]:
-    """Reuse CPU footer/content evidence with the current deterministic assignment.
+def build_training_data_manifest(config: Stage4Config, *, world_size: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Assign the established text corpus without a new content/tokenizer audit.
 
-    This checks local file identities/sizes and tokenizer bytes, without reading
-    Parquet contents or loading a model. Old GBS1024 reports remain compatible.
+    Keep the original shard discovery and seed-based assignment. An explicitly
+    supplied old Gate B report is optional metadata only; its host paths and
+    tokenizer directory never decide which shards the training stream opens.
     """
-    bundle = json.loads(report_path.expanduser().read_text(encoding="utf-8"))
-    if bundle.get("status") != "PASS" or str(bundle.get("gate", "")).upper() != "B":
-        raise ValueError("A successful CPU Gate B audit is required")
-    settings = bundle.get("configuration", {})
-    if int(settings.get("context_length", -1)) != context_length:
-        raise ValueError("CPU audit context length mismatch")
-    if Path(settings.get("data_dir") or ".").resolve() != data_dir.resolve():
-        raise ValueError("CPU audit dataset directory mismatch")
-    previous_tokenizer = Path(settings.get("tokenizer_path") or settings.get("model_path") or ".")
-    token_names = {"tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
-                   "tokenizer.model", "spiece.model", "vocab.json", "merges.txt", "added_tokens.json"}
-    def token_hashes(directory: Path) -> dict[str, str]:
-        return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in directory.iterdir()
-                if p.is_file() and (p.name in token_names or p.name.endswith(".jinja"))}
-    current = token_hashes(tokenizer_path)
-    if not current or current != token_hashes(previous_tokenizer):
-        raise ValueError("CPU audit tokenizer bytes mismatch or missing tokenizer")
-    files = discover_parquet_files(data_dir)
-    audit = dict(bundle.get("dataset_audit", bundle.get("audit", {})))
-    shards = audit.get("shards", [])
-    by_name = {item["name"]: item for item in shards}
-    if len(shards) != 85 or set(by_name) != {p.name for p in files}:
-        raise ValueError("CPU audit must cover all 85 current shards")
-    if not audit.get("content_audit"):
-        raise ValueError("CPU audit is missing sampled content/tokenizer evidence")
-    for path in files:
-        item = by_name[path.name]
-        if (Path(item.get("path") or ".").resolve() != path.resolve()
-                or int(item.get("bytes", -1)) != path.stat().st_size
-                or int(item.get("num_rows", -1)) <= 0):
-            raise ValueError(f"CPU audit shard identity/size mismatch: {path.name}")
-    if int(audit.get("total_rows", -1)) != sum(int(item["num_rows"]) for item in shards):
-        raise ValueError("CPU audit total row count mismatch")
-    manifest = assign_shards(files, world_size=world_size, seed=seed)
-    return {"audit": audit, "manifest": manifest}
+    files = discover_parquet_files(config.data_dir)
+    manifest = assign_shards(files, world_size=world_size, seed=config.seed)
+    target_samples_per_rank = (
+        int(config.max_optimizer_steps) * config.gradient_accumulation_steps * config.micro_batch_size
+    )
+    manifest.update({
+        "target_optimizer_steps": int(config.max_optimizer_steps),
+        "target_samples_per_rank": target_samples_per_rank,
+        "formal_optimizer_steps": int(config.formal_optimizer_steps),
+        "formal_global_samples": int(config.formal_optimizer_steps * config.gradient_accumulation_steps
+                                     * config.micro_batch_size * world_size),
+    })
+    audit: dict[str, Any] = {
+        "status": "NOT_RUN", "startup_mode": "direct_training",
+        "dataset_audit_performed": False, "parquet_shard_count": len(files),
+        "data_dir": str(config.data_dir),
+    }
+    if config.audit_report is not None:
+        report_path = config.audit_report.expanduser()
+        try:
+            audit_bundle = json.loads(report_path.read_text(encoding="utf-8"))
+            if not isinstance(audit_bundle, Mapping):
+                raise ValueError("Expected a JSON object")
+            previous = audit_bundle.get("dataset_audit", audit_bundle.get("audit", audit_bundle))
+            if not isinstance(previous, Mapping):
+                raise ValueError("Expected a dataset audit object")
+            # Retain historical evidence separately: no metadata is represented
+            # as an audit of the current mount or used as a capacity gate.
+            audit["historical_report"] = dict(previous)
+            audit["historical_report_path"] = str(report_path)
+        except (OSError, ValueError) as exc:
+            print(f"[stage4-data] Optional report ignored: {report_path}: {exc}", flush=True)
+    return audit, manifest
 
 
 def _dataset_preaudit(
@@ -2803,133 +2801,18 @@ def _dataset_preaudit(
     world_size: int,
     require_full_content: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Run the single-process content audit and broadcast its manifest.
-
-    Gate B calls this directly without a process group.  Gates C/D run the
-    expensive footer/content scan once on rank 0 and broadcast only metadata;
-    actual training remains rank-local and never centralizes Parquet payloads.
-    """
-
-    import torch.distributed as dist
-
+    """Compatibility name: broadcast the original shard assignment, without scanning."""
+    del tokenizer, require_full_content
+    bundle = None
     if rank == 0:
-        if world_size > 1 and config.audit_report is None:
-            raise RuntimeError(
-                "Gate C/D multi-card startup requires --audit-report from Gate B; "
-                "rank 0 is forbidden from scanning the full corpus as a training preflight"
-            )
-        if config.audit_report is not None:
-            # Prefer the standalone Gate B artifact.  This avoids a second
-            # full-corpus scan before a multi-card pilot while retaining all
-            # footer/content evidence in the report consumed here.
-            audit_bundle = validate_cpu_audit(
-                config.audit_report, data_dir=config.data_dir,
-                tokenizer_path=config.tokenizer_path or config.model_path,
-                world_size=world_size, seed=config.seed, context_length=config.context_length,
-            )
-            audit = audit_bundle["audit"]
-            manifest = audit_bundle["manifest"]
-            if not manifest:
-                files = discover_parquet_files(config.data_dir)
-                manifest = assign_shards(files, world_size=world_size, seed=config.seed)
-        else:
-            files = discover_parquet_files(config.data_dir)
-            audit = audit_parquet_shards(
-                files,
-                tokenizer=tokenizer,
-                context_length=config.context_length,
-                content=require_full_content,
-            )
-            manifest = assign_shards(files, world_size=world_size, seed=config.seed)
-        # A Gate B manifest may have been produced with world_size=1.  Never
-        # silently reuse that assignment for a different DDP topology.
-        if int(manifest.get("world_size", world_size)) != world_size:
-            files = discover_parquet_files(config.data_dir)
-            manifest = assign_shards(files, world_size=world_size, seed=config.seed)
-        by_name = {item["name"]: item for item in audit["shards"]}
-        full_content = bool(
-            audit.get(
-                "content_is_full_corpus",
-                audit.get("content_audit") and not audit.get("footer_only"),
-            )
-        )
-        rank_valid: dict[str, int | None] = {}
-        for rank_key, shard_paths in manifest["rank_shards"].items():
-            rank_valid[rank_key] = (
-                sum(
-                    int(by_name[Path(path).name].get("content", {}).get("valid_trainable_rows", 0))
-                    for path in shard_paths
-                )
-                if full_content
-                else None
-            )
-        manifest["rank_raw_rows"] = {
-            rank_key: sum(int(by_name[Path(path).name]["num_rows"]) for path in shard_paths)
-            for rank_key, shard_paths in manifest["rank_shards"].items()
-        }
-        manifest["rank_valid_trainable_rows"] = rank_valid
-        manifest["rank_effective_rows_scope"] = (
-            "full_corpus" if full_content else "unavailable_sample_only"
-        )
-        target_samples_per_rank = (
-            int(config.max_optimizer_steps)
-            * config.gradient_accumulation_steps
-            * config.micro_batch_size
-        )
-        manifest["target_optimizer_steps"] = int(config.max_optimizer_steps)
-        manifest["target_samples_per_rank"] = target_samples_per_rank
-        manifest["formal_optimizer_steps"] = int(config.formal_optimizer_steps)
-        manifest["rank_has_target_samples"] = {
-            rank_key: (value >= target_samples_per_rank if value is not None else None)
-            for rank_key, value in rank_valid.items()
-        }
-        manifest["rank_has_raw_capacity"] = {
-            rank_key: value >= target_samples_per_rank
-            for rank_key, value in manifest["rank_raw_rows"].items()
-        }
-        manifest["raw_rows"] = int(audit["total_rows"])
-        manifest["effective_trainable_rows"] = (
-            int(audit["content"]["valid_trainable_rows"]) if full_content else None
-        )
-        manifest["effective_rows_scope"] = (
-            "full_corpus" if full_content else "unavailable_sample_only"
-        )
-        manifest["formal_global_samples"] = int(
-            config.formal_optimizer_steps
-            * config.gradient_accumulation_steps
-            * config.micro_batch_size
-            * world_size
-        )
-        manifest["formal_remaining_raw_rows"] = int(
-            audit["total_rows"] - manifest["formal_global_samples"]
-        )
+        audit, manifest = build_training_data_manifest(config, world_size=world_size)
+        print(f"[stage4-data] direct training; shards={len(manifest['shards_shuffled'])}; "
+              "CPU content/tokenizer audit disabled", flush=True)
         bundle = {"audit": audit, "manifest": manifest}
-    else:
-        bundle = None
     bundle = _broadcast_object(bundle, rank=rank)
     if not bundle or "audit" not in bundle or "manifest" not in bundle:
-        raise RuntimeError("Failed to broadcast Stage 4 dataset audit/manifest")
-    audit, manifest = bundle["audit"], bundle["manifest"]
-    has_full_effective_rows = manifest.get("effective_rows_scope") == "full_corpus"
-    capacity_key = "rank_has_target_samples" if has_full_effective_rows else "rank_has_raw_capacity"
-    missing = [
-        rank_key
-        for rank_key, ok in manifest.get(capacity_key, {}).items()
-        if not ok
-    ]
-    if missing:
-        if has_full_effective_rows:
-            raise RuntimeError(
-                "Fail-fast: rank shard(s) lack the required target effective samples: "
-                f"{missing}; valid={manifest.get('rank_valid_trainable_rows')}"
-            )
-        raise RuntimeError(
-            "Fail-fast: rank shard(s) lack the required target raw-row capacity: "
-            f"{missing}; raw={manifest.get('rank_raw_rows')}"
-        )
-    if dist.is_initialized():
-        dist.barrier()
-    return audit, manifest
+        raise RuntimeError("Failed to broadcast Stage 4 shard manifest")
+    return bundle["audit"], bundle["manifest"]
 
 
 def gate_b_real_data_preaudit(
@@ -3042,7 +2925,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> Stage4Config:
     parser.add_argument("--model-path", type=Path, default=None)
     parser.add_argument("--tokenizer-path", type=Path, default=None)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--audit-report", type=Path, default=None)
+    parser.add_argument("--audit-report", type=Path, default=None,
+                        help="Optional historical Gate B JSON; never triggers or gates training with an audit")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--report-path", type=Path, default=None)
     parser.add_argument("--resume-from", type=Path, default=None)
@@ -3396,10 +3280,6 @@ def run(config: Stage4Config) -> dict[str, Any]:
         elif config.model_path is None and config.resume_from is None:
             raise ValueError(f"Gate {config.gate} requires --model-path")
         formal_resume = config.gate == "FORMAL" and config.resume_from is not None
-        if config.gate in ("C", "D", "FORMAL") and world_size > 1 and config.audit_report is None and not formal_resume:
-            raise RuntimeError(
-                "Gate C/D/FORMAL requires an external Gate B --audit-report before multi-card startup"
-            )
         model_path = config.resume_from or config.model_path
         _stage4_event(output_dir, rank, "model_load_start", model_path=str(model_path))
         model, tokenizer = _load_runtime_model(model_path, device, config.tokenizer_path)

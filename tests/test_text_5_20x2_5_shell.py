@@ -52,13 +52,14 @@ class TextShellTest(unittest.TestCase):
         (profile / "conda.sh").write_text('conda() { export CONDA_DEFAULT_ENV="$2"; }\n', encoding="utf-8", newline="\n")
         self.model = self.tmp / "model dir"
         self.model.mkdir()
-        (self.model / "recursive_conversion_metadata.json").write_text("{}", encoding="utf-8")
+        (self.model / "config.json").write_text("{}", encoding="utf-8")
         self.audit = self.tmp / "audit.json"
         self.audit.write_text("{}", encoding="utf-8")
         self.calls_path = self.tmp / "calls.jsonl"
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         MOCK_PYTHON=Path(sys.executable).as_posix(), MOCK_DRIVER=driver.as_posix(),
                         MOCK_CALLS=str(self.calls_path), MOCK_BASH=BASH, MOCK_RUN_JOB="1",
+                        RSMOL_5_20X2_5_MODEL_DIR=self.model.as_posix(),
                         RSMOL_5_20X2_5_CONDA_BASE=conda.as_posix(),
                         RSMOL_5_20X2_5_TASK_TMP=(self.tmp / "runtime tmp").as_posix(),
                         RSMOL_STAGE4_GATE="D", RSMOL_STAGE4_MICRO_BATCH_SIZE="8",
@@ -92,13 +93,13 @@ class TextShellTest(unittest.TestCase):
             "--output-dir", output, "--audit-report", self.audit.as_posix()])
         self.assertEqual(result.returncode, 0, result.stdout)
         calls = self.calls()
-        self.assertEqual([c["tool"] for c in calls], ["python", "vc", "torchrun"])
-        vc = calls[1]["args"]
+        self.assertEqual([c["tool"] for c in calls], ["vc", "torchrun"])
+        vc = calls[0]["args"]
         self.assertEqual(vc[vc.index("-p") + 1], "pdgpu-5090")
         for flag, value in (("-c", "32"), ("-m", "256G"), ("-g", "8"), ("-n", "1")):
             self.assertEqual(vc[vc.index(flag) + 1], value)
         self.assertIn("sjtu_wumengyue-mhl:0.0.1", vc[vc.index("-i") + 1])
-        runtime = self.options(calls[2]["args"])
+        runtime = self.options(calls[1]["args"])
         for name, value in (("--gate", "FORMAL"), ("--micro-batch-size", "4"),
                             ("--gradient-accumulation-steps", "16"), ("--max-optimizer-steps", "18488"),
                             ("--scheduler-total-steps", "18488"), ("--warmup-steps", "925"),
@@ -116,11 +117,24 @@ class TextShellTest(unittest.TestCase):
         self.assertEqual(calls[0]["env"]["CUDA_VISIBLE_DEVICES"], "")
         self.assertEqual(self.options(calls[0]["args"])["--threads"], "8")
 
-    def test_preflight_failure_prevents_submission(self):
+    def test_default_submission_needs_no_audit_or_preflight(self):
         self.env["MOCK_FAIL_PREPARE"] = "23"
         result = self.run_script("run_stage4_5_20x2_5_training_5090.sh")
-        self.assertEqual(result.returncode, 23, result.stdout)
-        self.assertEqual([c["tool"] for c in self.calls()], ["python"])
+        self.assertEqual(result.returncode, 0, result.stdout)
+        calls = self.calls()
+        self.assertEqual([c["tool"] for c in calls], ["vc", "torchrun"])
+        self.assertNotIn("--audit-report", calls[-1]["args"])
+        self.assertNotIn("prepare_text_5_20x2_5", str(calls))
+        self.assertNotIn("audit_stage4_dataset", str(calls))
+        self.assertEqual(self.options(calls[-1]["args"])["--gate"], "FORMAL")
+
+    def test_missing_optional_report_does_not_block_submission_or_runtime(self):
+        missing = self.tmp / "old mount" / "missing-audit.json"
+        result = self.run_script("run_stage4_5_20x2_5_training_5090.sh", ["--audit-report", missing.as_posix()])
+        self.assertEqual(result.returncode, 0, result.stdout)
+        calls = self.calls()
+        self.assertEqual([c["tool"] for c in calls], ["vc", "torchrun"])
+        self.assertEqual(Path(self.options(calls[-1]["args"])["--audit-report"]), missing)
 
     def test_resume_alias_forwards_complete_checkpoint(self):
         resume = self.tmp / "checkpoint-step-000500"

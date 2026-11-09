@@ -1,4 +1,4 @@
-"""Pure-text route contracts, inherited algorithm parity, and CPU preflight."""
+"""Pure-text contracts, inherited update parity, and direct data startup."""
 from __future__ import annotations
 
 import ast
@@ -16,7 +16,7 @@ import types
 import unittest
 from dataclasses import asdict
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / "code/RSmol"
@@ -257,20 +257,110 @@ class TextRouteStaticTest(unittest.TestCase):
         scale = TRAIN.token_weighted_gradient_scale(world_size=8, global_window_tokens=sum(tokens))
         self.assertAlmostEqual(sum(s * scale for s in sums) / 8, sum(sums) / sum(tokens))
 
-    def test_cpu_audit_compatibility_rebuilds_assignment_and_rejects_changes(self):
+    def test_old_report_with_different_dataset_and_tokenizer_paths_does_not_block_training(self):
         with tempfile.TemporaryDirectory() as directory:
             data, token, path, report = audit_fixture(Path(directory))
-            result = TRAIN.validate_cpu_audit(path, data_dir=data, tokenizer_path=token)
-            self.assertEqual(list(result["manifest"]["rank_shard_counts"].values()), [11] * 5 + [10] * 3)
-            for mutate in (lambda r: r.update(status="FAIL"),
-                           lambda r: r["configuration"].update(context_length=512),
-                           lambda r: r["dataset_audit"]["shards"][0].update(bytes=0),
-                           lambda r: r["dataset_audit"].update(content_audit=False)):
-                changed = copy.deepcopy(report)
-                mutate(changed)
-                path.write_text(json.dumps(changed), encoding="utf-8")
-                with self.assertRaises(ValueError):
-                    TRAIN.validate_cpu_audit(path, data_dir=data, tokenizer_path=token)
+            report["configuration"].update(data_dir="/mnt/cloudstorfs/original/data", tokenizer_path="/login-node/tokenizer")
+            for shard in report["dataset_audit"]["shards"]:
+                shard["path"] = "/login-node/old-data/" + shard["name"]
+            path.write_text(json.dumps(report), encoding="utf-8")
+            config = TRAIN._parse_args(["--gate", "FORMAL", "--data-dir", str(data), "--audit-report", str(path)])
+            with patch.object(TRAIN, "audit_parquet_shards", side_effect=AssertionError("No content audit")), \
+                 patch.object(TRAIN, "_load_tokenizer_only", side_effect=AssertionError("No audit tokenizer loading")):
+                audit, manifest = TRAIN.build_training_data_manifest(config, world_size=8)
+            self.assertEqual(list(manifest["rank_shard_counts"].values()), [11] * 5 + [10] * 3)
+            self.assertEqual(manifest["target_samples_per_rank"], 1183232)
+            self.assertTrue(all(Path(p).parent == data for p in manifest["shards_shuffled"]))
+            self.assertNotIn("wrong", str(manifest))
+            self.assertEqual(audit["status"], "NOT_RUN")
+            self.assertFalse(audit["dataset_audit_performed"])
+            self.assertEqual(audit["historical_report"], report["dataset_audit"])
+
+    def test_fresh_eight_rank_startup_without_report_broadcasts_only_current_shards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data, _, _, _ = audit_fixture(Path(directory))
+            config = TRAIN._parse_args(["--gate", "FORMAL", "--data-dir", str(data)])
+            sent = []
+            def broadcast(bundle, *, rank):
+                if rank == 0:
+                    sent.append(bundle)
+                return sent[0]
+            with patch.object(TRAIN, "_broadcast_object", side_effect=broadcast), \
+                 patch.object(TRAIN, "audit_parquet_shards", side_effect=AssertionError("No Parquet audit")), \
+                 patch.object(TRAIN, "_load_tokenizer_only", side_effect=AssertionError("No audit tokenizer")):
+                rank0 = TRAIN._dataset_preaudit(config, tokenizer=object(), rank=0, world_size=8)
+                for rank in range(1, 8):
+                    self.assertEqual(TRAIN._dataset_preaudit(config, tokenizer=object(), rank=rank, world_size=8), rank0)
+            audit, manifest = rank0
+            self.assertEqual(audit["startup_mode"], "direct_training")
+            self.assertEqual(len(manifest["shards_shuffled"]), 85)
+            self.assertEqual(manifest["formal_global_samples"], 9465856)
+            self.assertEqual(manifest["rank_shards"], TRAIN.assign_shards(TRAIN.discover_parquet_files(data), world_size=8, seed=0)["rank_shards"])
+
+    def test_missing_or_unreadable_optional_report_does_not_gate_training(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            data, _, _, _ = audit_fixture(tmp)
+            for name, content in (("missing.json", None), ("invalid.json", "{invalid"), ("wrong-format.json", "[]")):
+                report = tmp / name
+                if content is not None:
+                    report.write_text(content, encoding="utf-8")
+                config = TRAIN._parse_args(["--gate", "FORMAL", "--data-dir", str(data), "--audit-report", str(report)])
+                audit, manifest = TRAIN.build_training_data_manifest(config, world_size=8)
+                self.assertEqual(audit["status"], "NOT_RUN")
+                self.assertEqual(len(manifest["rank_shards"]), 8)
+
+    def test_actual_formal_entry_reaches_training_after_forward_trace_without_cpu_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            data, token, old_report, report = audit_fixture(tmp)
+            report["configuration"].update(data_dir="/other-mount/data", tokenizer_path="/other-mount/tokenizer")
+            old_report.write_text(json.dumps(report), encoding="utf-8")
+            dist = types.ModuleType("torch.distributed")
+            dist.is_initialized = lambda: True
+            dist.broadcast_object_list = Mock()
+            dist.barrier = Mock()
+            dist.destroy_process_group = Mock()
+            torch = types.ModuleType("torch")
+            torch.distributed = dist
+            for index, attached in enumerate((None, old_report)):
+                output = tmp / f"formal-{index}"
+                argv = ["--gate", "FORMAL", "--data-dir", str(data), "--model-path", str(token), "--output-dir", str(output)]
+                if attached:
+                    argv.extend(("--audit-report", str(attached)))
+                config = TRAIN._parse_args(argv)
+                with patch.dict(sys.modules, {"torch": torch, "torch.distributed": dist}), \
+                     patch.object(TRAIN, "_prepare_distributed", return_value=(0, 8, "cuda:0", True)), \
+                     patch.object(TRAIN, "_set_seed"), \
+                     patch.object(TRAIN, "_load_runtime_model", return_value=(object(), object())), \
+                     patch.object(TRAIN, "_validate_recursive_architecture", return_value={}), \
+                     patch.object(TRAIN, "recursive_forward_trace_audit", return_value={"forward_trace_ok": True}), \
+                     patch.object(TRAIN, "audit_parquet_shards", side_effect=AssertionError("No CPU scan")), \
+                     patch.object(TRAIN, "_git_commit", return_value="local-test"), \
+                     patch.object(TRAIN, "run_training", return_value={"status": "PASS", "optimizer_steps": 18488}) as update:
+                    result = TRAIN.run(config)
+                update.assert_called_once()
+                manifest = update.call_args.kwargs["manifest"]
+                self.assertEqual(len(manifest["shards_shuffled"]), 85)
+                self.assertEqual(result["dataset_audit"]["status"], "NOT_RUN")
+                phases = [json.loads(line)["phase"] for line in (output / "stage4_lifecycle_rank0.jsonl").read_text(encoding="utf-8").splitlines()]
+                self.assertLess(phases.index("forward_trace_done"), phases.index("training_start"))
+                self.assertEqual(result["status"], "PASS")
+
+    def test_current_dataset_still_uses_original_shard_discovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            data, _, _, _ = audit_fixture(tmp)
+            nested = data / "data"
+            nested.mkdir()
+            for path in data.glob("*.parquet"):
+                path.rename(nested / path.name)
+            config = TRAIN._parse_args(["--gate", "FORMAL", "--data-dir", str(data)])
+            _, manifest = TRAIN.build_training_data_manifest(config, world_size=8)
+            self.assertTrue(all(Path(p).parent == nested for p in manifest["shards_shuffled"]))
+            (nested / TRAIN.EXPECTED_PARQUET_NAMES[0]).unlink()
+            with self.assertRaisesRegex(ValueError, "85 parquet shards"):
+                TRAIN.build_training_data_manifest(config, world_size=8)
 
     def test_existing_conversion_output_rejected_before_tensor_import(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -280,16 +370,16 @@ class TextRouteStaticTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             CONVERT.reject_forbidden_output(ROOT / "bad-model")
 
-    def test_preflight_reuses_report_without_model_or_tensor_loading(self):
+    def test_legacy_manual_prepare_no_longer_requires_or_runs_cpu_audit(self):
         with tempfile.TemporaryDirectory() as directory:
             tmp = Path(directory)
             data, token, path, report = audit_fixture(tmp)
             config = vars(CONVERT.build_target_config(types.SimpleNamespace(num_hidden_layers=30)))
             (token / "config.json").write_text(json.dumps(config), encoding="utf-8")
             (token / "recursive_conversion_metadata.json").write_text(json.dumps({"status": "PASS", "text_route": TRAIN.TEXT_ROUTE}), encoding="utf-8")
-            with patch.object(PREPARE.subprocess, "run", side_effect=AssertionError("Audit should be reused")):
+            with patch("subprocess.run", side_effect=AssertionError("No CPU audit or external process")):
                 self.assertEqual(PREPARE.main(["--model-dir", str(token), "--data-dir", str(data),
-                                              "--output-dir", str(tmp / "new-formal"), "--audit-report", str(path)]), 0)
+                                              "--output-dir", str(tmp / "new-formal")]), 0)
 
 
 if __name__ == "__main__":

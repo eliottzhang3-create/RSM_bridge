@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""CPU preflight before vc submission; never loads weights or starts DDP."""
+"""Optional manual model-path check; the formal launcher does not call this.
+
+Kept for existing commands. Never scans/tokenizes the dataset or starts DDP.
+"""
 from __future__ import annotations
 
 import argparse
 import importlib.util
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def main(argv=None):
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--audit-report", type=Path, required=True)
+    parser.add_argument("--audit-report", type=Path, help="Accepted for old commands; no audit is run")
     parser.add_argument("--resume-from", type=Path)
     args = parser.parse_args(argv)
     trainer = trainer_module()
@@ -54,23 +55,7 @@ def main(argv=None):
     metadata = json.loads((model_dir / "recursive_conversion_metadata.json").read_text(encoding="utf-8"))
     if metadata.get("status") != "PASS" or metadata.get("text_route") != trainer.TEXT_ROUTE:
         raise ValueError("Successful conversion metadata required for fresh training")
-    report = trainer.ensure_external_output(args.audit_report)
-    if not report.exists():
-        os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", TOKENIZERS_PARALLELISM="false")
-        subprocess.run([
-            sys.executable, "-u", str(SCRIPTS / "audit_stage4_dataset.py"),
-            "--tokenizer-path", str(model_dir), "--data-dir", str(args.data_dir),
-            "--output-dir", str(report.parent), "--report-path", str(report),
-            "--cache-root", str(report.parent / "cache"), "--world-size", "8",
-            "--context-length", "1024", "--seed", "0",
-        ], check=True)
-    bundle = trainer.validate_cpu_audit(report, data_dir=args.data_dir, tokenizer_path=model_dir)
-    rows = {s["name"]: int(s["num_rows"]) for s in bundle["audit"]["shards"]}
-    target = trainer.DEFAULT_FORMAL_SAMPLES_PER_RANK
-    for rank, paths in bundle["manifest"]["rank_shards"].items():
-        if sum(rows[Path(p).name] for p in paths) < target:
-            raise ValueError(f"Rank {rank} has insufficient raw row capacity for {target} samples")
-    print(f"[preflight] PASS audit={report}; raw-row capacity checked; effective rows remain sample-only", flush=True)
+    print("[preflight] Model config checked; dataset audit disabled. Formal launcher submits directly.", flush=True)
     return 0
 
 

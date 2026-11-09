@@ -22,25 +22,19 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1; shift;;
     --help|-h)
       echo "Usage: bash $0 [--model-dir PATH] [--data-dir PATH] [--output-dir NEW_PATH] [--audit-report CPU_JSON] [--resume-from CHECKPOINT] [--dry-run]"
-      echo "Fresh: run CPU conversion first. Reuses compatible Gate B JSON, or runs a CPU audit before submitting one FORMAL job."
+      echo "Uses the converted model and submits one FORMAL job directly. No CPU dataset audit. --audit-report only attaches an old report."
       exit 0;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
-[[ -n "$AUDIT_REPORT" ]] || AUDIT_REPORT="$(dirname "$OUTPUT_DIR")/cpu_audit/stage4_gate_B_audit.json"
 export RSMOL_5_20X2_5_MODEL_DIR="$MODEL_DIR" RSMOL_5_20X2_5_DATA_DIR="$DATA_DIR"
 export RSMOL_5_20X2_5_OUTPUT_DIR="$OUTPUT_DIR" RSMOL_5_20X2_5_AUDIT_REPORT="$AUDIT_REPORT"
 export RSMOL_5_20X2_5_RESUME_FROM="$RESUME_FROM" RSMOL_5_20X2_5_DRY_RUN="$DRY_RUN"
 if [[ "$DRY_RUN" == 1 ]]; then
   exec bash "$SCRIPT_DIR/scripts/train_stage4_5_20x2_5_ddp.sh"
 fi
-CONDA_BASE="${RSMOL_5_20X2_5_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3}"
-source "$CONDA_BASE/etc/profile.d/conda.sh"
-conda activate "$CONDA_BASE/envs/rsmol"
-export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
-PREPARE=(--model-dir "$MODEL_DIR" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --audit-report "$AUDIT_REPORT")
-[[ -z "$RESUME_FROM" ]] || PREPARE+=(--resume-from "$RESUME_FROM")
-python -u "$SCRIPT_DIR/scripts/prepare_text_5_20x2_5.py" "${PREPARE[@]}"
+# Match the original text submit wrapper: vc dispatches the runtime directly.
+# Dataset reading/tokenization happens in the training stream, not on the login node.
 CMD_PREFIX=""
 for name in RSMOL_5_20X2_5_MODEL_DIR RSMOL_5_20X2_5_DATA_DIR RSMOL_5_20X2_5_OUTPUT_DIR \
             RSMOL_5_20X2_5_AUDIT_REPORT RSMOL_5_20X2_5_RESUME_FROM RSMOL_5_20X2_5_TASK_TMP \

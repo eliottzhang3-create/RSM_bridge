@@ -1,3 +1,35 @@
+## 2026-11-09：修复纯文本5＋20×2＋5启动，取消新增CPU数据审计
+
+用户远程日志已完成模型forward_trace_done，随后被初版新增的
+validate_cpu_audit中的“CPU audit dataset directory mismatch”阻断，尚未进入第一步训练。
+该判断比较历史报告data_dir与当前容器目录，不能据此认定实际数据不匹配；原5+10×2+5文本母本无此检查。
+按用户要求撤掉新增流程，继续本地Windows改核心代码、GitHub同步、远程Linux保存资产和执行训练。
+
+正式launcher现在和原文本提交器一样直接vc submit，不再调用prepare_text_5_20x2_5.py，
+不自动运行Gate B、扫描85片footer、分词三个sample shard或比较报告目录/tokenizer文件。
+训练默认无需--audit-report；使用原discover_parquet_files/assign_shards，从当前数据目录或其data/子目录
+发现85个shard并按seed0分给八卡，然后直接进入原streaming训练。旧报告若显式提供仅存历史记录，
+不参与路径/容量匹配、不提供训练文件路径；缺失/损坏说明后继续。当前dataset_audit明确NOT_RUN，
+不将历史报告记成本次审计PASS。手动prepare旧命令仅检查模型配置，不再生成或要求CPU报告。
+
+模型/转换文件未改；30物理/50执行、8×micro4×GA16=GBS512、18488updates/925warmup，
+FP32参数/BF16前向/FP32 CE、全局有效token加权loss、AdamW及完整更新主体保持。
+本次失败无已训练checkpoint需要恢复，既有转换模型直接复用，不必再次转换；同步修复后执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+cd code/RSmol
+bash run_stage4_5_20x2_5_training_5090.sh
+```
+
+python -B tests/validate_text_5_20x2_5.py：50项本地检查通过，8项真实CPU tensor因缺依赖跳过。
+新增实际FORMAL启动控制流回归（替换GPU/模型执行），无报告/旧报告异挂载路径均从forward_trace_done进入run_training；
+八rank manifest广播、可选报告缺失/损坏、原85片发现/分配、Bash直接vc→torchrun无CPU preflight均通过，
+母本SHA和原更新/读取/损失/attention/cache AST对照通过。报告audit_reports/text_5_20x2_5_validation.json。
+按既有授权在沙箱外运行临时目录/Bash测试；本次未读取远程资产、提交真实作业或验证GPU训练完成。
+以下初版记录的自动CPU审计/匹配流程由本条修复取代，最新用法见[README](code/RSmol/text_5_20x2_5/README.md)。
+
 ## 2026-11-09：纯文本 SmolLM2 5＋20×2＋5，GBS512 正式训练
 
 按已确认计划实现独立非MeSH纯文本路线，见[转换、正式训练与恢复说明](code/RSmol/text_5_20x2_5/README.md)。

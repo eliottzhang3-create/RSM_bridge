@@ -26,8 +26,7 @@ if [[ "$DRY_RUN" != 1 ]]; then
       [[ -f "$RESUME_FROM/$name" ]] || { echo "Incomplete resume: $RESUME_FROM/$name" >&2; exit 2; }
     done
   else
-    [[ -f "$MODEL_DIR/recursive_conversion_metadata.json" ]] || { echo "Run CPU conversion first: $MODEL_DIR" >&2; exit 2; }
-    [[ -n "$AUDIT_REPORT" && -f "$AUDIT_REPORT" ]] || { echo "CPU Gate B audit required" >&2; exit 2; }
+    [[ -f "$MODEL_DIR/config.json" ]] || { echo "Converted model config missing: $MODEL_DIR/config.json" >&2; exit 2; }
   fi
 fi
 ARGS=(

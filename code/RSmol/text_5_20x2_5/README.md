@@ -55,7 +55,7 @@ cd code/RSmol
 # CPU 转换；原模型和输出目录都有独立默认值。
 bash scripts/convert_stepwise_5_20x2_5.sh
 
-# 先检查/生成 CPU 数据审计，再提交一个正式八卡作业。
+# 直接提交一个正式八卡作业，不再先运行 CPU 数据检查。
 bash run_stage4_5_20x2_5_training_5090.sh
 ```
 
@@ -65,14 +65,18 @@ bash run_stage4_5_20x2_5_training_5090.sh
 
 正式日志：远程代码目录的 `log/text_5_20x2_5_gbs512/formal_<timestamp>_<pid>.JOB.log`。提交前打印具体 OUTPUT_DIR；训练中的 `stage4_progress.jsonl`、`stage4_lifecycle_rank*.jsonl`、监控和报告保存在该输出目录。
 
-默认在同一 run root 的 `cpu_audit/` 运行原 `audit_stage4_dataset.py`：仅 CPU/tokenizer，85 片 footer＋默认 3 片内容采样，不加载模型或启动 DDP。也可以复用旧路线的兼容 Gate B 报告：
+正式入口按原文本提交方式，直接调用 `vc submit`；不再运行 `prepare_text_5_20x2_5.py` 或自动 Gate B，不扫描三个 shard 的内容、不预先分词。训练仍使用母本的 `discover_parquet_files` 和 `assign_shards`，从当前数据目录（支持其 `data/` 子目录）发现 85 个 shard，按 seed0 分给八卡，然后由原 streaming loader 读取训练。
+
+已有转换模型可直接复用，不必重新转换。用户本次失败发生在 `forward_trace_done` 之后、第一步训练之前；该失败 run 没有可恢复的训练更新，重新提交到默认新输出目录即可。
+
+`--audit-report` 仅为旧命令保留，可选附带已有 Gate B 报告：
 
 ```bash
 bash run_stage4_5_20x2_5_training_5090.sh \
   --audit-report /absolute/path/to/stage4_gate_B_audit.json
 ```
 
-校验报告 PASS、Gate B、context、数据目录、当前 85 片路径/字节数/行数记录以及报告所指 tokenizer 与目标 tokenizer 的文件字节一致。分片分配始终按当前八卡、seed0 重建，旧报告的 GBS1024 训练步数不沿用；重新检查每卡正式样本预算的原始行容量。内容采样不能证明全语料有效行数，不能把 raw capacity 记成全量有效数据审计。未保存历史资产指纹的旧报告也不能证明文件自审计后从未被改写；资产应按项目约定保持固定。
+历史报告仅写入 `dataset_audit.historical_report`，不参与当前路径、tokenizer 文件或容量匹配，也不提供训练 shard 路径。报告缺失或无法解析会打印说明后继续；未提供则完全不读取报告。当前数据分配始终来自当前训练数据目录，而非旧报告内的登录节点/挂载路径。报告如实记录 `status=NOT_RUN`、`dataset_audit_performed=false`，不会将历史检查冒充本次审计。
 
 路径选项：`--model-dir`、`--data-dir`、`--output-dir`、`--audit-report`、`--resume-from`。对应环境变量前缀统一为 `RSMOL_5_20X2_5_`，不读取旧 `RSMOL_STAGE4_*` / `RSMOL_5_10_5_*` 配方。输出须为新的空外部目录。短名 `run_stage4_5_20x2_5_5090.sh` 转发到同一个正式入口。
 
@@ -102,6 +106,6 @@ python -B tests/validate_text_5_20x2_5.py
 python -B tests/validate_text_5_20x2_5.py --require-tensors
 ```
 
-验证包含母本 SHA、完整更新主体/读取/损失/attention/cache 算法 AST 对照、实际 schedule/cache-slot helper、全部 LR 位置、正式配方/跨路线恢复拒绝、模拟 Parquet 的真实 micro4 迭代、CPU 审计兼容性，以及真实 Bash＋假 vc/conda/torchrun 的转换/正式/恢复/失败流程。可选真实张量用例覆盖源模型单遍一致性、两轮共享梯度求和、50 槽 cache、绑定/非绑定保存重载、完整转换、16 次累积的 token 加权梯度及 checkpoint optimizer/scheduler/rank cursor 恢复。
+验证包含母本 SHA、完整更新主体/读取/损失/attention/cache 算法 AST 对照、实际 schedule/cache-slot helper、全部 LR 位置、正式配方/跨路线恢复拒绝、模拟 Parquet 的真实 micro4 迭代，以及真实 Bash＋假 vc/conda/torchrun 的转换/直接正式/恢复流程。针对本次故障，实际运行不带报告和带不同挂载路径旧报告的 FORMAL 启动控制流，替换模型/GPU执行后确认从 `forward_trace_done` 进入 `run_training`；另检查八 rank manifest 广播、旧报告缺失/损坏不阻断、默认无 CPU preflight/扫描/分词，以及 85 片分配与母本一致。可选真实张量用例覆盖源模型单遍一致性、两轮共享梯度求和、50 槽 cache、绑定/非绑定保存重载、完整转换、16 次累积的 token 加权梯度及 checkpoint optimizer/scheduler/rank cursor 恢复。
 
 本地 Windows 当前缺 Torch/Transformers，真实张量检查会明确跳过；结果写入仓库 `audit_reports/text_5_20x2_5_validation.json`。本地检查不代表远程生产转换、八卡训练或八卡恢复已通过；这些须由实际资产和远程作业给出证据。
