@@ -1,0 +1,12 @@
+{
+  "code/RSmol/scripts/train_stage4_5_20x2_5_ddp.py": "4a2c562b40d9dc605e3ed84672b1d4d6d72d5abf393bc8ad6615409560d71c60",
+  "code/RSmol/scripts/train_stage4_5_10_5_ddp.py": "85b16770a121b202892bf60fc40ba8a5b77232e54a6147ad4b4a9f121183f97e",
+  "code/RSmol/scripts/train_stage4_5_10_5_ddp.sh": "b79e69069983905378304b87e74ff1168eabccd580d5659b4a06e9773bbeca9f",
+  "code/RSmol/scripts/train_stage4_5_20x2_5_ddp.sh": "94aa7b1519d4563b31648af610d47afcec66d16588c5593b32a841eff718184a",
+  "code/RSmol/scripts/convert_stepwise_5_10_5.py": "251a4024b8420f36eb0b4511502627b4d048c28a2ad14645cfc1b639f5e21b15",
+  "code/RSmol/scripts/convert_stepwise_5_20x2_5.py": "5e0f721b50bba784020ebf5441f036a871e0a481b6d80081991f70949495c936",
+  "code/RSmol/recursive_model_5_10_5.py": "0208157d4bda977cfd1aac260f727df8f6f0dd2ed244a60c324bd5cbf4f1a5c9",
+  "code/RSmol/run_stage4_5_10_5_5090.sh": "bfa5a1cd7b41d19ef5ec748ca4867d74c757fd5c5f8f7d0678cbc2b4aab254a2",
+  "code/RSmol/run_stage4_5_20x2_5_training_5090.sh": "aa86fff677eee22f80e8bb11fe8dadac1b39d32fc02eabac20ce26a4dc218234",
+  "code/RSmol/mizar_official_eval/release_manifest.json": "07f52ca348869cbb44ef44b0cff0c103700497091dcf7e0f492adb23c5b61dcd"
+}

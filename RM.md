@@ -1,3 +1,48 @@
+## 2026-11-09：Mizar 最终文本权重抽层循环与单 epoch 文本训练
+
+按用户确认方案完成独立代码，说明见 code/RSmol/mizar_text_5_10x2_5/README.md。
+继续本地 Windows 维护核心代码、GitHub 中转、远程 Linux 保存全部权重/数据和执行任务。
+原 5＋10×2＋5 与 5＋20×2＋5 及其他既有路线保持不变；十份母本归一化 LF SHA 记录于新路线 source_guard.json。
+
+CPU 转换从 models/Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt
+提取 caption_decoder.lm.*，不使用 assets/smollm2-135m/model.safetensors 作为训练权重。
+只校验最终 checkpoint 和文本配置/tokenizer 的官方 release SHA，不要求音频资产或构造 CED/mapper。
+前五/后五层保留，中间原二十层沿用隔层取十层：一基 6,8,10,12,14,16,18,20,22,24；
+20 物理层，执行前5→中10→中10→后5共30次，中间参数共享，无 MeSH/router/LoRA/音频分支。
+使用原 recursive_model_5_10_5.RecursiveLlamaForCausalLM 显式加载，不调用全局 AutoModel 注册。
+转换检查源 LM 严格加载、绑定 embedding/head、全部继承 tensor、30次 trace、保存重载 tensor/logits/tokenizer，
+CPU 离线8线程、拒绝覆盖、失败 staging 保留；默认输出 models/Mizar159M-text-5-10x2-5。
+
+独立单 epoch trainer 复制较新无审计文本入口，恢复原 8×micro8×GA16=GBS1024、
+9244 updates/9244 scheduler domain/463 warmup，保留原完整更新循环、全局有效 token 加权 CE、
+FP32 参数/AdamW 状态、BF16 仅 forward、FP32 CE、单组 AdamW(.9,.95)/eps1e-8/WD.1/clip1。
+原85片 seed0 shuffle后连续分给八rank、片内 buffer4096/片尾不足8丢弃、动态padding/context1024/不packing保持。
+每次名义额度9,465,856样本，不保证严格完整数据遍历恰好一次；每500步及最终保存，保留8500/9000/9244。
+显式 --max-lr/--min-lr，min默认0.1×max；epoch1为8e-4/8e-5，epoch2为2e-4/2e-5。
+用户手动以 --model-dir 指向 epoch1 的完整 checkpoint-step-009244 开始 epoch2，
+只加载模型，不读 training_state.pt；优化器/scheduler/RNG/计数/数据游标重置，seed0 从头读取。
+两个 epoch 各自 min→max warmup，再cosine回min，不合并成18488步scheduler。
+同epoch --resume-from 要求本路线完整checkpoint和相同LR，累计到9244，使用新空输出目录。
+恢复继承原母本限制：保存八rank游标但无shuffle buffer，模型RNG仅rank0快照，不声称八rank bitwise exact。
+
+正式入口直接 vc submit，无CPU数据扫描/Gate B/smoke前置；沿用 pdgpu-5090/32CPU/256G/8GPU/1node、原容器和rsmol环境。
+新路线模型/输出/log/job/环境变量隔离，转换 CONVERT_OUTPUT_DIR 和训练 OUTPUT_DIR 分开。
+远程仓库根目录 /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM 同步后：
+
+```bash
+bash code/RSmol/scripts/convert_mizar_text_5_10x2_5.sh
+bash code/RSmol/run_stage4_mizar_text_5_10x2_5_training_5090.sh --max-lr 8e-4 --min-lr 8e-5
+```
+
+README含固定epoch1/epoch2输出、手动第二epoch、完整恢复、执行和精确git add/commit/push命令。
+python -B tests/validate_mizar_text_5_10x2_5.py：28项本地检查通过，5项真实CPU tensor因缺Torch等依赖跳过。
+覆盖母本SHA、完整更新循环/数据/损失AST、所有9245点LR、最终权重初始化和错路线拒绝、
+实际FORMAL启动不加载旧训练状态、原micro8片尾规则、Bash vc→torchrun转义/资源/显式LR/失败传递。
+报告 audit_reports/mizar_text_5_10x2_5_validation.json；远程rsmol可选加 --require-tensors 验证合成CPU张量。
+Windows沙箱拒绝临时目录后，经授权在沙箱外运行同一本地验证。
+未代为git commit/push、读取远程生产资产、执行生产转换或提交GPU作业，不登记远程转换/训练/恢复PASS。
+本条仅前置项目记录，原RM内容完整保留。
+
 ## 2026-11-09：新增两条隔离的固定三循环文本完整一轮训练
 
 按用户确认方案落代码：纯5＋10×3＋5，以及5＋10×3＋5 MeSH六槽、四组write/read routers（8个独立Linear模块）。
