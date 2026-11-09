@@ -1,0 +1,74 @@
+{
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "time_utc": "2026-11-09T15:43:54.680564+00:00",
+  "run": 44,
+  "passed": 34,
+  "skipped": [
+    {
+      "test": "test_mizar_text_5_10x2_5_loop_lora_r8_tensors.TensorTests.test_epoch2_optimizer_and_scheduler_start_fresh",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_loop_lora_r8_tensors.TensorTests.test_global_token_weighted_gradient_matches_concatenated_tokens",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_loop_lora_r8_tensors.TensorTests.test_missing_trained_lora_is_rejected_by_actual_runtime_loader",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_loop_lora_r8_tensors.TensorTests.test_nonzero_branches_prefill_incremental_cache_match_full_forward",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_loop_lora_r8_tensors.TensorTests.test_real_final_namespace_extraction_and_strict_load",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_loop_lora_r8_tensors.TensorTests.test_real_task_gradients_reach_both_loops_and_shared_base",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_loop_lora_r8_tensors.TensorTests.test_real_tied_head_mismatch_fails_before_load",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_loop_lora_r8_tensors.TensorTests.test_scope_independence_inherited_parameters_and_rng",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_loop_lora_r8_tensors.TensorTests.test_selected_inheritance_trace_and_save_reload",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_loop_lora_r8_tensors.TensorTests.test_trained_nonzero_lora_full_checkpoint_restores_model_moments_and_cursor",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    }
+  ],
+  "failures": [],
+  "errors": [],
+  "production_assets_read": false,
+  "remote_conversion_verified": false,
+  "gpu_training_verified": false,
+  "eight_rank_resume_verified": false,
+  "source_sha256": {
+    "code/RSmol/mizar_text_5_10x2_5_loop_lora_r8/contract.py": "5875d649e5b32accfa40bb31a8bae4f728dc3fb38feb9775634aae1bbc389d5c",
+    "code/RSmol/mizar_text_5_10x2_5_loop_lora_r8/conversion.py": "9d6f22bffd3eabe3bb687215fe329482ae37a5792c8da4a71f64acc36ae34138",
+    "code/RSmol/mizar_text_5_10x2_5_loop_lora_r8/loop_lora.py": "825d03f4f2e50b7c06536b40b44e510edfe2bc03aeaf329f7bb5bb42288d8d8a",
+    "code/RSmol/mizar_text_5_10x2_5_loop_lora_r8/publication.py": "c19e573d9da4c0519d5a7058b80d450609e67a90c136186dbf444f9e119b2fb0",
+    "code/RSmol/mizar_text_5_10x2_5_loop_lora_r8/__init__.py": "b80f329ce720199d944cb147447e4431fedf55b20f81f5dd33b251ef8312678a",
+    "code/RSmol/recursive_model_mizar_text_5_10x2_5_loop_lora_r8.py": "3e238159f37b7845a79d468b11023920410021d24c216ba6b1d1c279730ab18b",
+    "code/RSmol/scripts/convert_mizar_text_5_10x2_5_loop_lora_r8.py": "3fe24c356a8c6add7e794d6e67bcd1c35dd5d27d72d282753840e4297976555b",
+    "code/RSmol/scripts/convert_mizar_text_5_10x2_5_loop_lora_r8.sh": "9fe376a1e0f521ea092e06c1b4c77124fd2d608c2e6d6c773de5d7efb9321764",
+    "code/RSmol/scripts/train_stage4_mizar_text_5_10x2_5_loop_lora_r8_ddp.py": "348de5c4d783a1b781705bf7c54f4b969f04c3a2ffad1ac76e133b69e1bc5823",
+    "code/RSmol/scripts/train_stage4_mizar_text_5_10x2_5_loop_lora_r8_ddp.sh": "3fd2b3d370a6491a52bb6ca13e26b5d31de0b591f97735ca265196f87ae3edf1",
+    "code/RSmol/run_stage4_mizar_text_5_10x2_5_loop_lora_r8_training_5090.sh": "28cf6dc106e1562e3ded26a3d2f495481c113e61a59f27e689f48c7a73ce3f22",
+    "tests/test_mizar_text_5_10x2_5_loop_lora_r8.py": "70141ca4b10e0aec239b323864510376ec0ed16bbd8e77f03c4440acb47ce942",
+    "tests/test_mizar_text_5_10x2_5_loop_lora_r8_numpy.py": "20bad672a160ff1314a67af2eda5632e568b4645b7425cfdf0c4b26ef6411814",
+    "tests/test_mizar_text_5_10x2_5_loop_lora_r8_shell.py": "93af74303d9800cc17529ce7e0a03f7244c83a70e418f950c968588b54fa0791",
+    "tests/test_mizar_text_5_10x2_5_loop_lora_r8_tensors.py": "a85da91a772892043a2efc5a77dd62185cf0fd98563e8ba69fdd966c2406bcf9",
+    "tests/validate_mizar_text_5_10x2_5_loop_lora_r8.py": "8fce2af24986809de54b0411a7af14b5bee92a2b13a90a20766ba5ec7852185f",
+    "code/RSmol/mizar_text_5_10x2_5_loop_lora_r8/README.md": "06544449d6d33b820abd71d608d99086a5ba412419c7aab72834764ee4ebb537",
+    "code/RSmol/mizar_text_5_10x2_5_loop_lora_r8/source_guard.json": "70182b9625da3e5f1584fd4e762c2df6d70372a7bdf3bdd6ff5550706384a483"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject_loop_lora_r8/models/loop_lora.py": "b13eb253c555ce11215d581e0a4e9acd5697bbc0ae0879c7a134cf5a19b20cc4",
+  "code/RSmol/mizar_official_eval/release_manifest.json": "07f52ca348869cbb44ef44b0cff0c103700497091dcf7e0f492adb23c5b61dcd",
+  "code/RSmol/mizar_text_5_10x2_5/README.md": "c86ffcbf6f26ab28bb04e66237f2020dbda05b9fff0f3e287449172ca1143546",
+  "code/RSmol/mizar_text_5_10x2_5/__init__.py": "b80f329ce720199d944cb147447e4431fedf55b20f81f5dd33b251ef8312678a",
+  "code/RSmol/mizar_text_5_10x2_5/contract.py": "2cc823297f408c5759aa6f3db60d9addac1d478e3611a0247b309f26f296c8ee",
+  "code/RSmol/mizar_text_5_10x2_5/conversion.py": "d916128ba640c2e3eb2b0817c2b7ad1489ef080d85a38ac6d4f8f3c32ad500b8",
+  "code/RSmol/mizar_text_5_10x2_5/publication.py": "c19e573d9da4c0519d5a7058b80d450609e67a90c136186dbf444f9e119b2fb0",
+  "code/RSmol/mizar_text_5_10x2_5/source_guard.json": "af7bece337ea3acf0a845877e30de439ef774c1ca0a612c5ef7268785a8c89f2",
+  "code/RSmol/recursive_model_5_10_5.py": "0208157d4bda977cfd1aac260f727df8f6f0dd2ed244a60c324bd5cbf4f1a5c9",
+  "code/RSmol/run_stage4_mizar_text_5_10x2_5_training_5090.sh": "c7cb18469338dddc23bc45668af3f04fa92163fd0415198a5573c2ecdcba862a",
+  "code/RSmol/scripts/convert_mizar_text_5_10x2_5.py": "55e42f260087b7266900c49cb6a04954e628e36695efc4b1fbc095227c4362fe",
+  "code/RSmol/scripts/convert_mizar_text_5_10x2_5.sh": "bbbe2949861801597db60d0deba4dad43fe7a58e71be0af1d4a68f32ad212ad8",
+  "code/RSmol/scripts/train_stage4_mizar_text_5_10x2_5_ddp.py": "691ee69767bd975e642d953ff8266b441573e6edcb4acf223e7aeb594cd4ac23",
+  "code/RSmol/scripts/train_stage4_mizar_text_5_10x2_5_ddp.sh": "64800fe3e9c4d9aa6ecc1335678b80f63e70e66f16badf3903a69925f45fa887",
+  "tests/test_mizar_text_5_10x2_5.py": "e21086ae34bf641563ecf3fa697efeed5546f4d6d78f149f360466ac2050c63b",
+  "tests/test_mizar_text_5_10x2_5_shell.py": "5bd751490653c985adfb46fc09f84823843b6d329914b828d651f6835844f3ab",
+  "tests/test_mizar_text_5_10x2_5_tensors.py": "a6d8a2feea748b1569a48150fb0a9182813893bfaf76f25a1190a641b1f9f4c2",
+  "tests/validate_mizar_text_5_10x2_5.py": "58cb11966721f3bba5914cce9d81149ff167751d3a0f2cd97cc78f18fbf506b7"
+}

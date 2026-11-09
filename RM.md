@@ -1,3 +1,104 @@
+## 2026-11-09：Mizar 文本 Huginn 类共享状态投影，两次独立单 epoch 训练
+
+按已确认方案复制并隔离新路线，说明与执行/提交命令见 code/RSmol/mizar_text_5_10x2_5_huginn/README.md。
+本地 Windows 维护核心代码、GitHub 中转、远程 Linux 保存权重/数据/输出并执行任务。
+保留原 Mizar 文本、LoRA 及其他路线，16 份母本文件的归一化 LF SHA256 记录于 source_guard.json。
+
+独立模型 recursive_model_mizar_text_5_10x2_5_huginn.MizarHuginnForCausalLM：
+20 物理层/30 次 Transformer 执行，E=前5层输出；S0 为 [B,L,576] 独立逐元素截断高斯，
+底层 σ=√(2/5)、±3σ 截断，每次完整 forward 只采样一次；S0 为临时激活，不是模型参数或持久状态。
+S1=Core(A(cat([S0,E])))，S2=Core(A(cat([S1,E])))，S2 直接进入后5层/final norm/head。
+同一 Linear(1152,576,bias=False) 调用两次，新增663,552参数；拼接顺序固定[state,prelude]。
+E 和 S1 不 detach，固定两轮完整反传，所有继承权重及A全量训练；沿用原 norm/attention/RoPE/30槽cache。
+A采用 σ=√(2/(5×576))、±3σ 截断正态，在独立CPU seed0 RNG上下文中初始化，不改变调用者RNG。
+投影在BF16 autocast后转回原FP32 residual dtype；不引入MeSH、LoRA、sandwich norm、可变深度或截断BPTT。
+
+CPU离线转换8线程，严格从 Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt 的 caption_decoder.lm.* 抽取，
+不使用 assets/smollm2-135m/model.safetensors；仅核验最终checkpoint及文本assets的官方release SHA和tensor inventory。
+沿用前1..5、中6/8/10/12/14/16/18/20/22/24、后26..30的一基选层；逐项核验继承tensor并严格组装唯一新增A。
+验证30次物理trace、A两次调用、保存重载全部tensor含A、绑定权重、固定同一噪声实现的logits和tokenizer。
+显式新模型类加载，无全局AutoModel注册；默认模型 models/Mizar159M-text-5-10x2-5-huginn，拒绝覆盖，失败staging保留。
+
+沿用原8×micro8×GA16=GBS1024、9244updates/9244scheduler domain/463warmup、每次单epoch。
+epoch1 max/min LR=8e-4/8e-5，epoch2=2e-4/2e-5；用户手动将 --model-dir 指向epoch1完整checkpoint-step-009244。
+第二epoch严格继承全部训练权重含A，不读training_state.pt；optimizer/scheduler/RNG/计数/游标重新开始、seed0从头读。
+保留85片seed0 shuffle后连续分rank、buffer4096、片尾不足micro8丢弃、context1024/动态padding/不packing。
+FP32参数及AdamW状态、BF16仅forward、FP32 CE、单组AdamW(.9,.95)/eps1e-8/WD.1/clip1、全局有效token加权梯度均保留。
+每500步及最终保存，保留8500/9000/9244；名义每epoch9,465,856样本，不声明严格遍历全部有效文本恰好一次。
+
+模型Torch CPU/CUDA RNG按seed+1009×rank独立，结构审计保护RNG；完整checkpoint收集每rank的Python/NumPy/CPU/当前CUDA RNG。
+同epoch --resume-from要求相同LR、新空输出目录，按rank恢复RNG、optimizer/scheduler/计数/数据游标，累计到9244。
+仍不保存bounded-shuffle buffer内容，不声称数据逐样本连续或八rank训练bitwise exact。
+正式入口直接vc submit，无数据扫描/Gate B/smoke前置；沿用pdgpu-5090/32CPU/256G/8GPU/1node及原镜像/rsmol环境。
+新模型/输出/log/job/环境前缀RSMOL_MIZAR_TEXT_5_10X2_5_HUGINN完全隔离，转换CONVERT_OUTPUT_DIR与训练OUTPUT_DIR分开。
+
+远程仓库根 /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM 同步后：
+
+```bash
+bash code/RSmol/scripts/convert_mizar_text_5_10x2_5_huginn.sh
+bash code/RSmol/run_stage4_mizar_text_5_10x2_5_huginn_training_5090.sh --max-lr 8e-4 --min-lr 8e-5
+```
+
+本地 python -B tests/validate_mizar_text_5_10x2_5_huginn.py：33项通过，13项真实CPU tensor因缺Torch等依赖跳过。
+涵盖母本SHA、原更新/数据/损失/attention/cache AST、全9245点LR、第二epoch实际控制流、完整RNG合同拒绝错误恢复、
+NumPy执行模型实际循环并对照两轮递推公式、真实Bash模拟vc→torchrun资源/转义/旧环境隔离/失败传递。
+NumPy不等于PyTorch autograd验证；可在远程rsmol运行 --require-tensors 的小模型CPU测试，无需生产资产、不作为训练前置。
+张量测试覆盖共享A与完整梯度、分布/初始化RNG、固定噪声数值/BF16 residual、训练后A保存重载/缺A严格拒绝、
+固定每token噪声的30槽cache、每rank RNG审计保护及完整checkpoint序列化往返恢复。
+报告 audit_reports/mizar_text_5_10x2_5_huginn_validation.json；Windows沙箱临时目录受限后在获准的沙箱外运行同一本地检查。
+未代为git commit/push、访问远程生产资产、执行真实转换或提交GPU作业，不登记远程转换/训练/八rank恢复PASS。
+原RM内容及工作区另一条LoRA记录完整保留；提交命令精确列出Huginn文件，RM.md按块仅选本条记录。
+
+## 2026-11-09：Mizar 文本中间两轮独立 LoRA rank8/alpha16 隔离实现
+
+按用户确认计划，在既有 Mizar 文本 5＋10×2＋5 路线基础上复制隔离。
+说明与执行/提交命令：code/RSmol/mizar_text_5_10x2_5_loop_lora_r8/README.md。
+保持本地 Windows 维护核心代码、GitHub 中转、远程 Linux 保存全部权重/数据并执行任务。
+原模型/转换/trainer/提交脚本不改，18 份参考源文件的归一化 LF SHA256 已记录并验证。
+
+专用模型 recursive_model_mizar_text_5_10x2_5_loop_lora_r8.MizarTextLoopLoRAR8ForCausalLM，
+20 物理层执行前5→中10第0轮→中10第1轮→后5，共30次；沿用原选层、attention/RoPE/30逻辑cache。
+仅中间物理层5..14（零基）的 q/k/v/o、gate/up/down 七投影新增按轮独立 A/B，
+rank8、alpha16、scale2、dropout0、A Kaiming/B零；140对、280 tensor、1,628,160新增参数。
+各层/投影/轮次独立，基础W共享且继续训练，前后五层无LoRA；所有参数同LR、单组AdamW WD.1。
+原W/bias对象与state_dict名称保留，初始化隔离CPU RNG；显式模型类加载，不调用全局AutoModel注册。
+关闭decoder gradient checkpointing，明确拒绝启用，保证按轮作用域与autograd选中参数一致。
+
+CPU离线转换8线程，源为Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt的caption_decoder.lm.*，
+不从assets/smollm2-135m/model.safetensors取权重；只核验final checkpoint及文本assets官方release SHA。
+严格加载源LM并逐项继承选中权重，检查LoRA范围/数量、30次trace、全量可训练、绑定embedding/head；
+零B logits与相同继承权重的原循环模型精确比较，保存重载全部tensor（含A/B）、logits、tokenizer。
+拒绝覆盖，失败staging保留；默认模型models/Mizar159M-text-5-10x2-5-loop-lora-r8。
+
+复制母本完整训练更新循环、数据流和优化方法：8×micro8×GA16=GBS1024，
+每次单epoch 9244updates/9244scheduler domain/463warmup；epoch1 max/min8e-4/8e-5，epoch2为2e-4/2e-5。
+用户手动用 --model-dir 指向epoch1完整checkpoint-step-009244提交epoch2，完整继承基础权重及两套已训练A/B，
+不读取training_state.pt；optimizer/scheduler/RNG/计数/游标重置、seed0从头读。
+同epoch --resume-from恢复完整状态并要求同LR、新空输出目录，累计至9244；旧路线/缺失A/B拒绝。
+保留FP32参数和AdamW状态、BF16仅forward、FP32 CE、全局token归一化、无额外GA除法、clip1。
+85片seed0 shuffle后连续分rank（11×5+10×3），buffer4096、片尾不足micro8丢弃、动态padding/context1024/无packing。
+每500步及最终保存，保留8500/9000/9244；全恢复保留母本shuffle buffer未保存、仅rank0模型RNG快照限制，
+不声称逐样本连续或八rank bitwise exact。
+
+正式入口直接vc submit，无CPU数据扫描/Gate B/smoke前置；沿用pdgpu-5090/32CPU/256G/8GPU/1node、原镜像和rsmol。
+模型/输出/log/job/环境变量完全隔离，转换CONVERT_OUTPUT_DIR和训练OUTPUT_DIR分开。
+远程仓库根/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM同步后CPU转换和正式提交：
+
+```bash
+bash code/RSmol/scripts/convert_mizar_text_5_10x2_5_loop_lora_r8.sh
+bash code/RSmol/run_stage4_mizar_text_5_10x2_5_loop_lora_r8_training_5090.sh --max-lr 8e-4 --min-lr 8e-5
+```
+
+本地 python -B tests/validate_mizar_text_5_10x2_5_loop_lora_r8.py：34项通过，10项真实CPU tensor因缺Torch等依赖跳过。
+包含参考源SHA、完整更新/数据/attention/cache AST、两组各9245点LR、第二epoch实际启动不反序列化旧状态、
+NumPy执行真实LoRA前向/有限差分/异常作用域清理、真实Bash vc→torchrun转义/资源/新旧环境隔离/失败传递。
+NumPy不等同验证PyTorch autograd。10项tensor测试留给远程rsmol --require-tensors，可运行合成CPU模型，
+覆盖任务梯度两轮A/B、初始化RNG与继承权重、训练后非零LoRA保存重载、缺A/B严格拒绝、30槽cache、
+完整checkpoint optimizer moments/RNG/指定rank游标恢复；无需生产模型/数据，不作为训练前置门槛。
+报告audit_reports/mizar_text_5_10x2_5_loop_lora_r8_validation.json；Windows沙箱拒绝测试临时目录后在获准的沙箱外运行。
+未代为git commit/push、访问远程生产资产、执行生产转换或提交GPU作业，不登记远程转换/训练/八rank恢复PASS。
+本条仅前置项目记录，原RM内容完整保留。
+
 ## 2026-11-09：Mizar 最终文本权重抽层循环与单 epoch 文本训练
 
 按用户确认方案完成独立代码，说明见 code/RSmol/mizar_text_5_10x2_5/README.md。

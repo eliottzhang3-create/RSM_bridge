@@ -1,0 +1,84 @@
+{
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "time_utc": "2026-11-09T15:51:13.785070+00:00",
+  "run": 46,
+  "passed": 33,
+  "skipped": [
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_actual_two_adapter_calls_prelude_reuse_and_full_gradients",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_cache_matches_full_forward_with_same_per_token_initial_state",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_complete_checkpoint_roundtrip_restores_each_rank_rng",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_controlled_forward_manual_reference_and_bf16_residual_dtype",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_epoch2_optimizer_and_scheduler_start_fresh",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_global_token_weighted_gradient_matches_concatenated_tokens",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_missing_adapter_rejected_by_runtime_strict_loader",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_noise_distribution_and_adapter_deterministic_initialization",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_rank_rng_independence_restore_and_trace_audit_preservation",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_real_final_namespace_extraction_and_strict_load",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_real_tied_head_mismatch_fails_before_load",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_selected_inheritance_trace_and_save_reload",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_mizar_text_5_10x2_5_huginn_tensors.TensorTests.test_trained_adapter_survives_epoch2_weights_only_reload",
+      "reason": "CPU tensor dependencies unavailable: No module named 'torch'"
+    }
+  ],
+  "failures": [],
+  "errors": [],
+  "production_assets_read": false,
+  "remote_conversion_verified": false,
+  "gpu_training_verified": false,
+  "eight_rank_resume_verified": false,
+  "source_sha256": {
+    "code/RSmol/mizar_text_5_10x2_5_huginn/contract.py": "2aa030dea508e1b1178627f531c66b4e9aeac7404eb067dd73eb70c5edc494ff",
+    "code/RSmol/mizar_text_5_10x2_5_huginn/conversion.py": "e6d088da51df5e68f590eef6655559dc14f4f29a8f121d43d7b9042509c70fe5",
+    "code/RSmol/mizar_text_5_10x2_5_huginn/publication.py": "c19e573d9da4c0519d5a7058b80d450609e67a90c136186dbf444f9e119b2fb0",
+    "code/RSmol/mizar_text_5_10x2_5_huginn/__init__.py": "b80f329ce720199d944cb147447e4431fedf55b20f81f5dd33b251ef8312678a",
+    "code/RSmol/recursive_model_mizar_text_5_10x2_5_huginn.py": "993697e6bae835ef7ec31424a64cee1e71b906da28e91940e8ac181f1714d52b",
+    "code/RSmol/scripts/convert_mizar_text_5_10x2_5_huginn.py": "e8390f5b2f82a230f8d1f33187719ae3bc84dc612bdd812779739b2fafe42e48",
+    "code/RSmol/scripts/convert_mizar_text_5_10x2_5_huginn.sh": "5f51a44870c77efc0abe29651554bf9b0c99f5d0128f9d2ac73f7a3695bc1917",
+    "code/RSmol/scripts/train_stage4_mizar_text_5_10x2_5_huginn_ddp.py": "0a0adf1eeba6633c08a993425186b9b9d445d99c5deae8ad352074fbb024e085",
+    "code/RSmol/scripts/train_stage4_mizar_text_5_10x2_5_huginn_ddp.sh": "809fed02148eeaad54e3531067f6da182b6094320711e328a700468441f84a57",
+    "code/RSmol/run_stage4_mizar_text_5_10x2_5_huginn_training_5090.sh": "a404421e44dc004e24bd75aacccc4d4da992b18aec8100188c7e237006740495",
+    "tests/test_mizar_text_5_10x2_5_huginn.py": "701301c68354ac79f6c25413793dd08cdef47fa2fe71d510e6a2ae8bb046939a",
+    "tests/test_mizar_text_5_10x2_5_huginn_shell.py": "91c02a3105ab0d776f1c03a4816641a87debeb9ab1d902d0a4f7a0e91e9d5823",
+    "tests/test_mizar_text_5_10x2_5_huginn_tensors.py": "eeadb314f2f5e40d30225e004461b1e4acd7812a91c0368cc1ae4c1279e57775",
+    "tests/validate_mizar_text_5_10x2_5_huginn.py": "f86a7a2601993298d619729d4b71d4fe128b1a46db133608b02d7d4415a9f408",
+    "code/RSmol/mizar_text_5_10x2_5_huginn/README.md": "4b98954196a546837c2f9cd6b1fa00a7bbdc1d3d0edda1eefdc67bc80b287402",
+    "code/RSmol/mizar_text_5_10x2_5_huginn/source_guard.json": "cf5e8a64ac0d652708a60cb933e2244bb040d510576021c72eefe329f37bfff8"
+  }
+}
