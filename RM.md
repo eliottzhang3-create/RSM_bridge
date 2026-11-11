@@ -1,3 +1,298 @@
+## 2026-11-11：Huginn 文本 epoch1 checkpoint 初始化 CED-Small 音频 S1
+
+按用户确认方案复制隔离原CED-Small音频S1完整路线；正式入口：
+code/RSmol/run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh。
+实现及正式提交/完整恢复/Git命令见
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/README.md。
+本地Windows维护核心代码，经GitHub同步；权重、数据和GPU执行保留在远程Linux。
+
+默认直接使用：
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_5_10x2_5_huginn_gbs1024/epoch1/checkpoint-step-009244。
+显式MizarHuginnForCausalLM严格加载全部HF权重及训练后的共享A，不重新初始化A；
+无需重新转换或先训文本epoch2。只读HF权重/tokenizer/JSON，不反序列化文本training_state.pt；
+音频optimizer/scheduler/scaler/GradNormTracker/各rank RNG及游标从step0新建。
+20物理层/30次执行，E=Prelude(完整683位置多模态embedding)，S0逐元素±3σ截断高斯，
+σ=√(2/5)，每forward只采样一次；S1=Core(A([S0,E]))，S2=Core(A([S1,E]))，
+S2直接进入后五层/final norm/head。同一无bias1152→576投影两次，663552参数，
+拼接顺序[state,prelude]；E和S1不detach，固定两轮完整反传，全部LM含A全量训练。
+模型副本models/huginn.py仅调整合同导入路径，避免Torch已加载stdlib code导致包名冲突；
+模型计算/参数名/checkpoint格式与既有文本Huginn实现一致，原共享文本模型保持不变。
+
+母本为run_mizar_s1_gbs256_recursive_5_10_5_ced_small_5090.sh及对应完整目录。
+train.py、optim.py、原decoder/CED/mapper和全部data/index/staging源码逐字节继承；
+更改集中于专用loader/合同、配置说明与隔离命名，35份参考源码LF SHA记录于source_guard.json。
+.gitignore放行source_guard.json和parent_reference_audit.json；后者仅为母本历史记录。
+新route ced_small_mizar_s1_fixed20_gbs256_huginn_text_epoch1_v1；
+代码/output/log/job/index-cache/tmpfs/完整恢复身份隔离，其他既有路线不改。
+
+严格保持hybrid1477492行、fixed20、冻结eval CED-Small及新初始化的freq_merge_126 mapper。
+126audio+1SEP+256prompt+300answer=683，PAD为已有!、EOS/SEP0，attention_mask=None、无KV。
+answer-only rank-local有效token均值→GA4均值→DDP均值；保留原seed1234及每rank1234+rank。
+8GPU×micro8×GA4=GBS256，3epochs、5771updates/epoch、17313total、866warmup。
+LM含A maxLR3e-4，mapper6e-4；原LambdaLR floor.1、AdamW(.9,.999)/eps1e-8、
+矩阵WD.01/bias低维WD0、GradNormTracker、FP32前向/无autocast/GradScaler/TF32关闭保持。
+共享音频立即训练、后台默认4workers复制、optimizer边界全rank共同切换、先reap再清理保持。
+完整音频恢复含模型/A/mapper和所有训练状态、8rank RNG及游标，沿用同run输出根，拒绝其他路线。
+保留mellow_c8204d8、原镜像、pdgpu-5090/32CPU/256G/8GPU/1node；
+原CED资产检查及CPU索引准备后直接formal，无新增自动smoke或tensor前置。
+
+代码提交推送后远程登录节点执行：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh --stage-workers 4
+```
+默认outputs/RSmol/mizar_s1_ced_small_huginn_text_epoch1_gbs256_5090/formal_<timestamp>/，
+沿母本追加formal/；最终formal/checkpoints/model--step-17313.ckpt和model--epo-3.ckpt。
+README含显式来源/输出、同run完整恢复及精确Git命令；RM按块仅选本条。
+
+python -B tests/validate_mizar_s1_ced_huginn_text_epoch1.py：42项本地检查通过，7项真实CPU tensor缺依赖跳过。
+覆盖35份参考SHA、逐文件差异、完整semantic配方/17314个LR位置、严格加载/新音频step0、
+A形状/训练分组/绑定权重、错误checkpoint及跨路线恢复拒绝、导入兼容、共享音频/后台复制/切换/清理、
+Bash模拟vc资源和参数、Git审计清单可提交性；报告audit_reports/mizar_s1_ced_huginn_text_epoch1_validation.json。
+可在远程mellow_c8204d8可选加--require-tensors检查合成CPU模型梯度、A继承/更新和随机恢复；不作formal前置。
+Windows沙箱阻止临时目录及Bash管道后，经授权在沙箱外运行同一本地验证。
+未代为commit/push、访问远程生产资产或提交真实作业；不登记真实权重加载/GPU训练/8rank恢复PASS。
+仅前置本条，之前RM所有内容字节完整保留。
+
+## 2026-11-11：已训练文本双LoRA epoch1 → CED4→8 音频 S1（A/B原值继承）
+
+按用户确认方案复制隔离指定CED4→8双LoRA母本，直接继承已训练文本LoRA进入音频阶段。
+本地Windows仅维护核心代码，通过GitHub同步；权重、数据、输出及GPU执行均在远程Linux。
+新入口 code/RSmol/run_mizar_s1_ced48_text_epoch1_loop_lora_r8_5090.sh；
+实现/提交/恢复/Git命令见
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/README.md。
+
+母本为run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer4_8_inject_audio_reinject_loop_lora_r8_5090.sh及对应完整目录。
+默认文本来源严格为：
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_5_10x2_5_loop_lora_r8_gbs1024/epoch1/checkpoint-step-009244。
+无需转换或先完成文本epoch2。此路线继承文本checkpoint中的全部基础LM及已训练双LoRA，
+区别于下方从普通文本epoch1再新建LoRA的另一条隔离路线。
+
+20物理层/30次执行、前5→中10第0轮→中10第1轮→后5；中间物理层5..14七投影
+q/k/v/o与gate/up/down使用r8/alpha16/scale2/dropout0两套独立A/B；前后五层无LoRA。
+280个A/B张量、1,628,160参数与全部基础LM、embedding/head绑定直接继承并继续全量训练。
+模型构造时先注册LoRA槽位，再由HF加载基础权重及完整A/B；加载后不重新安装/初始化LoRA。
+HF missing/unexpected/mismatched/error均拒绝，添加音频模块前后两次逐项核验所有源tensor
+名称/形状/FP32原值/有限性、绑定关系及全部280个LoRA；保存base/LoRA SHA审计。
+来源文本lr_policy=same_as_base保留为元数据，音频optimizer采用母本分组学习率。
+
+新初始化原freq_merge_126 mapper、两套CED4/8 MLP和gate、共享input投影及gate，三个gate零初始化。
+冻结eval CED从原models/CED_small加载；每批一次编码取得final及完整block4/8输出。
+逻辑索引5：共享input残差后CED4；索引15：同一input残差后CED8，CED门读取post-input hidden。
+共享input投影每forward只计算一次，不detach；音频残差直接作用前126位置，LoRA作用完整序列。
+保留逐层/异常清理轮次、无KV、禁用decoder gradient checkpointing。
+首步保留训练后的非零B，相应两轮A/B均须有效任务梯度；新音频gate仍须从零开始，保留打开gate后审计。
+只读HF权重/tokenizer和JSON元数据，不反序列化文本training_state.pt；
+音频optimizer/scheduler/scaler/GradNormTracker/各rank RNG/数据游标从step0新建。
+
+严格保留母本整个音频前向和训练更新循环；train.py仅增加继承审计、取消初始B必须全零的旧断言。
+数据/CED/mapper/optimizer/staging等18份运行源码逐字节不变，37份原始参考文件LF SHA保护。
+source_guard.json与parent_reference_audit.json通过本目录.gitignore例外同步；
+reference_audit.json为本次源码对照，parent_reference_audit.json仅为母本历史记录。
+新route ced_small_mizar_s1_ced48_text_epoch1_loop_lora_r8_v1，代码/output/log/job/index-cache/tmpfs及恢复身份隔离。
+
+原hybrid1,477,492行、fixed20、126audio+1SEP+256prompt+300answer=683token、
+PAD!/17、EOS/SEP0、attention_mask=None、answer-only rank-local token mean→GA4→DDP均值保持。
+8GPU×micro8×GA4=GBS256，3epochs/5771updates每epoch/17313total/866warmup；
+基础LM maxLR3e-4，双LoRA及全部音频可训练模块maxLR6e-4；原AdamW(.9,.999)/eps1e-8、
+矩阵WD.01/bias低维WD0、LambdaLR floor.1、GradNormTracker、FP32无autocast/TF32、GradScaler保持。
+共享音频立即训练，后台默认4workers复制，optimizer边界全rank共同切换，先stop/reap再清理。
+完整音频恢复保留LM/双LoRA/音频模块及全部训练状态、8rank RNG和游标；拒绝其他路线恢复。
+保持mellow_c8204d8、原镜像、pdgpu-5090/32CPU/256G/8GPU/1node；原CED资产及CPU索引准备后直接formal，无新增smoke前置。
+
+本地提交推送后，远程登录节点执行：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_ced48_text_epoch1_loop_lora_r8_5090.sh --stage-workers 4
+```
+输出根outputs/RSmol/mizar_s1_ced48_text_epoch1_loop_lora_r8_5090/formal_<timestamp>/，
+沿母本追加formal/；最终formal/checkpoints/model--step-17313.ckpt及model--epo-3.ckpt。
+README含显式来源/固定输出和同run完整恢复命令，Git命令只暂存本路线新文件；RM按块只选本条。
+
+python -B tests/validate_mizar_s1_ced48_text_epoch1_loop_lora_r8.py：38项通过、6项真实CPU tensor因缺依赖跳过。
+涵盖完整母本源码/配方、17314个LR位置、非零A/B继承数值检查、严格加载顺序/失败、step0不读文本状态、
+初始梯度及跨路线恢复拒绝、共享读取/并发复制/切换/失败清理、Bash假vc资源与参数。
+真实tensor用例补齐非零双A/B文本类保存→音频公开loader加载（含shards/tied）、零音频gate logits对齐、
+缺A/B拒绝、音频注册保留RNG/预训练值且禁止重置、实际反传/optimizer及CPU完整checkpoint下一步往返。
+报告audit_reports/mizar_s1_ced48_text_epoch1_loop_lora_r8_validation.json；远程有依赖时可选--require-tensors，
+仅合成CPU模型，无生产资产/CUDA/真实作业，不作为formal前置；collective/scaler为明确CPU fixture。
+Windows沙箱曾阻止临时目录及Bash管道，经授权在沙箱外运行同一本地验证。
+未代为commit/push、访问远程资产或提交GPU作业，不登记真实权重加载、GPU训练或8rank恢复PASS。
+仅前置本条，工作区其他未提交路线记录及全部原RM内容字节保留。
+
+## 2026-11-11：文本 epoch1 初始化 CED4→8 串行音频注入＋两轮独立 LoRA r8
+
+按用户确认方案复制隔离指定完整LoRA母本；正式入口：
+code/RSmol/run_mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_5090.sh。
+实现及提交/恢复/Git命令见
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8/README.md。
+本地Windows维护核心代码、GitHub同步，模型/数据/输出及GPU执行位于远程Linux。
+
+母本为run_mizar_s1_gbs256_recursive_5_10_5_ced_small_layer4_8_inject_audio_reinject_loop_lora_r8_5090.sh及对应训练目录。
+默认直接继承/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_5_10x2_5_gbs1024/epoch1/checkpoint-step-009244，
+显式严格加载完整非MeSH文本LM及tokenizer后，再注册CED层注入、共享input音频再注入及LoRA。
+20物理层/30次执行、前5→中10→中10→后5、全部基础权重及embedding/head绑定保持；
+只读HF权重/tokenizer，不读文本training_state.pt，音频optimizer/scheduler/scaler/tracker/RNG/游标从step0新建。
+
+CED-Small冻结eval，每批一次编码取final及完整block4/8的final norm前输出；
+原freq_merge_126 mapper生成E [B,126,576]，A_input=audio_linear(E)每次完整forward只算一次不detach。
+零基逻辑索引5：共享input残差→CED4残差；索引15：同一input残差→CED8残差。
+CED门控读取post-input hidden，直接残差限前126位置；两个CED MLP/gate独立，三个gate零初始化。
+仅物理层5..14的q/k/v/o、gate/up/down七投影新增两轮独立LoRA A/B，
+r8/alpha16/scale2/dropout0，A Kaiming/B零，基础W/bias共享且全量训练，前后五层全量训练无LoRA。
+LoRA新增1,628,160参数，保留音频分支2,777,859参数；独立CPU RNG、
+每层及异常时轮次清理、无KV、关闭decoder gradient checkpointing、首步/打开门控梯度审计保持。
+
+严格保留母本train.py、optim.py及全部models/data/staging/index/CED配置等24份运行源码逐字节一致。
+contract.py只改ROUTE和默认文本路径，run.sh只改入口提示和tmpfs前缀；
+提交器只改目录/来源/输出/log/job/index-cache及提示。
+audit_reference.py为此次直接母本的精确差异检查，不参与训练；35份原始文件LF SHA记录于source_guard.json。
+.gitignore仅放行新增source_guard.json，确保普通Git提交包含该清单。
+母本历史reference_audit.json不复制，本目录新reference_audit.json仅记录本地精确源码/配方验证。
+新route为ced_small_mizar_s1_fixed20_gbs256_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_v1；
+与旧LoRA母本、普通CED epoch1版本分别隔离，原入口及共享模型均保持。
+
+原hybrid1,477,492行、fixed20、126audio+1SEP+256prompt+300answer=683token、
+PAD!/17、EOS/SEP0、attention_mask=None、answer-only rank-local token mean→GA4→DDP平均保持。
+8GPU×micro8×GA4=GBS256，3epochs/5771updates每epoch/17313total/866warmup；
+基础LM maxLR3e-4，mapper、音频分支及两套LoRA maxLR6e-4；
+原AdamW(.9,.999)/eps1e-8/矩阵WD.01/bias低维不衰减、LambdaLR floor.1、GradNormTracker、
+FP32/无autocast/保留GradScaler/关闭TF32、seed1234和rank+seed、原数据顺序均保持。
+共享音频立即训练、后台默认4workers复制、optimizer边界全rank共同切换、producer先reap再清理保持。
+完整音频恢复含基础模型/音频分支/两套LoRA、所有训练状态、8rank RNG及游标；
+严格拒绝其他路线或不同源码/资产/数据/配方恢复。
+
+远程仓库根同步后：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_5090.sh --stage-workers 4
+```
+原CED资产/CPU索引准备后直接vc submit，无额外smoke/tensor前置；
+mellow_c8204d8/原镜像/pdgpu-5090/32CPU/256G/8GPU/1node保持。
+默认输出outputs/RSmol/mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_gbs256_5090/formal_<timestamp>/，
+沿母本追加formal/；最终formal/checkpoints/model--step-17313.ckpt和model--epo-3.ckpt。
+README含显式初始化/输出路径及同run完整恢复命令，Git命令只暂存此次新路线；
+RM.md已有其他记录，需git add -p仅选本条。
+
+python -B tests/validate_mizar_s1_ced_text_epoch1_loop_lora.py：40项本地检查通过、7项真实CPU tensor缺依赖跳过。
+覆盖35份母本SHA、完整源码差异白名单、整个semantic recipe及17314个LR位置、
+文本epoch1配置兼容/实际step0初始化、严格加载后注册、恢复拒绝、
+非零按轮LoRA/scale2/post-input gate/梯度审计、共享读取/复制/切换/失败清理、Bash模拟提交资源与参数。
+报告audit_reports/mizar_s1_ced_text_epoch1_loop_lora_validation.json。
+Windows沙箱拒绝测试临时目录及Bash信号管道后，经授权在沙箱外运行同一本地检查。
+可在远程mellow_c8204d8可选加--require-tensors执行合成CPU用例，不依赖生产资产，不作为训练前置。
+未代为git commit/push或提交真实vc作业，未读取远程权重/数据；不登记真实GPU训练或八rank恢复PASS。
+仅前置本条，之前RM内容字节完整保留。
+
+## 2026-11-11：SmolLM2 非MeSH 文本 init0904 初始化 CED-small 音频 S1
+
+按用户确认计划复制隔离，说明与提交/恢复命令见：
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_init0904/README.md。
+本地Windows维护核心代码、GitHub中转，权重/数据/生产执行均在远程Linux。
+
+完整复制 run_mizar_s1_gbs256_recursive_5_10_5_ced_small_5090.sh 对应训练路线。
+新入口 run_mizar_s1_gbs256_recursive_5_10_5_ced_small_init0904_5090.sh 默认文本来源为：
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10_5/formal-maxlr8e-4-resume4500-20260904_154711/checkpoint-step-009244。
+无需重新转换；显式非MeSH RecursiveLlamaForCausalLM 严格加载完整LM和同目录tokenizer，
+保留hidden576、20物理层/30次执行、固定5+10×2+5和原抽层映射，无MeSH/router/LoRA/音频重注入。
+只继承文本权重/tokenizer，不读取文本training_state.pt；音频训练step0重新建立optimizer/scheduler/
+GradScaler/GradNormTracker/各rank RNG/数据游标。CED-small从原资产冻结eval加载，原freq_merge_126
+mapper按母本顺序随机初始化并训练，完整LM继续全量训练。
+
+train.py、optim.py、write_config.py、全部model/data/索引/staging保持母本原实现；
+contract.py只改ROUTE及默认文本路径，run.sh只改入口提示和tmpfs前缀。
+新route ced_small_mizar_s1_fixed20_gbs256_recursive_5_10_5_init0904_v1；入口/output/log/job/
+index-cache/tmpfs及完整恢复身份隔离，原母本/共享模型/现有评测不改。
+38份母本/参考文件归一化LF SHA见source_guard.json；parent_reference_audit.json为原路线历史审计，
+其PASS和源码身份仅指原路线，不冒充本次新路线生产验证。
+
+保持hybrid1,477,492条、fixed20、audio126+SEP1+prompt256+answer300=683token，
+原模板/PAD!/EOS与SEP0/attention_mask=None/无KV/answer-only loss保持。
+loss为rank-local microbatch有效token均值→GA4均值→DDP均值，不改成全局token归一化。
+8×micro8×GA4=GBS256、3epochs/5771updates每epoch/17313总步/866warmup，
+LM maxLR3e-4及mapper6e-4、原LambdaLR floor.1、AdamW(.9,.999)/eps1e-8/WD.01、
+bias/低维不衰减、原GradNormTracker、FP32前向/无autocast/GradScaler/TF32关闭保持。
+共享原始音频立即训练，单producer默认4workers后台复制，完成后optimizer边界全rank MIN切换；
+退出先stop/reap再清理本token tmpfs；每次resume重建staging从shared开始。
+原mellow_c8204d8/镜像/pdgpu-5090/32CPU/256G/8GPU/1node；直接formal，无自动smoke/tensor前置任务。
+
+本地代码提交推送GitHub后，远程登录节点执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs256_recursive_5_10_5_ced_small_init0904_5090.sh --stage-workers 4
+```
+
+输出根outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_init0904_5090/formal_<timestamp>/，
+其下formal/checkpoints/model--step-17313.ckpt及model--epo-3.ckpt为最终产物。
+完整恢复沿用原run root，要求本init0904同代码/资产/依赖/数据/配方；拒绝原路线音频checkpoint完整恢复。
+README提供显式输出、同run恢复、可选CPU验证及精确git提交命令，RM.md按块只暂存本条记录。
+
+python -B tests/validate_mizar_s1_ced_init0904.py：42项实际本地检查通过，3项真实CPU tensor缺依赖跳过。
+覆盖38份母本SHA、整份trainer/loader/数据/优化器及复制受限差异、完整semantic合同和17314个LR位置，
+执行真实fresh/resume初始化代码块验证step0不读旧状态、旧route/错身份拒绝及八rank状态选择，
+严格加载和tokenizer检查、实际并发后台复制/共享读取/集体切换/失败清理、Bash假vc及torchrun入口验证。
+报告audit_reports/mizar_s1_ced_init0904_validation.json；远程依赖完整时可手动加--require-tensors，
+仅合成CPU模型、无生产资产/CUDA/作业提交，不作为formal前置。
+Windows沙箱阻止临时目录和Bash signal pipe后，经批准在沙箱外运行同一验证通过。
+未代为git commit/push、读取远程生产资产或提交GPU作业，不登记真实权重加载/八卡训练/八rank恢复PASS。
+工作区另一条Mizar文本epoch1音频路线记录及此前RM内容完整保留，仅前置本条。
+
+## 2026-11-11：Mizar 文本 epoch1 checkpoint 初始化 CED-Small 音频 S1
+
+按用户确认方案复制隔离正式音频路线，说明与提交/恢复命令见：
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/README.md。
+继续本地 Windows 维护核心代码、GitHub 中转、远程 Linux 保存权重/数据并执行 GPU 作业。
+
+母本为 run_mizar_s1_gbs256_recursive_5_10_5_ced_small_5090.sh 及对应完整训练目录。
+新入口 run_mizar_s1_ced_small_text_epoch1_5090.sh，默认直接使用：
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_5_10x2_5_gbs1024/epoch1/checkpoint-step-009244。
+无需再次转换或先训练文本 epoch2；严格显式加载原非MeSH RecursiveLlamaForCausalLM 与对应 tokenizer，
+保留20物理层/30次执行、前5→中10→中10→后5、已训练LM全部权重及embedding/head绑定。
+只读取HF文本权重/tokenizer，不读取文本training_state.pt；音频optimizer/scheduler/GradScaler/
+GradNormTracker/各rank RNG/数据进度从step0重新开始。CED仍由models/CED_small加载冻结eval，
+官方freq_merge_126 mapper沿用母本随机初始化，完整mapper和完整LM全量训练。
+
+严格保持原训练实现：train.py、optim.py、全部模型/数据/音频预处理/离线CED配置/索引/staging逐字节一致。
+contract.py只修改ROUTE和默认文本路径；run.sh只修改入口提示和tmpfs前缀；
+提交器只修改代码目录/文本初始化/输出/log/job/index-cache名称和提示。35份参考文件LF SHA见source_guard.json。
+独立身份ced_small_mizar_s1_fixed20_gbs256_text_epoch1_5_10x2_5_v1；原入口、共享模型和文本路线未修改。
+
+原hybrid 1,477,492行、fixed20、126audio+1SEP+256prompt+300answer=683token、
+PAD为已有!、EOS/SEP0、attention_mask=None/无KV、answer-only rank-local token mean→GA4→DDP平均保持。
+8×micro8×GA4=GBS256、3epochs/5771steps每epoch/17313updates/866warmup；
+LM maxLR3e-4、mapper maxLR6e-4、原LambdaLR floor.1、AdamW(.9,.999)/eps1e-8/WD.01、
+bias/低维不衰减、GradNormTracker、FP32 forward/无autocast/GradScaler/关闭TF32保持。
+共享音频立即训练、后台默认4workers复制、optimizer边界全rank MIN切换及先reap再清理保持。
+原完整音频checkpoint/八rank RNG及采样游标恢复保持，拒绝旧路线或不同源资产/代码/数据/配方恢复。
+不增加smoke或CPU张量测试前置；保留原CED配置检查和CPU index准备后直接vc submit。
+原mellow_c8204d8环境、镜像、pdgpu-5090/32CPU/256G/8GPU/1node保持。
+
+GitHub同步后远程仓库根执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_ced_small_text_epoch1_5090.sh --stage-workers 4
+```
+
+默认输出outputs/RSmol/mizar_s1_ced_small_text_epoch1_gbs256_5090/formal_<timestamp>/，
+沿母本再追加formal/；最终formal/checkpoints/model--step-17313.ckpt与model--epo-3.ckpt。
+index-cache/log/job/tmpfs命名独立；README含显式文本来源、新输出路径、同run完整恢复及精确git提交命令。
+
+python -B tests/validate_mizar_s1_ced_text_epoch1.py：45项本地检查通过，3项真实CPU tensor缺依赖跳过。
+覆盖35份母本SHA、全部未调整文件逐字节一致、整个semantic recipe、17314个LR位置、
+GradNorm数值、实际step0初始化不读文本状态、旧音频恢复拒绝、严格LM加载与tokenizer、
+共享读取/后台复制/切换/失败清理、Bash正式提交资源和参数及原完整更新循环继承。
+报告audit_reports/mizar_s1_ced_text_epoch1_validation.json；可在远程mellow_c8204d8可选加--require-tensors，
+仅使用合成CPU模型，不要求生产权重/数据，也不作为训练前置。Windows沙箱拒绝临时目录和Bash管道后，
+经授权在沙箱外运行同一本地检查。未代为git commit/push、读取远程生产资产或提交GPU作业，
+不登记远程权重加载、真实训练或八rank恢复PASS。仅前置本条，原RM内容字节完整保留。
+
 ## 2026-11-09：Mizar 文本 Huginn 类共享状态投影，两次独立单 epoch 训练
 
 按已确认方案复制并隔离新路线，说明与执行/提交命令见 code/RSmol/mizar_text_5_10x2_5_huginn/README.md。

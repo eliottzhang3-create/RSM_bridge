@@ -1,0 +1,151 @@
+{
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "time_utc": "2026-11-11T04:18:06.033528+00:00",
+  "passed": 45,
+  "skipped": 3,
+  "suites": {
+    "identity": {
+      "run": 12,
+      "passed": 12,
+      "success": true,
+      "skipped": [],
+      "failures": [],
+      "errors": []
+    },
+    "route": {
+      "run": 6,
+      "passed": 6,
+      "success": true,
+      "skipped": [],
+      "failures": [],
+      "errors": []
+    },
+    "parity": {
+      "run": 10,
+      "passed": 10,
+      "success": true,
+      "skipped": [],
+      "failures": [],
+      "errors": []
+    },
+    "offline_config": {
+      "run": 6,
+      "passed": 6,
+      "success": true,
+      "skipped": [],
+      "failures": [],
+      "errors": []
+    },
+    "shared_start": {
+      "run": 11,
+      "passed": 11,
+      "success": true,
+      "skipped": [],
+      "failures": [],
+      "errors": []
+    },
+    "tensor": {
+      "run": 3,
+      "passed": 0,
+      "success": true,
+      "skipped": [
+        {
+          "test": "test_mizar_s1_ced_text_epoch1_tensor.NonMeshCEDTensorTests.test_full_checkpoint_cpu_roundtrip_preserves_next_stochastic_update",
+          "reason": "requires torch/torchaudio/transformers/soundfile in mellow_c8204d8"
+        },
+        {
+          "test": "test_mizar_s1_ced_text_epoch1_tensor.NonMeshCEDTensorTests.test_real_nonmesh_schedule_full_prefix_and_mapper_lm_backward",
+          "reason": "requires torch/torchaudio/transformers/soundfile in mellow_c8204d8"
+        },
+        {
+          "test": "test_mizar_s1_ced_text_epoch1_tensor.NonMeshCEDTensorTests.test_three_real_mappers_share_initial_weights_before_different_text_initializers",
+          "reason": "requires torch/torchaudio/transformers/soundfile in mellow_c8204d8"
+        }
+      ],
+      "failures": [],
+      "errors": []
+    }
+  },
+  "initial_text_checkpoint": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_5_10x2_5_gbs1024/epoch1/checkpoint-step-009244",
+  "production_assets_read": false,
+  "gpu_training_verified": false,
+  "real_vc_job_submitted": false,
+  "eight_rank_resume_verified": false,
+  "syntax_checked": [
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/audit_reference.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/check_ced_assets.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/contract.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/optim.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/prepare_index.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/runtime_checks.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/stage_data.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/train.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/write_config.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/audiotext_dataset.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/audio_paths.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/fixed20.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/indexed_jsonl.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/prepared_index.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/sampler.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/staging.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/template.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/audio.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/ced.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/ced_offline.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/decoder.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/mellow.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/recursive_text.py",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/utils/audio_io.py",
+    "tests/test_mizar_s1_ced_text_epoch1_identity.py",
+    "tests/test_mizar_s1_ced_text_epoch1_offline_config.py",
+    "tests/test_mizar_s1_ced_text_epoch1_parity.py",
+    "tests/test_mizar_s1_ced_text_epoch1_route.py",
+    "tests/test_mizar_s1_ced_text_epoch1_shared_start.py",
+    "tests/test_mizar_s1_ced_text_epoch1_tensor.py",
+    "tests/validate_mizar_s1_ced_text_epoch1.py"
+  ],
+  "source_sha256": {
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/.gitignore": "1766f4a1a52993c00592281e808f5da9b698133665b4541a10da4424e8525764",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/audit_reference.py": "21cbf5f8f943eb81b898e69c46d6a1addae24abdf7a694d83994d4d41c295172",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/check_ced_assets.py": "075b49dc02eca6d5293f1abaadce736fece46a2fc67661324ac9b45913466367",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/contract.py": "0a09f8cee6b7927b26c8287a4c14516281f70a8dd30c145a1f43a02fd8f79b59",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/LICENSE": "38a24d3355eb2aa8d7bb2e66878e2a206ab97779bb1598832d4bce134bb3f8f0",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/NOTICE": "547b820e4bfff3765eee9ee51cd19e410e5ee0feff18c447dae86ac4ab0b87ef",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/optim.py": "e0bd421eb5edf6dfc60a4e6e14e3d221de450ad94c4829c234e7c6058319036e",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/prepare_index.py": "daf059301ff5cb2550a11e6f35cb53fe655b17b6b92cb0974da8f3da55f337e2",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/run.sh": "13d982f54f9bc7904315a53d1c7640a1ae70aef282e894e35e0ad1e7b762ba8b",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/runtime_checks.py": "939e6d9f24ab8359499dbb00e1d13434e3996929f68c0ad4ef2a0342632dd7d2",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/source_guard.json": "f627ab29c83dab442e1a56b74cd2c2b9885191b43a9e3f6b9600eb87ce772b67",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/stage_data.py": "83925428208c0b5e1859b3ccd9f41670235720a07c76c514bd1453c5eee205cf",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/train.py": "6a01a92475a9d4206e13c08cb4a035ddc63fa593636de27cbd5a0ee0ab6bc82b",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/write_config.py": "56be1b94c0ac856a2cef69a4f55edc04944b216b62e9300fa2cbf320dc37f528",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/audiotext_dataset.py": "f41bbd8edf863c906d8ef996da87b726edaedae7987fa5507416e03113b5bf8b",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/audio_paths.py": "f65433f8db88a59bf1d7701ce9b0bfe85e8c00affa673b69246684ae34596685",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/fixed20.py": "f4580fdaf1b75acd54bbd12dbfc72f18e2906e1dbcebd8ff8e5d1ff355ac6a5c",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/indexed_jsonl.py": "1fac5952ad67609cc050d9b05cfac8c9cb16f4bf520b9eabbcfb0dee3af82e8a",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/prepared_index.py": "9852107e00223c91bb07a4bf05347089884bbfcff9d5075cc60ef53086af57e3",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/sampler.py": "66be929c5f5458816c64b12bec058791a173698290ea1e7a5ef80a730aa02525",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/staging.py": "db7a465e90deb6be5aa0342afbb6cb56279fbea20081cd09f79c42db2fac4515",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/data/template.py": "0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/licenses/Mizar-ClearBSD.txt": "5970fc567fdfef751f3444fb0eb151c37900737223ef620eb6da8bc276e4bd59",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/audio.py": "de8394e231c4ee67d6a9baaad864032e2825c717f7e5c6c838543a613619ebb4",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/ced.py": "67c101680a14ee8391568f892cf33f1748443af4c182ba5b3270707e210d3517",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/ced_offline.py": "94a0d5ede90337b4b88b112dfaad3db0144e644458dcc1a744096c6f19f248af",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/decoder.py": "4fd99542941d7a05277a2ac005aa123128798f245b19fc1ffaf3ccd13d39e237",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/mellow.py": "1990fe5eacd412a027fabd76f193975ddd5e22c9e02e7c371dc077030e07bdcf",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/models/recursive_text.py": "5073dc131cba9b22b0d14150f08dfce892a061d7140a7617d9fa8b56486893ef",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/utils/audio_io.py": "67f3680af4b8bb5cbc30426c54d71155d2b65f8cdd5c4fb89af08a374e63f311",
+    "code/RSmol/run_mizar_s1_ced_small_text_epoch1_5090.sh": "1b504a2d3da3c606c1acc3f0846b688f9375c5ebc9b9b2fd65f81e10f11b9ef6",
+    "tests/test_mizar_s1_ced_text_epoch1_identity.py": "4921f09110b57bba76fd182441aff31f1e4b1cf10a49dcb09553bbe805f4c035",
+    "tests/test_mizar_s1_ced_text_epoch1_offline_config.py": "a97781f12b5bccc402e2aa3b3a463834403be237b74afb247646b43c95c5280b",
+    "tests/test_mizar_s1_ced_text_epoch1_parity.py": "d58bad97fb5c5cd1ac42aea9d9684e99471d090e6bce14694e0d909520cd9a85",
+    "tests/test_mizar_s1_ced_text_epoch1_route.py": "ecd6198d7a78df68cfc748e22a46b260223fda40d1e1848ac55c753ea1ec46c3",
+    "tests/test_mizar_s1_ced_text_epoch1_shared_start.py": "367753fd3462298b7d4066a2361425bf1b31054026fb00c841ed243d70cb16f5",
+    "tests/test_mizar_s1_ced_text_epoch1_tensor.py": "d2b2b8fa378980704062773a4d1e33678a357bae19d42fcd07e7e4e83c5236c5",
+    "tests/validate_mizar_s1_ced_text_epoch1.py": "2a52d5d1667d1cc855af57be16f0b5d321c7e93c0b17627d0733046f7942d1eb",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/README.md": "10533fb0c27600112bdf2c0e6b1b734a34476fe73517c13e5bbe0e70eb09b54b"
+  },
+  "documentation_added_after_tests": [
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/README.md"
+  ]
+}

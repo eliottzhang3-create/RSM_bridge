@@ -1,0 +1,98 @@
+{
+  "status": "PASS",
+  "scope": "source audit only; no production tensors/jobs",
+  "code_sha256": "1832c1ac814cf32871a405184afa01bb67492a3565180b5580d588296ba0f700",
+  "protected_originals": {
+    "files": 37,
+    "all_unchanged": true
+  },
+  "byte_identical_sources": [
+    "check_ced_assets.py",
+    "data/audio_paths.py",
+    "data/audiotext_dataset.py",
+    "data/fixed20.py",
+    "data/indexed_jsonl.py",
+    "data/prepared_index.py",
+    "data/sampler.py",
+    "data/staging.py",
+    "data/template.py",
+    "models/audio.py",
+    "models/ced.py",
+    "models/ced_offline.py",
+    "models/decoder.py",
+    "models/mellow.py",
+    "optim.py",
+    "prepare_index.py",
+    "stage_data.py",
+    "utils/audio_io.py"
+  ],
+  "audio_semantic_recipe_equal": true,
+  "training_parity": {
+    "entire_train_function_preserved_after_explicit_audits": true,
+    "changed_first_step_condition": "only fresh audio gates must be zero; trained B retained",
+    "added_report_keys": [
+      "text_initialization",
+      "inherited_lora_parameter_count",
+      "fresh_audio_parameter_count"
+    ]
+  },
+  "backbone_parity": {
+    "model_forward_injection_attention_rope_unchanged": true,
+    "one_constructor_install_before_hf_weight_load": true
+  },
+  "loop_lora": {
+    "contract": "two_independent_loop_lora_on_shared_trainable_middle_v1",
+    "physical_layers_0based": [
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "logical_ranges_0based_inclusive": [
+      [
+        5,
+        14
+      ],
+      [
+        15,
+        24
+      ]
+    ],
+    "targets": [
+      "self_attn.q_proj",
+      "self_attn.k_proj",
+      "self_attn.v_proj",
+      "self_attn.o_proj",
+      "mlp.gate_proj",
+      "mlp.up_proj",
+      "mlp.down_proj"
+    ],
+    "rank": 8,
+    "alpha": 16,
+    "scale": 2.0,
+    "dropout": 0.0,
+    "loops": 2,
+    "A_init": "text_checkpoint",
+    "B_init": "text_checkpoint",
+    "initialization": "strict_pretrained_A_B_without_post_load_reset",
+    "base_trainable": true,
+    "shared_base_between_loops": true,
+    "independent_per_layer_projection_loop": true,
+    "prefix_suffix_lora": false,
+    "positions": "full_sequence",
+    "max_lr": 0.0006,
+    "weight_decay": 0.01,
+    "new_parameters": 1628160,
+    "inherited_parameters": 1628160,
+    "fresh_parameters": 0,
+    "use_cache": false,
+    "gradient_checkpointing": false,
+    "merge_adapters": false
+  }
+}

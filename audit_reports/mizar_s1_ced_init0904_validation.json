@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "status": "PASS",
+  "route": "ced_small_mizar_s1_fixed20_gbs256_recursive_5_10_5_init0904_v1",
+  "text_initialization": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10_5/formal-maxlr8e-4-resume4500-20260904_154711/checkpoint-step-009244",
+  "require_tensors": false,
+  "checks": [
+    {
+      "suite": "isolation",
+      "run": 9,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "passed": true
+    },
+    {
+      "suite": "route",
+      "run": 6,
+      "skipped": 0,
+      "returncode": 0,
+      "passed": true
+    },
+    {
+      "suite": "parity",
+      "run": 10,
+      "skipped": 0,
+      "returncode": 0,
+      "passed": true
+    },
+    {
+      "suite": "offline_config",
+      "run": 6,
+      "skipped": 0,
+      "returncode": 0,
+      "passed": true
+    },
+    {
+      "suite": "shared_start",
+      "run": 11,
+      "skipped": 0,
+      "returncode": 0,
+      "passed": true
+    },
+    {
+      "suite": "tensor",
+      "run": 3,
+      "skipped": 3,
+      "returncode": 0,
+      "passed": true
+    }
+  ],
+  "passed_tests": 42,
+  "skipped_tests": 3,
+  "guarded_parent_files": 38,
+  "scheduler_positions": 17314,
+  "code_sha256": "54f2685ec0eab9de6fabb7befe46a56f2416970659ae16a4a3fb7131cb1369fd",
+  "source_guard_sha256": "6506848b299eaa9937d381e6b00f1c955448232b3e0d50b5f53571700637b6e2",
+  "scope": "Local source, stdlib control-flow, synthetic concurrency and Bash mock tests; no production assets or GPU jobs.",
+  "production_weights_loaded": false,
+  "gpu_training_verified": false,
+  "eight_rank_resume_verified": false,
+  "seconds": 8.959
+}
