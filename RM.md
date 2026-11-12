@@ -1,3 +1,46 @@
+## 2026-11-13：新增独立 MMSU 完整测评链路
+
+按用户确认方案实现 MMSU 官方大小写题面，保留项目现有 CED 的数值与推理参数。
+正式入口：code/RSmol/run_mizar_s1_ced_small_mmsu_eval_5090.sh。
+实现与详细参数模板：code/RSmol/mizar_s1_ced_mmsu_eval/README.md。
+本地 Windows 只维护代码，经 GitHub 同步；生产权重和 GPU 推理仍在远程 Linux。
+未预选架构、训练 run、checkpoint、step 或 geometry，全部由后续目标显式指定。
+
+新增隔离 dataset/runtime/storage/scoring/evaluate 与计算入口；导入原有严格模型 loader、
+greedy decoder 和每样本交互 context，支持现有 base、mesh、简单递归、multilayer 注册路线，
+以及既有官方最终 release loader；尚未被原 runtime 支持的新架构不自动推断。
+原 MMAU/MMAR 的入口、runner、runtime、训练和模型文件均不修改，28 份原评测文件字节 SHA 一致。
+
+默认读取 /hpc_stor03/sjtu_home/jinwei.zhang/data/MMSU 下 MMSU data 和 MMSU code，
+保持含空格路径的完整引用，依次遍历三份 train parquet 的 1667/1667/1666 行。
+核验 5000 个唯一 ID、schema、原始选项/null 和文本 GT；GT/分类不进入模型题面。
+音频优先嵌入 bytes，按 SoundFile 实际解码采样率/长度，先 mono 后 torchaudio 32k resample，
+训练 fixed20 整段居中裁剪/右补零后分两个10秒；FP32、prompt256、prefix383、300 token
+纯 greedy/完整重算/无 KV/无 attention mask、原始 EOS 解码等保持已有口径。
+
+官方 mmsu_evaluation.py 原样外部执行，CLI 使用位置参数 JSONL，LF SHA 固定为
+b6d5d35d2755244019a78e601495ea74e722681bf6f7e1fd0179bab7cabca3eb。
+response 不转大写、不抽取字母、不删 EOS；保留官方对部分格式错误回答排除分母的行为。
+仅满 5000 条唯一生成后评分；分开记录推理覆盖、scorer 执行、实际分母。
+scorer 正常退出但实际分母不足5000时保留官方分数/输出，整轮仍 FAILED、返回1。
+
+输出包含 run_config、progress、raw_generations、model_audit、predictions_official.jsonl、
+official_evaluation.txt、evaluation_report.json。严格绑定 checkpoint/runtime/data/scorer/code/protocol；
+OS进程锁防并发写，raw 为恢复依据，追加并 fsync；只恢复未完成末尾写，不吞完整损坏记录。
+出错停止、不跳题，匹配身份后续跑剩余条目，完整 raw 重评分不再加载模型。
+提交默认完整评测，不增加自动 smoke 或额外 GPU 测试；沿用5090的1卡/8CPU/32G/原镜像/原conda。
+
+python -B tests/validate_mizar_s1_ced_mmsu_eval.py --assets-root C:/Xlance/assets/MMSU：
+122项中119通过，3项真实Torch/torchaudio检查因本地缺依赖明确跳过。
+含完整5000条fixture控制流、中断续跑、原官方scorer、真实Bash模拟vc、原有MMAU/MMAR相关回归。
+独立临时依赖目录提供PyArrow/SoundFile，未修改原Python环境；实际核验5000条/47任务元数据，
+并真实解码全部5000音频：8种采样率、450段双声道，时长0.302至35.915秒，
+145段会被fixed20截断，4855段需补零；298段头部帧数与实际解码不同，以实际解码为准。
+修正验证入口选用Git Bash以避免WindowsApps WSL别名；两个新增脚本bash -n通过。
+报告：audit_reports/mizar_s1_ced_mmsu_eval_validation.json。
+不声明真实模型/远程推理通过；未访问远程生产权重、提交真实作业或代为commit/push。
+本条仅前置，原RM全部历史字节完整保留。
+
 ## 2026-11-12：已训练文本双LoRA epoch1音频路线的tmpfs前缀自查与修复
 
 用户要求自查run_mizar_s1_ced48_text_epoch1_loop_lora_r8_5090.sh是否存在隔离目录前缀问题。

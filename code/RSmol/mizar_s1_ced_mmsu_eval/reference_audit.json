@@ -1,0 +1,117 @@
+{
+  "description": "Pre-MMSU source preservation baseline. raw_sha256 preserves local byte audit; lf_sha256 also supports Git CRLF/LF conversion on remote Linux.",
+  "files": {
+    "code/RSmol/mizar_official_eval/evaluate.py": {
+      "raw_sha256": "8c2a6ab897383f612533226b865bd9a6c7b82bd30701bbdded4ebe62e0bd3de6",
+      "lf_sha256": "8c2a6ab897383f612533226b865bd9a6c7b82bd30701bbdded4ebe62e0bd3de6"
+    },
+    "code/RSmol/mizar_official_eval/README.md": {
+      "raw_sha256": "9e5c923e2d81612af6b18ee3634ce7a07b7d6de2679e10cb7a6fa57362f8fcf6",
+      "lf_sha256": "9e5c923e2d81612af6b18ee3634ce7a07b7d6de2679e10cb7a6fa57362f8fcf6"
+    },
+    "code/RSmol/mizar_official_eval/release_manifest.json": {
+      "raw_sha256": "07f52ca348869cbb44ef44b0cff0c103700497091dcf7e0f492adb23c5b61dcd",
+      "lf_sha256": "07f52ca348869cbb44ef44b0cff0c103700497091dcf7e0f492adb23c5b61dcd"
+    },
+    "code/RSmol/mizar_official_eval/run.sh": {
+      "raw_sha256": "97f5e647cddda51d21c3fc76eebb1b6ef55351ab95c9a883611455a73d5e171e",
+      "lf_sha256": "97f5e647cddda51d21c3fc76eebb1b6ef55351ab95c9a883611455a73d5e171e"
+    },
+    "code/RSmol/mizar_official_eval/runtime.py": {
+      "raw_sha256": "e4cf6c407163c11c6a7294790847fdf0c4e89dead706261f8e1ef2fb0f64d36d",
+      "lf_sha256": "e4cf6c407163c11c6a7294790847fdf0c4e89dead706261f8e1ef2fb0f64d36d"
+    },
+    "code/RSmol/mizar_official_eval/submit_5090.sh": {
+      "raw_sha256": "02d1731a5d423f9f42394658de474c22e37f1fad48f6248ae6865b21b607335c",
+      "lf_sha256": "02d1731a5d423f9f42394658de474c22e37f1fad48f6248ae6865b21b607335c"
+    },
+    "code/RSmol/run_mizar_s1_ced_small_mmar_eval_5090.sh": {
+      "raw_sha256": "f94fe8fe8f031fd6a8f2b8c0157251b1420b98309a372ff2693ce3e55596693d",
+      "lf_sha256": "f94fe8fe8f031fd6a8f2b8c0157251b1420b98309a372ff2693ce3e55596693d"
+    },
+    "code/RSmol/run_mizar_s1_ced_small_mmau_eval_5090.sh": {
+      "raw_sha256": "6f860fb2e35f408f7720d6d158f5b0e08fbef7ca4738a37178b6cc6a952a1fc7",
+      "lf_sha256": "6f860fb2e35f408f7720d6d158f5b0e08fbef7ca4738a37178b6cc6a952a1fc7"
+    },
+    "code/RSmol/scripts/evaluate_mizar_s1_ced_benchmark.py": {
+      "raw_sha256": "5358e5da5ca18f32f4558b3f83683314c2dceca4e44a2d06c05677788431a343",
+      "lf_sha256": "5358e5da5ca18f32f4558b3f83683314c2dceca4e44a2d06c05677788431a343"
+    },
+    "code/RSmol/scripts/evaluate_mizar_s1_ced_benchmark.sh": {
+      "raw_sha256": "66f7c4b3ef0c6fd1dcf81104eff01defb9aa7ee9d33cad1bc5135112673a04b3",
+      "lf_sha256": "66f7c4b3ef0c6fd1dcf81104eff01defb9aa7ee9d33cad1bc5135112673a04b3"
+    },
+    "code/RSmol/scripts/evaluate_mizar_s1_ced_multilayer_benchmark.py": {
+      "raw_sha256": "16a6d68c280f93ea3700537bfc7f39510f31a6e9e0a16849ecb486c0dc920a20",
+      "lf_sha256": "16a6d68c280f93ea3700537bfc7f39510f31a6e9e0a16849ecb486c0dc920a20"
+    },
+    "code/RSmol/scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh": {
+      "raw_sha256": "7e62b7d4f52b5b907824318acd329dfed1cedcc560223169c9802ae98eb98c9b",
+      "lf_sha256": "7e62b7d4f52b5b907824318acd329dfed1cedcc560223169c9802ae98eb98c9b"
+    },
+    "code/RSmol/scripts/evaluate_mizar_s1_ced_recursive_benchmark.py": {
+      "raw_sha256": "2f596f4d113e8b98f7338cc640661d5185b306935b0278cd32126c6144e1f882",
+      "lf_sha256": "2f596f4d113e8b98f7338cc640661d5185b306935b0278cd32126c6144e1f882"
+    },
+    "code/RSmol/scripts/evaluate_mizar_s1_ced_recursive_benchmark.sh": {
+      "raw_sha256": "13515ccdea62c3c8c14cc0e97b5acab04c72d10876652687476ca30f225c3b79",
+      "lf_sha256": "13515ccdea62c3c8c14cc0e97b5acab04c72d10876652687476ca30f225c3b79"
+    },
+    "code/RSmol/scripts/evaluate_mizar_s1_ced_recursive_mesh_benchmark.py": {
+      "raw_sha256": "dc4996edb80123b97872a402ebea4156395dbc875d2ec90ae54ea3f629de676e",
+      "lf_sha256": "dc4996edb80123b97872a402ebea4156395dbc875d2ec90ae54ea3f629de676e"
+    },
+    "code/RSmol/scripts/evaluate_mizar_s1_ced_recursive_mesh_benchmark.sh": {
+      "raw_sha256": "ac2e4fa44e36149d74c534e99c84e95a3bc82f4d31c08851d45f376540cb9182",
+      "lf_sha256": "ac2e4fa44e36149d74c534e99c84e95a3bc82f4d31c08851d45f376540cb9182"
+    },
+    "code/RSmol/scripts/evaluate_mmar_5_10x2_5_mesh_mellow.py": {
+      "raw_sha256": "702d0be1cdf86236487574ac8bb355f5adab3e2dbdc7f4bb3f2ab562529dffe6",
+      "lf_sha256": "702d0be1cdf86236487574ac8bb355f5adab3e2dbdc7f4bb3f2ab562529dffe6"
+    },
+    "code/RSmol/scripts/evaluate_mmau_test_mini_5_10x2_5_mesh_mellow.py": {
+      "raw_sha256": "00daa81270013f7cbe1855cb371670428be844a8427ab2b9a839b2215da1fb3f",
+      "lf_sha256": "00daa81270013f7cbe1855cb371670428be844a8427ab2b9a839b2215da1fb3f"
+    },
+    "code/RSmol/scripts/mizar_s1_ced_eval_runtime.py": {
+      "raw_sha256": "78e41b07ad54ecb182621a3103491a25092d38f16e0450b3bc25685c4e18ce2e",
+      "lf_sha256": "78e41b07ad54ecb182621a3103491a25092d38f16e0450b3bc25685c4e18ce2e"
+    },
+    "code/RSmol/scripts/mizar_s1_ced_input_ca_eval_runtime.py": {
+      "raw_sha256": "8b8a41b2fb98d9967e3e3e3ed5155d963bfc9af7f860899dcc6fc7980acaaaf6",
+      "lf_sha256": "8b8a41b2fb98d9967e3e3e3ed5155d963bfc9af7f860899dcc6fc7980acaaaf6"
+    },
+    "code/RSmol/scripts/mizar_s1_ced_multilayer_eval_runtime.py": {
+      "raw_sha256": "ed80288f04ed0724e8ca9c775da297291453c0c728338662be9016638d8366e5",
+      "lf_sha256": "ed80288f04ed0724e8ca9c775da297291453c0c728338662be9016638d8366e5"
+    },
+    "code/RSmol/scripts/mizar_s1_ced_official_recursive_eval_runtime.py": {
+      "raw_sha256": "b7e9cfa0187ac8f42e3cae4acf5b8156c3087852b9738989bfbc6dd57145eaa9",
+      "lf_sha256": "b7e9cfa0187ac8f42e3cae4acf5b8156c3087852b9738989bfbc6dd57145eaa9"
+    },
+    "code/RSmol/scripts/mizar_s1_ced_recursive_eval_runtime.py": {
+      "raw_sha256": "e56844b50c47792789293ace871c10df5406884c5542a4468394ed734bc13018",
+      "lf_sha256": "e56844b50c47792789293ace871c10df5406884c5542a4468394ed734bc13018"
+    },
+    "code/RSmol/scripts/mizar_s1_ced_recursive_mesh_eval_runtime.py": {
+      "raw_sha256": "b408f0c9d45e3f77466c7fa7dea7e0de163a31b7e9315b4bf2b1a0308ee0e2ec",
+      "lf_sha256": "b408f0c9d45e3f77466c7fa7dea7e0de163a31b7e9315b4bf2b1a0308ee0e2ec"
+    },
+    "code/RSmol/scripts/README_mizar_s1_ced_loop_lora.md": {
+      "raw_sha256": "568f435cb1e01a8c6ef05bf399b950e8510cbb3848534343eb26789ebd1d8fdc",
+      "lf_sha256": "568f435cb1e01a8c6ef05bf399b950e8510cbb3848534343eb26789ebd1d8fdc"
+    },
+    "code/RSmol/scripts/README_mizar_s1_ced_multilayer_eval.md": {
+      "raw_sha256": "70f43888fbcd6e83f82fe4bd0e52d25f3bc2e5fa2fd35c7d58967fbdfb636ee6",
+      "lf_sha256": "70f43888fbcd6e83f82fe4bd0e52d25f3bc2e5fa2fd35c7d58967fbdfb636ee6"
+    },
+    "code/RSmol/scripts/README_mizar_s1_ced_recursive_eval.md": {
+      "raw_sha256": "53a515779e36dbb542fedc9fc4c6f32f1e43060bb77c46cb61e2efb952910814",
+      "lf_sha256": "53a515779e36dbb542fedc9fc4c6f32f1e43060bb77c46cb61e2efb952910814"
+    },
+    "code/RSmol/scripts/README_mizar_s1_ced_recursive_mesh_eval.md": {
+      "raw_sha256": "f53371c563bd31243ce324339d9cf254af7707ac55f8898e911a9436391dc146",
+      "lf_sha256": "f53371c563bd31243ce324339d9cf254af7707ac55f8898e911a9436391dc146"
+    }
+  }
+}

@@ -1,0 +1,215 @@
+{
+  "scope": "local CPU/fixture validation; no remote checkpoint inference or job submission",
+  "status": "PASS",
+  "utc": "2026-11-12T16:22:50.271470+00:00",
+  "modules": [
+    "test_mizar_s1_ced_mmsu_eval",
+    "test_mizar_s1_ced_mmsu_dependencies",
+    "test_mizar_s1_ced_mmsu_shell",
+    "test_mizar_s1_ced_benchmark_eval",
+    "test_mizar_s1_ced_recursive_eval",
+    "test_mizar_s1_ced_recursive_mesh_eval",
+    "test_mizar_s1_ced_multilayer_eval",
+    "test_mizar_s1_ced_eval_extensions",
+    "test_mizar_s1_ced_input_ca_eval"
+  ],
+  "tests_run": 122,
+  "passed": 119,
+  "skipped": [
+    {
+      "test": "test_embedded_bytes_precede_stale_path_stereo_downmix_and_real_resampling (test_mizar_s1_ced_mmsu_dependencies.RealAudioTensorTests.test_embedded_bytes_precede_stale_path_stereo_downmix_and_real_resampling)",
+      "reason": "requires torch, torchaudio, soundfile; run in mellow_c8204d8"
+    },
+    {
+      "test": "test_fixed20_actual_crop_before_split_and_right_padding (test_mizar_s1_ced_mmsu_dependencies.RealAudioTensorTests.test_fixed20_actual_crop_before_split_and_right_padding)",
+      "reason": "requires torch, torchaudio, soundfile; run in mellow_c8204d8"
+    },
+    {
+      "test": "test_generation_preserves_uppercase_and_actual_greedy_decoder_eos (test_mizar_s1_ced_mmsu_dependencies.RealAudioTensorTests.test_generation_preserves_uppercase_and_actual_greedy_decoder_eos)",
+      "reason": "requires torch, torchaudio, soundfile; run in mellow_c8204d8"
+    }
+  ],
+  "failures": [],
+  "errors": [],
+  "actual_assets": {
+    "status": "PASS",
+    "metadata": {
+      "status": "PASS",
+      "rows": 5000,
+      "task_count": 47,
+      "task_rows": {
+        "accent_identification": 114,
+        "age_prediction": 104,
+        "background_scene_recognition": 110,
+        "casual_reasoning": 116,
+        "code_switch_question_answering": 111,
+        "consonant_vowel_perception": 103,
+        "content_grounding": 109,
+        "continuation_writing": 110,
+        "couplet_matching": 107,
+        "deixis_resolution": 103,
+        "dialogue_reasoning": 114,
+        "dialogue_turn_counting": 99,
+        "disfluency_detection": 106,
+        "emotion_recognition": 117,
+        "emotional_context_reasoning": 110,
+        "gender_prediction": 120,
+        "homophone_based_reasoning": 101,
+        "idiom_reasoning": 102,
+        "intent_detection": 115,
+        "intonation_based_reasoning": 78,
+        "intonation_perception": 111,
+        "logical_reasoning": 104,
+        "long_speech_summarization": 106,
+        "near_homophone_perception": 99,
+        "non_verbal_sound_detection": 117,
+        "pause_based_reasoning": 90,
+        "pause_perception": 107,
+        "pitch_comparison": 108,
+        "plosive_sound_identification": 108,
+        "polysemy_reasoning": 98,
+        "prolonged_sound_perception": 83,
+        "prolonged_sound_reasoning": 84,
+        "puns_interpretation": 109,
+        "sarcasm_detection": 116,
+        "speaker_identity_recognition": 114,
+        "speech_act_classification": 98,
+        "speech_duration_estimation": 106,
+        "speech_stress_perception": 110,
+        "speech_translation": 119,
+        "speed_comparison": 109,
+        "stress_based_reasoning": 110,
+        "syllable_perception": 100,
+        "syntactic_structure_matching": 98,
+        "synthetic_speech_detection": 109,
+        "total_speaker_counting": 120,
+        "vocal_range_comparison": 108,
+        "volume_comparison": 110
+      },
+      "category_rows": {
+        "Perception/Linguistics": 1570,
+        "Perception/Paralinguistics": 1010,
+        "Reasoning/Linguistics": 2085,
+        "Reasoning/Paralinguistics": 335
+      },
+      "null_choices": {
+        "choice_a": 214,
+        "choice_c": 237,
+        "choice_d": 230,
+        "choice_b": 225
+      },
+      "multiple_matching_choices": 0,
+      "answer_policy": "original_text_exact_equality_no_normalization",
+      "shards": [
+        {
+          "name": "train-00000-of-00003.parquet",
+          "rows": 1667,
+          "schema": "id: string\ntask_name: string\naudio: struct<bytes: binary, path: string>\n  child 0, bytes: binary\n  child 1, path: string\nquestion: string\nchoice_a: string\nchoice_b: string\nchoice_c: string\nchoice_d: string\nanswer_gt: string\ncategory: string\nsub-category: string\nsub-sub-category: string\nlinguistics_sub_discipline: string\n-- schema metadata --\nhuggingface: '{\"info\": {\"features\": {\"id\": {\"dtype\": \"string\", \"_type\": \"' + 656"
+        },
+        {
+          "name": "train-00001-of-00003.parquet",
+          "rows": 1667,
+          "schema": "id: string\ntask_name: string\naudio: struct<bytes: binary, path: string>\n  child 0, bytes: binary\n  child 1, path: string\nquestion: string\nchoice_a: string\nchoice_b: string\nchoice_c: string\nchoice_d: string\nanswer_gt: string\ncategory: string\nsub-category: string\nsub-sub-category: string\nlinguistics_sub_discipline: string\n-- schema metadata --\nhuggingface: '{\"info\": {\"features\": {\"id\": {\"dtype\": \"string\", \"_type\": \"' + 656"
+        },
+        {
+          "name": "train-00002-of-00003.parquet",
+          "rows": 1666,
+          "schema": "id: string\ntask_name: string\naudio: struct<bytes: binary, path: string>\n  child 0, bytes: binary\n  child 1, path: string\nquestion: string\nchoice_a: string\nchoice_b: string\nchoice_c: string\nchoice_d: string\nanswer_gt: string\ncategory: string\nsub-category: string\nsub-sub-category: string\nlinguistics_sub_discipline: string\n-- schema metadata --\nhuggingface: '{\"info\": {\"features\": {\"id\": {\"dtype\": \"string\", \"_type\": \"' + 656"
+        }
+      ]
+    },
+    "audio_headers": 5000,
+    "real_decoded_audio_rows": 5000,
+    "header_frame_count_disagreements": 298,
+    "sample_rates": {
+      "32000": 71,
+      "48000": 893,
+      "24000": 1122,
+      "16000": 2475,
+      "44100": 220,
+      "22050": 108,
+      "96000": 3,
+      "17600": 108
+    },
+    "channels": {
+      "1": 4550,
+      "2": 450
+    },
+    "shortest_audio": {
+      "row_index": 2579,
+      "id": "non_verbal_sound_detection_1a5324b3-a104-472c-9b0b-913c476c18f7",
+      "duration_seconds": 0.301859410430839
+    },
+    "longest_audio": {
+      "row_index": 548,
+      "id": "code_switch_question_answering_fb184666-14b8-4782-bfec-3b06ab16e97b",
+      "duration_seconds": 35.915
+    },
+    "fixed20_would_crop_rows": 145,
+    "fixed20_would_pad_rows": 4855,
+    "real_soundfile_decode_probes": [
+      {
+        "row_index": 0,
+        "id": "accent_identification_41693afa-2627-4e38-82de-f7659cd554c2",
+        "duration_seconds": 3.456,
+        "rate": 32000,
+        "source": "parquet_embedded_bytes",
+        "decoded_shape": [
+          110592,
+          1
+        ],
+        "dtype": "float32"
+      },
+      {
+        "row_index": 1667,
+        "id": "gender_prediction_3d68d803-6c66-4436-9b23-5f2b06c4cd62",
+        "duration_seconds": 6.864,
+        "rate": 48000,
+        "source": "parquet_embedded_bytes",
+        "decoded_shape": [
+          329472,
+          1
+        ],
+        "dtype": "float32"
+      },
+      {
+        "row_index": 3334,
+        "id": "prolonged_sound_reasoning_e1983a5e-be48-4351-96ff-5a0192324727",
+        "duration_seconds": 4.565333333333333,
+        "rate": 48000,
+        "source": "parquet_embedded_bytes",
+        "decoded_shape": [
+          219136,
+          1
+        ],
+        "dtype": "float32"
+      },
+      {
+        "row_index": 4999,
+        "id": "volume_comparison_7866a108-277c-4dcf-94b2-c997371ba6a5",
+        "duration_seconds": 11.840625,
+        "rate": 16000,
+        "source": "parquet_embedded_bytes",
+        "decoded_shape": [
+          189450,
+          1
+        ],
+        "dtype": "float32"
+      }
+    ],
+    "official_scorer": {
+      "path": "C:\\Xlance\\assets\\MMSU\\MMSU code\\mmsu_evaluation.py",
+      "sha256": "b6d5d35d2755244019a78e601495ea74e722681bf6f7e1fd0179bab7cabca3eb",
+      "lf_sha256": "b6d5d35d2755244019a78e601495ea74e722681bf6f7e1fd0179bab7cabca3eb",
+      "source": "https://github.com/dingdongwang/MMSU/blob/main/mmsu_evaluation.py"
+    },
+    "shard_sha256": {
+      "train-00000-of-00003.parquet": "af33755e6dbc2bfa22d37186964c91f579dd1f2419680fc56a090368f6c70eb9",
+      "train-00001-of-00003.parquet": "aa9de4cdef5e2da81078d016dfdc024e594fe42e70a53050ae792de198bfa666",
+      "train-00002-of-00003.parquet": "392e1c1a57d3a1ba732d617e97452b48214541cd257d59005d92ccccc9e7b020"
+    }
+  },
+  "original_source_lf_sha256_preserved": true,
+  "original_source_raw_sha256_preserved": true,
+  "elapsed_seconds": 106.80104200000642
+}
