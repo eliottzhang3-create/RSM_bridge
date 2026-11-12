@@ -80,6 +80,10 @@ bash code/RSmol/run_mizar_s1_ced48_text_epoch1_loop_lora_r8_5090.sh \
 ## 输出与完整恢复
 
 route为 `ced_small_mizar_s1_ced48_text_epoch1_loop_lora_r8_v1`；output/log/job/index-cache/tmpfs独立。
+tmpfs为 `/dev/shm/mizar_s1_gbs256_ced48_text_epoch1_loop_lora_r8_<token>`。
+2026-11-12修正此前缺失的 `mizar_s1_gbs256_` 前缀：原路径会在 `stage_data.py` 的启动和清理校验处均被拒绝。
+保留原 `/dev/shm` 直属、非软链接、解析路径一致和owner/token检查；路线后缀和每次作业token仍独立。
+若旧作业仅因此在发布TRAINING_READY前失败、未进入torchrun，同步修复后用上述正式命令重新提交到新输出目录。
 沿母本在run root下追加 `formal/`：
 
 - `formal/runtime.json`：完整音频配方及文本来源身份。
@@ -107,10 +111,12 @@ bash code/RSmol/run_mizar_s1_ced48_text_epoch1_loop_lora_r8_5090.sh \
 python -B tests/validate_mizar_s1_ced48_text_epoch1_loop_lora_r8.py
 ```
 
-本机38项通过、6项真实CPU tensor检查因缺 torch/transformers/safetensors 跳过，详见
+本机42项通过、6项真实CPU tensor检查因缺 torch/transformers/safetensors 跳过，详见
 `audit_reports/mizar_s1_ced48_text_epoch1_loop_lora_r8_validation.json`。
 检查37份参考SHA、完整模型及训练循环受限差异、整个音频配方和17314个LR位置、严格加载及非零A/B继承、
 首步梯度审计、跨路线恢复拒绝、共享读取/后台复制/切换/清理、Bash假vc提交资源和参数。
+新增4项staging目录回归：真实Bash赋值交给原启动/清理函数，重现旧前缀拒绝、验证新前缀和作业隔离，
+并验证越界/嵌套/软链接/解析别名及错误owner/token仍被拒绝；POSIX文件查询/rmtree为fixture，不触碰真实tmpfs。
 `reference_audit.json` 为本路线源码对照；`parent_reference_audit.json` 仅保留母本历史审计。
 
 远程已有依赖的环境可选运行合成CPU检查，不读取生产资产，不提交作业，也不作为formal前置：
@@ -134,11 +140,11 @@ PowerShell中执行以下命令，只暂存本次新路线。工作区 `RM.md` �
 ```powershell
 Set-Location C:/Xlance/GZ_bridge/Recursive_SALM/RSM_bridge
 git add -- code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8 code/RSmol/run_mizar_s1_ced48_text_epoch1_loop_lora_r8_5090.sh
-git add -- tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_identity.py tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_route.py tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_behavior.py tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_shared_start.py tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_tensor.py tests/validate_mizar_s1_ced48_text_epoch1_loop_lora_r8.py audit_reports/mizar_s1_ced48_text_epoch1_loop_lora_r8_validation.json
+git add -- tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_identity.py tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_route.py tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_behavior.py tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_shared_start.py tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_staging_roots.py tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_tensor.py tests/validate_mizar_s1_ced48_text_epoch1_loop_lora_r8.py audit_reports/mizar_s1_ced48_text_epoch1_loop_lora_r8_validation.json
 git add -p -- RM.md
 git diff --cached --stat
 git diff --cached --check
-git commit -m "Add isolated CED48 audio training from text epoch1 pretrained loop LoRA"
+git commit -m "Fix CED48 pretrained LoRA audio staging prefix"
 git push
 ```
 

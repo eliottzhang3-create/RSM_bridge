@@ -1,3 +1,54 @@
+## 2026-11-12：已训练文本双LoRA epoch1音频路线的tmpfs前缀自查与修复
+
+用户要求自查run_mizar_s1_ced48_text_epoch1_loop_lora_r8_5090.sh是否存在隔离目录前缀问题。
+已确认其调用的mizar_s1_ced48_text_epoch1_loop_lora_r8/run.sh原STAGE_ROOT为
+/dev/shm/mizar_s1_ced48_text_epoch1_loop_lora_r8_<token>，与未改的stage_data.py
+validate_stage_root要求的mizar_s1_gbs256_前缀不符；启动和EXIT cleanup均会先被同一校验拒绝。
+仅将实际运行路径修正为/dev/shm/mizar_s1_gbs256_ced48_text_epoch1_loop_lora_r8_<token>。
+保留路线后缀、每作业token及/dev/shm直属/非软链接/解析路径一致/owner检查；
+stage_data.py、文本checkpoint及已训练A/B继承、音频模型和训练配方均不改。
+
+新增tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_staging_roots.py的4项回归：
+执行run.sh真实Bash赋值，再执行原validate_stage_root/cleanup函数；
+修复前复现旧目录启动/清理失败，修复后通过，验证不同token的独立目录、
+不存在目录的安全清理、匹配owner才允许rmtree、越界/嵌套/软链接/解析别名及错误owner/token拒绝。
+POSIX文件查询及rmtree为显式fixture，不创建或删除真实/dev/shm目录。
+此前假staging进程遗漏了此接口校验，本次补齐；validator接入新suite，原路径断言同步。
+README补充故障原因、修正路径和重提说明，reference_audit.json按新源码重新生成。
+
+python -B tests/validate_mizar_s1_ced48_text_epoch1_loop_lora_r8.py：42项本地检查通过、6项真实CPU tensor缺依赖跳过。
+报告audit_reports/mizar_s1_ced48_text_epoch1_loop_lora_r8_validation.json；37份母本SHA及音频配方对照通过。
+Windows沙箱阻止Bash信号管道，经授权在沙箱外运行同一本地回归及整套验证。
+未读取远程权重/数据、提交真实作业或代为commit/push，不声明远程训练PASS。
+若旧作业只在该校验处失败且未进入torchrun，同步后用原入口重新提交到新输出目录即可。
+仅前置本条，原RM所有内容逐字节保留；其他并行路线修改保持。
+
+## 2026-11-12：自查并修复 Huginn 文本 epoch1 音频路线 tmpfs 前缀
+
+用户提醒其他路线出现staging目录前缀不兼容后，自查确认Huginn入口也有同样问题。
+入口run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh调用独立目录run.sh；
+旧STAGE_ROOT=/dev/shm/mizar_s1_ced_small_huginn_text_epoch1_<token>，
+而stage_data.py的validate_stage_root及cleanup只允许mizar_s1_gbs256_前缀。
+此前模拟staging进程的检查未覆盖真实路径守卫，导致该启动/清理兼容问题漏检。
+
+仅将本路线run.sh的生产代码一行改为：
+/dev/shm/mizar_s1_gbs256_ced_small_huginn_text_epoch1_<token>。
+保留Huginn专属后缀及唯一token，stage_data.py及所有路径/软链接/所有权保护不改；
+指定Huginn checkpoint、模型、训练设置、staging/清理时序、输出目录与作业入口均保持。
+
+新增tests/test_mizar_s1_ced_huginn_text_epoch1_staging_roots.py，
+从真实run.sh执行Bash路径赋值，直接执行stage_data.py中实际validate_stage_root/cleanup函数。
+修复前重现启动及清理拒绝，修复后验证新路径及独立token、错误token/root、越界/嵌套/软链接/解析别名拒绝。
+Windows仅POSIX文件查询和rmtree为显式fixture，无真实/dev/shm目录创建或删除。
+Huginn validator新增staging_roots四项回归；原目录差异断言同步，README更新说明和Git文件清单。
+python -B tests/validate_mizar_s1_ced_huginn_text_epoch1.py：46项本地通过、7项真实CPU tensor缺依赖跳过；
+报告audit_reports/mizar_s1_ced_huginn_text_epoch1_validation.json。
+Windows沙箱阻止Bash信号管道后，经授权在沙箱外运行同一检查；未访问生产资产或提交真实训练。
+
+本地提交推送并在远程git pull --ff-only后，沿用原入口：
+bash code/RSmol/run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh --stage-workers 4。
+本轮只修复Huginn路线，不改工作区其他路线的已有修改；仅前置本条，旧RM字节完整保留。
+
 ## 2026-11-12：修复普通文本 epoch1 两条音频路线的 tmpfs staging 前缀
 
 用户提供普通CED及CED4→8串行音频注入/双LoRA两条正式作业的启动日志。

@@ -164,7 +164,7 @@ class IdentityTests(unittest.TestCase):
         text=LAUNCHER.read_text()
         self.assertIn('TEXT_MODEL_DIR='+C.DEFAULT_TEXT_MODEL_DIR,text)
         self.assertIn('mizar_s1_ced48_text_epoch1_loop_lora_r8_5090/index_cache',text)
-        self.assertIn('/dev/shm/mizar_s1_ced48_text_epoch1_loop_lora_r8_', (ROUTE/'run.sh').read_text())
+        self.assertIn('/dev/shm/mizar_s1_gbs256_ced48_text_epoch1_loop_lora_r8_', (ROUTE/'run.sh').read_text())
         bash='C:/Program Files/Git/bin/bash.exe' if os.name=='nt' else 'bash'
         for path in (LAUNCHER,ROUTE/'run.sh'):
             self.assertNotIn(b'\r',path.read_bytes())

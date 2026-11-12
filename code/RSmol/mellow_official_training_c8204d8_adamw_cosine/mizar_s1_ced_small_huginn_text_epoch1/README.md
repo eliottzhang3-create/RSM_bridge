@@ -63,6 +63,8 @@ A属于完整LM优化器组，使用3e-4和WD.01。音频阶段不沿用文本�
 保留原CED资产检查及CPU index准备后直接提交formal，无新增smoke/tensor测试前置。
 共享音频立即开始训练，单producer默认4workers后台复制；全部完成后在optimizer边界经全rank MIN确认切换。
 退出先stop/reap producer，再清理本token的tmpfs；每次恢复重新staging并从shared读取开始。
+临时目录为 `/dev/shm/mizar_s1_gbs256_ced_small_huginn_text_epoch1_<token>`，
+兼容原 `stage_data.py` 启动/清理共同要求的 `mizar_s1_gbs256_` 前缀，后缀及token保持路线隔离。
 
 `train.py`、`optim.py`、原decoder、CED、mapper和全部data/index/staging实现逐字节继承。
 改变集中在专用loader/合同、隔离命名和配置说明。35份母本/模型参考文件的LF SHA256见 `source_guard.json`。
@@ -138,9 +140,13 @@ python -B tests/validate_mizar_s1_ced_huginn_text_epoch1.py
 ```
 
 报告为 `audit_reports/mizar_s1_ced_huginn_text_epoch1_validation.json`。
-2026-11-11 本地结果：42项通过，7项真实CPU张量用例因缺少Torch等依赖跳过。
+2026-11-12 修复tmpfs前缀后，本地结果：46项通过，7项真实CPU张量用例因缺少Torch等依赖跳过。
 覆盖35份参考源码SHA、完整音频配方和17314个LR位置、严格加载/step0初始化、跨路线恢复拒绝、
 共享读取/后台复制/集体切换/退出清理、Bash模拟vc资源和参数，以及Git审计清单可提交性。
+新增前缀回归从真实 `run.sh` 执行Bash路径赋值，交给真实 `validate_stage_root`/`cleanup`函数：
+修复前重现启动/清理均拒绝，修复后通过；保留软链接/越界/错误token和root拒绝。
+Windows上仅POSIX文件查询及删除使用fixture，不创建或删除真实 `/dev/shm` 目录。
+旧模拟进程测试未验证目录前缀，现由此回归补齐；模型、checkpoint及训练配方均不变。
 缺依赖时真实CPU张量用例明确跳过；它们检查完整多模态梯度、A继承与优化器更新、随机状态恢复等。
 远程mellow_c8204d8中可手动运行 `python -B tests/validate_mizar_s1_ced_huginn_text_epoch1.py --require-tensors`，
 仅用合成CPU模型，不读生产资产，不作为formal前置条件。源码/模拟检查不代表生产训练已验证。
@@ -150,7 +156,7 @@ python -B tests/validate_mizar_s1_ced_huginn_text_epoch1.py
 
 ```text
 git diff --cached --stat
-git add -- code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1 code/RSmol/run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh tests/test_mizar_s1_ced_huginn_text_epoch1_identity.py tests/test_mizar_s1_ced_huginn_text_epoch1_route.py tests/test_mizar_s1_ced_huginn_text_epoch1_offline_config.py tests/test_mizar_s1_ced_huginn_text_epoch1_shared_start.py tests/test_mizar_s1_ced_huginn_text_epoch1_tensor.py tests/validate_mizar_s1_ced_huginn_text_epoch1.py audit_reports/mizar_s1_ced_huginn_text_epoch1_validation.json
+git add -- code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1 code/RSmol/run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh tests/test_mizar_s1_ced_huginn_text_epoch1_identity.py tests/test_mizar_s1_ced_huginn_text_epoch1_route.py tests/test_mizar_s1_ced_huginn_text_epoch1_offline_config.py tests/test_mizar_s1_ced_huginn_text_epoch1_shared_start.py tests/test_mizar_s1_ced_huginn_text_epoch1_staging_roots.py tests/test_mizar_s1_ced_huginn_text_epoch1_tensor.py tests/validate_mizar_s1_ced_huginn_text_epoch1.py audit_reports/mizar_s1_ced_huginn_text_epoch1_validation.json
 git add -p -- RM.md
 git diff --cached --stat
 git commit -m "Add isolated Huginn text epoch1 CED audio S1 training"

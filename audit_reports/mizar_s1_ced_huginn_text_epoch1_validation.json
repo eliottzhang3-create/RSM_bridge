@@ -1,7 +1,7 @@
 {
   "status": "PASS_LOCAL_WITH_SKIPS",
-  "time_utc": "2026-11-11T04:51:13.892866+00:00",
-  "passed": 42,
+  "time_utc": "2026-11-12T02:32:14.342136+00:00",
+  "passed": 46,
   "skipped": 7,
   "suites": {
     "identity": {
@@ -31,6 +31,14 @@
     "shared_start": {
       "run": 11,
       "passed": 11,
+      "success": true,
+      "skipped": [],
+      "failures": [],
+      "errors": []
+    },
+    "staging_roots": {
+      "run": 4,
+      "passed": 4,
       "success": true,
       "skipped": [],
       "failures": [],
@@ -109,6 +117,7 @@
     "tests/test_mizar_s1_ced_huginn_text_epoch1_offline_config.py",
     "tests/test_mizar_s1_ced_huginn_text_epoch1_route.py",
     "tests/test_mizar_s1_ced_huginn_text_epoch1_shared_start.py",
+    "tests/test_mizar_s1_ced_huginn_text_epoch1_staging_roots.py",
     "tests/test_mizar_s1_ced_huginn_text_epoch1_tensor.py",
     "tests/validate_mizar_s1_ced_huginn_text_epoch1.py"
   ],
@@ -122,8 +131,8 @@
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/optim.py": "e0bd421eb5edf6dfc60a4e6e14e3d221de450ad94c4829c234e7c6058319036e",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/parent_reference_audit.json": "a6b6926cbd72825f13c4a5c570fa4d01bcad349a1a6b079861af583221ed895f",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/prepare_index.py": "daf059301ff5cb2550a11e6f35cb53fe655b17b6b92cb0974da8f3da55f337e2",
-    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/README.md": "88853f7012bc7b620d31aec44c574fa89d3819c97185bbe26f2cb9695f845fdc",
-    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/run.sh": "acb164a1d269c9e7717f026a9e320ff8c55dd3a3e7d0e220ea7600c63844de6f",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/README.md": "18226ac1268901c66c77fd3d4c95431370b3bf2148cbf4926460885c95ca63b9",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/run.sh": "610d6b0a10f721e15dda2cd300854e054625d4d5df5f78deadda806528824c0b",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/runtime_checks.py": "939e6d9f24ab8359499dbb00e1d13434e3996929f68c0ad4ef2a0342632dd7d2",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/source_guard.json": "f3d8b050d01d3e1c1563f53cfc933631485a7c34182e3ae761c01fa1e1abe5ae",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/stage_data.py": "83925428208c0b5e1859b3ccd9f41670235720a07c76c514bd1453c5eee205cf",
@@ -147,11 +156,12 @@
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/models/recursive_text.py": "2ec8f9212358e00a28ea6ce5225ed6b17f7e4c709df5d615718b295e991618c4",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/utils/audio_io.py": "67f3680af4b8bb5cbc30426c54d71155d2b65f8cdd5c4fb89af08a374e63f311",
     "code/RSmol/run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh": "c5f7c2c11f6d8406b6d9a1cf70e65366f95d1879a65303cb13eea0792c6a97d4",
-    "tests/test_mizar_s1_ced_huginn_text_epoch1_identity.py": "45a9b3faaace9c247f6fc1eb58364891cfa4c65ff096c499af6036156344e12e",
+    "tests/test_mizar_s1_ced_huginn_text_epoch1_identity.py": "7c751b504e04caa484d771e17a23d151b38ca4c8a0c7a14af38ff1263338cdaa",
     "tests/test_mizar_s1_ced_huginn_text_epoch1_offline_config.py": "6e6aacf1bdb912dabe54791dd65720b10662d7d33921567a90f25f31907a1bd0",
     "tests/test_mizar_s1_ced_huginn_text_epoch1_route.py": "2c3601165380b7c7811d4b62191fbb34dd9eb5b95be2f6ba8227cdee028a6148",
     "tests/test_mizar_s1_ced_huginn_text_epoch1_shared_start.py": "09d74c2489a65ad36113131ef38329155c18e4f2ca3c47280d766a17700c2409",
+    "tests/test_mizar_s1_ced_huginn_text_epoch1_staging_roots.py": "187054334f859a407f7647a7d6abaf1c8fd341733bf8c441b8356169a3eb3ebe",
     "tests/test_mizar_s1_ced_huginn_text_epoch1_tensor.py": "06207ab51a81d74f3b2b0209d6fd80ed7745910a99f6b8ea29c9526b7c1895f9",
-    "tests/validate_mizar_s1_ced_huginn_text_epoch1.py": "6308d69dd3e15d0e1ff692c942712d0a34c3411abca4aa9f6e76b3df559cc95e"
+    "tests/validate_mizar_s1_ced_huginn_text_epoch1.py": "efe7abebaf61eca0b4c245a9e0c08a80cc16d3f8f8823548754b8e2b302a4083"
   }
 }

@@ -14,7 +14,7 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
 ROUTE=ROOT/'code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8'
-SUITES=('identity','route','behavior','shared_start','tensor')
+SUITES=('identity','route','behavior','shared_start','staging_roots','tensor')
 
 
 def run_suite(name, result_path):

@@ -1,7 +1,7 @@
 {
   "status": "PASS_LOCAL_WITH_SKIPS",
-  "time_utc": "2026-11-11T04:43:31.241491+00:00",
-  "passed": 38,
+  "time_utc": "2026-11-12T02:34:30.201923+00:00",
+  "passed": 42,
   "skipped": 6,
   "suites": {
     "identity": {
@@ -31,6 +31,14 @@
     "shared_start": {
       "run": 11,
       "passed": 11,
+      "success": true,
+      "skipped": [],
+      "failures": [],
+      "errors": []
+    },
+    "staging_roots": {
+      "run": 4,
+      "passed": 4,
       "success": true,
       "skipped": [],
       "failures": [],
@@ -106,6 +114,7 @@
     "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_identity.py",
     "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_route.py",
     "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_shared_start.py",
+    "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_staging_roots.py",
     "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_tensor.py",
     "tests/validate_mizar_s1_ced48_text_epoch1_loop_lora_r8.py"
   ],
@@ -119,9 +128,9 @@
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/optim.py": "7651bc987a0f2870de679fa9a502edd8aec622e91a5d71eb2d07beeafe42bf2f",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/parent_reference_audit.json": "4a1bc52c3ce2d06ab3b25be42114043bf003fb78b8e4090c9ae6a8f4b77d50f2",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/prepare_index.py": "daf059301ff5cb2550a11e6f35cb53fe655b17b6b92cb0974da8f3da55f337e2",
-    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/README.md": "b884a65e38b2220737b7e007442c015efb72a9596183ae642e8956441bf68120",
-    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/reference_audit.json": "7a4d63692bc7c63563ae331a05d19fbc9ca7234a3042a0053cabe044e0198bb8",
-    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/run.sh": "5c9b7b5c8a4edd3b480e2f3349f2b72046d959f9034fe2d8a3461963d97b1736",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/README.md": "f8a99fec407fbcfbe444d6b1f3dc21d736e3c647705fcc506f1b1a3e96cbccad",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/reference_audit.json": "813626f5d4ed6aa981b9f6145aade794a83335154f1bbbc918c74af813b632e1",
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/run.sh": "a5ae650d9251a19d3be38c4eebfacadf6e1bc4426edcb1e08c6a1f1208f2cab5",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/runtime_checks.py": "8dd9e1eed402663e646ba5240e8ffac473599e561cd27b53a59c75fd8f88a684",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/source_guard.json": "d5ad0f44166965db2317c583f2a8b69d8a48c3cf2c72b21ae3a13db51cd69c3c",
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/stage_data.py": "83925428208c0b5e1859b3ccd9f41670235720a07c76c514bd1453c5eee205cf",
@@ -147,10 +156,11 @@
     "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced48_text_epoch1_loop_lora_r8/utils/audio_io.py": "67f3680af4b8bb5cbc30426c54d71155d2b65f8cdd5c4fb89af08a374e63f311",
     "code/RSmol/run_mizar_s1_ced48_text_epoch1_loop_lora_r8_5090.sh": "e9323d1f6b119d39c2d9aeced170467054329f8acaebc85123ee378e05806d7d",
     "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_behavior.py": "7b88d4f69d076615d3b84f16612fdb1394c0a477b65e659e088ed0052f221f7d",
-    "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_identity.py": "542eff167a52c87a9752bc8605f82fbc5f783505965faf41d76501a11cd55c23",
+    "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_identity.py": "a3abc80fe0538e661fca48fcdc658b63e1eb35caa5a60df9af5c11138feca719",
     "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_route.py": "82b0bac28f450b82812f8e4ed03b9f05c4db6abf8282b6d184036b1fceefe641",
     "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_shared_start.py": "4c00453cd0fe27bf62372f8a993c710c19f9ceb45e604812a700ccf707187b39",
+    "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_staging_roots.py": "e90e3da8e6d8f696fcb6768fed1e2dddfd2c7111cd900f33e372650edecb4135",
     "tests/test_mizar_s1_ced48_text_epoch1_loop_lora_r8_tensor.py": "3755fe007eab99164c75999737bca2d3b4daf8a471d9c21b00d93ad252a539a0",
-    "tests/validate_mizar_s1_ced48_text_epoch1_loop_lora_r8.py": "e35097253aa917f0c929739ccda7aa189738b9e14f24fd3444f5a913412b435e"
+    "tests/validate_mizar_s1_ced48_text_epoch1_loop_lora_r8.py": "116f3e1d19b65a10c8e55f97aa9c427d9014d97394f81176a49745240484344f"
   }
 }
