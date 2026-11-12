@@ -80,6 +80,7 @@ def main():
         os.environ["PATH"] = str(git_bin) + os.pathsep + os.environ.get("PATH", "")
     started = time.monotonic()
     modules = ["test_mizar_s1_ced_mmsu_eval", "test_mizar_s1_ced_mmsu_dependencies", "test_mizar_s1_ced_mmsu_shell",
+               "test_mizar_mmsu_selected5",
                "test_mizar_s1_ced_benchmark_eval", "test_mizar_s1_ced_recursive_eval",
                "test_mizar_s1_ced_recursive_mesh_eval", "test_mizar_s1_ced_multilayer_eval",
                "test_mizar_s1_ced_eval_extensions", "test_mizar_s1_ced_input_ca_eval"]

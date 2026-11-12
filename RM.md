@@ -1,3 +1,37 @@
+## 2026-11-13：为用户指定的五个 Mizar 目标准备 MMSU 提交预设
+
+用户选择官方 Mizar 本身，以及 base / 普通 recursive_5_10_5 /
+recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8 / 原始 recursive_mesh
+四个明确的 model--step-17313.ckpt，要求复用已存在的 MMAU/MMAR 适配并提供提交命令。
+已逐一核对旧提交分支、runtime 注册、训练 contract 与官方 release manifest。
+官方 Mizar 本身对应 /hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M/
+checkpoints/final/stage3_q4_seed20260905.ckpt，使用既有严格发布包 loader；
+其余四条 total_step=17313、geometry=8,8,4，沿用各自 run 下 formal/runtime.json。
+
+新增 code/RSmol/run_mizar_mmsu_selected5_5090.sh，五个 TARGET 为：
+official_mizar、base、recursive_5_10_5、serial84_lora_r8、recursive_mesh。
+其固定训练 run 分别对应用户所列 20261026_193830617147305、20261028_160823559722647、
+20261103_165410438279511、20261027_081123150934256；checkpoint 路径、route 目录、
+step、geometry 和独立输出均显式绑定，最终调用原通用 MMSU 提交入口。
+仅允许数据路径、scorer 路径、output-dir、Parquet I/O batch-size 与 --check-args；
+目标模型身份参数固定，其余架构继续使用通用入口。
+
+五条均为完整5000题、pdgpu-5090、1GPU/8CPU/32G/1node、原镜像/conda/离线协议。
+官方输出为 outputs/RSmol/mizar_official_stage3_q4_seed20260905_matched_ced_v1/mmsu；
+四条训练目标分别写入各自 run 的 eval/mmsu_step17313。
+说明与可直接复制的五条远程提交、本地Git同步命令：
+code/RSmol/mizar_s1_ced_mmsu_eval/SELECTED5.md。
+旧官方Mizar MMAU/MMAR的4090提交分支保持；本次MMSU按已有通用入口走5090。
+
+tests/test_mizar_mmsu_selected5.py执行真实新入口、通用提交和计算shell与参数解析，
+仅vc/conda为显式fixture，核验全部目标的精确路径/geometry、资源、独立输出、
+路径空格、只检查不提交和错误参数拦截，并与原官方发布manifest核对。
+联合已有MMSU shell回归与28份母本SHA检查，8项全部通过，接入原完整MMSU validator。
+报告 audit_reports/mizar_mmsu_selected5_validation.json；Windows沙箱外运行本地合成检查。
+原MMSU推理/评分实现、通用提交脚本、MMAU/MMAR、训练及模型文件均未修改。
+仅进行本地代码准备，未访问远程生产权重、代为commit/push或提交真实GPU作业。
+本条仅前置，全部RM旧内容字节保留。
+
 ## 2026-11-13：新增独立 MMSU 完整测评链路
 
 按用户确认方案实现 MMSU 官方大小写题面，保留项目现有 CED 的数值与推理参数。

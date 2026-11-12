@@ -2,7 +2,9 @@
 
 正式入口是 `code/RSmol/run_mizar_s1_ced_small_mmsu_eval_5090.sh`。本实现只新增隔离文件；原 MMAU test mini、MMAR 的入口、runner、runtime、模型和训练文件均保持原样。
 
-本地 Windows 维护代码，通过 GitHub 同步到远程 Linux；权重、真实推理和输出仍在远程。此处没有预选架构、训练 run、checkpoint 或 step，也没有默认触发 smoke、额外测试作业或训练。提交入口默认执行完整 5000 条评测。
+本地 Windows 维护代码，通过 GitHub 同步到远程 Linux；权重、真实推理和输出仍在远程。通用入口不预选架构、训练 run、checkpoint 或 step，也没有默认触发 smoke、额外测试作业或训练。提交入口默认执行完整 5000 条评测。
+
+2026-11-13 用户指定的官方 Mizar 与四个 step17313 checkpoint，已准备独立的五目标提交入口：`code/RSmol/run_mizar_mmsu_selected5_5090.sh`。固定映射、五条可直接执行的提交命令及本地 Git 同步命令见 [SELECTED5.md](SELECTED5.md)。它只组装参数并调用本通用入口，模型加载、生成和评分实现保持原样。
 
 ## 正式运行
 

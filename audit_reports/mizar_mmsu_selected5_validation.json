@@ -1,0 +1,12 @@
+{
+  "scope": "Local real Bash + fake vc/conda + actual argument parser; no remote jobs/weights/data",
+  "utc": "2026-11-12T16:42:25.147316+00:00",
+  "status": "PASS",
+  "tests_run": 8,
+  "passed": 8,
+  "skipped": [],
+  "errors": [],
+  "failures": [],
+  "original_28_files_lf_sha256_preserved": true,
+  "elapsed_seconds": 24.755305999991833
+}
