@@ -1,5 +1,19 @@
 # Mizar 文本 epoch1 → CED-Small 音频 S1，GBS256
 
+## 2026-11-12 staging启动修复
+
+原隔离tmpfs名称缺少stage_data.py要求的mizar_s1_gbs256_前缀，导致producer启动失败，
+wait_for_start随后报未发布TRAINING_READY，退出清理再次被同一校验拒绝。
+现仅修正run.sh的临时目录名称为：
+
+~~~text
+/dev/shm/mizar_s1_gbs256_ced_small_text_epoch1_<token>
+~~~
+
+保留原路径/软链接/所有权保护及全部训练设置。新增回归检查实际Bash路径→原validate_stage_root/cleanup，
+重现旧名称失败，覆盖新名称通过、两路线隔离及错误路径/软链接/所有权拒绝。
+同步修复后重新执行本页正式提交命令，默认生成新时间戳输出目录；本次staging失败尚未进入训练，无需resume。
+
 本路线完整复制自 `mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small`，
 对应原入口 `run_mizar_s1_gbs256_recursive_5_10_5_ced_small_5090.sh`。
 本地 Windows 维护核心代码，经 GitHub 同步；权重、数据及训练全部在远程 Linux。
@@ -103,7 +117,7 @@ formal/training_report.json
 ```
 
 log位于远程 `code/RSmol/log/mizar_s1_ced_small_text_epoch1_5090.<timestamp>.JOB.log`。
-index cache为新输出根下的 `index_cache/`；tmpfs为 `/dev/shm/mizar_s1_ced_small_text_epoch1_<token>`。
+index cache为新输出根下的 `index_cache/`；tmpfs为 `/dev/shm/mizar_s1_gbs256_ced_small_text_epoch1_<token>`。
 源码不保存模型、数据或训练产物。
 
 ## 同一音频run的完整恢复
@@ -131,7 +145,7 @@ python -B tests/validate_mizar_s1_ced_text_epoch1.py
 ```
 
 报告为 `audit_reports/mizar_s1_ced_text_epoch1_validation.json`。
-45项本地检查通过，3项真实CPU tensor检查因缺Torch等依赖跳过。
+49项本地检查通过，3项真实CPU tensor检查因缺Torch等依赖跳过。
 检查包括35份母本SHA、全部未调整文件逐字节相等、完整semantic recipe、17314个LR位置、
 原GradNorm策略、实际初始化/恢复分支、严格LM加载、tokenizer、共享读取/后台复制/异常清理、
 Bash模拟正式提交资源和参数，以及原更新/数据/音频代码继承。
@@ -146,12 +160,12 @@ python -B tests/validate_mizar_s1_ced_text_epoch1.py --require-tensors
 可选CPU tensor用例保留原mapper/LM反传、30次执行和完整checkpoint往返恢复检查。
 本地结果不代表远程epoch1权重已经加载或真实八卡训练/恢复已经通过；未读取远程生产资产或提交真实作业。
 
-本地仅提交本次交付文件：
+本地提交两条路线的本次修复及回归检查：
 
 ```text
-git add -- RM.md code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1 code/RSmol/run_mizar_s1_ced_small_text_epoch1_5090.sh "tests/*mizar_s1_ced_text_epoch1*.py" audit_reports/mizar_s1_ced_text_epoch1_validation.json
+git add -- RM.md code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1 code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8 "tests/*mizar_s1_ced_text_epoch1*.py" audit_reports/mizar_s1_ced_text_epoch1_validation.json audit_reports/mizar_s1_ced_text_epoch1_loop_lora_validation.json
 git diff --cached --stat
-git commit -m "Add isolated CED audio training from Mizar text epoch1"
+git commit -m "Fix staging paths for both Mizar text epoch1 audio routes"
 git push
 ```
 

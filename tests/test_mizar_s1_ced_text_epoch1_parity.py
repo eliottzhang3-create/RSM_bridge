@@ -136,7 +136,7 @@ class NonMeshCEDParityTests(unittest.TestCase):
         self.assertIn("mizar_s1_ced_small_text_epoch1_gbs256_5090/index_cache", launcher)
         self.assertNotIn("/stage4_5_10x2_5_mesh/", launcher)
         runner = (ROUTE / "run.sh").read_text(encoding="utf-8")
-        self.assertIn('/dev/shm/mizar_s1_ced_small_text_epoch1_${STAGE_TOKEN}', runner)
+        self.assertIn('/dev/shm/mizar_s1_gbs256_ced_small_text_epoch1_${STAGE_TOKEN}', runner)
         self.assertIn('conda activate mellow_c8204d8', runner)
         self.assertNotIn('smoke', launcher)
 

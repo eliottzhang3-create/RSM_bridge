@@ -14,12 +14,14 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
 ROUTE=ROOT/'code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8'
-SUITES=('identity','route','behavior','shared_start','tensor')
+SUITES=('identity','route','behavior','shared_start','tensor','staging_roots')
 
 
 def run_suite(name, result_path):
     sys.path.insert(0,str(ROOT/'tests'))
-    suite=unittest.defaultTestLoader.discover(str(ROOT/'tests'),pattern=f'test_mizar_s1_ced_text_epoch1_loop_lora_{name}.py')
+    pattern = ('test_mizar_s1_ced_text_epoch1_staging_roots.py' if name == 'staging_roots'
+               else f'test_mizar_s1_ced_text_epoch1_loop_lora_{name}.py')
+    suite=unittest.defaultTestLoader.discover(str(ROOT/'tests'),pattern=pattern)
     result=unittest.TextTestRunner(verbosity=1).run(suite)
     record={'run':result.testsRun,'passed':result.testsRun-len(result.skipped)-len(result.failures)-len(result.errors),
             'success':result.wasSuccessful(),
@@ -45,6 +47,7 @@ def main():
     files=[p for p in ROUTE.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
     files+=[ROOT/'code/RSmol/run_mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_5090.sh']
     files+=list((ROOT/'tests').glob('*mizar_s1_ced_text_epoch1_loop_lora*.py'))
+    files+=[ROOT/'tests/test_mizar_s1_ced_text_epoch1_staging_roots.py']
     for path in files:
         if path.suffix=='.py':
             compile(ast.parse(path.read_text(encoding='utf-8')),str(path),'exec')

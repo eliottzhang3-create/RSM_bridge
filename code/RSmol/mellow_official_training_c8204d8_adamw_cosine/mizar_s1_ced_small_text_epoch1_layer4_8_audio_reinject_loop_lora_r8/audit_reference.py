@@ -79,7 +79,7 @@ def audit():
     require_equal(text(ROOT / "contract.py"), expected, "contract identity changes only")
     expected = text(PARENT / "run.sh").replace(PARENT_ENTRY, ENTRY).replace(
         "/dev/shm/mizar_s1_gbs256_recursive_5_10_5_ced_small_layer4_8_inject_audio_reinject_loop_lora_r8_",
-        "/dev/shm/mizar_s1_ced_text_e1_in48_loop_lora_r8_")
+        "/dev/shm/mizar_s1_gbs256_ced_text_e1_in48_loop_lora_r8_")
     require_equal(text(ROOT / "run.sh"), expected, "runtime help and tmpfs only")
     require_equal(text(ROOT / ".gitignore"), text(PARENT / ".gitignore") + "!source_guard.json\n",
                   "Git includes the source guard")

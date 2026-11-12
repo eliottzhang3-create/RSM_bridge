@@ -1,7 +1,7 @@
 {
   "status": "PASS",
   "scope": "local exact source/recipe audit; no production assets or GPU",
-  "route_code_sha256": "639c178b5d099beca0c089ddb579eb99f98a9acd07f6af386b280438af7606a7",
+  "route_code_sha256": "daec8ec2ce63b77f59cb887a65086a24808df9e1610618f187342df0f67ad8ad",
   "protected_originals": {
     "files": 35,
     "all_unchanged": true

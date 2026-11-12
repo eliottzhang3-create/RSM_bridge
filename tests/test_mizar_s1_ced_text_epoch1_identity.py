@@ -86,7 +86,7 @@ class Epoch1AudioIdentityTests(unittest.TestCase):
             'run_mizar_s1_gbs256_recursive_5_10_5_ced_small_5090.sh',
             'run_mizar_s1_ced_small_text_epoch1_5090.sh').replace(
             '/dev/shm/mizar_s1_gbs256_recursive_5_10_5_ced_small_',
-            '/dev/shm/mizar_s1_ced_small_text_epoch1_')
+            '/dev/shm/mizar_s1_gbs256_ced_small_text_epoch1_')
         self.assertEqual(expected, (ROUTE / 'run.sh').read_text(encoding='utf-8'))
 
     def test_launcher_diff_changes_only_init_and_isolation_names(self):

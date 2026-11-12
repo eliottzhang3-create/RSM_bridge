@@ -51,7 +51,7 @@ run_one() {
     return 2
   fi
   STAGE_TOKEN="${run_mode}_${RUN_ID}"
-  STAGE_ROOT="/dev/shm/mizar_s1_ced_text_e1_in48_loop_lora_r8_${STAGE_TOKEN}"
+  STAGE_ROOT="/dev/shm/mizar_s1_gbs256_ced_text_e1_in48_loop_lora_r8_${STAGE_TOKEN}"
   local stage_args=(--manifest "$MANIFEST" --resolved-paths "$RESOLVED_PATHS" --prepared-index "$PREPARED_INDEX" \
     --stage-root "$STAGE_ROOT" --token "$STAGE_TOKEN" --mode "$run_mode" --output "$run_dir/staging_report.json" \
     --background --workers "$STAGE_WORKERS")

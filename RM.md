@@ -1,3 +1,41 @@
+## 2026-11-12：修复普通文本 epoch1 两条音频路线的 tmpfs staging 前缀
+
+用户提供普通CED及CED4→8串行音频注入/双LoRA两条正式作业的启动日志。
+直接原因：复制隔离时run.sh改为mizar_s1_ced_*临时目录名，而未修改的stage_data.py
+只允许/dev/shm直属、非软链接、解析路径不变且名称以mizar_s1_gbs256_开头的目录。
+producer在创建目录/发布TRAINING_READY前退出，随后wait_for_start与EXIT清理连锁报错；
+日志未进入torchrun，重新提交为全新音频训练，不使用resume。
+
+仅修正以下两条运行脚本的STAGE_ROOT命名：
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1/run.sh：
+/dev/shm/mizar_s1_gbs256_ced_small_text_epoch1_<token>
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8/run.sh：
+/dev/shm/mizar_s1_gbs256_ced_text_e1_in48_loop_lora_r8_<token>
+两路线的后缀及token仍独立。stage_data.py及路径/软链接/所有权保护保持母本原样，
+checkpoint来源、模型、optimizer、GBS、epochs、学习率、音频处理及数据/staging实现均不修改。
+
+新增tests/test_mizar_s1_ced_text_epoch1_staging_roots.py：
+执行真实run.sh中的Bash赋值，将实际输出交给原validate_stage_root及cleanup函数；
+Windows仅POSIX路径文件查询/rmtree使用显式fixture，不创建/删除真实/dev/shm目录。
+修复前重现两条路径在启动/清理校验失败，修复后通过；
+同时验证目录隔离、越界/嵌套/软链接/解析别名拒绝、错误token/root拒绝。
+原先模拟staging进程而漏检目录前缀的覆盖缺口现由该回归覆盖。
+两个validator已接入此四项用例，路径断言与LoRA源码审计同步。
+普通版49项本地通过/3项真实tensor缺依赖跳过；LoRA版44项本地通过/7项真实tensor缺依赖跳过。
+Windows沙箱阻止Bash管道及测试临时目录后，经授权在沙箱外执行同一本地合成验证。
+报告为audit_reports/mizar_s1_ced_text_epoch1_validation.json及mizar_s1_ced_text_epoch1_loop_lora_validation.json。
+两个README同步路径、失败原因及联合Git提交命令，LoRA reference_audit.json已按实际新源码重新生成。
+
+本地修复提交推送后，远程仓库根分别重新提交，自动使用新的时间戳输出目录：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_ced_small_text_epoch1_5090.sh --stage-workers 4
+bash code/RSmol/run_mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_5090.sh --stage-workers 4
+```
+此轮未修改其他隔离路线，未访问远程生产权重/数据、未提交真实GPU作业或代为commit/push。
+仅前置本条，之前RM内容字节完整保留。
+
 ## 2026-11-11：Huginn 文本 epoch1 checkpoint 初始化 CED-Small 音频 S1
 
 按用户确认方案复制隔离原CED-Small音频S1完整路线；正式入口：

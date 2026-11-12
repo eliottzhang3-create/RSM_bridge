@@ -1,5 +1,19 @@
 # Mizar 文本 epoch1 → CED4/8串行音频注入＋两轮独立LoRA
 
+## 2026-11-12 staging启动修复
+
+原隔离tmpfs名称缺少stage_data.py要求的mizar_s1_gbs256_前缀，导致producer启动失败，
+wait_for_start随后报未发布TRAINING_READY，退出清理再次被同一校验拒绝。
+现仅修正run.sh的临时目录名称为：
+
+~~~text
+/dev/shm/mizar_s1_gbs256_ced_text_e1_in48_loop_lora_r8_<token>
+~~~
+
+保留原路径/软链接/所有权保护及全部训练设置。新增回归检查实际Bash路径→原validate_stage_root/cleanup，
+重现旧名称失败，覆盖新名称通过、两路线隔离及错误路径/软链接/所有权拒绝。
+同步修复后重新执行本页正式提交命令，默认生成新时间戳输出目录；本次staging失败尚未进入训练，无需resume。
+
 本目录完整复制隔离自
 mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer4_8_inject_audio_reinject_loop_lora_r8。
 正式入口为 code/RSmol/run_mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_5090.sh。
@@ -113,7 +127,7 @@ formal/training_report.json
 独立route为ced_small_mizar_s1_fixed20_gbs256_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_v1。
 index cache位于上述输出大目录下的index_cache/；
 log为code/RSmol/log/mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_5090.<timestamp>.JOB.log；
-tmpfs前缀为/dev/shm/mizar_s1_ced_text_e1_in48_loop_lora_r8_。
+tmpfs前缀为/dev/shm/mizar_s1_gbs256_ced_text_e1_in48_loop_lora_r8_。
 
 仅接受本路线同源码/源资产/包版本/数据/配方、原run root内的完整音频checkpoint。
 恢复继续累计到17313updates，保留已经训练的全部LoRA及音频分支。
@@ -140,7 +154,7 @@ python -B tests/validate_mizar_s1_ced_text_epoch1_loop_lora.py
 ~~~
 
 报告audit_reports/mizar_s1_ced_text_epoch1_loop_lora_validation.json：
-40项本地检查通过，7项真实CPU tensor检查因缺Torch/Transformers依赖而跳过。
+44项本地检查通过，7项真实CPU tensor检查因缺Torch/Transformers依赖而跳过。
 覆盖35份参考SHA、完整源码差异白名单、整个semantic recipe、全部17314个LR位置、
 原GradNorm、文本epoch1配置兼容、step0初始化不读文本训练状态、跨路线恢复拒绝、
 严格加载后才注册分支、非零分轮LoRA及scale2、post-input门控、梯度审计、
@@ -159,17 +173,16 @@ python -B tests/validate_mizar_s1_ced_text_epoch1_loop_lora.py --require-tensors
 严格文本加载及复制模型初值一致性。CPU collective/scaler为明确fixture，
 本地报告不代表远程真实权重加载、GPU训练或八rank恢复已通过。
 
-本地仅暂存本次新路线，避免包含工作区其他未提交实现：
+本地同步提交两条路线的本次修复和共用路径回归检查：
 
 ~~~powershell
 cd C:\Xlance\GZ_bridge\Recursive_SALM\RSM_bridge
-git add -- code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8 code/RSmol/run_mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_5090.sh "tests/*mizar_s1_ced_text_epoch1_loop_lora*.py" audit_reports/mizar_s1_ced_text_epoch1_loop_lora_validation.json
+git add -- RM.md code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1 code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8 "tests/*mizar_s1_ced_text_epoch1*.py" audit_reports/mizar_s1_ced_text_epoch1_validation.json audit_reports/mizar_s1_ced_text_epoch1_loop_lora_validation.json
 git diff --cached --stat
-git commit -m "Add epoch1 initialized CED audio training with loop LoRA"
+git commit -m "Fix staging paths for both Mizar text epoch1 audio routes"
 git push
 ~~~
 
-RM.md已前置本次记录，并保留之前的全部字节；它已有其他未提交记录，
-如需随本次提交，可在commit前执行git add -p -- RM.md并仅选择本次记录。
+RM.md已前置本次修复记录，并保留之前的全部字节。
 本次未自动执行git commit/push或真实vc提交。
 
