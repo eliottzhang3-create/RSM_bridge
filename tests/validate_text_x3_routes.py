@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -32,8 +33,11 @@ def main():
         sources += [ROOT/f'code/RSmol/{name}' for name in (f'run_stage4_{route}_3090.sh',f'run_stage4_{route}_formal_3090.sh')]
         sources += [ROOT/f'code/RSmol/scripts/{name}' for name in (f'convert_stepwise_{route}.sh',f'train_stage4_{route}_ddp.sh')]
     sources += list((ROOT/'tests').glob('*text_x3*.py'))
+    sources += [ROOT/'code/RSmol/text_5_10x3_5_mesh_6slot/router_transfer.py',
+                ROOT/'code/RSmol/text_5_10x3_5_mesh_6slot/router_transfer_source_guard.json']
+    sources=sorted(set(sources))
     for path in sources:
-        if path.suffix=='.py': compile(path.read_text(encoding='utf-8'),str(path),'exec')
+        if path.suffix=='.py': compile(ast.parse(path.read_text(encoding='utf-8'),feature_version=(3,10)),str(path),'exec')
         if path.suffix=='.sh':
             if b'\r' in path.read_bytes(): raise RuntimeError(f'Bash requires LF: {path}')
             subprocess.run([bash,'-n',str(path)],check=True,capture_output=True)
@@ -48,6 +52,7 @@ def main():
         skipped=[{'test':test.id(),'reason':reason} for test,reason in result.skipped],
         errors=[{'test':test.id(),'traceback':message} for test,message in result.errors+result.failures],
         production_assets_read=False,remote_conversion_verified=False,gpu_training_verified=False,eight_rank_resume_verified=False,
+        python_syntax_target='3.10',
         source_sha256={path.relative_to(ROOT).as_posix():hashlib.sha256(path.read_bytes()).hexdigest() for path in sources})
     args.output.parent.mkdir(exist_ok=True,parents=True)
     args.output.write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8',newline='\n')

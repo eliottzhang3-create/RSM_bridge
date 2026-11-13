@@ -23,6 +23,13 @@ from mizar_text_5_10x2_5_huginn.contract import (
 ROUTE = "ced_small_mizar_s1_fixed20_gbs256_huginn_text_epoch1_v1"
 TEXT_MODEL_CONTRACT = ARCHITECTURE
 TEXT_MODEL_ARCHITECTURE = TEXT_MODEL_CONTRACT
+BOUNDARY_NORM_CONTRACT = {
+    "type": "LlamaRMSNorm", "input": "after_shared_adapter_before_core",
+    "output": "after_core_before_next_adapter_or_coda",
+    "shared_across_loops": True, "separate_input_output": True,
+    "hidden_size": 576, "new_parameters": 1152, "initial_weight": 1.0,
+    "epsilon": "text_config.rms_norm_eps", "bias": False,
+}
 TEXT_MODEL_SOURCE_MAPPING = (
     0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23,
     25, 26, 27, 28, 29,
@@ -312,6 +319,9 @@ def validate_recursive_config_values(config):
 def validate_text_initialization(checkpoint):
     """Inspect JSON only; never deserialize the text optimizer/RNG state."""
     info = inspect_initialization(checkpoint, resume=False)
+    config = json.loads((Path(checkpoint) / "config.json").read_text(encoding="utf-8"))
+    if config.get("huginn_audio_boundary_norms") is not None:
+        raise ValueError("Initialize from the original Huginn text checkpoint, before audio boundary norms")
     if info["source_training_step"] != 9244:
         raise ValueError("Audio initialization requires a complete trained Huginn step-009244 checkpoint")
     return {"mode": "weights_only_new_audio_run", "source_training_step": 9244,
@@ -362,6 +372,7 @@ def recursive_checkpoint_contract(checkpoint):
         "checkpoint": str(checkpoint),
         "initialization": initialization,
         "huginn": dict(HUGINN_FIELDS),
+        "audio_boundary_normalization": dict(BOUNDARY_NORM_CONTRACT),
         "config": {
             "model_type": config.get("model_type"),
             "model_architecture_contract": TEXT_MODEL_ARCHITECTURE,
@@ -504,6 +515,7 @@ def semantic_contract(prepared, text_model_dir, ced_model_dir):
         "recursive_model_source_sha256": recursive_model_source_sha256(),
         "recursive_model_sources": recursive_model_source_files(),
         "huginn": dict(HUGINN_FIELDS),
+        "audio_boundary_normalization": dict(BOUNDARY_NORM_CONTRACT),
         "rows_canonical_sha256": prepared["rows_canonical_sha256"],
         "mapping_sha256": prepared["mapping_sha256"],
         "source_rows": prepared["source_rows"], "geometry": geometry(prepared["rows"]),

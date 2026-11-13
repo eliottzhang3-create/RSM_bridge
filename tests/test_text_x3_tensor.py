@@ -50,6 +50,29 @@ class RealTensorChecks(unittest.TestCase):
         target.tie_weights()
         return target
 
+    def donor(self, root):
+        """Synthetic real x2 model with identifiable routers and deliberately different LM."""
+        from text_x3_router_transfer_support import donor_metadata
+        path=Path(root)/'router_donor/checkpoint-009244'
+        if path.exists(): return path
+        old=load_file('x3_router_source_converter',BASE/'scripts/convert_stepwise_5_10x2_5_mesh_6slot.py')
+        source=self.source()
+        cfg=old._target_config(source.config,{'kind':'original_smolLM2_30_layer'},Path('/synthetic'))
+        model=old.RecursiveLlamaForCausalLM(cfg).float()
+        with self.torch.no_grad():
+            model.model.embed_tokens.weight.add_(.75)
+            for i,router in enumerate([*model.model.write_routers,*model.model.read_routers]):
+                values=self.torch.arange(router.weight.numel()).reshape_as(router.weight)/router.weight.numel()
+                router.weight.copy_(values*.04+i*.001)
+                router.bias.copy_(self.torch.arange(6)*.01-.025+i*.002)
+        model.save_pretrained(path,safe_serialization=True)
+        donor_metadata(path,16)
+        return path
+
+    def conversion_args(self, root, source, output):
+        return types.SimpleNamespace(source_checkpoint=source,output_dir=output,seed=0,threads=2,
+                                     router_checkpoint=self.donor(root))
+
     def test_full_cpu_converters_both_routes_save_reload_and_reject_existing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); source=root/'source'
@@ -58,7 +81,7 @@ class RealTensorChecks(unittest.TestCase):
             targets=[]
             for route in ROUTES:
                 converter,trainer=self.mods[route]
-                args=types.SimpleNamespace(source_checkpoint=source,output_dir=root/route,seed=0,threads=2)
+                args=self.conversion_args(root,source,root/route)
                 metadata=converter.convert(args)
                 for key in ('inherited_weights_exact','save_reload_tensors_exact','save_reload_logits_exact','tokenizer_roundtrip_exact'):
                     self.assertTrue(metadata[key],key)
@@ -68,6 +91,9 @@ class RealTensorChecks(unittest.TestCase):
                 trainer._validate_loading_info(info)
                 trainer._validate_model_audit(converter.parameter_audit(restored))
                 self.assertEqual(restored.lm_head.weight.data_ptr(),restored.model.embed_tokens.weight.data_ptr())
+                if 'mesh' in route:
+                    from text_5_10x3_5_mesh_6slot.router_transfer import validate_materialized_routers
+                    validate_materialized_routers(restored,metadata['router_initialization'])
                 for i,j in enumerate(SOURCE_MAPPING):
                     for name,value in restored.model.layers[i].state_dict().items():
                         self.assertTrue(self.torch.equal(value,original.model.layers[j].state_dict()[name]))
@@ -92,7 +118,7 @@ class RealTensorChecks(unittest.TestCase):
             (src/'recursive_conversion_metadata.json').write_text(json.dumps({'conversion':'SmolLM2-5-10-5','status':'ok'}))
             for route in ROUTES:
                 c,_=self.mods[route]
-                report=c.convert(types.SimpleNamespace(source_checkpoint=src,output_dir=root/route,seed=0,threads=2))
+                report=c.convert(self.conversion_args(root,src,root/route))
                 self.assertEqual(report['source_kind'],'conversion_only_5_10_5')
 
     def test_real_cpu_training_control_flow_both_routes(self):
@@ -103,7 +129,7 @@ class RealTensorChecks(unittest.TestCase):
             for route in ROUTES:
                 converter,trainer=self.mods[route]
                 model_dir=root/(route+'_model')
-                converter.convert(types.SimpleNamespace(source_checkpoint=source,output_dir=model_dir,seed=0,threads=2))
+                converter.convert(self.conversion_args(root,source,model_dir))
                 config=trainer.Stage4Config(gate='A',model_path=model_dir,output_dir=root/(route+'_run'),world_size=1,micro_batch_size=2,gradient_accumulation_steps=2,context_length=8,max_optimizer_steps=2,scheduler_total_steps=10,warmup_steps=1)
                 report=trainer.run_training(config)
                 self.assertEqual(report['status'],'PASS',report.get('hard_failures'))
@@ -111,6 +137,29 @@ class RealTensorChecks(unittest.TestCase):
                 self.assertEqual(report['precision_policy']['parameter_dtype'],'float32')
                 self.assertTrue((Path(report['final_checkpoint'])/'checkpoint_complete.json').is_file())
                 self.assertEqual(report['router_module_count'],8 if 'mesh' in route else 0)
+
+    def test_transferred_routers_remain_exact_fp32_with_bf16_backbone_and_independent_after_reload(self):
+        torch=self.torch; converter,trainer=self.mods[ROUTES[1]]
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); source=root/'source_bf16'; original=self.source().bfloat16()
+            original.save_pretrained(source,safe_serialization=True); self.tokenizer.save_pretrained(source)
+            args=self.conversion_args(root,source,root/'converted')
+            report=converter.convert(args)
+            trained=load_file('x3_router_donor_model',BASE/'recursive_model_5_10x2_5_mesh_6slot.py').RecursiveLlamaForCausalLM.from_pretrained(args.router_checkpoint,local_files_only=True,torch_dtype=torch.float32)
+            model=converter.RecursiveLlamaForCausalLM.from_pretrained(args.output_dir,local_files_only=True,torch_dtype=torch.float32)
+            trainer._validate_fresh_model(args.output_dir)
+            for name,parameter in model.named_parameters(): self.assertEqual(parameter.dtype,torch.float32,name)
+            for target,old in report['router_initialization']['tensor_mapping'].items():
+                torch.testing.assert_close(model.get_parameter(target),trained.get_parameter(old),rtol=0,atol=0)
+            for i,j in enumerate(SOURCE_MAPPING):
+                for name,value in model.model.layers[i].state_dict().items():
+                    torch.testing.assert_close(value,original.model.layers[j].state_dict()[name].float(),rtol=0,atol=0)
+            torch.testing.assert_close(model.model.embed_tokens.weight,original.model.embed_tokens.weight.float(),rtol=0,atol=0)
+            ids=torch.tensor([[3,4,5,6]])
+            model.train(); model(input_ids=ids,labels=ids,use_cache=False).loss.backward()
+            for name,p in model.named_parameters():
+                self.assertIsNotNone(p.grad,name); self.assertTrue(torch.isfinite(p.grad).all(),name)
+            self.assertTrue(torch.isfinite(torch.nn.utils.clip_grad_norm_(model.parameters(),1.)))
 
     def test_pure_middle_gradients_sum_three_uses(self):
         torch=self.torch

@@ -9,10 +9,39 @@ MeSH 记忆为每次 forward 新建的 `[B,6,L,576]` 激活：槽0放原始输�
 第0组 query/write value 均为 prelude 输出；后三组 query 为各轮中间层输入，write value 为该轮输出。
 每次 `memory += value * write_weights`，然后加权 read 得到下一阶段输入；不做 embedding scale，
 不将记忆存为参数或 checkpoint 状态。router softmax FP32，无额外辅助 loss；坍缩诊断只告警。
-router weight 初始化为 std=`sqrt(2/(6*576))` 的正态后 clamp ±3std，bias0，兼容 meta 加载。
+正式转换时，全部 router weight/bias 由指定双循环六槽 checkpoint 复制，保持 FP32 原值；
+构造器内的随机初值全部被覆盖。主干仍来自干净 SmolLM2，不继承双循环训练后的主干或训练状态。
 
 本地 Windows 编辑核心代码，通过 GitHub 同步；远程 Linux 保存全部资产和执行训练。
 十个母本保持不变，归一化 LF SHA256 见 `source_guard.json`。
+本次 router 迁移额外保护28份模型、纯三循环、双循环来源及提交源码，见 `router_transfer_source_guard.json`。
+
+## 双循环已训练 router 初始化
+
+默认 router checkpoint：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh_6slot/formal_1epoch_fp32_20261031_124955519529617/checkpoint-009244
+```
+
+| 三循环位置 | write 来源 | read 来源 |
+| --- | --- | --- |
+| prelude 后、循环1前 | 旧 w_pre | 旧 r_pre |
+| 循环1后、循环2前 | 旧 w0 | 旧 r_pre |
+| 循环2后、循环3前 | 旧 w0 | 旧 r0 |
+| 循环3后、suffix 前 | 旧 w1 | 旧 r1 |
+
+write 的 ModuleList 来源索引为 `[0,1,1,2]`，read 为 `[0,0,1,2]`。
+即按执行顺序 `w_pre,r_pre,w0,r_pre,w0,r0,w1,r1`；weight 与 bias 一起复制。
+重复来源也复制成独立参数，后续分别全量训练，不绑定或冻结；六槽记忆仍为每次 forward 新建的激活。
+
+转换校验 donor 的 x2/六槽/三组身份、FP32训练合同、最终9244步和完整 manifest/complete 标记，
+只从 model safetensors 中取12个 router 张量，不加载其 LM、tokenizer 或 training_state.pt。
+目标8个模块/16张量逐元素一致、存储独立；不允许缺失参数后随机回退。
+`router_transfer.py` 保存精确映射、文件SHA和源/目标张量SHA，`config.json` 和
+`mesh_conversion_metadata.json` 都记录双来源。
+训练入口拒绝旧随机 router 转换产物，并在严格加载后重新核对16个实际 router 的数值摘要和存储。
+训练时不再依赖 donor 目录；完整恢复时不以初始 router 覆盖已经训练的参数。
 
 | 项目 | 六槽三循环 MeSH 路线 |
 | --- | --- |
@@ -33,17 +62,21 @@ router weight 初始化为 std=`sqrt(2/(6*576))` 的正态后 clamp ±3std，bia
 `models/SmolLM2-5-10-5`，已有 20 个物理层直接继承，不二次抽层。
 也可显式选择原始 30 层 `models/SmolLM2`，按固定源层
 `0,1,2,3,4,5,7,9,11,13,15,17,19,21,23,25,26,27,28,29` 映射。
-转换不接受训练 checkpoint 或已有新递归/MeSH 路线；输出目录必须不存在。
+主干来源仍不接受训练 checkpoint 或已有新递归/MeSH 路线；独立的 router 来源允许上述训练 checkpoint。
+输出目录必须不存在；用户已删除旧三循环转换目录后，可直接重新转换。
 
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
 git pull --ff-only
-bash code/RSmol/scripts/convert_stepwise_5_10x3_5_mesh_6slot.sh
-bash code/RSmol/run_stage4_5_10x3_5_mesh_6slot_formal_3090.sh
+bash code/RSmol/scripts/convert_stepwise_5_10x3_5_mesh_6slot.sh &&
+  RSMOL_5_10X3_5_MESH_6SLOT_FORMAL_RESUME_FROM='' bash code/RSmol/run_stage4_5_10x3_5_mesh_6slot_formal_3090.sh
 ```
 
-转换用 CPU、8 线程、离线加载；验证所有继承 tensor、40 次 forward、保存重载的
-tensor/logits 和 tokenizer 一致性后发布目录。已有产物不可覆盖；失败 staging 保留诊断。
+这条默认命令固定使用上面的已训练 routers，文本主干默认仍为 `models/SmolLM2-5-10-5`。
+也可用 `--router-checkpoint PATH` 或 `RSMOL_5_10X3_5_MESH_6SLOT_ROUTER_CHECKPOINT` 显式指定 donor。
+转换用 CPU、8 线程、离线加载，产物以 FP32 保存（BF16主干源升为FP32不改变数值）；
+验证所有主干继承、router迁移、40 次 forward、保存重载的 tensor/logits 和 tokenizer 一致性后发布目录。
+已有产物不可覆盖；失败 staging 保留诊断。
 不读取训练数据。转换成功后不必重复转换，后续可单独执行最后一行提交训练。
 
 需要原始 30 层源时，仅将转换命令替换成：
@@ -59,6 +92,7 @@ RSMOL_5_10X3_5_MESH_6SLOT_SOURCE_CHECKPOINT=/hpc_stor03/sjtu_home/jinwei.zhang/m
 容器激活 `/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3/envs/rsmol` 后调用本路线 `torchrun`。
 GPU 训练必须走此提交器；不在登录节点运行训练 Python 或 torchrun。
 不自动运行数据审计、Gate B 或 smoke。正式入口清空遗留通用 `RESUME_FROM`；恢复使用下节专用变量。
+本次重训不设置 `FORMAL_RESUME_FROM`，使用新的时间戳输出，optimizer/scheduler/RNG/数据游标均从0开始。
 
 ## 训练配方与数据口径
 
@@ -103,8 +137,29 @@ checkpoint 内有 `mesh_checkpoint_metadata.json`、`training_state.pt`、`data_
 
 ## 验证与代码提交
 
-统一验证命令为 `python -B tests/validate_text_x3_routes.py`，远程 CPU 张量验证加 `--require-tensors`。
-两条路线共用的完整验证命令和精确 Git add/commit/push 命令见
-[纯三循环文档的验证与代码提交](../text_5_10x3_5/README.md#验证与代码提交)。
-本地缺少 Torch/Transformers 时只报告本地合同、游标和 Bash 测试通过，真实 tensor 测试跳过；
-未访问远程权重/数据、未代为提交作业，不代表八卡 GPU 训练或恢复已验证。
+本地合成回归：
+
+```powershell
+python -B tests/validate_text_x3_routes.py --output audit_reports/text_x3_mesh6_router_transfer_validation.json
+```
+
+已有 Torch/Transformers/safetensors/tokenizers 的环境可手动加 `--require-tensors`。
+覆盖原两条路线与新映射、仅加载router、独立存储、错误来源/缺失/非有限/错误dtype拒绝、
+训练初始化合同、原数据/损失/梯度更新/优化器/调度/恢复、28份源码保护及真实Bash参数传递。
+真实CPU模型另验证转换、保存重载、BF16主干搭配FP32 router无损、前后向有限以及恢复后的下一步一致。
+缺依赖时明确跳过；不读生产资产、不用CUDA、不调用真实vc，不作为正式训练前置。
+这次改动提供新的初始化方式，不能单凭本地回归宣称远端首步非有限梯度问题已解决。
+
+本地仅提交本次文件，保留工作区其他路线的改动：
+
+```powershell
+cd C:\Xlance\GZ_bridge\Recursive_SALM\RSM_bridge
+git add -- RM.md code/RSmol/scripts/convert_stepwise_5_10x3_5_mesh_6slot.py code/RSmol/scripts/convert_stepwise_5_10x3_5_mesh_6slot.sh code/RSmol/scripts/train_stage4_5_10x3_5_mesh_6slot_ddp.py code/RSmol/text_5_10x3_5_mesh_6slot/README.md code/RSmol/text_5_10x3_5_mesh_6slot/router_transfer.py tests/test_text_x3_mesh_shell.py tests/test_text_x3_routes.py tests/test_text_x3_tensor.py tests/test_text_x3_router_transfer.py tests/text_x3_router_transfer_support.py tests/validate_text_x3_routes.py
+git add -f -- code/RSmol/text_5_10x3_5_mesh_6slot/router_transfer_source_guard.json audit_reports/text_x3_mesh6_router_transfer_validation.json
+git -c core.whitespace=cr-at-eol diff --cached --check
+git diff --cached --stat
+git commit -m "Initialize six-slot x3 routers from trained x2 checkpoint"
+git push origin main
+```
+
+尚未代为commit/push、转换生产权重或提交真实GPU作业。

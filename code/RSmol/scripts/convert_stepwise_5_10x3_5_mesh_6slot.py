@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CPU-only clean initialization for the isolated 5_10x3_5_mesh_6slot text route."""
+"""CPU-only clean SmolLM2 backbone plus trained x2 six-slot router initialization."""
 
 from __future__ import annotations
 
@@ -30,6 +30,11 @@ from recursive_model_5_10x3_5_mesh_6slot import (  # noqa: E402
     RecursiveLlamaForCausalLM,
     parameter_audit,
 )
+from text_5_10x3_5_mesh_6slot.router_transfer import (  # noqa: E402
+    DEFAULT_ROUTER_CHECKPOINT, ROUTER_INIT_CONTRACT, router_tensor_mapping,
+    tensor_sha256, validate_materialized_routers, validate_router_checkpoint,
+    validate_router_tensors,
+)
 
 FORBIDDEN_CHECKOUT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM")
 LOCAL_CHECKOUT = SCRIPT_ROOT.parents[1]
@@ -58,6 +63,8 @@ def reject_forbidden_output(path: Path) -> Path:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-checkpoint", type=Path, default=DEFAULT_SOURCE_DIR)
+    parser.add_argument("--router-checkpoint", type=Path, default=DEFAULT_ROUTER_CHECKPOINT,
+                        help="trained x2 six-slot donor; only router weights/biases are loaded")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--threads", type=int, default=8)
@@ -166,6 +173,40 @@ def _load_weights(source: Path) -> dict[str, Any]:
     return state
 
 
+def _load_router_weights(source: Path, identity: dict[str, Any]) -> dict[str, Any]:
+    """Materialize only the twelve routers, never donor LM tensors or training state."""
+    from safetensors import safe_open
+    expected = set(router_tensor_mapping().values())
+    tensors: dict[str, Any] = {}
+    for entry in identity["weight_files"]:
+        with safe_open(str(source / entry["name"]), framework="pt", device="cpu") as handle:
+            for name in handle.keys():
+                if ".write_routers." not in name and ".read_routers." not in name:
+                    continue
+                if name not in expected or name in tensors:
+                    raise ValueError(f"unexpected or duplicate router donor key: {name}")
+                tensors[name] = handle.get_tensor(name)
+    validate_router_tensors(tensors, identity["hidden_size"])
+    return tensors
+
+
+def _transfer_routers(model: Any, tensors: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
+    import torch
+    source_hashes = validate_router_tensors(tensors, model.config.hidden_size)
+    mapping = router_tensor_mapping()
+    with torch.no_grad():
+        for target, source in mapping.items():
+            # copy_ preserves eight independent target modules, even for repeated sources.
+            model.get_parameter(target).copy_(tensors[source])
+    record = dict(contract=ROUTER_INIT_CONTRACT, source=identity, tensor_mapping=mapping,
+                  dtype="float32", source_tensor_sha256=source_hashes,
+                  target_tensor_sha256={key: tensor_sha256(model.get_parameter(key)) for key in mapping},
+                  routers_exact=True, independent_target_storage=True,
+                  load_source_lm=False, load_source_training_state=False, random_router_fallback=False)
+    validate_materialized_routers(model, record)
+    return record
+
+
 def _remap_key(key: str, source_kind: str, source_to_target: dict[int, int]) -> str | None:
     prefix = "model.layers."
     if key.startswith(prefix):
@@ -240,7 +281,7 @@ def _target_config(source_config: Any, source_info: dict[str, Any], source: Path
     target.mesh_architecture_contract = MODEL_ARCHITECTURE_CONTRACT
     target.mesh_memory_slots = MEMORY_SLOT_COUNT
     target.mesh_router_count = ROUTER_PARAMETER_COUNT
-    target.mesh_router_init = "truncated_normal_std_sqrt_2_over_6d_clamped_3std_bias_zero"
+    target.mesh_router_init = ROUTER_INIT_CONTRACT
     target.mesh_transition_query = "prefix_output"
     target.mesh_embedding_scale = "disabled"
     target.mesh_memory_persistent = False
@@ -255,10 +296,13 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
     from transformers import AutoConfig
 
     source = _resolved(args.source_checkpoint)
+    router_source = _resolved(getattr(args, "router_checkpoint", DEFAULT_ROUTER_CHECKPOINT))
     output = reject_forbidden_output(args.output_dir)
     info = detect_source(source)
     if output == source or output in source.parents or source in output.parents:
         raise ValueError("source and output must be disjoint")
+    if output == router_source or output in router_source.parents or router_source in output.parents:
+        raise ValueError("router donor and output must be disjoint")
     if output.exists():
         raise FileExistsError(f"output already exists: {output}; choose a new model directory")
     if args.threads <= 0:
@@ -267,13 +311,13 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
     source_config = AutoConfig.from_pretrained(source, local_files_only=True)
     if getattr(source_config, "model_type", None) != "llama":
         raise ValueError("converter currently supports only Llama/SmolLM2 checkpoints")
+    router_identity = validate_router_checkpoint(router_source, source_config.hidden_size)
+    router_tensors = _load_router_weights(router_source, router_identity)
     torch.manual_seed(args.seed)
     state = _load_weights(source)
     target_config = _target_config(source_config, info, source)
-    target_model = RecursiveLlamaForCausalLM(target_config)
-    first_tensor = next((value for value in state.values() if isinstance(value, torch.Tensor) and value.is_floating_point()), None)
-    if first_tensor is not None:
-        target_model.to(dtype=first_tensor.dtype)
+    # Keep trained FP32 router values exact, even when the clean LM source is BF16.
+    target_model = RecursiveLlamaForCausalLM(target_config).float()
     target_state = target_model.state_dict()
     source_to_target = {source_index: target_index for target_index, source_index in enumerate(info["mapping"])}
     remapped: dict[str, Any] = {}
@@ -295,6 +339,9 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
     unequal = [key for key in required_inherited if not torch.equal(inherited_state[key], remapped[key])]
     if unequal:
         raise ValueError(f"inherited weights differ after conversion: {unequal[:8]}")
+    router_initialization = _transfer_routers(target_model, router_tensors, router_identity)
+    target_model.config.mesh_router_initialization = router_initialization
+    target_model.config.torch_dtype = torch.float32
     audit = parameter_audit(target_model)
     target_model.config.conversion_parameter_audit = audit
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -322,6 +369,9 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
         reloaded.eval()
         if any(not torch.equal(value, reloaded.state_dict()[key]) for key, value in target_model.state_dict().items()):
             raise ValueError("saved/reloaded tensors differ")
+        validate_materialized_routers(reloaded, router_initialization)
+        if reloaded.config.mesh_router_initialization != router_initialization:
+            raise ValueError("saved/reloaded router transfer provenance differs")
         with torch.no_grad():
             after = reloaded(input_ids=probe, use_cache=False).logits
         torch.testing.assert_close(before, after, rtol=0, atol=0)
@@ -337,11 +387,13 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
             "logical_layer_count": 40, "physical_layer_count": PHYSICAL_LAYER_COUNT, "prefix_layer_count": 5, "middle_layer_count": 10, "suffix_layer_count": 5, "loops": 3,
             "logical_to_physical": list(LOGICAL_TO_PHYSICAL), "source_layer_indices_0based": list(SOURCE_LAYER_INDICES_0BASED), "mapping_policy": MAPPING_POLICY,
             "memory_slots": MEMORY_SLOT_COUNT, "router_groups": 4, "router_parameter_count": ROUTER_PARAMETER_COUNT, "transition_query": "prefix_output", "embedding_scale": "disabled",
-            "router_init": "truncated_normal_std_sqrt_2_over_6d_clamped_3std_bias_zero", "memory_persistent": False, "architectures": list(target_config.architectures),
+            "router_init": ROUTER_INIT_CONTRACT, "router_initialization": router_initialization,
+            "memory_persistent": False, "architectures": list(target_config.architectures),
             "parameter_audit": audit, "copied_tokenizer_files": copied, "seed": args.seed, "code_commit": git_commit(), "python": sys.version,
             "restored_tied_weight_aliases": restored_tied_weight_aliases,
             "architecture_contract": MODEL_ARCHITECTURE_CONTRACT,
-            "inherited_weights_exact": True, "fresh_router_tensors": sorted(expected_missing),
+            "inherited_weights_exact": True, "fresh_router_tensors": [],
+            "transferred_router_tensors": sorted(expected_missing),
             "platform": platform.platform(), "torch": torch.__version__, "transformers": _package_version("transformers"), "conversion_time_utc": datetime.now(timezone.utc).isoformat(),
         }
         (staging / "mesh_conversion_metadata.json").write_text(json.dumps(_json_safe(metadata), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -1,7 +1,8 @@
 """Isolated Huginn-style Mizar 5-10x2-5 Llama with shared state injection.
 
 E = prelude(embedding); S0 ~ Normal(0, sqrt(2/5)), truncated to +/-3 std.
-S1 = core(adapter(cat([S0, E]))); S2 = core(adapter(cat([S1, E]))).
+Audio training installs two shared RMSNorms after strict text weight loading:
+Si = output_norm(core(input_norm(adapter(cat([Si-1, E]))))).
 Only S2 enters coda/final norm/head. Both recurrences train end to end.
 
 The 5-10-5 model owns twenty physical decoder modules.  Physical modules 0--4
@@ -65,6 +66,7 @@ LOGICAL_TO_PHYSICAL = (
 LOGICAL_TO_PHYSICAL_SCHEDULE = LOGICAL_TO_PHYSICAL
 
 from mizar_text_5_10x2_5_huginn.contract import STATE_STD, validate_huginn_config
+from contract import BOUNDARY_NORM_CONTRACT
 
 
 def make_huginn_adapter(hidden_size: int) -> nn.Linear:
@@ -400,7 +402,33 @@ class MizarHuginnModel(LlamaPreTrainedModel):
         self._supports_output_attentions = "output_attentions" in inspect.signature(
             self.layers[0].forward
         ).parameters
+        if getattr(config, "huginn_audio_boundary_norms", None) is not None:
+            self.enable_recurrent_boundary_norms()
         self.post_init()
+
+    def enable_recurrent_boundary_norms(self) -> None:
+        """Add unit-gain audio norms without touching loaded weights or RNG.
+
+        Text HF loading happens first, with no norm slots and no allowed
+        missing keys. Saved normalized HF configs recreate the slots before
+        loading; full audio checkpoints restore them through state_dict.
+        """
+        from transformers.models.llama.modeling_llama import LlamaRMSNorm
+
+        declared = getattr(self.config, "huginn_audio_boundary_norms", None)
+        if declared is not None and declared != BOUNDARY_NORM_CONTRACT:
+            raise ValueError("Unsupported Huginn audio boundary normalization")
+        present = [hasattr(self, name) for name in ("recurrent_input_norm", "recurrent_output_norm")]
+        if any(present):
+            if not all(present):
+                raise ValueError("Incomplete Huginn audio boundary norms")
+            return
+        weight = self.recurrent_adapter.weight
+        self.recurrent_input_norm = LlamaRMSNorm(self.config.hidden_size, eps=self.config.rms_norm_eps).to(
+            device=weight.device, dtype=weight.dtype)
+        self.recurrent_output_norm = LlamaRMSNorm(self.config.hidden_size, eps=self.config.rms_norm_eps).to(
+            device=weight.device, dtype=weight.dtype)
+        self.config.huginn_audio_boundary_norms = dict(BOUNDARY_NORM_CONTRACT)
 
     def forward(
         self, input_ids: torch.LongTensor | None = None,
@@ -470,6 +498,8 @@ class MizarHuginnModel(LlamaPreTrainedModel):
                 # The same E and same projection are used in both recurrences.
                 # No detach: both paths through E and the full first core train.
                 hidden_states = self.recurrent_adapter(torch.cat([hidden_states, prelude], dim=-1)).to(prelude.dtype)
+            if logical_index in (5, 15) and hasattr(self, "recurrent_input_norm"):
+                hidden_states = self.recurrent_input_norm(hidden_states).to(prelude.dtype)
             layer = self.layers[physical_index]
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -484,6 +514,8 @@ class MizarHuginnModel(LlamaPreTrainedModel):
                 position_embeddings=position_embeddings, output_attentions=output_attentions,
             )
             hidden_states = outputs[0]
+            if logical_index in (14, 24) and hasattr(self, "recurrent_output_norm"):
+                hidden_states = self.recurrent_output_norm(hidden_states).to(prelude.dtype)
             if output_attentions:
                 if len(outputs) < 2 or outputs[1] is None:
                     raise RuntimeError("Decoder did not return attentions")

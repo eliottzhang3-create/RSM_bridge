@@ -11,10 +11,12 @@
 
 ## 模型与初始化
 
-`models/huginn.py` 复制已有 Huginn 文本模型，仅调整其依赖导入路径，避免独立音频目录运行时
-与 Python 标准库 `code` 冲突。计算、参数名称及 checkpoint 格式保持一致。
-显式 `MizarHuginnForCausalLM.from_pretrained` 严格加载全部 LM 权重；
-缺失、额外、形状不匹配或加载错误均拒绝，不使用全局 AutoModel 注册。
+2026-11-13 按用户要求直接更新本音频路线，保留原入口、输出命名和文本来源。
+`models/huginn.py` 在既有文本 Huginn 计算上增加循环边界 RMSNorm；共享文本模型文件保持原样。
+依赖导入仍避免与 Python 标准库 `code` 冲突，不使用全局 AutoModel 注册。
+先显式 `MizarHuginnForCausalLM.from_pretrained` 严格加载原文本 LM（此时没有新Norm槽位）；
+缺失、额外、形状不匹配或加载错误均拒绝。确认完整加载后，才注册两个新增Norm，
+不会以允许missing keys的方式加载，也不改写已继承的参数。
 JSON 检查要求本 Huginn 路线完整训练 step9244、20 物理层/30 次执行、hidden576/vocab49152、
 既定选层及两轮参数共享，检查绑定 embedding/head 和唯一共享投影 A。
 
@@ -22,6 +24,9 @@ JSON 检查要求本 Huginn 路线完整训练 step9244、20 物理层/30 次执
 只读取 HF 权重、配置和 tokenizer，不反序列化文本 `training_state.pt`。
 音频 optimizer/scheduler/GradScaler/GradNormTracker/RNG/采样进度从 step0 重新建立。
 **已训练 A 的参数完整继承，不重新初始化；所有 LM 参数包括 A 继续训练。**
+新增独立 `recurrent_input_norm`、`recurrent_output_norm` 两个 `LlamaRMSNorm(576)`，各自跨两轮共享。
+权重全1、无bias、epsilon沿用文本config的 `rms_norm_eps`，新增1152参数；注册不消耗RNG。
+它们归入LM组，maxLR3e-4、低维参数WD0；原FinalNorm及层内Norm保持。
 
 ```text
 fixed20音频 → 冻结且eval的CED-Small → 原可训练freq_merge_126 mapper
@@ -29,13 +34,16 @@ fixed20音频 → 冻结且eval的CED-Small → 原可训练freq_merge_126 mappe
                X = [audio126, SEP1, prompt256, answer300]
                E = Prelude(X)                      # [B,683,576]
               S0 ~ ±3σ截断高斯，σ=√(2/5)            # 每forward一次
-              S1 = Core(A(cat([S0,E], dim=-1)))
-              S2 = Core(A(cat([S1,E], dim=-1)))
+              S1 = Norm_out(Core(Norm_in(A(cat([S0,E], dim=-1)))))
+              S2 = Norm_out(Core(Norm_in(A(cat([S1,E], dim=-1)))))
           logits = LMHead(FinalNorm(Coda(S2)))
 ```
 
 A 为同一个 `Linear(1152,576,bias=False)`，共663,552参数，两次输入顺序均为 `[state,prelude]`；
 第二轮不重新采样，S0只为临时激活。E和S1不detach，固定两轮完整反传。
+Norm_in位于A后、十层Core前，Norm_out位于每次Core后、下一次A或Coda前；
+归一化作用于全部683个位置的每token hidden维。输入/输出Norm是两个模块，各调用两次。
+全1 gain也会改变原模型的激活尺度；本次从文本checkpoint开始全新的音频训练。
 保留原多模态前缀方式，无额外音频注入、MeSH、LoRA、辅助loss或其他新训练分支。
 CED从 `models/CED_small` 加载，冻结全部参数及BN/eval状态；mapper沿母本构造顺序随机初始化。
 
@@ -66,8 +74,10 @@ A属于完整LM优化器组，使用3e-4和WD.01。音频阶段不沿用文本�
 临时目录为 `/dev/shm/mizar_s1_gbs256_ced_small_huginn_text_epoch1_<token>`，
 兼容原 `stage_data.py` 启动/清理共同要求的 `mizar_s1_gbs256_` 前缀，后缀及token保持路线隔离。
 
-`train.py`、`optim.py`、原decoder、CED、mapper和全部data/index/staging实现逐字节继承。
-改变集中在专用loader/合同、隔离命名和配置说明。35份母本/模型参考文件的LF SHA256见 `source_guard.json`。
+原decoder、CED、mapper和全部data/index/staging实现逐字节继承。
+`train.py` 仅增加Norm配置审计和失败诊断，`optim.py` 保留原范数计算及裁剪策略、增加裁剪前失败检查；
+完整训练AST/优化器策略与原母本的对照由 `audit_reference.py` 验证。
+35份母本/模型参考文件的LF SHA256见 `source_guard.json`，原参考源码均不修改。
 本目录 `.gitignore` 放行 `source_guard.json` 与 `parent_reference_audit.json`，随代码一起同步。
 `parent_reference_audit.json` 是母本历史审计，不能当作本路线生产验证。
 `audit_reference.py` 可选比较此次直接母本，正式训练不调用它。
@@ -117,11 +127,19 @@ CED=/hpc_stor03/sjtu_home/jinwei.zhang/models/CED_small
 <OUTPUT_ROOT>/formal/training_report.json
 ```
 
+异常时额外生成 `formal/gradient_failure_rank<N>_step<XXXXXX>.json`；
+记录unscale后、裁剪前的FP32/FP64范数、逐参数非有限计数、最大20项梯度、rank/步数/loss/LR/scale/样本。
+FP64复核只在异常时运行，不改变正常训练精度或裁剪结果。区分真实非有限梯度、
+FP32范数计算溢出，以及有限范数达到1e6；原紧急阈值、GradScaler及停止策略保持。
+当前代码从文本checkpoint重新提交，不传旧音频 `--resume-checkpoint`，使用默认新时间戳输出目录。
+
 ## 同一路线完整恢复
 
-音频checkpoint保存完整CED/mapper/LM（包括A）、optimizer、scheduler、scaler、tracker、8rank RNG及采样游标。
+音频checkpoint保存完整CED/mapper/LM（包括A和两个新增Norm）、optimizer、scheduler、scaler、tracker、8rank RNG及采样游标。
 源码身份覆盖隔离Huginn模型、共享文本合同及官方源manifest；拒绝旧音频路线或不同源码/资产/数据/配方。
 保留原音频 `1234+rank` 随机流，Huginn噪声和mapper dropout均由它驱动；source probes保护RNG。
+合同新增 `audio_boundary_normalization` 并更新源码哈希，拒绝旧的无边界Norm音频checkpoint；
+以下恢复命令仅适用于本次修改后、含两个Norm且代码/配方一致的完整音频checkpoint。
 
 恢复沿用**原音频run输出根**，不是新建文本epoch；先将变量设为实际已存在的run目录：
 
@@ -140,13 +158,15 @@ python -B tests/validate_mizar_s1_ced_huginn_text_epoch1.py
 ```
 
 报告为 `audit_reports/mizar_s1_ced_huginn_text_epoch1_validation.json`。
-2026-11-12 修复tmpfs前缀后，本地结果：46项通过，7项真实CPU张量用例因缺少Torch等依赖跳过。
+2026-11-13 增加边界Norm及梯度诊断后，本地结果：51项通过，9项真实CPU张量用例因缺少Torch等依赖跳过。
 覆盖35份参考源码SHA、完整音频配方和17314个LR位置、严格加载/step0初始化、跨路线恢复拒绝、
 共享读取/后台复制/集体切换/退出清理、Bash模拟vc资源和参数，以及Git审计清单可提交性。
 新增前缀回归从真实 `run.sh` 执行Bash路径赋值，交给真实 `validate_stage_root`/`cleanup`函数：
 修复前重现启动/清理均拒绝，修复后通过；保留软链接/越界/错误token和root拒绝。
 Windows上仅POSIX文件查询及删除使用fixture，不创建或删除真实 `/dev/shm` 目录。
-旧模拟进程测试未验证目录前缀，现由此回归补齐；模型、checkpoint及训练配方均不变。
+旧模拟进程测试未验证目录前缀，现由此回归补齐。
+新增NumPy执行真实模型循环AST，覆盖全部683位置、两个Norm的前后顺序/共享、归一化状态进入第二轮，
+以及真实安装/加载/异常报告代码的CPU fixture；不将NumPy检查登记为Torch autograd验证。
 缺依赖时真实CPU张量用例明确跳过；它们检查完整多模态梯度、A继承与优化器更新、随机状态恢复等。
 远程mellow_c8204d8中可手动运行 `python -B tests/validate_mizar_s1_ced_huginn_text_epoch1.py --require-tensors`，
 仅用合成CPU模型，不读生产资产，不作为formal前置条件。源码/模拟检查不代表生产训练已验证。
@@ -156,10 +176,10 @@ Windows上仅POSIX文件查询及删除使用fixture，不创建或删除真实 
 
 ```text
 git diff --cached --stat
-git add -- code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1 code/RSmol/run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh tests/test_mizar_s1_ced_huginn_text_epoch1_identity.py tests/test_mizar_s1_ced_huginn_text_epoch1_route.py tests/test_mizar_s1_ced_huginn_text_epoch1_offline_config.py tests/test_mizar_s1_ced_huginn_text_epoch1_shared_start.py tests/test_mizar_s1_ced_huginn_text_epoch1_staging_roots.py tests/test_mizar_s1_ced_huginn_text_epoch1_tensor.py tests/validate_mizar_s1_ced_huginn_text_epoch1.py audit_reports/mizar_s1_ced_huginn_text_epoch1_validation.json
+git add -- code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1 code/RSmol/run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh tests/test_mizar_s1_ced_huginn_text_epoch1_identity.py tests/test_mizar_s1_ced_huginn_text_epoch1_route.py tests/test_mizar_s1_ced_huginn_text_epoch1_normalization.py tests/test_mizar_s1_ced_huginn_text_epoch1_offline_config.py tests/test_mizar_s1_ced_huginn_text_epoch1_shared_start.py tests/test_mizar_s1_ced_huginn_text_epoch1_staging_roots.py tests/test_mizar_s1_ced_huginn_text_epoch1_tensor.py tests/validate_mizar_s1_ced_huginn_text_epoch1.py audit_reports/mizar_s1_ced_huginn_text_epoch1_validation.json
 git add -p -- RM.md
 git diff --cached --stat
-git commit -m "Add isolated Huginn text epoch1 CED audio S1 training"
+git commit -m "Add shared recurrent RMSNorm and gradient diagnostics to Huginn audio"
 git push
 ```
 

@@ -1,7 +1,9 @@
 """Mizar Stage 1 discriminative AdamW and its adaptive GradNormTracker."""
+import math
 import torch
 
 from contract import lr_factor
+from gradient_diagnostics import inspect_gradients
 
 
 def parameter_role(name):
@@ -41,6 +43,7 @@ class GradNormTracker:
         self.initial_norm = (initial_l2_norm, initial_max_norm)
         self.overdrive_factor, self.momentum = overdrive_factor, momentum
         self.running_norm = {}
+        self.last_anomaly = None
 
     def _clip_grad(self, norm, running, scale):
         limit = running * self.overdrive_factor
@@ -63,12 +66,16 @@ class GradNormTracker:
             running_l2, scale = self._clip_grad(l2, running_l2, scale)
             running_max, scale = self._clip_grad(maximum, running_max, scale)
             self.running_norm[name] = (running_l2, running_max)
+        total_norm = torch.linalg.norm(torch.tensor(l2_norms), 2.).item()
+        self.last_anomaly = None
+        if not (math.isfinite(total_norm) and total_norm < 1e6 and math.isfinite(scale) and scale > 0):
+            self.last_anomaly = inspect_gradients(parameters, total_norm, scale)
         if scale < 1.:
             factor = torch.tensor(scale)
             for _, parameter in parameters:
                 if parameter.grad is not None:
                     parameter.grad.detach().mul_(factor.to(parameter.grad.device))
-        return torch.linalg.norm(torch.tensor(l2_norms), 2.).item(), scale
+        return total_norm, scale
 
     def state_dict(self):
         return dict(self.running_norm)

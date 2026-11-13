@@ -32,6 +32,10 @@ from recursive_model_5_10x3_5_mesh_6slot import (  # noqa: E402
     RecursiveLlamaForCausalLM,
     parameter_audit,
 )
+from text_5_10x3_5_mesh_6slot.router_transfer import (  # noqa: E402
+    ROUTER_INIT_CONTRACT, router_tensor_mapping, validate_materialized_routers,
+    validate_transfer_provenance,
+)
 
 TRAINING_CONTRACT = "text_mesh_x3_6slot_bf16_full_epoch_v1"
 PRECISION_CONTRACT = "bf16"
@@ -199,7 +203,7 @@ def _assert_fp32_model(model: torch.nn.Module) -> None:
         raise ValueError(f"BF16 AMP requires all floating parameters to be float32: {invalid[:8]}")
 
 
-def _validate_fresh_model(path: Path) -> None:
+def _validate_fresh_model(path: Path) -> dict[str, Any]:
     if (path / "training_state.pt").exists():
         raise ValueError("fresh training requires the converted six-slot x3 MeSH model; use --resume-from for a training checkpoint")
     metadata_path = path / "mesh_conversion_metadata.json"
@@ -211,9 +215,16 @@ def _validate_fresh_model(path: Path) -> None:
                 "inherited_weights_exact": True, "source_training_markers": [],
                 "save_reload_tensors_exact": True, "save_reload_logits_exact": True,
                 "tokenizer_roundtrip_exact": True, "forward_trace": list(LOGICAL_TO_PHYSICAL)}
-    routers = {f"model.{kind}_routers.{group}.{part}" for kind in ("write", "read") for group in range(4) for part in ("weight", "bias")}
-    if any(metadata.get(key) != value for key, value in expected.items()) or set(metadata.get("fresh_router_tensors", [])) != routers:
-        raise ValueError("fresh training requires a clean six-slot x3 MeSH conversion with sixteen newly initialized router tensors")
+    if (any(metadata.get(key) != value for key, value in expected.items())
+            or metadata.get("fresh_router_tensors") != []
+            or set(metadata.get("transferred_router_tensors", [])) != set(router_tensor_mapping())
+            or metadata.get("router_init") != ROUTER_INIT_CONTRACT):
+        raise ValueError("fresh training requires clean SmolLM2 plus sixteen trained x2 router tensors")
+    provenance = validate_transfer_provenance(metadata.get("router_initialization"))
+    config = json.loads((path / "config.json").read_text(encoding="utf-8"))
+    if config.get("mesh_router_init") != ROUTER_INIT_CONTRACT or config.get("mesh_router_initialization") != provenance:
+        raise ValueError("model config and conversion router provenance disagree")
+    return provenance
 
 
 def _capture_rng_state(device: torch.device) -> dict[str, Any]:
@@ -691,13 +702,16 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         model_path = config.resume_from or config.model_path
         if model_path is None:
             raise ValueError("Stage 4 requires --model-path or --resume-from")
+        router_initialization = None
         if config.resume_from is not None:
             _validate_checkpoint_complete(config.resume_from)
         else:
-            _validate_fresh_model(model_path)
+            router_initialization = _validate_fresh_model(model_path)
         from transformers import AutoTokenizer
         model, loading_info = RecursiveLlamaForCausalLM.from_pretrained(model_path, local_files_only=True, torch_dtype=torch.float32, output_loading_info=True)
         _validate_loading_info(loading_info)
+        if router_initialization is not None:
+            validate_materialized_routers(model, router_initialization)
         if config.gate == "FORMAL" and model.config.hidden_size != 576:
             raise ValueError("FORMAL requires the SmolLM2 hidden_size=576 backbone")
         model_audit = parameter_audit(model)
@@ -716,6 +730,7 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         resume_state = _load_checkpoint_state(config.resume_from) if config.resume_from else None
         optimizer_step = int(resume_state.get("optimizer_step", 0)) if resume_state else 0
         report["initialization"] = {"mode": "full_state_resume" if resume_state is not None else "weights_only_new_training_state", "loaded_model_path": str(model_path), "source_model_path": str(config.model_path), "starting_optimizer_step": optimizer_step, "precision": PRECISION_CONTRACT}
+        report["initialization"]["router_initialization"] = getattr(model.config, "mesh_router_initialization", None)
         if rank == 0:
             print(f"[initialization] {json.dumps(report['initialization'])}", flush=True)
         if resume_state is not None:

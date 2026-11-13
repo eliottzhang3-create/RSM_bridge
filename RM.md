@@ -1,3 +1,116 @@
+## 2026-11-13：六槽三循环MeSH改用指定双循环已训练routers，干净SmolLM2主干重新训练
+
+用户报告run_stage4_5_10x3_5_mesh_6slot_formal_3090.sh首步nonfinite gradient norm，批准更换初始化方案。
+只扩展本路线转换.py/.sh及训练入口的初始化来源校验/实际加载核验/报告；模型结构、MeSH记忆与query、
+三循环执行、数据/损失/梯度归一化/裁剪/优化器/调度/保存恢复计算均保持原样。
+本地Windows维护核心代码、GitHub中转，权重/数据/输出和GPU训练仍在远程Linux。
+
+文本主干/tokenizer仍来自干净SmolLM2，默认models/SmolLM2-5-10-5原始权重抽层产物，也支持原始30层
+models/SmolLM2固定抽层。独立router来源默认固定为：
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x2_5_mesh_6slot/formal_1epoch_fp32_20261031_124955519529617/checkpoint-009244。
+新增--router-checkpoint和RSMOL_5_10X3_5_MESH_6SLOT_ROUTER_CHECKPOINT，与主干来源分开校验。
+源x2仍为六槽/三组/6模块/12参数张量，目标x3为六槽/四组/8模块/16参数张量/27696参数。
+按执行顺序复制为w_pre,r_pre,w0,r_pre,w0,r0,w1,r1；write索引[0,1,1,2]，read索引[0,0,1,2]。
+weight/bias一起copy到独立目标Parameters，重复来源不绑定/冻结，后续全部训练；memory每次forward新建。
+
+新增code/RSmol/text_5_10x3_5_mesh_6slot/router_transfer.py：验证源架构/FP32训练合同、9244步完整
+metadata/manifest/complete文件；只从safetensors materialize所需12个router，不加载源LM/tokenizer或
+training_state.pt。检查形状/dtype/finite/缺失重复额外键；无随机回退。
+转换产物固定FP32，避免BF16主干源导致FP32 router降精度；主干继承逐元素核验、router迁移逐元素与SHA核验、
+目标存储独立、40次执行、保存重载tensor/logits和tokenizer一致后原子发布。config与mesh_conversion_metadata
+记录双来源、文件与router SHA及精确映射；不再声称fresh_router_tensors随机初始化。
+训练fresh校验拒绝旧随机产物，严格from_pretrained后再次核对16个实际router值、FP32、独立存储及可训练性。
+完整resume沿用checkpoint实际参数，不用初始donor覆盖更新后的router；报告保留初始化来源。
+
+本地提交推送后，远程登录节点重新转换并提交新训练（旧三循环转换目录已由用户删除）：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/scripts/convert_stepwise_5_10x3_5_mesh_6slot.sh &&
+  RSMOL_5_10X3_5_MESH_6SLOT_FORMAL_RESUME_FROM='' bash code/RSmol/run_stage4_5_10x3_5_mesh_6slot_formal_3090.sh
+```
+
+转换CPU8线程/离线；产物仍models/SmolLM2-5-10x3-5-mesh-6slot，不覆盖已有目录。
+新时间戳训练输出保持outputs/RSmol/stage4_5_10x3_5_mesh_6slot/formal_1epoch_bf16_<timestamp>/，
+从step0新建optimizer/scheduler/RNG/数据游标；GBS1024=8×micro4×GA32，context1024，1epoch/9244步、
+463warmup、max/minLR8e-4/8e-5，FP32参数/状态、BF16 autocast、FP32 CE、无GradScaler、TF32关闭，
+原pdgpu-3090/8GPU/64CPU/256G/1node及rsmol环境不变；不新增smoke前置。
+完整转换/训练/恢复及精确Git提交命令见code/RSmol/text_5_10x3_5_mesh_6slot/README.md。
+
+python -B tests/validate_text_x3_routes.py --output audit_reports/text_x3_mesh6_router_transfer_validation.json：
+46项中36项本地合成回归通过，10项真实Torch/Transformers/safetensors/tokenizers CPU检查因缺依赖明确跳过，
+报告PASS_LOCAL_WITH_SKIPS。包含10项新增router迁移回归及原两条路线回归：映射与数值、独立存储/别名和冻结
+拒绝、仅获取12个tensor/不读训练状态、错误来源/缺失重复/非有限/dtype拒绝、Python默认与覆盖、
+Bash双来源参数/空格路径和提交几何、实际初始化元数据、原stream/LR/梯度更新/优化器/恢复合同。
+28份母本/模型/纯三循环/双循环/提交源码LF摘要不变，记录router_transfer_source_guard.json；
+Python3.10语法、相关shell及README命令语法通过。Windows沙箱临时目录/Bash限制，经批准沙箱外验证。
+未改动工作区其他Huginn路线已有编辑，Git命令只纳入本次文件；未代为commit/push、读取生产权重或提交GPU作业。
+保留nonfinite gradient norm硬检查；不宣称新router初始化已解决真实首步报错或完成远程训练。
+本条仅前置，全部RM旧字节保留。
+
+## 2026-11-13：原地更新 Huginn 音频训练，增加循环前后共享 RMSNorm 与失败诊断
+
+用户报告音频作业在train.py的nonfinite/emergency gradient norm保护处退出。
+该检查同时涵盖非有限范数、有限范数达到1e6、异常裁剪系数，现有日志不足以证明梯度本身为inf。
+用户明确要求不再复制隔离，直接修改现有Huginn音频实现；本轮保留原入口、route、输出命名与文本来源。
+本地Windows只维护代码，GitHub同步，生产权重/数据及GPU执行均在远程Linux。
+
+原入口仍为code/RSmol/run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh，
+实现/运行/提交/恢复命令见
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_huginn_text_epoch1/README.md。
+默认仍严格从
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_5_10x2_5_huginn_gbs1024/epoch1/checkpoint-step-009244
+开始全新音频训练，不读文本training_state.pt，不使用旧音频checkpoint恢复。
+
+先显式from_pretrained严格加载完整原文本LM含训练后的A，此时不注册新Norm槽位，
+missing/unexpected/mismatched/error仍全部拒绝；校验后新增两个LlamaRMSNorm(576)，再校验新模块。
+recurrent_input_norm位于每次共享A后、Core十层前；recurrent_output_norm位于每次Core后、下一次A或Coda前。
+两个Norm相互独立且各自在两轮共享，沿hidden维作用于全部683位置，weight全1、无bias、
+epsilon沿用文本rms_norm_eps，新增1152参数。注册不消耗RNG、不改变已加载基础LM/A/绑定embedding/head；
+新增Norm使用LM maxLR3e-4及低维WD0，全部LM/A/新Norm均全量训练。
+E=Prelude(X)，S0仍每forward一次±3σ截断高斯/σ√(2/5)，
+Si=Norm_out(Core(Norm_in(A(cat([Si-1,E])))))，i=1,2；S2直接进入原Coda/FinalNorm/head。
+20物理层/30执行、同一A两次、相同E、不detach完整反传均保持。
+全1Norm并非恒等映射，音频阶段从文本权重适配新增归一化；原共享文本模型及转换/训练路线不改。
+
+contract/runtime/config_audit登记audio_boundary_normalization；完整音频state_dict保存新Norm，
+HF normalized config也支持重建槽位。源码/合同哈希改变，严格拒绝旧的无边界Norm音频checkpoint完整恢复；
+README恢复命令只适用于本次修改后、相同源码/资产/数据/配方的完整音频checkpoint。
+
+新增gradient_diagnostics.py及失败前诊断，不改变原GradNormTracker算术/裁剪结果/1e6阈值或GradScaler。
+正常步不做FP64扫描；异常时在unscale后、裁剪前检查逐参数有限性/FP64 L2/最大值，
+保留前20项及非有限参数清单，写formal/gradient_failure_rank<N>_step<XXXXXX>.json，
+记录rank/待更新步/已完成步/loss/LR/scaler/样本，区分真实非有限梯度、FP32范数溢出及有限超阈值。
+首次梯度审计失败也落诊断；仍在optimizer更新前集体退出。JSON用字符串表示inf/nan，不输出非标准数值。
+
+原CED/mapper/decoder及全部data/index/staging逐字节不变。原train.py完整AST去除新增审计/诊断后
+与母本一致；optim.py去除失败诊断后保持原算术、裁剪状态更新和优化器分组；
+音频Huginn去除三个Norm挂载/边界扩展后与原共享文本模型AST一致，audit_reference.py验证以上受限差异。
+35份原始参考源码SHA继续通过。保持此前修好的mizar_s1_gbs256_临时目录前缀。
+全部原音频配方不改：hybrid1477492行/fixed20/冻结eval CED/新mapper/683位置，
+answer-only rank-local token mean→GA4→DDP均值，8×micro8×GA4=GBS256，3epochs/17313步/866warmup，
+LM3e-4/mapper6e-4、AdamW(.9,.999)/eps1e-8/WD.01、LambdaLR floor.1、GradNormTracker、
+FP32无autocast/TF32、保留GradScaler、seed1234及rank1234+rank；原资源/环境/共享音频后台复制均保持。
+
+本地提交推送后，远程登录节点执行：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_ced_small_huginn_text_epoch1_5090.sh --stage-workers 4
+```
+使用默认新时间戳输出，不传旧音频--resume-checkpoint，原CED资产及CPU index准备后直接formal。
+
+python -B tests/validate_mizar_s1_ced_huginn_text_epoch1.py：51项本地通过、9项真实CPU tensor缺依赖跳过；
+报告audit_reports/mizar_s1_ced_huginn_text_epoch1_validation.json。
+新增NumPy执行真实模型循环AST/全部683位置/两轮Norm顺序/归一化状态回注，
+真实安装/严格加载顺序/新旧恢复身份/诊断写盘CPU fixture，以及真实GradNormTracker受控数值对照。
+可选Torch用例补齐新Norm反传及LR/WD/更新、完整checkpoint下一随机步往返、
+HF原文本全部tensor继承与训练A保留/缺A拒绝、Norm注册RNG不变/幂等、normalized HF保存重载。
+NumPy/fixture不代表Torch autograd验证；Windows沙箱临时目录及Bash限制下经授权沙箱外执行同一检查。
+未代为commit/push、访问远程资产或提交真实GPU作业，不登记稳定训练或8rank恢复PASS。
+本条前置，原RM字节完整保留；其他并发路线改动不触碰。
+
 ## 2026-11-13：纯三循环文本 checkpoint 初始化 CED4→8／三轮 input 重注入／三组 LoRA r8 音频训练
 
 按用户批准计划，完整复制双循环 layer4_8_inject_audio_reinject_loop_lora_r8 音频母本后隔离扩展。

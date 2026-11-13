@@ -39,7 +39,7 @@ class NonMeshCEDTensorTests(unittest.TestCase):
         cls.tracker_class, cls.train = GradNormTracker, train
         torch.set_num_threads(1)
 
-    def make_model_and_inputs(self):
+    def make_model_and_inputs(self, *, normalized=True):
         torch, nn = self.torch, self.torch.nn
         torch.manual_seed(1234)
         config = self.config_class(vocab_size=32, hidden_size=32, intermediate_size=48,
@@ -51,6 +51,8 @@ class NonMeshCEDTensorTests(unittest.TestCase):
         decoder = self.decoder_class.__new__(self.decoder_class)
         nn.Module.__init__(decoder)
         decoder.lm, decoder.lm_embedding_size = self.model_class(config).float(), 32
+        if normalized:
+            decoder.lm.model.enable_recurrent_boundary_norms()
         model = nn.Module()
         model.audio_encoder, model.caption_decoder = nn.Module(), decoder
         model.audio_encoder.base = nn.Module()
@@ -163,10 +165,11 @@ class NonMeshCEDTensorTests(unittest.TestCase):
     def test_trained_adapter_hf_weights_only_load_and_missing_key_rejected(self):
         import safetensors.torch
         torch=self.torch
-        model,_=self.make_model_and_inputs()
+        model,_=self.make_model_and_inputs(normalized=False)
         lm=model.caption_decoder.lm
         with torch.no_grad(): lm.model.recurrent_adapter.weight.add_(.125)
         expected=lm.model.recurrent_adapter.weight.detach().clone()
+        inherited={name:value.detach().clone() for name,value in lm.state_dict().items()}
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)
             lm.save_pretrained(path,safe_serialization=True)
@@ -178,6 +181,10 @@ class NonMeshCEDTensorTests(unittest.TestCase):
                 loaded=self.recursive_text.load_recursive_text_model(path)
                 self.assertTrue(torch.equal(loaded.model.recurrent_adapter.weight,expected))
                 self.assertIs(loaded.get_input_embeddings().weight,loaded.lm_head.weight)
+                for name, value in inherited.items():
+                    self.assertTrue(torch.equal(loaded.state_dict()[name],value), name)
+                for norm in (loaded.model.recurrent_input_norm,loaded.model.recurrent_output_norm):
+                    self.assertTrue(torch.equal(norm.weight,torch.ones(32)))
                 weights=safetensors.torch.load_file(path/'model.safetensors')
                 del weights['model.recurrent_adapter.weight']
                 safetensors.torch.save_file(weights,path/'model.safetensors',metadata={'format':'pt'})
@@ -187,11 +194,13 @@ class NonMeshCEDTensorTests(unittest.TestCase):
     def test_multimodal_huginn_one_noise_sample_and_two_shared_adapter_calls(self):
         model,inputs=self.make_model_and_inputs()
         core=model.caption_decoder.lm.model
-        seen=[]; prelude=[]; first_core=[]
+        seen=[]; prelude=[]; normalized_states=[]; norm_inputs=[]; core_inputs=[]
         def tensor(out): return out if self.torch.is_tensor(out) else out[0]
         handles=[core.recurrent_adapter.register_forward_pre_hook(lambda _m,args:seen.append(args[0])),
                  core.layers[4].register_forward_hook(lambda _m,_a,out:prelude.append(tensor(out))),
-                 core.layers[14].register_forward_hook(lambda _m,_a,out:first_core.append(tensor(out)))]
+                 core.recurrent_output_norm.register_forward_hook(lambda _m,_a,out:normalized_states.append(out)),
+                 core.recurrent_input_norm.register_forward_hook(lambda _m,_a,out:norm_inputs.append(out)),
+                 core.layers[5].register_forward_pre_hook(lambda _m,args:core_inputs.append(args[0]))]
         try:
             with patch.object(self.huginn,'sample_initial_state',wraps=self.huginn.sample_initial_state) as sample:
                 self.loss(model,inputs)
@@ -199,7 +208,10 @@ class NonMeshCEDTensorTests(unittest.TestCase):
             self.assertEqual(len(seen),2)
             self.assertEqual(tuple(seen[0].shape),(1,683,64))
             for value in seen: self.torch.testing.assert_close(value[...,32:],prelude[0],rtol=0,atol=0)
-            self.torch.testing.assert_close(seen[1][...,:32],first_core[0],rtol=0,atol=0)
+            self.assertEqual((len(norm_inputs),len(normalized_states),len(core_inputs)),(2,2,2))
+            self.torch.testing.assert_close(seen[1][...,:32],normalized_states[0],rtol=0,atol=0)
+            for actual, expected in zip(core_inputs,norm_inputs):
+                self.torch.testing.assert_close(actual,expected,rtol=0,atol=0)
         finally:
             for h in handles: h.remove()
 
@@ -215,6 +227,56 @@ class NonMeshCEDTensorTests(unittest.TestCase):
         self.tracker_class().track_and_clip_(model.named_parameters())
         optimizer.step(); scheduler.step()
         self.assertFalse(torch.equal(before,model.caption_decoder.lm.model.recurrent_adapter.weight))
+        for name in ('recurrent_input_norm','recurrent_output_norm'):
+            norm=getattr(model.caption_decoder.lm.model,name)
+            group=next(g for g in audit if 'caption_decoder.lm.model.'+name+'.weight' in g['names'])
+            self.assertEqual((group['role'],group['base_lr'],group['weight_decay']),('default',3e-4,0.))
+            self.assertIsNotNone(norm.weight.grad)
+            self.assertTrue(norm.weight.grad.ne(0).any())
+            self.assertFalse(torch.equal(norm.weight,torch.ones_like(norm.weight)))
+
+    def test_norm_installation_preserves_loaded_values_rng_and_normalized_hf_reload(self):
+        torch=self.torch
+        model,_=self.make_model_and_inputs(normalized=False)
+        lm=model.caption_decoder.lm
+        before={name:t.detach().clone() for name,t in lm.state_dict().items()}
+        rng=torch.get_rng_state().clone()
+        lm.model.enable_recurrent_boundary_norms()
+        self.assertTrue(torch.equal(rng,torch.get_rng_state()))
+        for name,t in before.items(): self.assertTrue(torch.equal(t,lm.state_dict()[name]),name)
+        slots=(lm.model.recurrent_input_norm,lm.model.recurrent_output_norm)
+        self.assertIsNot(*slots)
+        lm.model.enable_recurrent_boundary_norms()
+        self.assertIs(lm.model.recurrent_input_norm,slots[0])
+        with torch.no_grad():
+            slots[0].weight.add_(.125)
+            slots[1].weight.sub_(.25)
+        with tempfile.TemporaryDirectory() as directory:
+            lm.save_pretrained(directory,safe_serialization=True)
+            restored,info=self.model_class.from_pretrained(directory,local_files_only=True,output_loading_info=True)
+            self.assertFalse(any(info.get(k) for k in ('missing_keys','unexpected_keys','mismatched_keys','error_msgs')))
+            for name,t in lm.state_dict().items(): self.assertTrue(torch.equal(t,restored.state_dict()[name]),name)
+            broken=dict(restored.state_dict())
+            del broken['model.recurrent_input_norm.weight']
+            with self.assertRaises(RuntimeError): restored.load_state_dict(broken,strict=True)
+
+    def test_gradient_diagnostics_inspect_values_before_clipping_and_keep_normal_policy(self):
+        torch=self.torch
+        for value,reason in ((1e6,'finite_gradient_norm_reached_emergency_threshold'),
+                             (1e20,'fp32_norm_overflow_with_finite_gradients'),
+                             (float('inf'),'nonfinite_gradient_values')):
+            parameter=torch.nn.Parameter(torch.ones(2))
+            parameter.grad=torch.full_like(parameter,value)
+            tracker=self.tracker_class()
+            tracker.track_and_clip_([('synthetic.weight',parameter)])
+            report=tracker.last_anomaly
+            self.assertIsNotNone(report)
+            self.assertEqual(report['reason'],reason)
+            if value==1e20:
+                self.assertTrue(self.torch.isfinite(torch.tensor(report['gradient_l2_fp64_before_clip'])))
+            if value==1e6:
+                self.assertEqual(report['largest_gradients_fp64'][0]['max_abs'],1e6)
+                self.assertTrue(parameter.grad.abs().max()<1e6)
 
     def test_audio_rank_seed_noise_and_source_probe_preserve_training_stream(self):
         import numpy as np

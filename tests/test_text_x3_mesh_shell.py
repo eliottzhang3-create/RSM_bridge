@@ -125,12 +125,14 @@ class MeshX3ShellTest(unittest.TestCase):
         self.executable("python", 'printf "%s\\0" "$@" > "$CAPTURE"\nenv -0 > "$ENV_CAPTURE"\n')
         self.env["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
         self.env[PREFIX+"SOURCE_CHECKPOINT"] = "clean source with spaces"
+        self.env[PREFIX+"ROUTER_CHECKPOINT"] = "trained router donor with spaces"
         self.env[PREFIX+"CONVERT_OUTPUT_DIR"] = "converted seven-slot-v2 model"
         result = self.run_script(target)
         self.assertEqual(result.returncode,0,result.stderr)
         args = self.captured_args()
         self.assertEqual(args[0],"code/RSmol/scripts/convert_stepwise_5_10x3_5_mesh_6slot.py")
         self.assertEqual(args[args.index("--source-checkpoint")+1],"clean source with spaces")
+        self.assertEqual(args[args.index("--router-checkpoint")+1],"trained router donor with spaces")
         self.assertEqual(args[args.index("--output-dir")+1],"converted seven-slot-v2 model")
         remote = dict(item.split("=",1) for item in self.env_capture.read_bytes().decode().split("\0") if "=" in item)
         for name,value in (("CUDA_VISIBLE_DEVICES",""),("HF_HUB_OFFLINE","1"),("TRANSFORMERS_OFFLINE","1")):

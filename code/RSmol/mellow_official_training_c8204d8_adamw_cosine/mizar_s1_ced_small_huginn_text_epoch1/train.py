@@ -36,6 +36,7 @@ from data.sampler import CustomDistributedSampler
 from data.staging import StagingGate
 from models.mellow import Mellow
 from optim import GradNormTracker, build_optimizer, parameter_role
+from gradient_diagnostics import inspect_gradients, json_number
 
 
 def collective_require(condition, message, device):
@@ -367,6 +368,7 @@ def train(config, rank, device):
     frozen_ced_before = tensor_digest(core.state_dict().items())
     gradient_audit = None
     audit = {"status": "PREFLIGHT_PASS", "resolved_config": config, "tokenizer": tokenizer_audit,
+             "audio_boundary_normalization": dict(model.caption_decoder.lm.config.huginn_audio_boundary_norms),
              "optimizer_groups": groups, "source_probes": source_probes,
              "model_parameters": sum(p.numel() for p in model.parameters()),
              "trainable_parameters": sum(p.numel() for p in model.parameters() if p.requires_grad),
@@ -455,12 +457,24 @@ def train(config, rank, device):
             scaler.unscale_(optimizer)
             if gradient_audit is None:
                 gradient_audit = first_gradient_audit(model)
+                if not gradient_audit["passed"]:
+                    diagnostic = inspect_gradients(model.named_parameters(), float("nan"), float("nan"))
+                    diagnostic.update(rank=rank, optimizer_step=step + 1, grad_scaler=scaler.get_scale(),
+                                      microbatch_losses=[json_number(v.item()) for v in update_losses])
+                    write_json(run_dir / f"gradient_failure_rank{rank}_step{step + 1:06d}.json", diagnostic)
                 write_json(run_dir / f"first_gradient_rank{rank}.json", gradient_audit)
                 collective_require(gradient_audit["passed"],
                                    "CED mapper/LM first gradient audit failed; see first_gradient_rank<N>.json", device)
             total_norm, min_scale = tracker.track_and_clip_(model.named_parameters())
+            if tracker.last_anomaly is not None:
+                diagnostic = dict(tracker.last_anomaly, rank=rank, optimizer_step=step + 1,
+                                  completed_optimizer_steps=step, grad_scaler=scaler.get_scale(),
+                                  microbatch_losses=[json_number(v.item()) for v in update_losses],
+                                  lr_used=lr_used, row_indices=update_rows, sources=update_sources)
+                write_json(run_dir / f"gradient_failure_rank{rank}_step{step + 1:06d}.json", diagnostic)
+                print(json.dumps({"event": "GRADIENT_FAILURE", **diagnostic}), flush=True)
             collective_require(math.isfinite(total_norm) and total_norm < 1e6 and math.isfinite(min_scale) and min_scale > 0,
-                               "nonfinite/emergency gradient norm; optimizer update aborted", device)
+                               "nonfinite/emergency gradient norm; optimizer update aborted; see gradient_failure_rank*_step*.json", device)
             scale_before = scaler.get_scale()
             scaler.step(optimizer)
             scaler.update()

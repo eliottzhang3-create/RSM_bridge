@@ -125,10 +125,21 @@ class RouteContracts(unittest.TestCase):
                 p = Path(tmp)
                 name = 'mesh_conversion_metadata.json' if groups else 'recursive_conversion_metadata.json'
                 metadata = dict(status='ok', architecture_contract=m.MODEL_ARCHITECTURE_CONTRACT, memory_slots=m.MEMORY_SLOT_COUNT, router_groups=groups, inherited_weights_exact=True, source_training_markers=[], fresh_router_tensors=routers, save_reload_tensors_exact=True, save_reload_logits_exact=True, tokenizer_roundtrip_exact=True, forward_trace=SCHEDULE)
+                if groups:
+                    from text_x3_router_transfer_support import provenance, transfer
+                    record=provenance()
+                    metadata.update(fresh_router_tensors=[],transferred_router_tensors=routers,
+                                    router_init=transfer.ROUTER_INIT_CONTRACT,router_initialization=record)
+                    (p/'config.json').write_text(json.dumps(dict(mesh_router_init=transfer.ROUTER_INIT_CONTRACT,
+                                                               mesh_router_initialization=record)))
                 (p/name).write_text(json.dumps(metadata))
                 m._validate_fresh_model(p)
                 for key, value in (('router_groups',3), ('architecture_contract','other'), ('save_reload_logits_exact',False), ('fresh_router_tensors',routers[1:] if routers else ['bad'])):
                     bad = dict(metadata, **{key:value})
+                    (p/name).write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError): m._validate_fresh_model(p)
+                if groups:
+                    bad=dict(metadata,router_init='truncated_normal_std_sqrt_2_over_6d_clamped_3std_bias_zero')
                     (p/name).write_text(json.dumps(bad))
                     with self.assertRaises(ValueError): m._validate_fresh_model(p)
 

@@ -39,8 +39,8 @@ def bash_path(path):
 class CEDRouteTests(unittest.TestCase):
     def test_parent_data_and_real_update_loop_preserved(self):
         result = audit_reference.audit_parent()
-        self.assertIn("train.py", result["byte_identical_files"])
-        self.assertIn("optim.py", result["byte_identical_files"])
+        self.assertTrue(result["training_ast_preserved_except_diagnostics"])
+        self.assertTrue(result["optimizer_policy_ast_preserved"])
 
     def test_formal_schedule_and_shorter_sequence(self):
         actual = contract.geometry(sum(contract.SOURCE_COUNTS.values()))

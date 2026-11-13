@@ -94,7 +94,7 @@ class Epoch1AudioIdentityTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(normalized(ROOT / name)).hexdigest(), digest)
 
     def test_all_copied_sources_except_allowed_files_are_byte_identical(self):
-        changed = {'.gitignore', 'contract.py', 'run.sh', 'models/recursive_text.py', 'write_config.py', 'audit_reference.py'}
+        changed = {'.gitignore', 'contract.py', 'run.sh', 'models/recursive_text.py', 'write_config.py', 'audit_reference.py', 'train.py', 'optim.py'}
         matched = []
         for original in sorted(PARENT.rglob('*')):
             if not original.is_file() or '__pycache__' in original.parts:
@@ -105,8 +105,8 @@ class Epoch1AudioIdentityTests(unittest.TestCase):
             with self.subTest(file=name):
                 self.assertEqual(original.read_bytes(), (ROUTE / name).read_bytes())
             matched.append(name)
-        self.assertIn('train.py', matched)
-        self.assertIn('optim.py', matched)
+        audit_reference.verify_training_delta()
+        audit_reference.verify_optimizer_delta()
         self.assertIn('models/ced.py', matched)
         self.assertIn('models/decoder.py', matched)
         self.assertIn('data/audiotext_dataset.py', matched)
@@ -122,7 +122,7 @@ class Epoch1AudioIdentityTests(unittest.TestCase):
 
     def test_contract_diff_preserves_audio_recipe_except_huginn_identity(self):
         result=audit_reference.audit_parent()
-        self.assertIn('train.py',result['byte_identical_files'])
+        self.assertTrue(result['training_ast_preserved_except_diagnostics'])
         self.assertEqual(contract.DEFAULT_TEXT_MODEL_DIR, EXPECTED_TEXT)
         self.assertEqual(contract.TEXT_MODEL_CONTRACT,text_contract.ARCHITECTURE)
 
@@ -176,7 +176,7 @@ class Epoch1AudioIdentityTests(unittest.TestCase):
         self.assertNotEqual(contract.digest(new), old.digest(original))
         for key in set(new) | set(original):
             if key not in {'route', 'code_sha256', 'text_model_contract', 'text_model_architecture',
-                           'recursive_model_source_sha256', 'recursive_model_sources', 'huginn'}:
+                           'recursive_model_source_sha256', 'recursive_model_sources', 'huginn', 'audio_boundary_normalization'}:
                 with self.subTest(field=key):
                     self.assertEqual(new[key], original[key])
 
@@ -246,13 +246,19 @@ class Epoch1AudioIdentityTests(unittest.TestCase):
             for failure in (None,'missing_keys','unexpected_keys','mismatched_keys','error_msgs'):
                 info={} if failure is None else {failure:['model.recurrent_adapter.weight']}
                 cls.from_pretrained.return_value=(model,info)
-                with self.subTest(failure=failure),patch.object(recursive_text,'_import_recursive_model',
+                model.model.enable_recurrent_boundary_norms=Mock()
+                with self.subTest(failure=failure),patch.object(recursive_text,'validate_loaded_model') as validate, patch.object(recursive_text,'_import_recursive_model',
                         return_value=(cls,lambda m:model_audit())):
                     if failure:
                         with self.assertRaisesRegex(ValueError,'weights do not match'):
                             recursive_text.load_recursive_text_model(path)
                     else:
                         self.assertIs(recursive_text.load_recursive_text_model(path),model)
+                        model.model.enable_recurrent_boundary_norms.assert_called_once_with()
+                        self.assertEqual(validate.call_count,2)
+                        self.assertTrue(validate.call_args.kwargs['require_boundary_norms'])
+                    if failure:
+                        model.model.enable_recurrent_boundary_norms.assert_not_called()
                 self.assertEqual(cls.from_pretrained.call_args.kwargs,dict(local_files_only=True,output_loading_info=True))
 
     def test_bash_syntax_and_lf(self):
