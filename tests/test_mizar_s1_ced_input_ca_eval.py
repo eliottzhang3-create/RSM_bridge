@@ -43,7 +43,7 @@ class InputCaEvaluationTests(unittest.TestCase):
         self.route = load("input_ca_contract_" + variant, self.spec["route_root"] / "contract.py")
 
     def test_actual_completed_contracts_runs_steps_and_exact_paths(self):
-        self.assertEqual(len(adapter.ROUTE_SPECS), 26)
+        self.assertEqual(sum(not spec.get("selected4_extension") for spec in adapter.ROUTE_SPECS.values()), 26)
         for variant, stamp, step, count in ((CA, "20261109_005039335295104", 17313, 4334405),
                                            (INPUT, "20261107_220147075105401", 34626, 332929)):
             self.select(variant)

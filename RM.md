@@ -1,3 +1,35 @@
+## 2026-11-13：四个指定新 checkpoint 的 MMAU / MMAR / MMSU 评测适配
+
+按用户批准计划扩展 init0904、普通 text_epoch1、text_epoch1 CED4→8/audio reinjection/双 LoRA r8、
+以及继承文本 epoch1 已训练双 LoRA 的 ced48 四个明确音频 checkpoint，全部 step17313、训练 geometry8,8,4。
+普通两条加入 mizar_s1_ced_recursive_eval_runtime.py；后两条加入 multilayer runtime，分别绑定自己的
+训练 route、目录、run 和文本合同。第四条使用其原训练构造器严格继承已训练 A/B，最终仍以完整音频
+checkpoint state_dict 为准，不重置 LoRA、不用文本初始化覆盖最终权重；报告区分2777859个新音频参数
+与1628160个继承的 LoRA 参数。严格合同、源码/资产摘要、实际类及执行顺序校验全部保留。
+
+扩展原 MMAU/MMAR 5090 提交入口的新分支；MMSU 自动复用共享 registry，题面/音频处理/FP32/
+prompt256/greedy300/原始response/官方scorer和完整1000/1000/5000题口径保持。
+新增 code/RSmol/run_mizar_selected4_benchmarks_5090.sh，四个 TARGET 为 init0904、text_epoch1、
+text_epoch1_serial48_lora_r8、text_lora_epoch1_serial48_r8；BENCHMARK 为 mmau/mmar/mmsu/all。
+all 各提交三个独立完整作业，共12项，某次提交失败仍尝试剩余项；模型身份固定并覆盖残留模型环境变量。
+--check-args 仅打印有效命令而不提交或读取生产资产；单项允许数据/评分器/输出路径覆盖。
+输出分别为各自 run 下 eval/mmau_test_mini_step17313、eval/mmar_step17313、eval/mmsu_step17313。
+原五目标 MMSU 预设保留。完整映射、四条批量/十二条单项提交、本地Git同步命令见
+code/RSmol/mizar_selected4_eval/README.md。
+
+保存105份训练源码摘要，训练目录和模型源码未修改。原28份MMSU历史母本SHA基线保持原样，
+新增 reference_audit 显式登记4份获准评测扩展的前后摘要；原默认 shell 分支、registry/constants、
+17个runtime函数及原模型审计主体/字段另做源码/AST保护。旧测试的路线数量和获准摘要断言同步更新。
+共享 adapter 摘要随扩展改变，已有未完成旧评测应沿用原代码版本续跑，不放宽断点身份或混合预测。
+
+python -B tests/validate_mizar_s1_ced_mmsu_eval.py --report audit_reports/mizar_selected4_eval_validation.json：
+142项中133通过、9项因本地缺少Torch/音频/Parquet依赖明确跳过，报告PASS。
+含十二项真实Bash入口/模拟vc及实际参数解析、错误路线/合同拦截、完整state严格加载先于冻结、
+继承参数报告、物理schedule/串行4→8/双LoRA hooks、旧路线和官方scorer/断点回归；3个shell语法通过。
+新增真实tiny CPU final-audio LoRA加载及logits等值测试，因缺Torch等依赖明确跳过，不声明已执行。
+Windows沙箱临时目录限制下经授权在沙箱外执行本地合成回归。未访问远程权重、代为commit/push或提交GPU作业。
+本条仅前置，RM全部历史字节完整保留。
+
 ## 2026-11-13：为用户指定的五个 Mizar 目标准备 MMSU 提交预设
 
 用户选择官方 Mizar 本身，以及 base / 普通 recursive_5_10_5 /

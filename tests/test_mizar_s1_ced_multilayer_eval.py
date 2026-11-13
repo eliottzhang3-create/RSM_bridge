@@ -200,6 +200,11 @@ class MultilayerEvaluationTests(unittest.TestCase):
             self.assertTrue(authorized <= files.keys())
             for path, expected in files.items():
                 if path in authorized: continue
+                if path == "code/RSmol/scripts/mizar_s1_ced_recursive_eval_runtime.py":
+                    extension = json.loads((ROOT / "code/RSmol/mizar_selected4_eval/reference_audit.json").read_text())
+                    record = extension["authorized_evaluator_extensions"][path]
+                    self.assertEqual(record["before_lf_sha256"], expected)
+                    expected = record["after_lf_sha256"]
                 with self.subTest(baseline=name, path=path):
                     self.assertEqual(hashlib.sha256((ROOT / path).read_bytes().replace(b"\r\n", b"\n")).hexdigest(), expected)
             variant = ("recursive_textmesh_layer8_4_inject_audio_reinject_loop_modality_lora_r8" if "modality" in name
@@ -209,8 +214,9 @@ class MultilayerEvaluationTests(unittest.TestCase):
             # snapshot clause is replaced by the explicit byte checks above.
             with patch.dict(sys.modules, {"contract": self.route}):
                 audit = load_module("eval_training_parity_" + variant, self.spec["route_root"] / "audit_reference.py")
-            checked = {"files": len(files), "unchanged_files": len(files) - len(authorized),
-                       "authorized_evaluator_updates": sorted(authorized)}
+            extended = authorized | {"code/RSmol/scripts/mizar_s1_ced_recursive_eval_runtime.py"}
+            checked = {"files": len(files), "unchanged_files": len(files) - len(extended),
+                       "authorized_evaluator_updates": sorted(extended)}
             with patch.object(audit, "protected_parents", return_value=checked):
                 result = audit.audit()
             self.assertEqual(result["status"], "PASS")

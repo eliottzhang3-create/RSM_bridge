@@ -31,7 +31,7 @@ def load(name, path):
 legacy = load("extension_eval_helpers", ROOT / "tests/test_mizar_s1_ced_multilayer_eval.py")
 shell = load("extension_shell_helpers", ROOT / "tests/test_mizar_s1_ced_multilayer_eval_shell.py")
 NEW = {name: spec for name, spec in adapter.ROUTE_SPECS.items()
-       if spec.get("extension") and not spec.get("input_ca_extension")}
+       if spec.get("extension") and not spec.get("input_ca_extension") and not spec.get("selected4_extension")}
 
 
 class ExtensionTests(unittest.TestCase):

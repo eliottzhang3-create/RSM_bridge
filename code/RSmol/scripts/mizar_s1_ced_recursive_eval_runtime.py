@@ -1,4 +1,4 @@
-"""Inference for four isolated non-MeSH CED 5+10x2+5 training routes.
+"""Inference for isolated non-MeSH CED 5+10x2+5 training routes.
 
 The standard CED adapter owns the common generation protocol and read-only
 asset/import helpers. Training files are never changed or patched for inference.
@@ -45,6 +45,23 @@ for _suffix, _timestamp, _implementation, _layers in (
         "implementation": _implementation,
         "layer_order": _layers,
         "reinjection": _suffix == "_audio_reinject",
+    }
+
+# Selected on 2026-11-13: identical execution geometry, distinct training identity.
+for _variant, _route, _directory, _run in (
+    ("recursive_5_10_5_init0904",
+     "ced_small_mizar_s1_fixed20_gbs256_recursive_5_10_5_init0904_v1",
+     "mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_init0904",
+     "mizar_s1_ced_small_gbs256_recursive_5_10_5_init0904_5090/formal_20261111_130037935014521"),
+    ("recursive_5_10_5_text_epoch1",
+     "ced_small_mizar_s1_fixed20_gbs256_text_epoch1_5_10x2_5_v1",
+     "mizar_s1_ced_small_text_epoch1",
+     "mizar_s1_ced_small_text_epoch1_gbs256_5090/formal_20261112_103104688616376"),
+):
+    ROUTE_SPECS[_variant] = {
+        **copy.deepcopy(ROUTE_SPECS["recursive_5_10_5"]),
+        "route": _route, "route_root": TRAINING_ROOT / _directory,
+        "run_root": REMOTE_OUTPUT_ROOT / _run,
     }
 
 

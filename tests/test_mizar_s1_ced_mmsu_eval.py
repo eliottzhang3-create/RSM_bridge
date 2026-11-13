@@ -135,10 +135,11 @@ class ProtocolTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     evaluate.parse_args(args)
 
-    def test_preserved_mmau_mmar_source_bytes(self):
+    def test_preserved_mmau_mmar_sources_with_explicit_selected4_extensions(self):
         audit = json.loads((ROOT / "code/RSmol/mizar_s1_ced_mmsu_eval/reference_audit.json").read_text())
         self.assertGreaterEqual(len(audit["files"]), 28)
-        for path, hashes in audit["files"].items():
+        from mizar_selected4_eval.audit import effective_reference_files
+        for path, hashes in effective_reference_files(ROOT).items():
             self.assertEqual(storage.text_sha(ROOT / path), hashes["lf_sha256"], path)
 
     def test_real_run_identity_binds_checkpoint_runtime_shards_and_source(self):

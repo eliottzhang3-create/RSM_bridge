@@ -192,6 +192,33 @@ ROUTE_SPECS["official_final_s1_5_20x2_5_input_only"] = {
 }
 
 
+# The two epoch1 serial48 routes share a forward, but not text/LoRA provenance.
+for _variant, _route, _directory, _run, _inherited in (
+    ("recursive_5_10_5_text_epoch1_layer4_8_audio_reinject_loop_lora_r8",
+     "ced_small_mizar_s1_fixed20_gbs256_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_v1",
+     "mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8",
+     "mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_gbs256_5090/formal_20261112_103717262469368",
+     False),
+    ("recursive_5_10_5_ced48_text_epoch1_loop_lora_r8",
+     "ced_small_mizar_s1_ced48_text_epoch1_loop_lora_r8_v1",
+     "mizar_s1_ced48_text_epoch1_loop_lora_r8",
+     "mizar_s1_ced48_text_epoch1_loop_lora_r8_5090/formal_20261112_111357380584730",
+     True),
+):
+    ROUTE_SPECS[_variant] = {
+        **copy.deepcopy(ROUTE_SPECS["recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8"]),
+        "extension": True, "selected4_extension": True,
+        "route": _route, "route_root": TRAINING_ROOT / _directory,
+        "run_root": REMOTE_OUTPUT_ROOT / _run,
+        "inherited_lora_parameters": 1628160 if _inherited else 0,
+        "fresh_audio_parameters": 2777859,
+    }
+    if _inherited:
+        ROUTE_SPECS[_variant].update(
+            text_contract="logical_30_physical_20_5_10x2_5_loop_lora_r8_alpha16",
+            text_architecture="logical_30_physical_20_5_10x2_5_loop_lora_r8_alpha16")
+
+
 def variant_spec(eval_variant):
     if eval_variant not in ROUTE_SPECS:
         raise ValueError(f"unsupported multilayer CED evaluation variant: {eval_variant!r}")
@@ -436,7 +463,7 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
         raise ValueError(f"CED branch parameter count mismatch: {count}")
     if routers and len({id(r) for r in routers}) != len(routers):
         raise ValueError("original and added routers must be independent")
-    return {"checkpoint": actual, "parameters": parameters, "branch": branch,
+    result = {"checkpoint": actual, "parameters": parameters, "branch": branch,
             "loop_lora": lora_audit,
             "text_memory": text_memory_audit,
             "implementation": spec["implementation"], "new_parameter_count": count,
@@ -445,6 +472,21 @@ def audit_recursive_route(route_contract, contract, model, *, eval_variant):
             "audio_memory_slots": spec["audio_memory_slots"],
             "text_memory_slots": spec["text_memory_slots"],
             "interaction_layers": list(spec["interaction_layers"]), "routers": len(routers)}
+    if spec.get("selected4_extension"):
+        # Provenance describes audio step0. The final audio state_dict loaded
+        # above owns ALL trained tensors, including inherited and updated A/B.
+        inherited = spec["inherited_lora_parameters"]
+        if (count - lora_count != spec["fresh_audio_parameters"]
+                or inherited != route_contract.LOOP_LORA_CONTRACT.get("inherited_parameters", 0)):
+            raise ValueError("selected epoch1 audio/LoRA parameter provenance mismatch")
+        result.update(branch_parameter_count=count,
+                      new_parameter_count=count - inherited,
+                      fresh_audio_parameter_count=spec["fresh_audio_parameters"],
+                      inherited_lora_parameter_count=inherited,
+                      fresh_lora_parameter_count=lora_count - inherited,
+                      evaluated_weights="complete_final_audio_checkpoint_state_dict",
+                      lora_initialization_contract=dict(route_contract.LOOP_LORA_CONTRACT))
+    return result
 
 
 def install_recursive_trace_audit(lm, *, eval_variant):

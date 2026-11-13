@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "code/RSmol"), str(ROOT / "tests")]
 from mizar_s1_ced_mmsu_eval import dataset, runtime, scoring, storage
+from mizar_selected4_eval.audit import source_audit
 
 
 def audit_assets(root):
@@ -81,6 +82,7 @@ def main():
     started = time.monotonic()
     modules = ["test_mizar_s1_ced_mmsu_eval", "test_mizar_s1_ced_mmsu_dependencies", "test_mizar_s1_ced_mmsu_shell",
                "test_mizar_mmsu_selected5",
+               "test_mizar_selected4_eval", "test_mizar_selected4_eval_tensor",
                "test_mizar_s1_ced_benchmark_eval", "test_mizar_s1_ced_recursive_eval",
                "test_mizar_s1_ced_recursive_mesh_eval", "test_mizar_s1_ced_multilayer_eval",
                "test_mizar_s1_ced_eval_extensions", "test_mizar_s1_ced_input_ca_eval"]
@@ -104,6 +106,11 @@ def main():
         storage.text_sha(ROOT / path) == value["lf_sha256"] for path, value in audit["files"].items())
     report["original_source_raw_sha256_preserved"] = all(
         storage.file_sha(ROOT / path) == value["raw_sha256"] for path, value in audit["files"].items())
+    # The historical baseline remains intact; authorized registration changes
+    # are checked separately instead of relabeling them as unchanged originals.
+    report["selected4_source_audit"] = source_audit(ROOT)
+    if report["selected4_source_audit"]["status"] != "PASS":
+        report["status"] = "FAILED"
     report["elapsed_seconds"] = time.monotonic() - started
     args.report.parent.mkdir(parents=True, exist_ok=True)
     storage.write_json(args.report, report)

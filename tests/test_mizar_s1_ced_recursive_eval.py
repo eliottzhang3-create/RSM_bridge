@@ -17,7 +17,8 @@ sys.path.insert(0, str(SCRIPTS))
 import evaluate_mizar_s1_ced_recursive_benchmark as runner
 
 adapter = runner.runtime_adapter
-VARIANTS = tuple(adapter.ROUTE_SPECS)
+VARIANTS = tuple(name for name in adapter.ROUTE_SPECS
+                 if name not in ("recursive_5_10_5_init0904", "recursive_5_10_5_text_epoch1"))
 
 
 def load_module(name, path):

@@ -10,6 +10,34 @@ EVAL_VARIANT="${RSMOL_MIZAR_CED_EVAL_VARIANT:-base}"
 DEFAULT_EXPECTED_STEP=17313
 DEFAULT_EXPECTED_GEOMETRY=8,8,4
 case "$EVAL_VARIANT" in
+  # BEGIN selected4 routes (2026-11-13); existing cases below are unchanged.
+  recursive_5_10_5_init0904|recursive_5_10_5_text_epoch1|recursive_5_10_5_text_epoch1_layer4_8_audio_reinject_loop_lora_r8|recursive_5_10_5_ced48_text_epoch1_loop_lora_r8)
+    EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_recursive_benchmark.sh
+    case "$EVAL_VARIANT" in
+      recursive_5_10_5_init0904)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_init0904_5090/formal_20261111_130037935014521
+        ROUTE_DIRECTORY=mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_init0904
+        JOB_TAG=i0904 ;;
+      recursive_5_10_5_text_epoch1)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_text_epoch1_gbs256_5090/formal_20261112_103104688616376
+        ROUTE_DIRECTORY=mizar_s1_ced_small_text_epoch1
+        JOB_TAG=te1 ;;
+      recursive_5_10_5_text_epoch1_layer4_8_audio_reinject_loop_lora_r8)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8_gbs256_5090/formal_20261112_103717262469368
+        ROUTE_DIRECTORY=mizar_s1_ced_small_text_epoch1_layer4_8_audio_reinject_loop_lora_r8
+        EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh
+        JOB_TAG=te148 ;;
+      recursive_5_10_5_ced48_text_epoch1_loop_lora_r8)
+        DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced48_text_epoch1_loop_lora_r8_5090/formal_20261112_111357380584730
+        ROUTE_DIRECTORY=mizar_s1_ced48_text_epoch1_loop_lora_r8
+        EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh
+        JOB_TAG=tl148 ;;
+    esac
+    DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/$ROUTE_DIRECTORY"
+    JOB_NAME_PREFIX="mizar-ced-${JOB_TAG}-mmar"
+    JOB_LOG_PREFIX="mizar_${JOB_TAG}_mmar_5090"
+    ;;
+  # END selected4 routes
   official_mizar)
     exec bash "$SCRIPT_DIR/mizar_official_eval/submit_5090.sh" mmar "$@"
     ;;
