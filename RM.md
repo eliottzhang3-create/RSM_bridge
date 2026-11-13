@@ -1,3 +1,71 @@
+## 2026-11-13：纯三循环音频启动兼容文本checkpoint遗留的双循环冗余schedule字段
+
+用户重提mizar_s1_ced_small_text_x3_layer4_8_audio_reinject_loop_lora_r8音频训练后，write_config.py
+报recursive_logical_to_physical_schedule contradicts the fixed schedule。原始5-10-5转换器写入四个
+schedule字段，纯x3转换器deep-copy后只更新三个，漏掉recursive_logical_to_physical_schedule；
+该冗余别名继承30次x2序列，真正执行使用的logical_to_physical及40/20/3模型/metadata均为三循环。
+此前音频入口把全部别名一律要求相同，阻断了这个有效的已训练文本checkpoint。
+
+仅修改本条隔离音频路线contract.py和models/recursive_text.py：
+只允许recursive_logical_to_physical_schedule恰为原始0..4,(5..14)×2,15..19历史序列，且主字段
+logical_to_physical必须完整为0..4,(5..14)×3,15..19；其他别名/架构/40逻辑20物理3循环/源层映射/
+非MeSH/完整9244步来源检查保留。runtime.json的contract.recursive_text_checkpoint.
+schedule_metadata_compatibility记录原值/规范值/原因及source_checkpoint_modified=false。
+严格加载完整权重并校验实际20个独立物理模块和40次执行后，只在内存中将冗余别名规范到40次。
+不改写远程源checkpoint/config/权重/训练状态，不重转或重训文本；shared文本模型和转换器保持原字节。
+音频mapper/三组LoRA、input5/15/25和CED4/8入口5/15、数据/损失/更新/配方保持原样。
+
+本地回归python -B tests/validate_mizar_s1_ced_text_x3_loop_lora.py：48项通过，7项真实tensor因缺少
+Torch/Transformers明确跳过，报告PASS_LOCAL_WITH_SKIPS。新增4项身份回归，执行实际旧转换器→x3转换器
+重现残留字段、只兼容已知别名/仍拒绝真实x2和其他错别名、源文件不修改、实际模型审核后仅内存规范；
+原shared-start的write_config合成链路改用真实历史形态，runtime.json生成并记录兼容审计。
+可选真实strict loader tensor检查追加历史别名/全部原权重一致/源config字节不变/内存规范断言。
+36份母本/共享SHA和16份继承源码保持，完整train() AST对照通过；Python3.10/shell/README语法通过。
+更新reference_audit.json及audit_reports/mizar_s1_ced_text_x3_loop_lora_validation.json。
+Windows临时目录/Bash受沙箱限制，经批准沙箱外运行本地合成回归；未访问生产权重、提交GPU作业或commit/push。
+
+失败在write_config.py、torchrun前，因此没有该run的音频更新或checkpoint；同步修复后直接重提，
+沿用原文本checkpoint和原训练配方，使用默认新时间戳目录，不能将失败run作为resume或复用非空output-dir：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_ced_small_text_x3_layer4_8_audio_reinject_loop_lora_r8_5090.sh --stage-workers 4
+```
+
+完整说明和精确Git提交命令见该隔离路线README。本条仅前置，全部RM旧字节保留。
+
+## 2026-11-13：init0904 CED8→4双LoRA音频作业中断及fresh重启目录保护诊断
+
+用户报告run_mizar_s1_ced_small_init0904_layer8_4_audio_reinject_loop_lora_r8_5090.sh
+日志仅有fresh formal directory is not empty，目标run为
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_init0904_layer8_4_audio_reinject_loop_lora_r8_gbs256_5090/formal_20261113_144012025494116。
+只读检查本地launcher/run.sh/train.py后，请用户提供远程目录和metrics证据。
+
+用户实际目录包含runtime/config_audit、全部8rank的first/opened_gate梯度审计文件、metrics和staging报告，
+说明曾进入真实八卡训练，而不是首次启动即失败。用户22:11:14和22:11:44两次读取均为step250，
+loss1.00848484、gradient_l2_before_clip0.88760376、gradient_common_scale1、GradScaler65536，
+staging_complete=true、audio_read_mode=local、local_switch_step17，
+实际串行轨迹input→CED8/input→CED4及双LoRA轮次符合预期。checkpoints目录total0。
+以上仅确认训练曾推进到250步，不表示完成17313步或整体远程PASS。
+
+用户补充集群部分卡掉线、训练运行约40分钟后回到Pending。最可能是平台重启了原fresh命令，
+复用同一个run root，随后计算入口的非空目录保护拒绝再次从step0覆盖既有产物。
+这是结合用户平台现象作出的推断，尚无平台重启事件记录，不登记为已验证根因。
+原代码首次保存点为2886，当前无完整checkpoint，metrics不能代替训练状态，无法从250完整恢复。
+
+建议先在平台终止旧Pending/重试作业，再沿用原入口提交新的自动时间戳run，不传旧--output-dir或--resume-checkpoint：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+bash code/RSmol/run_mizar_s1_ced_small_init0904_layer8_4_audio_reinject_loop_lora_r8_5090.sh --stage-workers 4
+```
+
+重新严格继承原指定formal-maxlr8e-4-resume4500-20260904_154711/checkpoint-step-009244文本权重，
+音频从step0新建所有训练状态；保持全部模型/训练配方及源码身份。
+本次不修改训练实现、不放宽空目录保护、不删除远程旧目录；未代为取消或提交作业、commit/push。
+本条仅前置，全部RM历史字节完整保留。
+
 ## 2026-11-13：六槽三循环MeSH改用指定双循环已训练routers，干净SmolLM2主干重新训练
 
 用户报告run_stage4_5_10x3_5_mesh_6slot_formal_3090.sh首步nonfinite gradient norm，批准更换初始化方案。

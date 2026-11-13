@@ -54,6 +54,71 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(contract.validate_recursive_config_values(vars(target))['recursive_loops'], 3)
         self.assertEqual(target.logical_to_physical, SCHEDULE)
 
+    def test_actual_x2_to_x3_conversion_reproduces_and_audits_known_stale_alias(self):
+        from text_x3_test_support import helpers
+        original = NS(num_hidden_layers=30, hidden_size=576, vocab_size=49152,
+                      tie_word_embeddings=True, model_type='llama', eos_token_id=0, pad_token_id=0)
+        x2 = helpers('5_10_5', converter=True).build_target_config(original)
+        self.assertEqual(x2.recursive_logical_to_physical_schedule, list(contract.LEGACY_X2_SCHEDULE))
+        x3 = helpers('5_10x3_5', converter=True)._target_config(x2, {}, Path('/synthetic/clean20'))
+        self.assertEqual(x3.logical_to_physical, SCHEDULE)
+        self.assertEqual(x3.recursive_logical_to_physical_schedule, list(contract.LEGACY_X2_SCHEDULE))
+        self.assertEqual(contract.validate_recursive_config_values(vars(x3))['logical_layers'], 40)
+        record = contract.recursive_config_compatibility(vars(x3))
+        self.assertEqual(record['overrides'][contract.LEGACY_SCHEDULE_ALIAS]['canonical'], SCHEDULE)
+        self.assertFalse(record['source_checkpoint_modified'])
+        # Validation must not mutate the source dict or silently substitute execution.
+        self.assertEqual(x3.recursive_logical_to_physical_schedule, list(contract.LEGACY_X2_SCHEDULE))
+
+    def test_only_known_unused_alias_is_accepted_effective_x3_fields_stay_strict(self):
+        legacy = dict(config(), **{contract.LEGACY_SCHEDULE_ALIAS: list(contract.LEGACY_X2_SCHEDULE)})
+        contract.validate_recursive_config_values(legacy)
+        for field, wrong in (('logical_to_physical', list(contract.LEGACY_X2_SCHEDULE)),
+                             ('logical_to_physical_schedule', list(contract.LEGACY_X2_SCHEDULE)),
+                             ('recursive_logical_to_physical', list(contract.LEGACY_X2_SCHEDULE)),
+                             (contract.LEGACY_SCHEDULE_ALIAS, list(range(30))),
+                             (contract.LEGACY_SCHEDULE_ALIAS, None),
+                             ('recursive_loops', 2), ('mesh_memory_slots', 6),
+                             ('recursive_architecture_contract', 'other')):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                contract.validate_recursive_config_values(dict(legacy, **{field: wrong}))
+        missing_primary = dict(legacy, logical_to_physical_schedule=SCHEDULE)
+        missing_primary.pop('logical_to_physical')
+        with self.assertRaises(ValueError): contract.validate_recursive_config_values(missing_primary)
+        canonical = dict(config(), **{contract.LEGACY_SCHEDULE_ALIAS: SCHEDULE})
+        self.assertEqual(contract.recursive_config_compatibility(canonical)['overrides'], {})
+
+    def test_existing_checkpoint_contract_records_alias_without_rewriting_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = checkpoint(Path(directory))
+            contract.write_json(path/'config.json', dict(config(), **{
+                contract.LEGACY_SCHEDULE_ALIAS: list(contract.LEGACY_X2_SCHEDULE)}))
+            before = {p.name: p.read_bytes() for p in path.iterdir()}
+            record = contract.recursive_checkpoint_contract(path)
+            self.assertEqual(record['config']['logical_to_physical'], SCHEDULE)
+            overrides = record['schedule_metadata_compatibility']['overrides']
+            self.assertEqual(overrides[contract.LEGACY_SCHEDULE_ALIAS]['source'], list(contract.LEGACY_X2_SCHEDULE))
+            self.assertEqual(before, {p.name: p.read_bytes() for p in path.iterdir()})
+
+    def test_loaded_model_normalizes_metadata_after_actual_schedule_and_module_audit(self):
+        class Config(NS):
+            def to_dict(self): return vars(self).copy()
+        cfg = Config(**dict(config(), **{contract.LEGACY_SCHEDULE_ALIAS: list(contract.LEGACY_X2_SCHEDULE)}))
+        model = NS(config=cfg, model=NS(layers=[object() for _ in range(20)], logical_to_physical=SCHEDULE),
+                   named_parameters=lambda: [], named_buffers=lambda: [])
+        loaded_audit = dict(logical_layer_count=40, physical_layer_count=20, recursive_layer_count=20,
+                            recursive_loops=3, middle_recurrent_count=10, model_physical_module_count=20,
+                            schedule=SCHEDULE)
+        source_cfg = cfg.to_dict()
+        model.model.logical_to_physical = list(contract.LEGACY_X2_SCHEDULE)
+        with self.assertRaises(ValueError): recursive_text.validate_loaded_model(model, loaded_audit)
+        self.assertEqual(cfg.to_dict(), source_cfg)
+        model.model.logical_to_physical = SCHEDULE
+        recursive_text.validate_loaded_model(model, loaded_audit)
+        self.assertEqual(cfg.recursive_logical_to_physical_schedule, SCHEDULE)
+        self.assertEqual(model.recursive_config_compatibility['overrides'][contract.LEGACY_SCHEDULE_ALIAS]['source'],
+                         list(contract.LEGACY_X2_SCHEDULE))
+
     def test_exact_source_and_pure_x3_geometry_rejects_other_models(self):
         self.assertEqual(contract.DEFAULT_TEXT_MODEL_DIR,
             '/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage4_5_10x3_5/formal_1epoch_bf16_20261109_153922858684473/checkpoint-009244')

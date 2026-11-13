@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from contract import TEXT_MODEL_SCHEDULE, validate_recursive_config_values, recursive_checkpoint_contract
+from contract import (TEXT_MODEL_SCHEDULE, validate_recursive_config_values,
+                      recursive_checkpoint_contract, recursive_config_compatibility)
 
 
 def validate_loop_lora(core):
@@ -54,6 +55,12 @@ def validate_loaded_model(model: Any, audit: dict) -> None:
         if any(part.startswith(("router", "mesh_", "memory_slot"))
                for part in name.split(".")):
             raise ValueError(f"non-MeSH model contains MeSH parameter/buffer: {name}")
+    # The model has now passed its real module/schedule/weight audit. Correct
+    # metadata in memory only; the source checkpoint and all tensors stay intact.
+    compatibility = recursive_config_compatibility(model.config.to_dict())
+    for name, override in compatibility["overrides"].items():
+        setattr(model.config, name, list(override["canonical"]))
+    model.recursive_config_compatibility = compatibility
 
 
 def load_recursive_text_model(model_path: str | Path) -> Any:

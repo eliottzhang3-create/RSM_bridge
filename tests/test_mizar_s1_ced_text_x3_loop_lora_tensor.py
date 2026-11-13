@@ -293,13 +293,18 @@ class TensorTests(unittest.TestCase):
         cfg.recursive_middle_layer_count=10; cfg.recursive_loops_scope="middle_only"
         cfg.logical_to_physical=list(self.contract.TEXT_MODEL_SCHEDULE)
         cfg.recursive_source_layer_indices_0based=list(self.contract.TEXT_MODEL_SOURCE_MAPPING)
+        cfg.recursive_logical_to_physical_schedule=list(self.contract.LEGACY_X2_SCHEDULE)
         with tempfile.TemporaryDirectory() as directory:
             checkpoint=Path(directory)/"checkpoint-009244"
             source.save_pretrained(checkpoint)
             (checkpoint/"tokenizer.json").write_text("{}")
             from mizar_text_x3_support import final_text_metadata
             final_text_metadata(checkpoint)
+            config_bytes=(checkpoint/'config.json').read_bytes()
             loaded=load_recursive_text_model(checkpoint)
+            self.assertEqual((checkpoint/'config.json').read_bytes(),config_bytes)
+        self.assertEqual(loaded.config.recursive_logical_to_physical_schedule,list(self.contract.TEXT_MODEL_SCHEDULE))
+        self.assertIn(self.contract.LEGACY_SCHEDULE_ALIAS,loaded.recursive_config_compatibility['overrides'])
         for name,p in source.state_dict().items(): torch.testing.assert_close(loaded.state_dict()[name],p,rtol=0,atol=0)
         extra=set(loaded.state_dict())-set(source.state_dict())
         self.assertEqual(len([n for n in extra if ".lora_" in n]),420)

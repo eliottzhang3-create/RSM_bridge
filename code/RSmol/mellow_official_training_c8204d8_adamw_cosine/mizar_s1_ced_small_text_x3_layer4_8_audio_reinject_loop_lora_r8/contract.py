@@ -64,6 +64,10 @@ DEFAULT_TEXT_MODEL_DIR = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/stage
 TEXT_MODEL_SCHEDULE = tuple(
     list(range(0, 5)) + list(range(5, 15)) * 3 + list(range(15, 20))
 )
+# The x3 converter deep-copied the clean x2 config and missed this unused alias.
+# The actual text decoder reads logical_to_physical, not this historical field.
+LEGACY_SCHEDULE_ALIAS = "recursive_logical_to_physical_schedule"
+LEGACY_X2_SCHEDULE = tuple(list(range(5)) + list(range(5, 15)) * 2 + list(range(15, 20)))
 WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, EPOCHS, SEED = 8, 8, 4, 3, 1234
 RANK_UPDATE_SAMPLES = BATCH_SIZE * ACCUMULATION_STEPS
 GLOBAL_BATCH_SIZE = WORLD_SIZE * RANK_UPDATE_SAMPLES
@@ -314,7 +318,13 @@ def validate_recursive_config_values(config):
     for name in ("logical_to_physical_schedule", "recursive_logical_to_physical",
                  "recursive_logical_to_physical_schedule"):
         if name in config and list(config[name] or ()) != list(TEXT_MODEL_SCHEDULE):
-            problems.append(f"{name} contradicts the fixed schedule")
+            known_stale_alias = (
+                name == LEGACY_SCHEDULE_ALIAS
+                and list(config[name] or ()) == list(LEGACY_X2_SCHEDULE)
+                and list(config.get("logical_to_physical") or ()) == list(TEXT_MODEL_SCHEDULE)
+            )
+            if not known_stale_alias:
+                problems.append(f"{name} contradicts the fixed schedule")
     mapping = config.get("recursive_source_layer_indices_0based")
     if list(mapping or ()) != list(TEXT_MODEL_SOURCE_MAPPING):
         problems.append("recursive source-layer mapping mismatch")
@@ -339,6 +349,22 @@ def validate_recursive_config_values(config):
     if problems:
         raise ValueError("invalid non-MeSH 5-10x3-5 config: " + "; ".join(problems))
     return geometry
+
+
+def recursive_config_compatibility(config):
+    """Audit the one known unused x2 alias; all effective x3 checks still apply."""
+    validate_recursive_config_values(config)
+    overrides = {}
+    if list(config.get(LEGACY_SCHEDULE_ALIAS) or ()) == list(LEGACY_X2_SCHEDULE):
+        overrides[LEGACY_SCHEDULE_ALIAS] = {
+            "source": list(LEGACY_X2_SCHEDULE), "canonical": list(TEXT_MODEL_SCHEDULE),
+            "reason": "unused_x2_alias_inherited_by_x3_converter",
+        }
+    return {"contract": "pure_x3_known_legacy_schedule_alias_v1",
+            "execution_schedule_field": ("logical_to_physical" if config.get("logical_to_physical")
+                                         else "logical_to_physical_schedule"),
+            "execution_schedule": list(TEXT_MODEL_SCHEDULE), "overrides": overrides,
+            "source_checkpoint_modified": False}
 
 
 def validate_text_source_provenance(checkpoint):
@@ -411,6 +437,7 @@ def recursive_checkpoint_contract(checkpoint):
     return {
         "checkpoint": str(checkpoint),
         "provenance": provenance,
+        "schedule_metadata_compatibility": recursive_config_compatibility(config),
         "config": {
             "model_type": config.get("model_type"),
             "model_architecture_contract": TEXT_MODEL_ARCHITECTURE,

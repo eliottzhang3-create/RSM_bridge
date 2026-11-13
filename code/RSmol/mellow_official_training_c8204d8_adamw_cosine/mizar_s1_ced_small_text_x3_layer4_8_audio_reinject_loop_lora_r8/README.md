@@ -10,6 +10,23 @@
 
 无需再次转换。严格加载该目录的全部 LM 权重和 tokenizer，再注册全新音频模块及三组 LoRA。检查 config、纯三循环身份、9244 步最终 checkpoint 的 metadata/manifest/complete JSON；不反序列化文本 `training_state.pt`。音频 optimizer、scheduler、GradScaler、GradNormTracker、RNG 和数据游标从 step0 新建。
 
+## 已有文本 checkpoint 的历史 schedule 字段兼容
+
+2026-11-13 的启动错误 `recursive_logical_to_physical_schedule contradicts the fixed schedule` 来自旧转换元数据：
+干净 `5+10×2+5` 源 config 写入四份 schedule；x3 转换器 deep-copy 后更新其中三份，
+未更新 `recursive_logical_to_physical_schedule`，该冗余字段仍是30次双循环序列。
+实际文本执行读取 `logical_to_physical`，其40次三循环序列与模型构造、checkpoint metadata 一致。
+
+本音频路线仅接受这一明确的历史别名：该字段必须恰为原 `0..4,(5..14)×2,15..19`，
+同时主字段 `logical_to_physical` 必须完整等于 `0..4,(5..14)×3,15..19`。
+其他 schedule 别名、40/20/3几何、纯模型合同、源层映射、最终9244步完整性和严格权重加载均继续校验。
+实际模型通过20个物理层/40次执行检查后，仅将内存中这一冗余字段规范为40次；不修改磁盘上的源 checkpoint。
+`runtime.json` 的 `contract.recursive_text_checkpoint.schedule_metadata_compatibility` 记录原值、规范值和原因。
+
+无需重转文本模型或重新训练文本。提交推送本修复、远程 `git pull --ff-only` 后，按下方正式训练命令重新提交。
+本次失败发生在 `write_config.py`、启动 torchrun 前；使用默认新时间戳目录从step0开始，
+不要将失败输出目录作为 `--output-dir` 或 `--resume-checkpoint` 复用。
+
 ## 模型与注入
 
 20 个物理 decoder 层执行 40 次：`0..4 → (5..14)×3 → 15..19`。全部基础 LM 参数继续训练，中间层基础 W/bias 在三轮共享。

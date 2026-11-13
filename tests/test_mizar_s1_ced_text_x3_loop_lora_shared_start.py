@@ -258,6 +258,7 @@ class CEDSharedStartTests(unittest.TestCase):
                 recursive_suffix_layer_count=5, recursive_loops_scope="middle_only",
                 recursive_source_layer_indices_0based=list(contract.TEXT_MODEL_SOURCE_MAPPING),
                 logical_to_physical=list(contract.TEXT_MODEL_SCHEDULE),
+                recursive_logical_to_physical_schedule=list(contract.LEGACY_X2_SCHEDULE),
                 architectures=["RecursiveLlamaForCausalLM"],
                 recursive_architecture_contract=contract.TEXT_MODEL_ARCHITECTURE,
                 vocab_size=49152, eos_token_id=0))
@@ -280,6 +281,11 @@ class CEDSharedStartTests(unittest.TestCase):
             self.assertEqual(config["max_optimizer_steps"], 17313)
             self.assertEqual(config["staging"]["initial_steps"], 0)
             self.assertEqual(config["staging"]["read_policy"], "shared_until_complete")
+            compat = config['contract']['recursive_text_checkpoint']['schedule_metadata_compatibility']
+            self.assertEqual(compat['execution_schedule'], list(contract.TEXT_MODEL_SCHEDULE))
+            self.assertIn(contract.LEGACY_SCHEDULE_ALIAS, compat['overrides'])
+            self.assertEqual(json.loads((text/'config.json').read_text())[contract.LEGACY_SCHEDULE_ALIAS],
+                             list(contract.LEGACY_X2_SCHEDULE))
 
     def test_switch_is_collective_before_loading_all_four_microbatches(self):
         source = (ROUTE / "train.py").read_text(encoding="utf-8")
