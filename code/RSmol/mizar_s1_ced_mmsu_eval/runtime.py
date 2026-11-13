@@ -20,9 +20,9 @@ import mizar_s1_ced_multilayer_eval_runtime as multilayer  # noqa: E402
 VARIANTS = ("base", "recursive_mesh", *recursive.ROUTE_SPECS, *multilayer.ROUTE_SPECS,
             "official_mizar")
 PROTOCOL = copy.deepcopy(base.PROTOCOL)
-PROTOCOL.update(version="mmsu_official_prompt_ced_fixed20_raw_greedy_v1",
+PROTOCOL.update(version="mmsu_official_prompt_ced_fixed20_raw_greedy_choice_v2",
                 prompt_policy="MMSU_official_instruction_ABCD_original_case_and_null_positions",
-                scoring="pinned_external_MMSU_mmsu_evaluation.py_positional_jsonl")
+                scoring="mmsu_explicit_choice_v2_then_pinned_external_official_scorer")
 
 
 def adapter(variant):

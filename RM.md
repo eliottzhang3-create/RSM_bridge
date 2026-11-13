@@ -1,3 +1,44 @@
+## 2026-11-13：独立 ReasonAQA test close-ended 评测及七目标提交
+
+按用户确认范围，仅纳入 AudioCaps-MCQ.json、Clotho-MCQ.json 全部行，以及 ClothoAQA.json
+中 strip/casefold 后标准答案严格为 yes/no 的行。其余行统计排除数量，保留原 JSON 顺序和
+原始行号，不去重、不跳过失败样本。唯一指标为完整答案规范化精确匹配：去首尾空白、
+移除末尾一个 <|endoftext|>、Unicode casefold、连续空白合并；保留字母、括号、正文和标点。
+不抽取字母、不作子串/语义匹配，空回答算错且保留分母。输出 overall 微平均及三类别统计。
+
+新增隔离包 code/RSmol/mizar_s1_ced_reasonaqa_eval/，默认读取
+/hpc_stor03/sjtu_home/jinwei.zhang/data/reasonaqa/test.json，音频按项目原有 AudioCaps/Clotho/
+ClothoAQA 根映射，支持反斜杠、空格、ClothoAQA 唯一规范化 stem；缺失/歧义/越界均失败。
+只把原 input 小写后送入训练 tokenizer，不追加指令、不把 caption/GT/task 元数据送入模型。
+使用原训练 mono/resample32k/fixed20，单文件整段20秒后分10秒，双文件分别10秒；保存实际
+音频波形SHA与prompt token IDs指纹。FP32/eval、seed1234、TF32关闭、prompt256/prefix383、
+纯greedy300/完整重算/无KV/LM mask=None与原CED协议一致；只调用已有严格loader和decoder，
+保留递归/MeSH/注入/reinjection/Loop-LoRA每样本context，不修改训练及模型源码。
+
+七个固定目标为 base、recursive_5_10_5、serial84、serial48_lora_r8、serial84_lora_r8、
+recursive_mesh、mesh48_lora_r8；精确绑定用户所列七个run的model--step-17313.ckpt及配套
+formal/runtime.json，训练geometry8,8,4，不自动选择latest。提交入口
+code/RSmol/run_mizar_reasonaqa_selected7_5090.sh支持单目标和all七个独立完整作业；通用入口
+run_mizar_s1_ced_small_reasonaqa_eval_5090.sh。每作业pdgpu-5090/1GPU/8CPU/32G/1node，
+沿用原镜像、mellow_c8204d8及离线环境，不加自动smoke。--check-args只解析、不提交或读资产。
+
+默认各自run下eval/reasonaqa_close_ended_step17313_v1/，输出完整raw generations/token IDs、
+筛选/路径/模型审计、逐题正确性、accuracy及evaluation_report。checkpoint/runtime/test/
+音频stat/源码/协议严格绑定；进程锁、append+fsync、raw权威恢复，只截断未完成末尾写入，
+完整损坏记录硬失败，身份改变不覆盖原报告。完整raw重评分不加载模型。
+compare模块对七个完成结果验证PASS、相同test/筛选/协议/评测源码、完整覆盖、原始hash、
+重算分数及逐题实际模型输入指纹后输出CSV/JSON。详细协议、七条/一键提交、Git同步和
+续跑/汇总命令见code/RSmol/mizar_s1_ced_reasonaqa_eval/README.md。
+
+python -B tests/validate_mizar_s1_ced_reasonaqa_eval.py：164项中154通过、10项因本地缺少
+Torch/音频/Parquet等依赖明确跳过，报告PASS；含22项新ReasonAQA测试（21通过/1跳过）
+及原MMAU/MMAR/MMSU回归。验证真实Bash入口+模拟vc/conda、七目标精确路径/资源/引用、
+筛选/完整答案计分/数值预处理fixture/题面隔离/断点恢复/损坏拦截/比较一致性；3个shell语法
+与Python语法通过。132份原评测文件字节SHA保持，snapshot记录在新包reference_audit.json。
+报告audit_reports/mizar_s1_ced_reasonaqa_eval_validation.json。Windows沙箱临时目录受限，
+经授权在沙箱外运行本地合成回归；未访问远程生产权重或数据，未代为commit/push或提交GPU作业，
+不声明远程推理PASS。本条仅前置，全部RM历史字节保留。
+
 ## 2026-11-13：四个指定新 checkpoint 的 MMAU / MMAR / MMSU 评测适配
 
 按用户批准计划扩展 init0904、普通 text_epoch1、text_epoch1 CED4→8/audio reinjection/双 LoRA r8、

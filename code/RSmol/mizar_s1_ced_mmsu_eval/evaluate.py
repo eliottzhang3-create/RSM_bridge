@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from mizar_s1_ced_mmsu_eval import dataset, runtime, scoring, storage  # noqa: E402
+from mizar_s1_ced_mmsu_eval import dataset, parsing, runtime, scoring, storage  # noqa: E402
 
 DEFAULT_MMSU = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/MMSU")
 
@@ -160,7 +160,9 @@ def execute(args, report):
     report["inference_coverage"] = {"status": "PASS", "rows": len(store.state), "skipped": 0}
     predictions = args.output_dir / "predictions_official.jsonl"
     scoring.write_predictions(predictions, store.state)
-    report["official_evaluation"] = scoring.run_scorer(args.evaluation_script, predictions, args.output_dir)
+    # Keep the v1 raw artifact; adapt only a separate scorer input copy.
+    report["response_parsing"], report["official_evaluation"] = parsing.score_records(
+        parsing.read_complete_jsonl(predictions), args.evaluation_script, args.output_dir)
     report["status"] = report["official_evaluation"]["status"]
 
 
