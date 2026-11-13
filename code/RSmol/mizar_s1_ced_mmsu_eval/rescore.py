@@ -11,7 +11,7 @@ from pathlib import Path
 from . import dataset, parsing, scoring, storage
 
 DEFAULT_SCORER = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/MMSU/MMSU code/mmsu_evaluation.py")
-SUBDIRECTORY = "rescore_mmsu_choice_v2"
+SUBDIRECTORY = "rescore_mmsu_answer_text_v2"
 
 
 def parse_args(argv=None):
@@ -113,7 +113,7 @@ def main(argv=None):
     report = run(args)
     parsed = report.get("response_parsing", {})
     print(json.dumps({"status": report["status"], "source": str(args.source_output_dir),
-                      "recognized_rows": parsed.get("recognized_rows"), "invalid_rows": parsed.get("invalid_rows"),
+                      "matched_rows": parsed.get("matched_rows"), "nonmatching_rows": parsed.get("nonmatching_rows"),
                       "official_evaluation": report.get("official_evaluation"),
                       "fatal_error": report["fatal_error"], "report": report["report"]}, ensure_ascii=False))
     return 0 if report["status"] == "PASS" else 1

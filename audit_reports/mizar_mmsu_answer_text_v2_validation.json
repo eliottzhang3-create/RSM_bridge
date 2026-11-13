@@ -1,0 +1,104 @@
+{
+  "scope": "local synthetic fixtures and existing regressions; no remote assets or GPU inference",
+  "status": "PASS",
+  "utc": "2026-11-13T03:30:34.063173+00:00",
+  "modules": [
+    "test_mizar_s1_ced_reasonaqa_eval",
+    "test_mizar_s1_ced_reasonaqa_shell",
+    "test_mizar_s1_ced_mmsu_eval",
+    "test_mizar_s1_ced_mmsu_dependencies",
+    "test_mizar_s1_ced_mmsu_shell",
+    "test_mizar_mmsu_selected5",
+    "test_mizar_selected4_eval",
+    "test_mizar_selected4_eval_tensor",
+    "test_mizar_mmsu_rescore",
+    "test_mizar_s1_ced_benchmark_eval",
+    "test_mizar_s1_ced_recursive_eval",
+    "test_mizar_s1_ced_recursive_mesh_eval",
+    "test_mizar_s1_ced_multilayer_eval",
+    "test_mizar_s1_ced_eval_extensions",
+    "test_mizar_s1_ced_input_ca_eval"
+  ],
+  "tests_run": 180,
+  "passed": 170,
+  "skipped": [
+    {
+      "test": "test_real_torch_audio_and_prompt_to_generation (test_mizar_s1_ced_reasonaqa_eval.RuntimeTests.test_real_torch_audio_and_prompt_to_generation)",
+      "reason": "real Torch/torchaudio unavailable: No module named 'torch'"
+    },
+    {
+      "test": "test_bytes_precede_nonexistent_path_and_preserve_header_rate_channels (test_mizar_s1_ced_mmsu_dependencies.RealAudioReadTests.test_bytes_precede_nonexistent_path_and_preserve_header_rate_channels)",
+      "reason": "requires soundfile"
+    },
+    {
+      "test": "test_path_fallback_and_corrupt_bytes_are_not_silently_replaced (test_mizar_s1_ced_mmsu_dependencies.RealAudioReadTests.test_path_fallback_and_corrupt_bytes_are_not_silently_replaced)",
+      "reason": "requires soundfile"
+    },
+    {
+      "test": "test_embedded_bytes_precede_stale_path_stereo_downmix_and_real_resampling (test_mizar_s1_ced_mmsu_dependencies.RealAudioTensorTests.test_embedded_bytes_precede_stale_path_stereo_downmix_and_real_resampling)",
+      "reason": "requires torch, torchaudio, soundfile; run in mellow_c8204d8"
+    },
+    {
+      "test": "test_fixed20_actual_crop_before_split_and_right_padding (test_mizar_s1_ced_mmsu_dependencies.RealAudioTensorTests.test_fixed20_actual_crop_before_split_and_right_padding)",
+      "reason": "requires torch, torchaudio, soundfile; run in mellow_c8204d8"
+    },
+    {
+      "test": "test_generation_preserves_uppercase_and_actual_greedy_decoder_eos (test_mizar_s1_ced_mmsu_dependencies.RealAudioTensorTests.test_generation_preserves_uppercase_and_actual_greedy_decoder_eos)",
+      "reason": "requires torch, torchaudio, soundfile; run in mellow_c8204d8"
+    },
+    {
+      "test": "test_local_uploaded_dataset_metadata_if_available (test_mizar_s1_ced_mmsu_dependencies.RealParquetTests.test_local_uploaded_dataset_metadata_if_available)",
+      "reason": "requires pyarrow; run in mellow_c8204d8"
+    },
+    {
+      "test": "test_real_metadata_and_schema_errors (test_mizar_s1_ced_mmsu_dependencies.RealParquetTests.test_real_metadata_and_schema_errors)",
+      "reason": "requires pyarrow; run in mellow_c8204d8"
+    },
+    {
+      "test": "test_real_three_shard_global_order_and_nullable_fields (test_mizar_s1_ced_mmsu_dependencies.RealParquetTests.test_real_three_shard_global_order_and_nullable_fields)",
+      "reason": "requires pyarrow; run in mellow_c8204d8"
+    },
+    {
+      "test": "test_trained_final_audio_lora_overwrites_text_values_and_matches_logits (test_mizar_selected4_eval_tensor.FinalAudioTensorTests.test_trained_final_audio_lora_overwrites_text_values_and_matches_logits)",
+      "reason": "requires torch, transformers and safetensors; no downloads"
+    }
+  ],
+  "failures": [],
+  "errors": [],
+  "existing_benchmark_sources": {
+    "checked": 132,
+    "authorized_mmsu_v2_extensions": 4,
+    "changed": []
+  },
+  "python_syntax": [
+    "code/RSmol/mizar_s1_ced_reasonaqa_eval/compare.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa_eval/config.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa_eval/dataset.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa_eval/evaluate.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa_eval/runtime.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa_eval/scoring.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa_eval/storage.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa_eval/__init__.py",
+    "tests/test_mizar_s1_ced_reasonaqa_eval.py",
+    "tests/test_mizar_s1_ced_reasonaqa_shell.py",
+    "tests/validate_mizar_s1_ced_reasonaqa_eval.py"
+  ],
+  "bash_syntax": [
+    {
+      "path": "code/RSmol/mizar_s1_ced_reasonaqa_eval/run.sh",
+      "status": "PASS",
+      "stderr": ""
+    },
+    {
+      "path": "code/RSmol/run_mizar_s1_ced_small_reasonaqa_eval_5090.sh",
+      "status": "PASS",
+      "stderr": ""
+    },
+    {
+      "path": "code/RSmol/run_mizar_reasonaqa_selected7_5090.sh",
+      "status": "PASS",
+      "stderr": ""
+    }
+  ],
+  "elapsed_seconds": 139.23260370000207
+}

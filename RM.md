@@ -1,3 +1,40 @@
+## 2026-11-13：MMSU完整答案文本包含评分及五份已有生成的CPU离线重评
+
+用户确认忽略生成的选项字母，只检查归一化后生成中是否包含完整answer_gt文本。
+评分版本mmsu_answer_text_contains_v2：去首尾空白、末尾一个EOS和开头选项格式标记，
+对生成/GT做Unicode casefold及连续空白合并，保留标点，并对答案两端词字符检查边界。
+完整文本命中才从原始选项元数据找到精确等于GT的第一个字母，作为官方格式编码；
+生成字母不参与判分。未命中/空回答/只有字母但无答案文本，向官方scorer写空字符串计错。
+解释、否定句或多候选中出现GT也会命中，这是用户选定的文本包含指标，不是选项字母准确率。
+
+新增MMSU parsing与rescore CPU链路；后续evaluate自动使用同一转换，原始生成/token IDs及
+predictions_official.jsonl不改，另存predictions_normalized.jsonl、response_parsing.jsonl、
+parsing_report.json。官方scoring.py与外部mmsu_evaluation.py原样，固定LF SHA
+b6d5d35d2755244019a78e601495ea74e722681bf6f7e1fd0179bab7cabca3eb；
+执行官方CLI和原函数并核对分母5000、总体正确率等于文本命中数/5000。
+音频/官方题面/FP32/prompt256/greedy300及已有模型loader、训练、MMAU/MMAR设置均保持。
+
+离线入口code/RSmol/rescore_mizar_mmsu_selected5.sh支持official_mizar、base、
+recursive_5_10_5、serial84_lora_r8、recursive_mesh和all。五个源目录精确复用原提交预设，
+all会尝试全部目标，某份失败仍处理其余份。直接CPU运行，不用vc/GPU，不读权重/音频/Parquet。
+优先校验完整raw的5000条连续行号、唯一ID、元数据与record/generation SHA，
+有原预测时逐行交叉核验；仅raw不存在时允许预测文件回退，损坏raw不绕过。
+不截断/修补源文件，不覆盖旧报告；新结果分别写各源目录的rescore_mmsu_answer_text_v2/。
+保留生成进程锁与严格源码/来源/协议身份。同版本可重复评分；旧v1完整结果用离线入口，
+未完成旧生成先沿用原代码完成再重评，不放宽断点身份。完整操作与Git同步命令见
+code/RSmol/mizar_s1_ced_mmsu_eval/RESCORE.md。
+
+本地验证python -B tests/validate_mizar_s1_ced_reasonaqa_eval.py --report
+audit_reports/mizar_mmsu_answer_text_v2_validation.json：180项中170通过、10项因缺少
+Torch/音频/Parquet依赖明确跳过，报告PASS。含16项新回归：真实官方scorer/5000条合成
+结果、文本包含/错误字母忽略/分母、离线重复/源文件保留/损坏拒绝、五路径/真实Bash CPU
+入口/无模型导入及未来完整生成流程；原MMAU/MMAR/MMSU/ReasonAQA回归通过。
+10份相关Python源码符合Python3.10语法，新2个shell语法通过。保留ReasonAQA原132份
+历史snapshot，normalization_reference.json单列4份授权MMSU文件前后SHA，其余128份
+字节一致。旧MMSU validator恢复原字节，新测试接入综合validator，不改历史基线。
+Windows沙箱外经授权运行本地合成测试；未读取远程资产、代为commit/push或提交真实作业，
+不声明五个远程模型评分已完成。本条仅前置，原RM全部历史字节保留。
+
 ## 2026-11-13：独立 ReasonAQA test close-ended 评测及七目标提交
 
 按用户确认范围，仅纳入 AudioCaps-MCQ.json、Clotho-MCQ.json 全部行，以及 ClothoAQA.json

@@ -1,10 +1,12 @@
 # MMSU：官方题面、官方 scorer、项目 CED 推理协议
 
-正式入口是 `code/RSmol/run_mizar_s1_ced_small_mmsu_eval_5090.sh`。本实现只新增隔离文件；原 MMAU test mini、MMAR 的入口、runner、runtime、模型和训练文件均保持原样。
+正式入口是 `code/RSmol/run_mizar_s1_ced_small_mmsu_eval_5090.sh`。原 MMAU test mini、MMAR 的入口、runner、runtime、模型和训练文件均保持原样。
+
+**评分更新（v2）**：按用户确认，忽略生成的选项字母，只检查归一化生成中是否包含完整 `answer_gt` 文本，再转换为未改动官方 scorer 接受的格式。这是答案文本包含指标；解释或否定句中提到标准答案也会命中。已完成的五份结果直接用 CPU 离线重评，无需再次推理：`bash code/RSmol/rescore_mizar_mmsu_selected5.sh all`。完整定义、命令和 Git 同步清单见 [RESCORE.md](RESCORE.md)。
 
 本地 Windows 维护代码，通过 GitHub 同步到远程 Linux；权重、真实推理和输出仍在远程。通用入口不预选架构、训练 run、checkpoint 或 step，也没有默认触发 smoke、额外测试作业或训练。提交入口默认执行完整 5000 条评测。
 
-2026-11-13 用户指定的官方 Mizar 与四个 step17313 checkpoint，已准备独立的五目标提交入口：`code/RSmol/run_mizar_mmsu_selected5_5090.sh`。固定映射、五条可直接执行的提交命令及本地 Git 同步命令见 [SELECTED5.md](SELECTED5.md)。它只组装参数并调用本通用入口，模型加载、生成和评分实现保持原样。
+2026-11-13 用户指定的官方 Mizar 与四个 step17313 checkpoint，已准备独立的五目标提交入口：`code/RSmol/run_mizar_mmsu_selected5_5090.sh`。固定映射及五条提交命令见 [SELECTED5.md](SELECTED5.md)。它只组装参数并调用本通用入口，新评测自动使用 v2 评分；模型加载和生成设置保持原样。
 
 ## 正式运行
 
@@ -116,24 +118,31 @@ GT、任务名和分类不进入模型输入。其他推理设置沿用当前 CE
 | `progress.jsonl` | 已完成样本事件；恢复以 durable raw 记录为准 |
 | `model_audit.json` | 现有严格 loader 和实际 forward 的审计，完整结果重评分时保留 |
 | `predictions_official.jsonl` | 原官方元数据 + 原始 `response`，含真实 null 选项 |
+| `predictions_normalized.jsonl` | 官方评分副本：完整答案文本命中写对应正确字母，未命中写空字符串 |
+| `response_parsing.jsonl` | 逐题原始回答、归一化生成/GT、匹配位置、判定与转换后的 response |
+| `parsing_report.json` | v2 规则、命中/未命中数量、EOS/格式处理统计、文件摘要 |
 | `official_evaluation.txt` | 未改的官方 scorer 标准输出与错误输出 |
-| `evaluation_report.json` | 推理覆盖、评分执行状态、实际分母、原始精度 overall/category 分数、处理统计和错误 |
+| `evaluation_report.json` | 推理覆盖、文本匹配统计、评分执行状态、实际分母、原始精度 overall/category 分数、处理统计和错误 |
 
-每个输出目录持有进程锁，进程异常退出后锁自动释放。再次用相同参数、相同输出目录启动，会校验 run identity，恢复已经落盘的连续样本，只推理剩余样本。raw 写成功但 progress 未写的样本也能恢复。只修复最后一个缺少换行的未完成写入；已完整换行但 JSON 损坏、样本顺序/ID/内容不匹配均报错。更换权重、runtime、数据、scorer 或源码时使用新输出目录。完整 5000 条 raw 已存在时只重评分，不再加载模型。
+每个输出目录持有进程锁，进程异常退出后锁自动释放。再次用相同参数、相同输出目录启动，会校验 run identity，恢复已经落盘的连续样本，只推理剩余样本。raw 写成功但 progress 未写的样本也能恢复。只修复最后一个缺少换行的未完成写入；已完整换行但 JSON 损坏、样本顺序/ID/内容不匹配均报错。更换权重、runtime、数据、scorer 或源码时使用新输出目录。同版本完整 5000 条 raw 已存在时只重评分，不再加载模型。
+
+旧 v1 代码/协议身份与 v2 不同，已完成的旧目录必须使用 [离线入口](RESCORE.md)，不要用新生成入口覆盖。未完成的旧生成先沿用旧代码完成，再离线重评。离线入口只读源 JSONL，不修补源文件，并将新评分写入独立子目录。
 
 遇到音频、数据、模型或生成错误立即停止并保留结果，不跳过样本。严格完成 5000 条唯一预测后才调用：
 
 ```bash
-python '/.../MMSU code/mmsu_evaluation.py' '/.../predictions_official.jsonl'
+python '/.../MMSU code/mmsu_evaluation.py' '/.../predictions_normalized.jsonl'
 ```
 
 脚本源文件固定为调研时版本，归一 LF 后 SHA256：
 `b6d5d35d2755244019a78e601495ea74e722681bf6f7e1fd0179bab7cabca3eb`。
 只容许 Git/上传产生的 CRLF/LF 差异；不修改脚本，不自动下载替换。测试 fixture 是该原文件的原样副本。
 
-官方 scorer 以选项文本与 `answer_gt` 精确相等判断正确；它会排除部分格式错误的回答，空回答和字符串 `None` 则计错。保留这种官方行为，不提取答案字母、不转大写、不删除 EOS。结果中的 accuracy 是 0～1 的比例。执行官方 CLI 后，再调用同一个官方函数取得未四舍五入的分数/计数，并核对 CLI 输出。
+原始生成及 `predictions_official.jsonl` 始终保留大小写、空白和 EOS。v2 评分副本先去首尾空白、末尾一个 EOS 和开头选项格式标记，再对生成与完整 `answer_gt` 做 Unicode casefold 与连续空白合并，保留标点，按完整文本包含及词边界判定。生成字母不参与正确性比较；只输出字母而没有标准答案文本算错。命中时以原始选项中精确等于 GT 的第一个字母编码，未命中时写空字符串，均送入原官方 scorer。
 
-三个状态分开报告：5000 条推理覆盖、scorer 进程执行、官方实际计分分母。即使 scorer 返回 0，只要实际分母小于 5000，仍保留官方分数与输出，但整轮 `status=FAILED`、退出码为 1；这不表示推理记录丢失，也不会偷偷改写回答以提高覆盖。官方现成统计按 category/sub-category，47 个 task 的元数据覆盖另有记录。
+官方 scorer 以选项文本与 `answer_gt` 精确相等判断正确；空字符串计错并保留分母，因此 v2 保证未命中也参与完整5000题分母。此转换表达用户选择的文本包含判定，不代表模型的选项字母预测。结果 accuracy 是 0～1 的比例。执行官方 CLI 后，再调用同一个官方函数取得未四舍五入的分数/计数，核对 CLI 输出，并核验总体分数等于文本命中数/5000。
+
+三个状态分开报告：5000 条推理覆盖、scorer 进程执行、官方实际计分分母。即使 scorer 返回 0，只要实际分母小于 5000，仍保留官方分数与输出，但整轮 `status=FAILED`、退出码为 1；这不表示推理记录丢失。转换规则及每题判定全部公开记录在解析审计中。官方现成统计按 category/sub-category，47 个 task 的元数据覆盖另有记录。
 
 ## 验证与代码同步
 
@@ -146,13 +155,13 @@ python -B tests/validate_mizar_s1_ced_mmsu_eval.py \
   --assets-root '/hpc_stor03/sjtu_home/jinwei.zhang/data/MMSU'
 ```
 
-覆盖真实三片 Parquet 的顺序、空选项、异常 schema/重复 ID；官方 scorer 的原始 EOS、大小写及分母行为；完整 5000 条 fixture 流程、中断续跑、身份变化和损坏记录；真实 Bash + 模拟 vc 的资源/路径参数/离线环境；现有 CED MMAU/MMAR 相关回归。`reference_audit.json` 固定了原有 28 个评测文件的原始字节和 LF SHA256。
+覆盖真实三片 Parquet 的顺序、空选项、异常 schema/重复 ID；官方 scorer 的原始 EOS、大小写及分母行为；v2 文本包含/格式转换与 CPU 离线重评；完整 5000 条 fixture 流程、中断续跑、身份变化和损坏记录；真实 Bash + 模拟 vc 的资源/路径参数/离线环境；现有 CED MMAU/MMAR 相关回归。`reference_audit.json` 固定了原有 28 个评测文件的原始字节和 LF SHA256。后续授权修改的4份 MMSU 文件由 `normalization_reference.json` 单列前后摘要，保留 ReasonAQA 的历史132份基线。
 
 真实 tensor/resampling 检查缺依赖时明确 skip；不将 fixture 推理或 CPU 检查宣称为远程 checkpoint 评测成功。无需安装本地权重或训练数据。
 
 2026-11-13 本地验收：122 项中 119 通过、3 项真实 Torch/torchaudio 检查缺依赖跳过，原有 28 个评测文件的原始字节校验全部通过。使用独立临时目录中的 PyArrow/SoundFile 核验了实际三片 5000 条元数据，并实际解码全部 5000 段音频。元数据为 47 个任务；音频包含 8 种真实采样率、450 段双声道，不能统一假设为 HF 元数据标注的 16 kHz；实际时长约 0.302～35.915 秒，145 段会被固定 20 秒策略截断，4855 段需补零。298 段的头部帧数与实际解码长度不同，因此统计与推理均以实际解码结果为准。完整记录见 `audit_reports/mizar_s1_ced_mmsu_eval_validation.json`。
 
-本次同步的新增文件为：
+初次交付的文件清单如下；本次 v2 的完整 Git 同步命令以 [RESCORE.md](RESCORE.md) 为准：
 
 ```text
 code/RSmol/run_mizar_s1_ced_small_mmsu_eval_5090.sh

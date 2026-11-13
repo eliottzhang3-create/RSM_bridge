@@ -326,7 +326,8 @@ class RuntimeTests(unittest.TestCase):
                 evaluate.parse_args(['--target', 'base', *option])
         audit = json.loads((config.ROOT / 'mizar_s1_ced_reasonaqa_eval/reference_audit.json').read_text())
         self.assertEqual(len(audit['files']), 132)
-        for path, digest in audit['files'].items():
+        from mmsu_v2_audit import effective_benchmark_baseline
+        for path, digest in effective_benchmark_baseline(ROOT).items():
             self.assertEqual(storage.file_sha(ROOT / path), digest, path)
         self.assertNotEqual(runtime.PROTOCOL['version'], runtime.base.PROTOCOL['version'])
         self.assertEqual(runtime.base.PROTOCOL['scoring'], 'benchmark_official_evaluation.py_only')

@@ -1,6 +1,8 @@
 # 用户指定的五个 Mizar MMSU 测评目标（2026-11-13）
 
-已核对现有 MMAU test mini、MMAR 的提交分支和 runtime 注册。五个目标全部复用现成适配，只新增 `code/RSmol/run_mizar_mmsu_selected5_5090.sh` 组装固定参数；既有 MMAU/MMAR、MMSU 推理和 scorer 实现均不修改。
+已核对现有 MMAU test mini、MMAR 的提交分支和 runtime 注册。五个目标全部复用现成适配，`code/RSmol/run_mizar_mmsu_selected5_5090.sh` 组装固定参数；既有 MMAU/MMAR 和 MMSU 推理设置保持。
+
+**已有五份生成无需重跑**：同步代码后执行 `bash code/RSmol/rescore_mizar_mmsu_selected5.sh all`，在 CPU 上按用户确认的 v2 完整答案文本包含规则重评，忽略生成字母，转换后调用未改动官方 scorer。新结果写入各源目录的 `rescore_mmsu_answer_text_v2/`。详细定义、完整命令和本次 Git 同步清单见 [RESCORE.md](RESCORE.md)。本页以下提交命令用于新的完整推理作业，更新代码后自动使用 v2 评分。
 
 ## 目标映射
 
@@ -62,7 +64,7 @@ bash code/RSmol/run_mizar_mmsu_selected5_5090.sh recursive_mesh
 
 五条 MMSU 作业均提交至既有 MMSU 资源池 `pdgpu-5090`，每作业 1 GPU / 8 CPU / 32G / 1 node，沿用原镜像、`mellow_c8204d8` 和离线设置。此前官方 Mizar 的 MMAU/MMAR 提交分支使用 `pdgpu-4090`；本次没有改动那个分支。
 
-数据默认使用 `/hpc_stor03/sjtu_home/jinwei.zhang/data/MMSU` 下的 `MMSU data` 与 `MMSU code`。官方大写题面、32kHz mono/fixed20、FP32、prompt256、greedy300、无 KV、保留原始 EOS、官方 scorer 和实际评分分母检查均沿用已交付 MMSU 协议。没有自动 smoke 或额外 GPU 前置任务。
+数据默认使用 `/hpc_stor03/sjtu_home/jinwei.zhang/data/MMSU` 下的 `MMSU data` 与 `MMSU code`。官方大写题面、32kHz mono/fixed20、FP32、prompt256、greedy300、无 KV、保留原始 EOS 均沿用已交付 MMSU 推理协议。v2 先判定归一化完整答案文本是否出现在生成中，再将命中转换为正确字母、未命中转换为空字符串，交给原官方 scorer；完整5000题均参与分母。没有自动 smoke 或额外 GPU 前置任务。
 
 ## 结果目录与续跑
 
@@ -72,9 +74,9 @@ bash code/RSmol/run_mizar_mmsu_selected5_5090.sh recursive_mesh
 /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_official_stage3_q4_seed20260905_matched_ced_v1/mmsu/
 ```
 
-其余四条各自在对应训练 run 下的 `eval/mmsu_step17313/`，五个输出目录相互独立。各目录中的 `evaluation_report.json`、`official_evaluation.txt`、`predictions_official.jsonl` 保存正式报告、官方 scorer 输出及逐题原始回答。
+其余四条各自在对应训练 run 下的 `eval/mmsu_step17313/`，五个输出目录相互独立。各目录中的 `evaluation_report.json`、`official_evaluation.txt`、`predictions_official.jsonl` 保存正式报告、官方 scorer 输出及逐题原始回答。v2 另存 `predictions_normalized.jsonl`、`response_parsing.jsonl` 和 `parsing_report.json`。
 
-再次执行同一目标命令，会按现有 MMSU 身份检查恢复该目录的未完成样本。需要全新评测时可以显式指定新输出目录：
+同代码/协议版本再次执行同一目标命令，会按现有 MMSU 身份检查恢复该目录的未完成样本。旧 v1 完整结果使用离线入口，不用新生成入口覆盖；未完成的 v1 先沿用旧代码完成，再离线重评。需要全新评测时可以显式指定新输出目录：
 
 ```bash
 bash code/RSmol/run_mizar_mmsu_selected5_5090.sh base --output-dir '/新输出目录/mmsu'
@@ -92,7 +94,7 @@ bash code/RSmol/run_mizar_mmsu_selected5_5090.sh serial84_lora_r8 --check-args
 
 ## 本地代码同步与回归
 
-本轮在已有 MMSU 实现之上，只需同步以下改动。PowerShell 在本地仓库根执行：
+以下为五目标预设初次交付时的同步命令；本次 v2 评分及离线重评请使用 [RESCORE.md](RESCORE.md) 的完整文件清单。初次交付时 PowerShell 在本地仓库根执行：
 
 ```powershell
 git add -- code/RSmol/run_mizar_mmsu_selected5_5090.sh code/RSmol/mizar_s1_ced_mmsu_eval/README.md code/RSmol/mizar_s1_ced_mmsu_eval/SELECTED5.md tests/test_mizar_mmsu_selected5.py tests/validate_mizar_s1_ced_mmsu_eval.py audit_reports/mizar_mmsu_selected5_validation.json RM.md
@@ -108,4 +110,4 @@ python -B -m unittest discover -s tests -p test_mizar_mmsu_selected5.py -v
 
 测试执行真实五目标入口、通用提交入口、计算 shell 与参数解析，`vc` 和 conda 激活为显式 fixture；验证精确 checkpoint/runtime/route、8/8/4、单卡资源、五个独立输出、含空格参数、只解析不提交及错误参数拦截。测试不会加载生产权重或提交真实作业。该用例也已接入完整 MMSU validator。
 
-本轮针对性验收合并新入口用例、已有 MMSU shell 用例及原 28 份 MMAU/MMAR 评测文件的源码校验，共 8 项全部通过；记录在 `audit_reports/mizar_mmsu_selected5_validation.json`。原 MMSU runner/runtime/storage/scoring/dataset、通用提交脚本和所有旧模型适配均未修改。
+五目标预设初次交付时的针对性验收合并新入口用例、已有 MMSU shell 用例及原 28 份 MMAU/MMAR 评测文件的源码校验，共 8 项全部通过；记录在 `audit_reports/mizar_mmsu_selected5_validation.json`。此次 v2 仅在 MMSU runner 接入评分转换、更新其协议标识并新增 CPU 重评，storage/scoring/dataset、通用提交脚本和所有旧模型适配保持原样。

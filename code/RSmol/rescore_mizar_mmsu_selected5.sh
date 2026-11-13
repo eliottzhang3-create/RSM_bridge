@@ -10,7 +10,7 @@ OPTIONS:
   --evaluation-script PATH   Pinned official MMSU scorer
   --output-dir PATH          Separate scoring directory (one TARGET only)
   --check-args               Print parsed paths only; no reads or scoring
-Default output: <existing MMSU output>/rescore_mmsu_choice_v2/
+Default output: <existing MMSU output>/rescore_mmsu_answer_text_v2/
 USAGE
 }
 TARGET="${1:-}"

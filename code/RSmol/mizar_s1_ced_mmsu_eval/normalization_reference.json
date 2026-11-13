@@ -3,19 +3,23 @@
   "authorized_mmsu_extensions": {
     "code/RSmol/mizar_s1_ced_mmsu_eval/evaluate.py": {
       "before_raw_sha256": "69daac605f6e986d4c2972bb3df690d031952d17418defbd207bb608e2f69ceb",
-      "reason": "Authorized MMSU response normalization v2 and CPU-only offline rescoring; inference and other benchmarks unchanged."
+      "reason": "Authorized MMSU answer-text containment v2 and CPU-only offline rescoring; inference and other benchmarks unchanged.",
+      "after_raw_sha256": "ed1571218a6ddf6f848efae35f90d3b8fb6b28ad57fc157551fde845982201b2"
     },
     "code/RSmol/mizar_s1_ced_mmsu_eval/runtime.py": {
       "before_raw_sha256": "03cc61c3a865473e125d52337bd8d242bda270409c1edda43b74f89c1e195dfb",
-      "reason": "Authorized MMSU response normalization v2 and CPU-only offline rescoring; inference and other benchmarks unchanged."
+      "reason": "Authorized MMSU answer-text containment v2 and CPU-only offline rescoring; inference and other benchmarks unchanged.",
+      "after_raw_sha256": "ed171ed50d8886db14468a4f89162c064a70634f9dca86ad36ae7673d9a2e760"
     },
     "code/RSmol/mizar_s1_ced_mmsu_eval/README.md": {
       "before_raw_sha256": "b68e93ab52b23cad5ce63ba8e0108619aed6d5d8c3c2d9e73fa224ac5535dc55",
-      "reason": "Authorized MMSU response normalization v2 and CPU-only offline rescoring; inference and other benchmarks unchanged."
+      "reason": "Authorized MMSU answer-text containment v2 and CPU-only offline rescoring; inference and other benchmarks unchanged.",
+      "after_raw_sha256": "a7fea70d9e8409c2a3e397552dc88e56382aca44fdba836b63a3870e5dce3562"
     },
     "code/RSmol/mizar_s1_ced_mmsu_eval/SELECTED5.md": {
       "before_raw_sha256": "7870621dc304e315a8e83000ed5a6ee0cb500be3c4bc474d05bcecf3cad33b89",
-      "reason": "Authorized MMSU response normalization v2 and CPU-only offline rescoring; inference and other benchmarks unchanged."
+      "reason": "Authorized MMSU answer-text containment v2 and CPU-only offline rescoring; inference and other benchmarks unchanged.",
+      "after_raw_sha256": "3d5f1758768e3d10ec71c1787cbfb62b585492fd7c7865631ed04943c0001d80"
     }
   }
 }

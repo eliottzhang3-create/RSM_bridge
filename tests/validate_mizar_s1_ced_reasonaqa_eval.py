@@ -29,6 +29,7 @@ def main():
     modules = ['test_mizar_s1_ced_reasonaqa_eval', 'test_mizar_s1_ced_reasonaqa_shell',
                'test_mizar_s1_ced_mmsu_eval', 'test_mizar_s1_ced_mmsu_dependencies', 'test_mizar_s1_ced_mmsu_shell',
                'test_mizar_mmsu_selected5', 'test_mizar_selected4_eval', 'test_mizar_selected4_eval_tensor',
+               'test_mizar_mmsu_rescore',
                'test_mizar_s1_ced_benchmark_eval', 'test_mizar_s1_ced_recursive_eval',
                'test_mizar_s1_ced_recursive_mesh_eval', 'test_mizar_s1_ced_multilayer_eval',
                'test_mizar_s1_ced_eval_extensions', 'test_mizar_s1_ced_input_ca_eval']
@@ -42,8 +43,11 @@ def main():
               'failures': [{'test': str(test), 'traceback': trace} for test, trace in result.failures],
               'errors': [{'test': str(test), 'traceback': trace} for test, trace in result.errors]}
     baseline = json.loads((ROOT / 'code/RSmol/mizar_s1_ced_reasonaqa_eval/reference_audit.json').read_text())
+    from mmsu_v2_audit import effective_benchmark_baseline
+    effective = effective_benchmark_baseline(ROOT)
     report['existing_benchmark_sources'] = {
-        'checked': len(baseline['files']), 'changed': [path for path, digest in baseline['files'].items()
+        'checked': len(baseline['files']), 'authorized_mmsu_v2_extensions': 4,
+        'changed': [path for path, digest in effective.items()
                                                      if storage.file_sha(ROOT / path) != digest]}
     report['python_syntax'] = []
     sources = list((ROOT / 'code/RSmol/mizar_s1_ced_reasonaqa_eval').glob('*.py'))
