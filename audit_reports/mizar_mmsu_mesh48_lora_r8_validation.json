@@ -1,0 +1,37 @@
+{
+  "status": "PASS",
+  "validation_date": "2026-11-13",
+  "scope": "Local actual Bash launch/compute argument parsing with explicit vc/conda fixtures; no production weights, audio or GPU inference",
+  "command": "python -B -m unittest discover -s tests -p test_mizar_mmsu_mesh48_lora_r8.py -v",
+  "tests_run": 7,
+  "passed": 7,
+  "skipped": [],
+  "failures": [],
+  "errors": [],
+  "variant": "recursive_mesh_layer4_8_inject_loop_lora_r8",
+  "checkpoint": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_inject_loop_lora_r8_5090/formal_20261104_161727489909082/formal/checkpoints/model--step-17313.ckpt",
+  "expected_step": 17313,
+  "expected_geometry": [8, 8, 4],
+  "scoring": "mmsu_answer_text_contains_v2_then_pinned_external_official_scorer",
+  "existing_benchmark_sources": {
+    "checked": 132,
+    "baseline": "Historical ReasonAQA snapshot plus the four previously authorized MMSU v2 extensions",
+    "changed": []
+  },
+  "training_sources": {
+    "checked": 105,
+    "hash_policy": "LF SHA256 from mizar_selected4_eval/reference_audit.json",
+    "changed": []
+  },
+  "bash_syntax": "PASS",
+  "python310_syntax": "PASS",
+  "test_names": [
+    "test_bad_options_and_model_overrides_fail_before_submission",
+    "test_check_args_and_help_do_not_submit",
+    "test_existing_benchmark_and_training_sources_unchanged",
+    "test_existing_mmau_mmar_adapter_is_used_with_original_mesh_and_lora_contract",
+    "test_full_submission_binds_checkpoint_and_preserves_resources_and_job_arguments",
+    "test_io_overrides_with_spaces_and_quotes_keep_fixed_model",
+    "test_new_shell_syntax"
+  ]
+}

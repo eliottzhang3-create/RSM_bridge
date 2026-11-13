@@ -1,3 +1,30 @@
+## 2026-11-13：指定MeSH 4→8注入/Loop-LoRA r8的MMSU固定目标入口
+
+按用户给定checkpoint扩展MMSU提交，精确绑定
+mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_inject_loop_lora_r8_5090/
+formal_20261104_161727489909082/formal/checkpoints/model--step-17313.ckpt，
+配套同run的formal/runtime.json，expected step17313和训练geometry8,8,4。
+核对原MMAU/MMAR分支与共享multilayer registry，variant为
+recursive_mesh_layer4_8_inject_loop_lora_r8，原MeSH五槽/两循环/4→8注入与Loop-LoRA r8
+适配已完整存在；MMSU通用入口原本已支持，无需改loader、模型或评测核心。
+
+新增code/RSmol/run_mizar_mmsu_mesh48_lora_r8_5090.sh，固定模型身份，仅允许数据/scorer/
+输出路径及Parquet I/O batch-size覆盖；支持--check-args纯参数检查。
+提交原通用MMSU入口，完整5000题，pdgpu-5090/1GPU/8CPU/32G/1node，原镜像和conda，
+保留音频fixed20/32k、FP32、prompt256、greedy300、无KV及官方题面。
+沿用已确认mmsu_answer_text_contains_v2，经原官方scorer汇总，完整分母5000。
+默认结果写本run的eval/mmsu_step17313/，原始生成/评分副本/解析审计均按现有MMSU链路保存。
+原五目标快捷入口和离线all保持原样。说明、远程提交与本地Git同步见
+code/RSmol/mizar_s1_ced_mmsu_eval/MESH48_LORA_R8.md。
+
+python -B -m unittest discover -s tests -p test_mizar_mmsu_mesh48_lora_r8.py -v：
+7项全部通过，无跳过，执行真实新入口/原通用提交/计算shell和实际参数解析，
+仅vc/conda为显式fixture，核验精确身份、资源、空格路径、只解析不提交、错误参数拦截。
+132份现有评测文件摘要与105份训练源码LF摘要保持；新shell及Python3.10语法通过。
+报告audit_reports/mizar_mmsu_mesh48_lora_r8_validation.json。
+经授权在Windows沙箱外运行本地合成检查，未访问远程权重或提交真实GPU作业，
+未代为commit/push，不声明远程推理PASS。本条仅前置，全部RM历史字节完整保留。
+
 ## 2026-11-13：MMSU完整答案文本包含评分及五份已有生成的CPU离线重评
 
 用户确认忽略生成的选项字母，只检查归一化后生成中是否包含完整answer_gt文本。
