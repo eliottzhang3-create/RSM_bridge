@@ -1,3 +1,16 @@
+## 2026-11-15：修复ReasonAQA sample5000提交job名超60字符
+
+用户已删除上一轮提交作业，报告部分vc submit的job参数超过60位。
+此前仅截目标别名到36字符，完整时间戳/PID仍拼入job名，导致整体可能超限。
+仅修改本隔离提交器的-j命名为raqa5k-<最多40字符别名>-<12位SHA256摘要>，
+完整名称最多60个ASCII字符；摘要绑定完整批次tag与完整目标别名，
+下划线转连字符；日志保留原完整批次标记/别名，资源继续pdgpu-4090。
+同步README及已有提交断言，新增2项回归：30项实际命令在不同长度PID/tag下
+均不超过60字符且互异；长目标相同可见前缀及不同批次仍可区分。
+两项本地回归通过，Python3.10语法和diff检查通过；未提交真实作业或commit/push。
+同步到远程后用bash code/RSmol/run_reasonaqa5000_eval_5090.sh all重新完整提交。
+本条仅前置，全部RM历史字节完整保留。
+
 ## 2026-11-15：ReasonAQA sample5000评测改用pdgpu-4090
 
 按用户要求，仅将mizar_s1_ced_reasonaqa5000_eval/submit.py中的vc submit分区改为

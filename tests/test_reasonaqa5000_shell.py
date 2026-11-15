@@ -21,6 +21,32 @@ import test_mizar_s1_ced_mmsu_shell as old_shell
 from test_reasonaqa5000_eval import write_pool
 
 
+class JobNameTests(unittest.TestCase):
+    def test_all_thirty_actual_commands_fit_vc_limit_and_keep_distinct_targets(self):
+        items = submit.planned(submit.parse_args(['all']))
+        self.assertEqual(len(items), 30)
+        for tag in ('20261115_233059_123456_12345',
+                    '20261115_233059_999999_12345678901234567890'):
+            jobs = []
+            for name, argv, resolved in items:
+                args = submit.command(name, argv, tag)
+                job = args[args.index('-j') + 1]
+                self.assertLessEqual(len(job), 60, (name, job))
+                self.assertRegex(job, r'^[a-zA-Z0-9][a-zA-Z0-9-]*$')
+                self.assertEqual(args[args.index('-p') + 1], 'pdgpu-4090')
+                jobs.append(job)
+            self.assertEqual(len(set(jobs)), 30)
+
+    def test_shared_long_target_prefixes_and_different_batches_remain_distinct(self):
+        prefix = 'serial84_attn_shared_mlp_shared_modality_' * 2
+        first, second = prefix + 'r8', prefix + 'r16'
+        jobs = [submit.job_name(name, tag) for name, tag in
+                ((first, 'batch1'), (second, 'batch1'), (first, 'batch2'))]
+        self.assertEqual(len(set(jobs)), 3)
+        self.assertTrue(all(len(job) <= 60 for job in jobs))
+        self.assertEqual(jobs[0], submit.job_name(first, 'batch1'))
+
+
 class ShellTests(unittest.TestCase):
     def setUp(self):
         git = Path('C:/Program Files/Git/bin/bash.exe')
@@ -79,6 +105,7 @@ class ShellTests(unittest.TestCase):
         for option, value in (('-p', 'pdgpu-4090'), ('-g', '1'), ('-c', '8'), ('-m', '32G'), ('-n', '1'),
                               ('-i', 'docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1')):
             self.assertEqual(data[data.index(option) + 1], value)
+        self.assertLessEqual(len(data[data.index('-j') + 1]), 60)
         command = shlex.split(data[data.index('--cmd') + 1])
         self.assertEqual(command[:3], ['bash', 'mizar_s1_ced_reasonaqa5000_eval/run.sh', 'evaluate'])
         self.assertIn("/output dir/model's eval", [part.replace('\\', '/') for part in command])
@@ -119,6 +146,7 @@ class BatchTests(unittest.TestCase):
                 command = shlex.split(args[args.index('--cmd') + 1])
                 self.assertEqual(command[command.index('--target') + 1], item['target'])
                 self.assertEqual(args[args.index('-p') + 1], 'pdgpu-4090')
+                self.assertLessEqual(len(args[args.index('-j') + 1]), 60)
 
     def test_candidate_and_vc_failures_continue_remaining_jobs_and_return_failure(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -157,6 +157,8 @@ raw 逐题 append+fsync，进程锁拒绝并发写；中断后只生成剩余题
 
 提交器逐项保存 `code/RSmol/log/reasonaqa5000.<时间_PID>.submission.json`，区分 SUBMITTED/FAILED、vc 调用是否发生和候选校验结果；也可传 `--submission-report`。SUBMITTED 仅表示提交成功。GPU 日志为同目录 `reasonaqa5000.<时间_PID>.<别名>.JOB.log`。
 
+`-j` 使用 `raqa5k-<最多40字符的别名>-<12位摘要>`，完整名称最多 60 个 ASCII 字符。摘要由完整批次时间/PID 标记及完整别名生成，长别名前缀相同时仍可区分，日志保留完整批次标记和别名。
+
 30 项全部评测结束后，CPU 汇总命令如下：
 
 ```bash

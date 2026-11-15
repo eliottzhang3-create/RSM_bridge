@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -61,10 +62,16 @@ def planned(args):
     return result
 
 
+def job_name(name, tag):
+    """Fit vc's 60-character limit, retaining identity beyond the readable prefix."""
+    digest = hashlib.sha256(f'{tag}:{name}'.encode('utf-8')).hexdigest()[:12]
+    return f'raqa5k-{name.replace("_", "-")[:40]}-{digest}'
+
+
 def command(name, argv, tag):
     compute = shlex.join(['bash', 'mizar_s1_ced_reasonaqa5000_eval/run.sh', 'evaluate', *argv])
     return ['submit', '-p', 'pdgpu-4090', '-i', 'docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1',
-            '-c', '8', '-m', '32G', '-g', '1', '-n', '1', '-j', f'raqa5k-{tag}-{name[:36]}',
+            '-c', '8', '-m', '32G', '-g', '1', '-n', '1', '-j', job_name(name, tag),
             '-d', str(config.ROOT), 'JOB=1:1', str(config.ROOT / 'log' / f'reasonaqa5000.{tag}.{name}.JOB.log'),
             '--cmd', compute]
 
