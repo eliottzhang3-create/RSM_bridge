@@ -11,6 +11,25 @@ def text_sha(path):
     return hashlib.sha256(Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
+def init0904_reference(root):
+    return json.loads((Path(root) / "code/RSmol/mizar_selected4_eval/init0904_lora_reference.json").read_text())
+
+
+def before_init0904_extension(root, path, source):
+    """Remove only the exact authorized registration; audit the old source too."""
+    record = init0904_reference(root)["authorized_evaluator_extensions"].get(path)
+    if record is None:
+        return source
+    digest = lambda value: hashlib.sha256(value.encode()).hexdigest()
+    block = record["inserted_block"]
+    if digest(source) != record["after_lf_sha256"] or source.count(block) != 1:
+        raise ValueError(f"init0904 evaluator extension changed: {path}")
+    restored = source.replace(block, "", 1)
+    if digest(restored) != record["before_lf_sha256"]:
+        raise ValueError(f"init0904 extension altered existing evaluator source: {path}")
+    return restored
+
+
 def effective_reference_files(root):
     root = Path(root)
     original = json.loads((root / "code/RSmol/mizar_s1_ced_mmsu_eval/reference_audit.json").read_text())
@@ -20,6 +39,10 @@ def effective_reference_files(root):
         if record["before_lf_sha256"] != original["files"][path]["lf_sha256"]:
             raise ValueError(f"extension baseline does not match historical source: {path}")
         result[path] = {"lf_sha256": record["after_lf_sha256"], "raw_sha256": record["after_raw_sha256"]}
+    for path, record in init0904_reference(root)["authorized_evaluator_extensions"].items():
+        if record["before_lf_sha256"] != result[path]["lf_sha256"]:
+            raise ValueError(f"init0904 extension does not continue the authorized source baseline: {path}")
+        result[path] = {"lf_sha256": record["after_lf_sha256"], "raw_sha256": record["after_raw_sha256"]}
     return result
 
 
@@ -28,11 +51,17 @@ def source_audit(root):
     baseline = json.loads((root / "code/RSmol/mizar_selected4_eval/reference_audit.json").read_text())
     files = effective_reference_files(root)
     mismatches = [path for path, hashes in files.items() if text_sha(root / path) != hashes["lf_sha256"]]
-    training = baseline["preserved_training_lf_sha256"]
+    training = {**baseline["preserved_training_lf_sha256"],
+                **init0904_reference(root)["preserved_training_lf_sha256"]}
     mismatches += [path for path, sha in training.items() if text_sha(root / path) != sha]
     functions = 0
     for path, record in baseline["authorized_evaluator_extensions"].items():
         source = (root / path).read_text(encoding="utf-8")
+        try:
+            source = before_init0904_extension(root, path, source)
+        except ValueError as exc:
+            mismatches.append(str(exc))
+            continue
         tree = ast.parse(source) if path.endswith(".py") else None
         if tree is not None:
             setup = []

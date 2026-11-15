@@ -1,3 +1,26 @@
+## 2026-11-15：init0904 串行 CED8→4 双循环 LoRA r8 三项评测扩展
+
+已将 mizar_s1_ced_small_init0904_layer8_4_audio_reinject_loop_lora_r8 接入共享 multilayer
+评测注册及现有 MMAU/MMAR 提交器；MMSU 通过原动态注册表复用同一模型加载和解码。
+variant=recursive_5_10_5_init0904_layer8_4_audio_reinject_loop_lora_r8，固定 run 为
+mizar_s1_ced_small_init0904_layer8_4_audio_reinject_loop_lora_r8_gbs256_5090/
+formal_20261113_221451337688842，精确选择 model--step-17313.ckpt、同 run 的 runtime.json，
+训练 geometry=8,8,4；其他中间 checkpoint 不参与选择。
+实际导入隔离训练模型，保留 (A4,A8) 接口、input→CED8 / input→CED4 顺序、30次层执行、
+双循环七投影 LoRA r8 和完整训练 state_dict strict=True 加载；不重置已训练 gate/LoRA。
+生成/输入/评分函数不变：固定20秒、prefix383、FP32 batch1、无cache完整重算、argmax、
+300token/EOS；MMAU test-mini与MMAR各1000条沿用小写题面和原官方scorer，MMSU5000条
+沿用官方原大小写题面及现行 mmsu_answer_text_contains_v2 评分，原始输出独立保留。
+历史SHA快照不改；新扩展引用记录精确新增块和前后SHA，内存剥离后继续原源码审计，
+额外保护31份本路线训练源码/启动器；训练/模型/转换源码及生产合同SHA校验未修改。
+本地回归175项：161通过、14项因缺少真实tensor/音频/Parquet依赖明确跳过；新增12项覆盖
+三入口真实Bash模拟提交、严格加载/错误身份拒绝、注入/双LoRA执行hooks、1000+1000+5000
+合成流程和续跑。5项新增真实小模型logits/最终权重测试已提供但因缺Torch/Transformers跳过。
+报告 audit_reports/mizar_init0904_lora_eval_validation.json；完整说明及三条远程提交命令见
+code/RSmol/scripts/README_mizar_init0904_lora_eval.md。Windows临时目录受沙箱限制，
+经批准在沙箱外运行本地合成回归；未访问生产权重、提交GPU作业或commit/push。
+本条仅前置，RM历史字节完整保留。
+
 ## 2026-11-13：纯三循环音频启动兼容文本checkpoint遗留的双循环冗余schedule字段
 
 用户重提mizar_s1_ced_small_text_x3_layer4_8_audio_reinject_loop_lora_r8音频训练后，write_config.py

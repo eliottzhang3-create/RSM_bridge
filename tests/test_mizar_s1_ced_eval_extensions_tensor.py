@@ -15,7 +15,8 @@ import mizar_s1_ced_multilayer_eval_runtime as adapter
 
 AVAILABLE = all(importlib.util.find_spec(name) for name in ("torch", "transformers"))
 NEW = {name: spec for name, spec in adapter.ROUTE_SPECS.items()
-       if spec.get("extension") and not spec.get("input_ca_extension")}
+       if spec.get("extension") and not spec.get("input_ca_extension")
+       and not spec.get("selected4_extension") and not spec.get("init0904_lora_extension")}
 
 
 def load(name, relative):

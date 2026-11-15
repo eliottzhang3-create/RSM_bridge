@@ -219,6 +219,17 @@ for _variant, _route, _directory, _run, _inherited in (
             text_architecture="logical_30_physical_20_5_10x2_5_loop_lora_r8_alpha16")
 
 
+# BEGIN init0904 serial84 LoRA evaluation route
+ROUTE_SPECS["recursive_5_10_5_init0904_layer8_4_audio_reinject_loop_lora_r8"] = {
+    **copy.deepcopy(ROUTE_SPECS["recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8"]),
+    "extension": True, "init0904_lora_extension": True,
+    "route": "ced_small_mizar_s1_fixed20_gbs256_init0904_layer8_4_audio_reinject_loop_lora_r8_v1",
+    "route_root": TRAINING_ROOT / "mizar_s1_ced_small_init0904_layer8_4_audio_reinject_loop_lora_r8",
+    "run_root": REMOTE_OUTPUT_ROOT / "mizar_s1_ced_small_init0904_layer8_4_audio_reinject_loop_lora_r8_gbs256_5090" / "formal_20261113_221451337688842",
+}
+# END init0904 serial84 LoRA evaluation route
+
+
 def variant_spec(eval_variant):
     if eval_variant not in ROUTE_SPECS:
         raise ValueError(f"unsupported multilayer CED evaluation variant: {eval_variant!r}")

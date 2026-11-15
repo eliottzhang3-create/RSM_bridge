@@ -10,6 +10,15 @@ EVAL_VARIANT="${RSMOL_MIZAR_CED_EVAL_VARIANT:-base}"
 DEFAULT_EXPECTED_STEP=17313
 DEFAULT_EXPECTED_GEOMETRY=8,8,4
 case "$EVAL_VARIANT" in
+  # BEGIN init0904 serial84 LoRA evaluation route
+  recursive_5_10_5_init0904_layer8_4_audio_reinject_loop_lora_r8)
+    DEFAULT_RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_init0904_layer8_4_audio_reinject_loop_lora_r8_gbs256_5090/formal_20261113_221451337688842
+    DEFAULT_ROUTE_ROOT="$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_ced_small_init0904_layer8_4_audio_reinject_loop_lora_r8"
+    EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_multilayer_benchmark.sh
+    JOB_NAME_PREFIX=mizar-ced-i0904-l84-mmau
+    JOB_LOG_PREFIX=mizar_i0904_l84_mmau_5090
+    ;;
+  # END init0904 serial84 LoRA evaluation route
   # BEGIN selected4 routes (2026-11-13); existing cases below are unchanged.
   recursive_5_10_5_init0904|recursive_5_10_5_text_epoch1|recursive_5_10_5_text_epoch1_layer4_8_audio_reinject_loop_lora_r8|recursive_5_10_5_ced48_text_epoch1_loop_lora_r8)
     EVAL_SCRIPT=scripts/evaluate_mizar_s1_ced_recursive_benchmark.sh
