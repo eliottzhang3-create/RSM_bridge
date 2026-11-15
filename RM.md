@@ -1,3 +1,53 @@
+## 2026-11-16：ReasonAQA sample5000每目标8卡、pdgpu-3090独立评测
+
+用户已撤下上一轮作业，批准按8卡计划实现并重新提供提交命令。
+新增隔离包code/RSmol/mizar_s1_ced_reasonaqa5000_8gpu_eval/及入口
+code/RSmol/run_reasonaqa5000_eval_8gpu_3090.sh；每目标一个pdgpu-3090作业，
+8GPU/64CPU/256G/1node，原镜像、mellow_c8204d8、离线配置不变；all提交30项。
+复用原固定targets.json和同一seed1234的5000条manifest，继续排除official_mizar与旧七项。
+候选mesh_inject48继续CPU合同校验，失败记录并继续其余29项；可按原参数明确更正run。
+原单卡/完整ReasonAQA、MMAU/MMAR/MMSU、训练和模型代码保持原字节。
+
+父进程预检/认领独立输出后，以同一Python的torch.distributed.run启动单节点8进程，
+standalone、nproc-per-node=8、max-restarts=0。推理不包装训练梯度DDP，不做逐题collective。
+worker导入Torch前按LOCAL_RANK屏蔽为一张继承可见GPU，原cuda:0严格loader映射到各自卡；
+同时保留原CUBLAS配置、seed1234、FP32、eval、TF32off、每卡batch1、fixed20/prefix383、
+原题小写、greedy300/EOS、无cache完整重算、逐题真实context和唯一全答案精确匹配。
+
+按manifest索引mod8无shuffle/补齐分片，每rank恰625题，独立raw/progress/模型审计/锁。
+8rank均PASS后校验625各覆盖、完整记录/生成SHA、不同GPU与同一可见卡映射，再恢复原顺序；
+必须覆盖原5000个ID且无重漏才评分。父进程合并前复核源码/模型/manifest/源JSON/音频元信息。
+任何rank错误或torchrun非零均整体FAILED，不以部分分母输出正确率。
+各rank逐题fsync；断点重提仅生成剩余题，已完成rank不加载模型；全部rank完成后重新汇总
+不启动torchrun。完整坏行/错误身份拒绝，仅截断未完成末尾写。
+默认新输出eval/reasonaqa_close_ended_sample5000_seed1234_step<step>_8gpu_v1/，
+rank00至rank07在ranks/下，旧单卡目录不复用、不删除。
+job采用raqa8g-<最多40字符别名>-<12位摘要>，整体至多60字符。
+--check-args打印30项完整绑定及vc_args，确认3090/8GPU资源且不读资产或提交。
+
+本地python -B tests/validate_reasonaqa5000_8gpu_eval.py：220项中205通过、15项因缺
+真实Torch/音频/Parquet等依赖明确跳过，PASS_LOCAL_WITH_SKIPS。
+14项新增回归覆盖实际8个OS进程运行worker（Torch/CUDA/模型明确模拟）、5000合并/精确计分/
+比较/无模型重评分、rank3中断13后仅补612、坏raw/错覆盖/重复GPU/身份变化拒绝、
+30项资源/别名及完整variant解析、60字符job、真实Bash入口和模拟vc及候选失败继续。
+1090份原源码SHA保持，Python3.10、5份Bash语法和diff检查通过；完整说明见新包README。
+报告audit_reports/reasonaqa5000_8gpu_eval_validation.json。
+Windows沙箱阻止临时目录/Bash，获准在沙箱外运行本地合成回归；未读取生产资产、
+提交真实GPU作业或commit/push，不登记远程8卡PASS。
+
+代码经GitHub同步后，在远程仓库根重新完整提交：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_reasonaqa5000_eval_8gpu_3090.sh all --check-args
+bash code/RSmol/run_reasonaqa5000_eval_8gpu_3090.sh all
+```
+
+已有5000条manifest直接复用，无需重新生成。完成后运行：
+bash code/RSmol/mizar_s1_ced_reasonaqa5000_8gpu_eval/run.sh compare
+默认输出outputs/RSmol/reasonaqa5000_remaining30_seed1234_8gpu_v1.csv和同名JSON。
+本条仅前置，全部RM历史字节完整保留。
+
 ## 2026-11-15：修复ReasonAQA sample5000提交job名超60字符
 
 用户已删除上一轮提交作业，报告部分vc submit的job参数超过60位。
