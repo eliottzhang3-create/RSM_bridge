@@ -101,7 +101,7 @@ bash code/RSmol/run_reasonaqa5000_eval_5090.sh all --check-args
 bash code/RSmol/run_reasonaqa5000_eval_5090.sh all
 ```
 
-第一条数据命令在登录节点 CPU 生成采样文件，打印实际 5000 条的类别计数和 manifest SHA。`--check-args` 只解析所有绑定，不读数据/权重、不提交。最后一条用 `vc submit` 提交 30 个独立目标；候选结构校验失败时其余 29 项继续提交。资源沿用 pdgpu-5090 / 1GPU / 8CPU / 32G / 1node、原镜像 `docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1`、conda `mellow_c8204d8`，不增加自动 smoke 作业。
+第一条数据命令在登录节点 CPU 生成采样文件，打印实际 5000 条的类别计数和 manifest SHA。`--check-args` 只解析所有绑定，不读数据/权重、不提交。最后一条用 `vc submit` 提交 30 个独立目标；候选结构校验失败时其余 29 项继续提交。资源为 pdgpu-4090 / 1GPU / 8CPU / 32G / 1node、原镜像 `docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1`、conda `mellow_c8204d8`，不增加自动 smoke 作业。为兼容已有命令，入口文件名仍保留 `_5090.sh`，实际提交分区已改为 `pdgpu-4090`。
 
 查看全部绑定或仅提交一个目标，支持表中别名与完整 variant：
 

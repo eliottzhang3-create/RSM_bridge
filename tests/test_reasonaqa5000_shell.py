@@ -76,7 +76,7 @@ class ShellTests(unittest.TestCase):
         summary = json.loads(result.stdout.splitlines()[-1])
         self.assertEqual(summary['submitted'], 1)
         data = (self.path / 'submission.bin').read_bytes().decode().split('\0\0')[0].split('\0')
-        for option, value in (('-p', 'pdgpu-5090'), ('-g', '1'), ('-c', '8'), ('-m', '32G'), ('-n', '1'),
+        for option, value in (('-p', 'pdgpu-4090'), ('-g', '1'), ('-c', '8'), ('-m', '32G'), ('-n', '1'),
                               ('-i', 'docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1')):
             self.assertEqual(data[data.index(option) + 1], value)
         command = shlex.split(data[data.index('--cmd') + 1])
@@ -118,7 +118,7 @@ class BatchTests(unittest.TestCase):
                 args = item['vc_args']
                 command = shlex.split(args[args.index('--cmd') + 1])
                 self.assertEqual(command[command.index('--target') + 1], item['target'])
-                self.assertEqual(args[args.index('-p') + 1], 'pdgpu-5090')
+                self.assertEqual(args[args.index('-p') + 1], 'pdgpu-4090')
 
     def test_candidate_and_vc_failures_continue_remaining_jobs_and_return_failure(self):
         with tempfile.TemporaryDirectory() as directory:

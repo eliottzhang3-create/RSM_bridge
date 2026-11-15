@@ -1,3 +1,12 @@
+## 2026-11-15：ReasonAQA sample5000评测改用pdgpu-4090
+
+按用户要求，仅将mizar_s1_ced_reasonaqa5000_eval/submit.py中的vc submit分区改为
+pdgpu-4090，同步README和既有提交测试期望。兼容原命令，入口文件名仍为
+code/RSmol/run_reasonaqa5000_eval_5090.sh；实际30项目标均提交到4090。
+核对30项实际command()参数均为4090，1GPU/8CPU/32G/1node及原镜像保持；
+两份改动Python文件通过Python3.10语法检查。未提交真实作业或commit/push。
+本条仅前置，全部RM历史字节保留。
+
 ## 2026-11-15：ReasonAQA test 固定随机5000条及其余30项checkpoint独立评测
 
 新增隔离包 code/RSmol/mizar_s1_ced_reasonaqa5000_eval/，以及数据入口
