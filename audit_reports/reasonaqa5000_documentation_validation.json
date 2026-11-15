@@ -1,0 +1,34 @@
+{
+  "status": "PASS",
+  "readme_sha256": "881d913bb7e32e68f46d6ac83799202c6c2d2b03a9e08ac945cce2e95a62972d",
+  "targets_verified": 30,
+  "readme_bash_syntax": [
+    {
+      "block": 0,
+      "returncode": 0
+    },
+    {
+      "block": 1,
+      "returncode": 0
+    },
+    {
+      "block": 2,
+      "returncode": 0
+    },
+    {
+      "block": 3,
+      "returncode": 0
+    },
+    {
+      "block": 4,
+      "returncode": 0
+    },
+    {
+      "block": 5,
+      "returncode": 0
+    }
+  ],
+  "original_sources_checked": 1070,
+  "original_sources_changed": [],
+  "rm_history_preserved": true
+}

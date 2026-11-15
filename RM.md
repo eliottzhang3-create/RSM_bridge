@@ -1,3 +1,62 @@
+## 2026-11-15：ReasonAQA test 固定随机5000条及其余30项checkpoint独立评测
+
+新增隔离包 code/RSmol/mizar_s1_ced_reasonaqa5000_eval/，以及数据入口
+generate_reasonaqa_test5000.sh、提交入口 run_reasonaqa5000_eval_5090.sh。
+本地Windows仅改代码，GitHub中转；原始test.json、音频、权重及GPU推理仍在远程Linux。
+不改原完整ReasonAQA七项及MMAU/MMAR/MMSU实现，也不改训练/模型代码。
+
+候选池按用户确认严格核对55379条：AudioCaps-MCQ23672、Clotho-MCQ26031、
+ClothoAQA标准答案yes/no5676；独立random.Random(1234)全池均匀无放回抽5000条，
+再按原始行号排序，不分层、不去重题目，不改变原记录。所有目标共用保存的manifest，
+保留源test SHA、算法、原行号/ID、原始记录及各类别实际入选数；每次启动复核源与抽样。
+默认目录 data/reasonaqa/test_close_ended_sample5000_seed1234_v1/，生成manifest.json、
+sampled_test.json、selected_records.jsonl、dataset_audit.json；幂等，拒绝异源覆盖。
+
+目标固定为当前MMAU已适配38路减official_mizar和之前七项，共30项。
+完整别名/variant/run/route/step/geometry见targets.json与README表格。
+official_input_only、official_serial84_r8、mesh_x4使用34626步、8/4/4训练geometry，
+其余17313步、8/8/4；评测始终单卡batch1，不自动找latest。
+recursive_mesh_layer4_8_inject采用用户暂定run：
+mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_inject_5090/formal_20261030_172359752928500，
+checkpoint为formal/checkpoints/model--step-17313.ckpt，runtime推定同run的formal/runtime.json。
+提交该候选项前CPU读取并调用原训练route validator核对源码/合同/step/geometry/runtime；
+错误则明确FAILED并继续其余29项，批量最终返回非零，不声称该路径已获远程核实。
+提供inspect_checkpoint独立核对与候选run显式更正；CPU通过不代替GPU strict load。
+
+沿用原fixed20、mono/32k、单文件20秒分半或双文件各10秒、原input小写/256token，
+prefix383、FP32、eval、seed1234、TF32off、greedy300/EOS、无cache完整重算；
+各架构通过原runtime传入真实音频/context和所需prompt mask，GT/caption不进入模型。
+唯一指标保持完整答案规范化精确匹配（去空白/一个末尾EOS/casefold/合并空白）；
+保留字母/正文/括号/标点，完整5000条后才评分，不跳题缩小分母。
+原始生成逐题fsync，锁/身份保护、坏末尾恢复、进度重建、剩余题续跑与完整raw重评分；
+逐题保存实际prompt tokens/mask/音频波形指纹，汇总严格比对共同数据/协议/代码/输入。
+每run输出eval/reasonaqa_close_ended_sample5000_seed1234_step<step>_v1/。
+提交器用原pdgpu-5090/1GPU/8CPU/32G/1node和镜像/conda，逐项保存submission报告。
+新增脚本名避开原完整ReasonAQA的身份glob，不使旧结果仅因新增入口而失效。
+
+远程同步代码后，仓库根执行：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/generate_reasonaqa_test5000.sh
+bash code/RSmol/run_reasonaqa5000_eval_5090.sh all --check-args
+bash code/RSmol/run_reasonaqa5000_eval_5090.sh all
+```
+
+30项完成后bash code/RSmol/mizar_s1_ced_reasonaqa5000_eval/run.sh compare，
+默认CSV为outputs/RSmol/reasonaqa5000_remaining30_seed1234_v1.csv及同名JSON。
+若改了候选run，比较时显式列出真实report-dir；失败单项按别名补交，避免重提整个all。
+
+本地python -B tests/validate_reasonaqa5000_eval.py：204项中189通过，
+15项因缺真实Torch/音频/Parquet等依赖明确跳过，PASS_LOCAL_WITH_SKIPS；
+包含20项新回归：55379行池与固定5000抽样、完整5000流程/精确计分、
+中断13条后续跑4987、清单/身份/坏记录拒绝、30路context及真实Bash模拟提交和失败继续。
+1070份原源码SHA不变，旧数据/评分字节与数值策略AST保持，Python3.10/Bash检查通过。
+报告audit_reports/reasonaqa5000_eval_validation.json，完整操作见隔离包README.md。
+Windows临时目录受限，经批准在沙箱外跑本地合成验证；未读取生产权重、
+生成真实采样集、提交GPU作业或commit/push，不登记远程PASS。
+本条仅前置，全部RM历史字节完整保留。
+
 ## 2026-11-15：init0904 串行 CED8→4 双循环 LoRA r8 三项评测扩展
 
 已将 mizar_s1_ced_small_init0904_layer8_4_audio_reinject_loop_lora_r8 接入共享 multilayer
