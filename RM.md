@@ -1,3 +1,40 @@
+## 2026-11-16：原七项ReasonAQA5000新增pdgpu-4090单卡入口
+
+用户询问七项能否以4090单卡提交，并授权必要修改。现有七项入口硬编码8卡3090，
+因此新增独立包code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_single_eval/及入口
+code/RSmol/run_reasonaqa5000_selected7_1gpu_4090.sh，不修改已有8卡或原30项源码。
+all只提交原七项，继续排除official_mizar；每项一个vc submit作业：
+pdgpu-4090/1GPU/8CPU/32G/1node，同镜像、conda mellow_c8204d8与离线配置。
+job采用raqa7s-短别名-12位摘要，完整长度最多60个ASCII字符。
+
+直接复用原七项精确checkpoint/run/route、step17313、runtime与训练geometry=8,8,4，
+实际推理单卡batch1，不启动torchrun。沿用原严格loader和FP32/seed1234/TF32off/
+fixed20/prefix383/greedy300/无cache及逐样本context，不改变完整答案规范化精确匹配。
+复用同一5000条manifest，不重新抽样；独立输出目录
+eval/reasonaqa_close_ended_sample5000_seed1234_step17313_1gpu4090_v1/，
+逐题fsync、同身份续跑、完整5000后计分及无模型重评分，保留原8卡结果。
+
+本地25项全部通过，无跳过，PASS_LOCAL；1120份原文件SHA保持，Python3.10与两份Bash语法通过。
+验证入口tests/validate_reasonaqa5000_selected7_single_eval.py，报告
+audit_reports/reasonaqa5000_selected7_single_eval_validation.json。
+验证包含精确七项绑定、单卡资源/短job名、原单卡生成循环AST一致、
+完整5000合成评测/计分/比较/重评分、中断13后续跑4987、身份变化拒绝、
+真实Bash入口与模拟vc批次及失败继续，并复核原8卡/数据/计分测试和旧源码SHA。
+Windows沙箱拒绝临时目录读写，获准在沙箱外重跑本地合成验证；真实模型/GPU明确模拟。
+本次未访问远程生产资产、提交真实作业或commit/push；不登记远程GPU已通过。
+
+代码经GitHub同步后，在远程仓库根执行：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_reasonaqa5000_selected7_1gpu_4090.sh all --check-args
+bash code/RSmol/run_reasonaqa5000_selected7_1gpu_4090.sh all
+```
+
+完成后bash code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_single_eval/run.sh compare，
+默认outputs/RSmol/reasonaqa5000_selected7_seed1234_1gpu4090_v1.csv及同名JSON。
+详细说明见新包README.md。本条仅前置，全部RM历史字节完整保留。
+
 ## 2026-11-16：ReasonAQA sample5000补充原七项、每目标8卡3090
 
 用户确认official_mizar仍不测，原先已在完整集合测过的七项需要用同一5000条版本重测。

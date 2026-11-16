@@ -1,0 +1,62 @@
+{
+  "status": "PASS_LOCAL",
+  "scope": "synthetic data and fake models, real Bash and mocked vc; no production GPU or submissions",
+  "utc": "2026-11-16T04:10:34.248657+00:00",
+  "modules": [
+    "test_reasonaqa5000_selected7_single_eval",
+    "test_reasonaqa5000_selected7_single_shell",
+    "test_reasonaqa5000_selected7_8gpu_eval.PartitionAndDeviceTests",
+    "test_mizar_s1_ced_reasonaqa_eval.DataTests",
+    "test_mizar_s1_ced_reasonaqa_eval.ScoreTests"
+  ],
+  "tests_run": 25,
+  "passed": 25,
+  "skipped": [],
+  "failures": [],
+  "errors": [],
+  "original_sources": {
+    "checked": 1120,
+    "changed": [],
+    "previous_seven_source_hashes": {
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/compare.py": "43a9e6e8e93e7a7113d8928709b67713e74b8f26df716712d4766534a5abd6f6",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/config.py": "ba175009ffd26b6286d477c2171c62823cc1bc5d6882555fadaf958a6f608138",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/evaluate.py": "0e7dbf25eeef4f21afeac6cceb04e98499e408d3dd57e5d009eb31bb32325bae",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/model.py": "4c1a14e4c70e16b7e513e2d2038b063b9f031ba7c88781d21483c57e92755b48",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/README.md": "8481d5124516059b8030f66c32d1f4da7bbaf1c26fe74c01057a74870b07e2d9",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/reference_audit.json": "af1931df4f54276422b1c97883b47c283f00080952f89abc512af6f0a9cfcd00",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/run.sh": "53b80710e3b45d6771466da3175dc59dc0f1c246742a829bd9a0d5714bbb9ceb",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/runtime.py": "1ca4a1a38d1669cdfe011df62ef66b725d4f62ddbfa6b7d022026e3ec9f9b143",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/submit.py": "db1dc52f79284971c0f70a55bbb1c0a0be944f08ab19ebd9c9cf5c79653d69a3",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/targets.json": "47d2474de49ba15a932ce8dc934f78d4bf697c2240636f7077b8f2f9d7de9819",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/worker.py": "099145f4895bac1cfd38fa5bb0048c20ec97f50ff1e4bb05d348c562136107a3",
+      "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/__init__.py": "a15beb59624f4ec21ca914f98a02a383ed82b3d40c5145c49eee8deb6422929c",
+      "code/RSmol/run_reasonaqa5000_selected7_8gpu_3090.sh": "da0ab064dc58b9898e235759cae524c514fe7def552f288896a2c657b1282b58",
+      "tests/test_reasonaqa5000_selected7_8gpu_eval.py": "09122a58ac1ed0cea06374ee0d717d3aa8c5595d2795486860e719bb1a07a90b",
+      "tests/test_reasonaqa5000_selected7_8gpu_shell.py": "99e97ecf53a184eb5f14946af7c386e8808448db39e16f76495196d4112a6427",
+      "tests/validate_reasonaqa5000_selected7_8gpu_eval.py": "adf8df04f17f3cab317969c799e1b73273103d048c27ed213bcad0981b6d2f65"
+    }
+  },
+  "python_syntax": [
+    "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_single_eval/compare.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_single_eval/config.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_single_eval/evaluate.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_single_eval/submit.py",
+    "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_single_eval/__init__.py",
+    "tests/test_reasonaqa5000_selected7_single_eval.py",
+    "tests/test_reasonaqa5000_selected7_single_shell.py",
+    "tests/validate_reasonaqa5000_selected7_single_eval.py"
+  ],
+  "bash_syntax": [
+    {
+      "path": "code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_single_eval/run.sh",
+      "returncode": 0,
+      "stderr": ""
+    },
+    {
+      "path": "code/RSmol/run_reasonaqa5000_selected7_1gpu_4090.sh",
+      "returncode": 0,
+      "stderr": ""
+    }
+  ],
+  "elapsed_seconds": 107.55374219999794
+}
