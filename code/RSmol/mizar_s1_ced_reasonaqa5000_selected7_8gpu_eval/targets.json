@@ -1,0 +1,86 @@
+{
+  "base": {
+    "eval_variant": "base",
+    "runtime_family": "base",
+    "run_root": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_5090/formal_20261026_193830617147305",
+    "route_root": "mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_ced_small",
+    "expected_step": 17313,
+    "expected_geometry": [
+      8,
+      8,
+      4
+    ]
+  },
+  "recursive_5_10_5": {
+    "eval_variant": "recursive_5_10_5",
+    "runtime_family": "recursive",
+    "run_root": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_5090/formal_20261028_160823559722647",
+    "route_root": "mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small",
+    "expected_step": 17313,
+    "expected_geometry": [
+      8,
+      8,
+      4
+    ]
+  },
+  "serial84": {
+    "eval_variant": "recursive_5_10_5_layer8_4_inject_audio_reinject",
+    "runtime_family": "multilayer",
+    "run_root": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_5090/formal_20261102_112121702891801",
+    "route_root": "mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject",
+    "expected_step": 17313,
+    "expected_geometry": [
+      8,
+      8,
+      4
+    ]
+  },
+  "serial48_lora_r8": {
+    "eval_variant": "recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8",
+    "runtime_family": "multilayer",
+    "run_root": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer4_8_inject_audio_reinject_loop_lora_r8_5090/formal_20261104_131843931946322",
+    "route_root": "mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer4_8_inject_audio_reinject_loop_lora_r8",
+    "expected_step": 17313,
+    "expected_geometry": [
+      8,
+      8,
+      4
+    ]
+  },
+  "serial84_lora_r8": {
+    "eval_variant": "recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8",
+    "runtime_family": "multilayer",
+    "run_root": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8_5090/formal_20261103_165410438279511",
+    "route_root": "mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_5_10_5_ced_small_layer8_4_inject_audio_reinject_loop_lora_r8",
+    "expected_step": 17313,
+    "expected_geometry": [
+      8,
+      8,
+      4
+    ]
+  },
+  "recursive_mesh": {
+    "eval_variant": "recursive_mesh",
+    "runtime_family": "mesh",
+    "run_root": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_5090/formal_20261027_081123150934256",
+    "route_root": "mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small",
+    "expected_step": 17313,
+    "expected_geometry": [
+      8,
+      8,
+      4
+    ]
+  },
+  "mesh48_lora_r8": {
+    "eval_variant": "recursive_mesh_layer4_8_inject_loop_lora_r8",
+    "runtime_family": "multilayer",
+    "run_root": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_inject_loop_lora_r8_5090/formal_20261104_161727489909082",
+    "route_root": "mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small_layer4_8_inject_loop_lora_r8",
+    "expected_step": 17313,
+    "expected_geometry": [
+      8,
+      8,
+      4
+    ]
+  }
+}

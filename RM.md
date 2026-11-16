@@ -1,3 +1,51 @@
+## 2026-11-16：ReasonAQA sample5000补充原七项、每目标8卡3090
+
+用户确认official_mizar仍不测，原先已在完整集合测过的七项需要用同一5000条版本重测。
+新增独立包code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/及入口
+code/RSmol/run_reasonaqa5000_selected7_8gpu_3090.sh；all只补交这七项，
+与原30项合计37项，不重新提交原30项。原30项可能正在运行，因此原评测源码及入口、
+完整ReasonAQA、MMAU/MMAR/MMSU、训练/模型源码均保持原字节，避免破坏运行身份。
+
+七项固定别名：base、recursive_5_10_5、serial84、serial48_lora_r8、
+serial84_lora_r8、recursive_mesh、mesh48_lora_r8。
+targets.json完整绑定最初七项的精确run/训练route，均step17313、geometry=8,8,4，
+runtime固定同run的formal/runtime.json；不自动选latest、不允许模型身份覆盖。
+各路线复用原严格loader和原逐样本context，数值策略与既有sample5000版本保持一致。
+复用data/reasonaqa/test_close_ended_sample5000_seed1234_v1/manifest.json，
+不重新抽样；唯一指标仍是完整答案规范化精确匹配。
+
+每项一个vc submit作业：pdgpu-3090/8GPU/64CPU/256G/1node。
+复用八进程分片协议，导入Torch前屏蔽GPU、manifest索引mod8，每rank625题，
+逐题fsync、断点恢复，精确完整5000题后才合并评分；任何rank失败不输出部分分母。
+job为raqa7g-<最多40字符别名>-<12位摘要>，整体不超过60个ASCII字符。
+输出在各自run的eval/reasonaqa_close_ended_sample5000_seed1234_step17313_8gpu_v1/，
+与原30项run及旧完整七项评测目录不冲突。新增独立七项compare入口及CSV/JSON。
+
+本地联合验证236项中221通过、15项因缺真实依赖跳过，PASS_LOCAL_WITH_SKIPS。
+验证器tests/validate_reasonaqa5000_selected7_8gpu_eval.py及报告
+audit_reports/reasonaqa5000_selected7_8gpu_eval_validation.json。
+新16项回归覆盖七项精确绑定、与原30项互斥合计37项、原推理函数AST/协议一致、
+8个真实OS进程运行实际worker（Torch/CUDA/模型明确模拟）、完整5000题合并/评分/比较、
+rank中断13后只补612、坏raw/错覆盖/重复GPU/身份变化拒绝、
+真实Bash入口与模拟vc七项提交及失败继续；同时运行既有评测回归并检查1104份旧源码SHA、
+Python3.10与7份Bash语法。真实依赖缺失的原测试明确跳过，不能视为生产GPU通过。
+本次仅在本地实现和合成验证，未读取远程生产资产、提交真实作业或commit/push。
+完整目标表、同步和操作说明见新增包README.md。
+
+代码经GitHub同步后，在远程仓库根补交这七项：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_reasonaqa5000_selected7_8gpu_3090.sh all --check-args
+bash code/RSmol/run_reasonaqa5000_selected7_8gpu_3090.sh all
+```
+
+无需重新生成已有manifest。完成后：
+bash code/RSmol/mizar_s1_ced_reasonaqa5000_selected7_8gpu_eval/run.sh compare
+默认输出outputs/RSmol/reasonaqa5000_selected7_seed1234_8gpu_v1.csv和同名JSON。
+原30项仍按原入口和比较命令运行。补交单项用上面的七项别名替换all。
+本条仅前置，全部RM历史字节完整保留。
+
 ## 2026-11-16：ReasonAQA sample5000每目标8卡、pdgpu-3090独立评测
 
 用户已撤下上一轮作业，批准按8卡计划实现并重新提供提交命令。
