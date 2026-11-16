@@ -80,7 +80,9 @@ def planned(args):
 
 def job_name(name, tag):
     digest = hashlib.sha256(f'{tag}:{name}'.encode()).hexdigest()[:12]
-    return f'mmsu27-{name.replace("_", "-")[:40]}-{digest}'
+    # Count the full -j value: 7-char prefix + 32-char alias + '-' + 12-char
+    # digest = 52 ASCII characters, safely below 60 including our suffix.
+    return f'mmsu27-{name.replace("_", "-")[:32]}-{digest}'
 
 
 def command(name, argv, tag):

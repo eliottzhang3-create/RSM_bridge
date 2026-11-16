@@ -27,7 +27,7 @@ bash code/RSmol/run_mizar_mmsu_remaining_4090.sh ca36912
 bash code/RSmol/run_mizar_mmsu_remaining_4090.sh recursive_mesh_6slot
 ```
 
-job名 `mmsu27-<短别名>-<12位摘要>` 最多60个ASCII字符。提交日志及逐项状态报告位于 `code/RSmol/log/mmsu27.<时间_PID>...`。`vc`接受提交仅代表入队，实际推理状态以各run产物为准。
+job名 `mmsu27-<最多32位别名>-<12位摘要>` 完整最多52个ASCII字符，包含前缀、分隔符和摘要后缀，严格小于60。摘要仍绑定完整别名及批次时间/PID，缩短名称后保持区分；时间/PID不直接拼入job名。提交日志及逐项状态报告位于 `code/RSmol/log/mmsu27.<时间_PID>...`。`vc`接受提交仅代表入队，实际推理状态以各run产物为准。
 
 ## 目标绑定
 
@@ -147,6 +147,8 @@ python -B tests/validate_mizar_mmsu_remaining_eval.py
 报告 `audit_reports/mizar_mmsu_remaining_eval_validation.json`。包含27项绑定与排除、原计算入口/资源/短job名、完整5000行原始生成检查与CPU重评分、只读检查/中断恢复/锁/错误身份/失败继续/重复提交保护、真实Bash与模拟vc，以及原MMSU及既有架构回归。模型和GPU仅合成模拟；缺真实依赖明确skip。`reference_audit.json`保存1768份原源码SHA及RM历史摘要，验证源码内容与原RM历史保持。
 
 2026-11-16本地验收：195项中181通过、14项因缺Torch/Transformers/音频/Parquet等真实依赖跳过，`PASS_LOCAL_WITH_SKIPS`。新增20项全部通过；1768份原源码raw/LF SHA均保持，Python3.10与两份Bash语法通过。Windows沙箱阻止临时目录/Bash时获准在沙箱外运行合成验证；没有读取远程权重或提交生产作业。
+
+同日按用户要求将完整job名上限从60缩短至52，严格小于60。补充长时间/PID批次与别名截断冲突回归，本包两组测试22项全部通过；实际27项的完整`-j`最长52位且互异。该后续检查单列在验证报告的`job_name_followup`，不重写此前195项验收计数。
 
 本次不代为commit/push或提交真实作业。本地同步文件清单：
 

@@ -48,7 +48,7 @@ class ShellTests(unittest.TestCase):
                 command = row['vc_args']
                 for key, value in (('-p', 'pdgpu-4090'), ('-g', '1'), ('-c', '8'), ('-m', '32G'), ('-n', '1')):
                     self.assertEqual(command[command.index(key) + 1], value)
-                self.assertLessEqual(len(command[command.index('-j') + 1]), 60)
+                self.assertLessEqual(len(command[command.index('-j') + 1]), 52)
             self.assertFalse((path / 'submission.bin').exists())
             self.assertFalse((rs / 'log').exists())
 

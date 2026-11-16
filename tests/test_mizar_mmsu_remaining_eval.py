@@ -100,13 +100,39 @@ class ScopeTests(unittest.TestCase):
             for key, value in (('-p', 'pdgpu-4090'), ('-g', '1'), ('-c', '8'), ('-m', '32G'), ('-n', '1')):
                 self.assertEqual(command[command.index(key) + 1], value)
             job = command[command.index('-j') + 1]
-            self.assertLessEqual(len(job), 60)
+            self.assertLessEqual(len(job), 52)
+            self.assertLess(len(job), 60)
             jobs.append(job)
             compute = shlex.split(command[command.index('--cmd') + 1])
             self.assertEqual(compute[:2], ['bash', 'mizar_s1_ced_mmsu_eval/run.sh'])
             actual = evaluate.parse_args(compute[2:])
             self.assertEqual(vars(actual), vars(resolved))
         self.assertEqual(len(set(jobs)), 27)
+
+    def test_complete_job_names_stay_short_for_all_targets_and_long_batch_suffixes(self):
+        batches = ('CHECK_ONLY', '20261116_235959_999999_1',
+                   '20261116_235959_999999_12345678901234567890', 'batch-' + '9' * 1000)
+        all_jobs = []
+        for tag in batches:
+            jobs = []
+            for name, argv, _ in submit.planned(submit.parse_args(['all'])):
+                command = submit.command(name, argv, tag)
+                job = command[command.index('-j') + 1]
+                self.assertLessEqual(len(job.encode('ascii')), 52)
+                self.assertRegex(job, r'^mmsu27-[a-z0-9-]+-[0-9a-f]{12}$')
+                jobs.append(job)
+            self.assertEqual(len(set(jobs)), 27)
+            all_jobs.extend(jobs)
+        self.assertEqual(len(set(all_jobs)), len(all_jobs))
+
+    def test_short_alias_collision_keeps_digest_of_complete_target_and_batch(self):
+        prefix = 'shared-long-target-prefix-' + 'x' * 80
+        first = submit.job_name(prefix + '-a', 'batch1')
+        other_target = submit.job_name(prefix + '-b', 'batch1')
+        other_batch = submit.job_name(prefix + '-a', 'batch2')
+        self.assertEqual(first.rsplit('-', 1)[0], other_target.rsplit('-', 1)[0])
+        self.assertEqual(len({first, other_target, other_batch}), 3)
+        self.assertTrue(all(len(job) == 52 for job in (first, other_target, other_batch)))
 
     def test_rejects_excluded_targets_shared_outputs_and_model_overrides(self):
         for args in (['base'], ['official_mizar'], ['all', '--output-dir', '/shared'],
