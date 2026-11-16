@@ -1,3 +1,51 @@
+## 2026-11-16：剩余27项MMSU新增pdgpu-4090单卡入口
+
+用户确认此前11项MMSU均已完成并排除，授权为剩余所有已适配版本新增入口，统一pdgpu-4090。
+当前MMSU支持38项，固定38减11为27项；精确别名/variant/run/训练route/step/geometry
+见code/RSmol/mizar_s1_ced_mmsu_remaining_eval/targets.json，排除清单见excluded.json。
+新增入口code/RSmol/run_mizar_mmsu_remaining_4090.sh和独立包，不修改训练/模型、原MMSU/
+MMAU/MMAR或ReasonAQA源码，新包不进入原MMSU的源码身份集合。
+
+每项目标一个vc submit作业：pdgpu-4090/1GPU/8CPU/32G/1node，同镜像、mellow_c8204d8
+和离线环境，job名最多60字符。24项step17313/训练geometry8,8,4；mesh_x4、
+official_serial84_r8和official_input_only为step34626/8,4,4。精确读取model--step-N.ckpt
+和同run的formal/runtime.json，不扫描latest，中间checkpoint不干扰；推理始终batch1。
+mesh_inject48沿用候选run，提交前原validator做CPU合同预检，失败继续其余目标；
+可显式更正该候选run，CPU通过不代替计算节点strict全模型加载。
+
+计算节点直接执行原mizar_s1_ced_mmsu_eval/run.sh，复用全部原架构context和严格loader，
+保留音频中间层注入、crossattention/query32、MeSH memory/router及LoRA分支。
+原完整5000题顺序与官方大小写题面、mono32k/fixed20、prompt256/prefix383、FP32、
+seed1234/TF32off、无cache完整重算、greedy300/首次EOS不变。
+评分继续mmsu_answer_text_contains_v2、原固定官方scorer与完整5000分母，原raw不变。
+结果沿用各run的eval/mmsu_step17313或eval/mmsu_step34626。
+
+批次先只读核验既有产物：完整v2跳过；完整raw但缺有效v2分数走CPU离线重评，
+同身份partial交原runner续跑；忙锁跳过，错误身份/坏完整行保留源文件并失败。
+新ledger在code/RSmol/log/mmsu_remaining4090_admissions，SUBMITTING/SUBMITTED
+阻止同绑定重复入队，不声称查询集群；旧job已停后单项--retry-submitted显式重提。
+inspect仅写独立状态报告，不改评测源产物；compare核对全5000记录/协议/共有代码并输出27行。
+
+本地验证tests/validate_mizar_mmsu_remaining_eval.py，报告
+ audit_reports/mizar_mmsu_remaining_eval_validation.json：195项中181通过、14项缺真实
+Torch/Transformers/音频/Parquet等依赖明确跳过，PASS_LOCAL_WITH_SKIPS；新增20项全部通过。
+覆盖实际Bash+模拟vc、27项目标/资源/排除、完整5000评分/重评/恢复、只读/锁/身份/
+失败继续/重复提交和原架构回归。1768份原源码raw/LF SHA保持，Python3.10与两份Bash语法通过。
+Windows沙箱拒绝临时目录/Bash，获准沙箱外执行本地合成验证；真实模型/GPU明确模拟。
+未读取远程生产权重、提交真实作业或commit/push，不登记远程GPU PASS。
+
+用户经GitHub同步后，在远程仓库根执行：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_mmsu_remaining_4090.sh all --check-args
+bash code/RSmol/run_mizar_mmsu_remaining_4090.sh all
+```
+完成后bash code/RSmol/mizar_s1_ced_mmsu_remaining_eval/run.sh compare，默认
+outputs/RSmol/mmsu_remaining27_4090_v2.csv和同名JSON；未完成项分数留空，全部完整才PASS。
+单项可用ca36912等别名；详细范围、纠正/续跑/汇总及Git文件清单见新包README.md。
+本条仅前置，全部RM历史字节完整保留。
+
 ## 2026-11-16：原七项ReasonAQA5000新增pdgpu-4090单卡入口
 
 用户询问七项能否以4090单卡提交，并授权必要修改。现有七项入口硬编码8卡3090，

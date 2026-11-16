@@ -1,0 +1,17 @@
+{
+  "confirmed_by_user": "2026-11-16",
+  "reason": "MMSU already completed; exclude all eleven from this batch",
+  "eval_variants": [
+    "official_mizar",
+    "base",
+    "recursive_5_10_5",
+    "recursive_mesh",
+    "recursive_5_10_5_layer8_4_inject_audio_reinject_loop_lora_r8",
+    "recursive_mesh_layer4_8_inject_loop_lora_r8",
+    "recursive_5_10_5_init0904",
+    "recursive_5_10_5_text_epoch1",
+    "recursive_5_10_5_text_epoch1_layer4_8_audio_reinject_loop_lora_r8",
+    "recursive_5_10_5_ced48_text_epoch1_loop_lora_r8",
+    "recursive_5_10_5_init0904_layer8_4_audio_reinject_loop_lora_r8"
+  ]
+}
