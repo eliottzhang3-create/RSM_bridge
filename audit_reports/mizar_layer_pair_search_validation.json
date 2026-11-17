@@ -1,0 +1,70 @@
+{
+  "timestamp_utc": "2026-11-17T07:22:42.607737+00:00",
+  "status": "PASS_LOCAL_CPU",
+  "scope": "LOCAL_CPU_ONLY",
+  "production_gpu_run": "NOT_RUN",
+  "simulated379rounds": "synthetic rows and runtime artifacts; tests actual finalization code",
+  "dependencies": {
+    "torch": false,
+    "transformers": false,
+    "pyarrow": false,
+    "soundfile": false
+  },
+  "static_checks": {
+    "python310_AST_files": 18,
+    "reference_sources": 31,
+    "reference_sources_equal_git_HEAD": true,
+    "LF_hashes": "PASS"
+  },
+  "tests": {
+    "run": 31,
+    "passed": 28,
+    "skipped": [
+      {
+        "test": "test_causal_shift_sum_matches_manual_token_predictions (test_mizar_layer_pair_search.TensorLikelihood.test_causal_shift_sum_matches_manual_token_predictions)",
+        "reason": "requires real torch; run in remote mellow_c8204d8 for tensor checks"
+      },
+      {
+        "test": "test_mask_skips_whole_modules_and_restores_originals (test_mizar_layer_pair_search.TensorLikelihood.test_mask_skips_whole_modules_and_restores_originals)",
+        "reason": "requires real torch; run in remote mellow_c8204d8 for tensor checks"
+      },
+      {
+        "test": "test_one_token_option_uses_prefix_last_position (test_mizar_layer_pair_search.TensorLikelihood.test_one_token_option_uses_prefix_last_position)",
+        "reason": "requires real torch; run in remote mellow_c8204d8 for tensor checks"
+      }
+    ],
+    "failures": 0,
+    "errors": 0,
+    "log": "test_378_protected_pairs_and_explicit_mask (test_mizar_layer_pair_search.DataContracts.test_378_protected_pairs_and_explicit_mask) ... ok\ntest_duplicate_normalized_choices_and_wrong_gt_rejected (test_mizar_layer_pair_search.DataContracts.test_duplicate_normalized_choices_and_wrong_gt_rejected) ... ok\ntest_full_options_are_never_truncated (test_mizar_layer_pair_search.DataContracts.test_full_options_are_never_truncated) ... ok\ntest_labelled_mmau_option_body_and_no_double_labels (test_mizar_layer_pair_search.DataContracts.test_labelled_mmau_option_body_and_no_double_labels) ... ok\ntest_manifest_tampering_and_wrong_coverage_rejected (test_mizar_layer_pair_search.DataContracts.test_manifest_tampering_and_wrong_coverage_rejected) ... ok\ntest_missing_candidates_fail_instead_of_changing_denominator (test_mizar_layer_pair_search.DataContracts.test_missing_candidates_fail_instead_of_changing_denominator) ... ok\ntest_mmsu_nulls_keep_valid_order_and_gt_mapping (test_mizar_layer_pair_search.DataContracts.test_mmsu_nulls_keep_valid_order_and_gt_mapping) ... ok\ntest_path_escape_rejected (test_mizar_layer_pair_search.DataContracts.test_path_escape_rejected) ... ok\ntest_prompt_no_eot_and_body_tokenization_has_no_specials (test_mizar_layer_pair_search.DataContracts.test_prompt_no_eot_and_body_tokenization_has_no_specials) ... ok\ntest_reason_open_yesno_two_recordings_and_ambiguous_delimiters_rejected (test_mizar_layer_pair_search.DataContracts.test_reason_open_yesno_two_recordings_and_ambiguous_delimiters_rejected) ... ok\ntest_reason_parser_does_not_use_gt_or_captions_as_candidates (test_mizar_layer_pair_search.DataContracts.test_reason_parser_does_not_use_gt_or_captions_as_candidates) ... ok\ntest_sampling_fixed_exact25_each_and_stable (test_mizar_layer_pair_search.DataContracts.test_sampling_fixed_exact25_each_and_stable) ... ok\ntest_all379_rounds_finalize_exact_counts_shared_ranks_and_integrity (test_mizar_layer_pair_search.FullFinalizationSimulation.test_all379_rounds_finalize_exact_counts_shared_ranks_and_integrity) ... ok\ntest_completion_rejects_missing_failed_and_duplicate_runtime_evidence (test_mizar_layer_pair_search.FullFinalizationSimulation.test_completion_rejects_missing_failed_and_duplicate_runtime_evidence) ... ok\ntest_device_visibility_handles_noncontiguous_and_UUIDs (test_mizar_layer_pair_search.LaunchAndSynchronization.test_device_visibility_handles_noncontiguous_and_UUIDs) ... ok\ntest_exact_one_job_resources_and_shell_quoting (test_mizar_layer_pair_search.LaunchAndSynchronization.test_exact_one_job_resources_and_shell_quoting) ... ok\ntest_real_worker_mask_loop_simulated8ranks_generation_and_resume (test_mizar_layer_pair_search.LaunchAndSynchronization.test_real_worker_mask_loop_simulated8ranks_generation_and_resume) ... ok\ntest_torchrun_has8_workers_no_restarts_and_no_378_submissions (test_mizar_layer_pair_search.LaunchAndSynchronization.test_torchrun_has8_workers_no_restarts_and_no_378_submissions) ... ok\ntest_13_12_coverage_and_count_weighted_accuracy (test_mizar_layer_pair_search.PersistenceAndResults.test_13_12_coverage_and_count_weighted_accuracy) ... ok\ntest_choose_sum_ties_and_nonfinite (test_mizar_layer_pair_search.PersistenceAndResults.test_choose_sum_ties_and_nonfinite) ... ok\ntest_duplicate_missing_wrong_mask_and_wrong_gt_results_fail (test_mizar_layer_pair_search.PersistenceAndResults.test_duplicate_missing_wrong_mask_and_wrong_gt_results_fail) ... ok\ntest_first_mask_needs100_generations_and_later_masks_forbid_them (test_mizar_layer_pair_search.PersistenceAndResults.test_first_mask_needs100_generations_and_later_masks_forbid_them) ... ok\ntest_frozen_manifest_rejects_changed_source_arguments (test_mizar_layer_pair_search.PersistenceAndResults.test_frozen_manifest_rejects_changed_source_arguments) ... ok\ntest_output_identity_prevents_mixed_runs (test_mizar_layer_pair_search.PersistenceAndResults.test_output_identity_prevents_mixed_runs) ... ok\ntest_partial_final_write_recovered_but_complete_corruption_fails (test_mizar_layer_pair_search.PersistenceAndResults.test_partial_final_write_recovered_but_complete_corruption_fails) ... ok\ntest_ranking_requires_all378_and_keeps_shared_ranks (test_mizar_layer_pair_search.PersistenceAndResults.test_ranking_requires_all378_and_keeps_shared_ranks) ... ok\ntest_resume_checks_each_record_and_only_keeps_completed_prefix (test_mizar_layer_pair_search.PersistenceAndResults.test_resume_checks_each_record_and_only_keeps_completed_prefix) ... ok\ntest_reused_sources_are_unchanged_and_pinned (test_mizar_layer_pair_search.PersistenceAndResults.test_reused_sources_are_unchanged_and_pinned) ... ok\ntest_causal_shift_sum_matches_manual_token_predictions (test_mizar_layer_pair_search.TensorLikelihood.test_causal_shift_sum_matches_manual_token_predictions) ... skipped 'requires real torch; run in remote mellow_c8204d8 for tensor checks'\ntest_mask_skips_whole_modules_and_restores_originals (test_mizar_layer_pair_search.TensorLikelihood.test_mask_skips_whole_modules_and_restores_originals) ... skipped 'requires real torch; run in remote mellow_c8204d8 for tensor checks'\ntest_one_token_option_uses_prefix_last_position (test_mizar_layer_pair_search.TensorLikelihood.test_one_token_option_uses_prefix_last_position) ... skipped 'requires real torch; run in remote mellow_c8204d8 for tensor checks'\n\n----------------------------------------------------------------------\nRan 31 tests in 25.463s\n\nOK (skipped=3)\n"
+  },
+  "shell": {
+    "status": "PASS",
+    "syntax": [
+      "code/RSmol/mizar_layer_pair_search/run.sh",
+      "code/RSmol/run_mizar_layer_pair_search_8gpu_3090.sh"
+    ],
+    "real_shell_parse_only": true,
+    "conda_activation": "explicit fake fixture",
+    "vc_called": false,
+    "CUDA_started": false
+  },
+  "reasonaqa_metadata": {
+    "source": {
+      "path": "C:\\Xlance\\assets\\reasonaqa\\reasonaqa\\test.json",
+      "bytes": 104261238,
+      "mtime_ns": 1742168114000000000,
+      "sha256": "7ea24154c641b34390c46346e3b806b09908573b2eaa353527f9f93490107d99"
+    },
+    "source_rows": 161695,
+    "eligible_by_subtype": {
+      "AudioCaps-MCQ.json": 23666,
+      "Clotho-MCQ.json": 26028
+    },
+    "eligible_rows": 49694,
+    "excluded": {
+      "not_two_MCQ_subtypes": 111992,
+      "empty_or_duplicate_normalized_options": 9
+    },
+    "scope": "real metadata parsing only; no tokenizer/audio/model"
+  }
+}

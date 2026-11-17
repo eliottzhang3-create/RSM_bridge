@@ -1,3 +1,28 @@
+## 2026-11-17：MeSH四循环MMSU异常的独立三题诊断
+
+用户反馈recursive_mesh_5_10x4_5的MMAU/MMAR正常、MMSU约1%。其提供的三条
+accent_identification原始response出现naive开头、重复短语/无关词及300token截断，
+属于生成退化，不能仅以评分器不识别字母解释；尚未确认根因，不登记修复完成。
+用户提供服务器forward audit：649923次检查通过，最后一次完整50次层调用，
+0..4,(5..14)×4,15..19，5/15/25/35/45五组write/read，无cache，4090。
+空branch事件符合本路线；片段未附checkpoint/runtime/源码身份，仍需核对。
+
+新增隔离包code/RSmol/mizar_mmsu_meshx4_diagnostics/，精确绑定mesh_x4的
+formal_20261103_093224843011222/step34626及同run runtime、训练geometry8,4,4。
+选定用户报告的三题，比较原MMSU题面/小写/原MMAU紧凑小写及两runner同输入；
+复用原严格loader、全部四循环与router审计、FP32/greedy300/无cache等生成设置。
+另比较原MMAU音频bytes解码结果，保存原始回答、tokens、音频与模型/来源审计。
+诊断输出必须是新目录，不评分、不覆盖原结果，PASS只代表runner及音频一致。
+pdgpu-4090单卡/8CPU/32G/1node提交命令见包README，job包含时间/PID后缀小于60位。
+
+6项新增本地测试全部通过，覆盖精确绑定/题面对照、runner差异、三题覆盖、旧目录
+拒绝覆盖、错误数据拒绝加载及真实CLI无资产预览；Python3.10与Bash语法通过。
+1768份既有源码raw/LF SHA保持，原MMSU/MMAU/MMAR/训练/模型及已有入口均未改。
+报告audit_reports/mizar_meshx4_mmsu_diagnostics_validation.json。真实张量/GPU明确模拟；
+Windows临时目录权限阻止测试后，获准沙箱外执行本地合成验证。
+未访问远程权重、提交真实作业或commit/push，真实三题对照仍待远程运行。
+本条仅前置，原RM历史字节完整保留。
+
 ## 2026-11-16：MMSU27项完整job名缩短至52位
 
 用户要求包含后缀的完整job参数名严格小于60位。检查发现原最长一项恰好60位，

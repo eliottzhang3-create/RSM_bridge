@@ -1,0 +1,32 @@
+{
+  "utc": "2026-11-17T03:00:37.304102+00:00",
+  "status": "PASS_LOCAL",
+  "scope": "Local fixtures and real CLI preview only; generation, waveform tensors and model loading simulated.",
+  "production_gpu_inference": "NOT_RUN; checkpoint is on the remote Linux server",
+  "tests_run": 6,
+  "passed": 6,
+  "errors": [],
+  "failures": [],
+  "skipped": [],
+  "syntax": {
+    "python310_files": 3,
+    "bash_returncode": 0,
+    "bash_stderr": ""
+  },
+  "preservation": {
+    "files_checked": 1768,
+    "raw_bytes_preserved": true,
+    "raw_changed": [],
+    "lf_content_preserved": true,
+    "lf_changed": [],
+    "rm_history_bytes_preserved": true,
+    "status": "PASS"
+  },
+  "diagnostic_files": {
+    "code/RSmol/mizar_mmsu_meshx4_diagnostics/__init__.py": "052a21f22b30da25651231b88df4869e222ee9a89ab2bd2d4296b5c54b7e8efa",
+    "code/RSmol/mizar_mmsu_meshx4_diagnostics/probe.py": "833e975847af608bea0d321e4849f6c2da04d3db9ef1a6a070e2319364116810",
+    "code/RSmol/mizar_mmsu_meshx4_diagnostics/README.md": "87b7126b40418e99754aa57d6c2fee8c5f0577ca382ed4002e1256d03261e002",
+    "code/RSmol/mizar_mmsu_meshx4_diagnostics/run.sh": "8f4de7ac6528b99b13c7f3b58f73522076f31f55f1c71c00f33d78f5fed9e0bd",
+    "tests/test_mizar_meshx4_mmsu_diagnostics.py": "0c4c72ff1dc41caafa419cdd722dc90c6d411214aea39fc987bf723d18829fec"
+  }
+}
