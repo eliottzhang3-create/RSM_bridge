@@ -2,7 +2,7 @@
 import csv
 import math
 
-from . import config, storage
+from . import config, execution, storage
 
 
 def choose(scores):
@@ -44,13 +44,14 @@ def validate_row(row, record, mask_index, identity_sha):
         raise ValueError('later masks/baseline must not generate answers')
 
 
-def merge_rank_rows(rank_rows, records, mask_index, identity_sha):
-    if len(rank_rows) != 8:
-        raise ValueError('must gather all eight ranks')
+def merge_rank_rows(rank_rows, records, mask_index, identity_sha, world_size=8):
+    execution.validate_world(world_size)
+    if len(rank_rows) != world_size:
+        raise ValueError('must gather every requested rank')
     combined = []
     for rank, rows in enumerate(rank_rows):
-        if [r['global_index'] for r in rows] != config.rank_indices(rank):
-            raise ValueError(f'wrong 13/12 sample coverage on rank {rank}')
+        if [r['global_index'] for r in rows] != execution.rank_indices(rank, world_size):
+            raise ValueError(f'wrong sample coverage on rank {rank}')
         for row in rows:
             validate_row(row, records[row['global_index']], mask_index, identity_sha)
         combined.extend(rows)
@@ -76,10 +77,10 @@ def summarize(rows, records, index):
             'free_generations': sum(r.get('generation') is not None for r in rows)}
 
 
-def read_rank(directory, rank, records, index, identity_sha):
+def read_rank(directory, rank, records, index, identity_sha, world_size=8):
     path = directory / 'ranks' / f'rank{rank:02d}' / (config.mask_name(index) + '.jsonl')
     rows = storage.recover_jsonl(path)
-    indices = config.rank_indices(rank)
+    indices = execution.rank_indices(rank, world_size)
     if len(rows) > len(indices):
         raise ValueError('extra journal rows')
     for local, row in enumerate(rows):

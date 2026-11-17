@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'code/RSmol'))
-from mizar_layer_pair_search import (arguments, audio, config, data, device, evaluate, identity,
+from mizar_layer_pair_search import (arguments, audio, config, data, device, evaluate, execution, identity,
                                      manifest, results, runtime, storage, submit, worker)
 
 
@@ -409,10 +409,10 @@ class LaunchAndSynchronization(TempCase):
 
 class FullFinalizationSimulation(TempCase):
     """Explicit synthetic CPU artifacts; never evidence of actual BF16/GPU PASS."""
-    def make_runtime_fixture(self):
+    def make_runtime_fixture(self, world_size=8):
         expected = {'identity_sha256': 'fixture-identity'}
         audits = []
-        for rank in range(8):
+        for rank in range(world_size):
             audit = {'binding': {'rank': rank, 'worker_cuda_visible_devices': str(rank)},
                      'fixture_only': 'CPU_SYNTHETIC_NOT_GPU'}
             audits.append(audit)
@@ -420,7 +420,7 @@ class FullFinalizationSimulation(TempCase):
             storage.write_json(directory/'model_audit.json', storage.seal(audit))
             storage.write_json(directory/'rank_report.json', storage.seal({
                 'status': 'PASS', 'identity_sha256': 'fixture-identity', 'binding': audit['binding'],
-                'masks_completed': 379, 'rows_per_mask': len(config.rank_indices(rank))}))
+                'masks_completed': 379, 'rows_per_mask': len(execution.rank_indices(rank, world_size))}))
         entries = []
         for index in range(100):
             directory = self.path/'cache'
@@ -441,13 +441,21 @@ class FullFinalizationSimulation(TempCase):
         return expected
 
     def test_all379_rounds_finalize_exact_counts_shared_ranks_and_integrity(self):
-        expected, records = self.make_runtime_fixture(), records_fixture()
-        def read_fixture(directory, rank, unused_records, index, identity_sha):
+        self.check_full_run(8)
+
+    def test_single_GPU_all379_rounds_cover37900_decisions_and100_generations(self):
+        self.check_full_run(1)
+
+    def check_full_run(self, world_size):
+        expected, records = self.make_runtime_fixture(world_size), records_fixture()
+        def read_fixture(directory, rank, unused_records, index, identity_sha, actual_world):
+            self.assertEqual(actual_world, world_size)
             correct_count = 80 if index == 378 else 70 if index < 2 else 60
-            return [row_fixture(records[i], index, i < correct_count) for i in config.rank_indices(rank)]
+            return [row_fixture(records[i], index, i < correct_count) for i in execution.rank_indices(rank, world_size)]
         with patch.object(results, 'read_rank', side_effect=read_fixture) as read:
-            report = evaluate.finalize(self.path, {'records': records}, expected)
-        self.assertEqual(read.call_count, 379*8)
+            report = evaluate.finalize(self.path, {'records': records}, expected, world_size)
+        self.assertEqual(read.call_count, 379*world_size)
+        self.assertEqual(report['world_size'], world_size)
         self.assertEqual(report['candidate_decisions']+report['baseline_decisions'], 37900)
         self.assertEqual(report['first_mask_free_generations'], 100)
         self.assertEqual(report['top_accuracy'], .7)
@@ -461,7 +469,7 @@ class FullFinalizationSimulation(TempCase):
         # Tampering with persisted cache bytes is detected independently of scores.
         (self.path/'cache/prefix_099.pt').write_bytes(b'changed')
         with self.assertRaises(ValueError):
-            evaluate.verify_runtime_artifacts(self.path, expected)
+            evaluate.verify_runtime_artifacts(self.path, expected, world_size)
 
     def test_completion_rejects_missing_failed_and_duplicate_runtime_evidence(self):
         expected = self.make_runtime_fixture()
@@ -475,6 +483,84 @@ class FullFinalizationSimulation(TempCase):
                 **{k:v for k,v in original.items() if k != 'sha256'}, **edit}))
             with self.assertRaises(ValueError):
                 evaluate.verify_runtime_artifacts(self.path, expected)
+
+
+class SingleCard4090(TempCase):
+    def test_one_job_resources_distinct_output_same_manifest_and_one_worker(self):
+        single = execution.parse_args([], 1)
+        eight = execution.parse_args([], 8)
+        self.assertEqual(single.manifest, eight.manifest)
+        self.assertNotEqual(single.output_dir, eight.output_dir)
+        command = submit.command(single, 'fixture123', 1)
+        for flag, value in [('-p','pdgpu-4090'),('-g','1'),('-n','1'),('-c','8'),('-m','32G')]:
+            self.assertEqual(command[command.index(flag)+1], value)
+        self.assertEqual(command.count('submit'), 1)
+        self.assertLess(len(command[command.index('-j')+1]), 60)
+        import shlex
+        compute = shlex.split(command[command.index('--cmd')+1])
+        self.assertEqual(compute[:3], ['bash', 'mizar_layer_pair_search/run.sh', 'pipeline_single_gpu'])
+        with patch.object(evaluate.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as mocked, \
+             contextlib.redirect_stdout(io.StringIO()):
+            evaluate.launch(single, 1)
+        self.assertEqual(mocked.call_count, 1)
+        launched = mocked.call_args.args[0]
+        self.assertIn('--nproc-per-node=1', launched)
+        self.assertIn('--max-restarts=0', launched)
+        self.assertIn('mizar_layer_pair_search.worker_single_gpu', launched)
+
+    def test_single_device_UUID_and_nonzero_physical_index_binding(self):
+        env = {'RANK':'0', 'LOCAL_RANK':'0', 'WORLD_SIZE':'1', 'LOCAL_WORLD_SIZE':'1'}
+        for visible in ('5', 'GPU-unique-card', '0'):
+            actual = device.device_binding({**env, 'CUDA_VISIBLE_DEVICES': visible}, 1)
+            self.assertEqual(actual['worker_cuda_visible_devices'], visible)
+            self.assertEqual(actual['world_size'], 1)
+        for edit in ({'CUDA_VISIBLE_DEVICES':'0,1'}, {'RANK':'1'}, {'WORLD_SIZE':'8'}):
+            with self.assertRaises(ValueError):
+                device.device_binding({**env, **edit}, 1)
+
+    def test_manifest_generator_sources_unchanged_and_numerical_protocol_shared(self):
+        # No manifest regeneration just because execution moved from 8 GPUs to 1.
+        for relative, digest in manifest.generator_sources().items():
+            old = subprocess.run(['git', 'show', 'HEAD:code/RSmol/'+relative], cwd=ROOT,
+                                 check=True, capture_output=True).stdout.decode('utf-8')
+            import hashlib
+            self.assertEqual(hashlib.sha256(old.replace('\r\n', '\n').encode('utf-8')).hexdigest(), digest)
+        self.assertEqual({k:v for k,v in execution.protocol(1).items() if k not in ('world_size','sharding')},
+                         {k:v for k,v in config.PROTOCOL.items() if k not in ('world_size','sharding')})
+        self.assertEqual(execution.rank_indices(0, 1), list(range(100)))
+        with self.assertRaises(ValueError):
+            execution.rank_indices(1, 1)
+
+    def test_single_worker_generates100_scores_all100_and_resumes_without_recompute(self):
+        records, expected = records_fixture(), {'identity_sha256':'fixture-identity'}
+        args = SimpleNamespace(output_dir=self.path)
+        class Controller:
+            def set_pair(self, pair):
+                self.trace = [i for i in range(30) if i not in pair]
+        class OneRank:
+            def broadcast_object_list(self, values, src):
+                pass
+            def gather_object(self, rows, destination, dst):
+                destination[0] = rows
+            def barrier(self):
+                pass
+        output = io.StringIO()
+        with patch.object(runtime, 'generate', return_value=generation_fixture()) as generate, \
+             patch.object(runtime, 'score', side_effect=lambda loaded, p, r: score_fixture(r)) as score, \
+             contextlib.redirect_stdout(output):
+            for index in (0, 1, 378):
+                worker.evaluate_mask(args, {'controller':Controller()}, {i:'prefix-only' for i in range(100)},
+                                     records, expected, index, 0, OneRank(), 1)
+            worker.evaluate_mask(args, {'controller':Controller()}, {}, records, expected, 0, 0, OneRank(), 1)
+        self.assertEqual(generate.call_count, 100)
+        self.assertEqual(score.call_count, 300)
+        lines = [json.loads(line) for line in output.getvalue().splitlines()]
+        samples = [row for row in lines if row['event'] == 'FIRST_MASK_SAMPLE']
+        self.assertEqual(len(samples), 200)
+        self.assertTrue(all(row['rank'] == 0 for row in samples))
+        self.assertEqual(len(results.read_rank(self.path, 0, records, 1, 'fixture-identity', 1)), 100)
+        with self.assertRaises(ValueError):
+            results.read_rank(self.path, 0, records, 1, 'fixture-identity', 8)
 
 
 HAS_TORCH = importlib.util.find_spec('torch') is not None

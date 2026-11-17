@@ -2,7 +2,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE="${1:-}"
-case "$MODE" in manifest|evaluate|pipeline|submit) shift ;; *) echo 'Expected manifest/evaluate/pipeline/submit' >&2; exit 2 ;; esac
+case "$MODE" in manifest|evaluate|pipeline|submit|submit_4090|pipeline_single_gpu|evaluate_single_gpu) shift ;; *) echo 'Expected manifest/evaluate/pipeline/submit or a single_gpu mode' >&2; exit 2 ;; esac
 RSMOL_CONDA_BASE="${RSMOL_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3}"
 source "$RSMOL_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate mellow_c8204d8

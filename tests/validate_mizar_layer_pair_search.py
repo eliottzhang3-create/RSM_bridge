@@ -22,7 +22,8 @@ from mizar_layer_pair_search import config, data, identity, storage
 def shell_checks():
     bash = (Path(os.environ.get('ProgramFiles', 'C:/Program Files'))/'Git/bin/bash.exe'
             if os.name == 'nt' else Path(shutil.which('bash') or '/usr/bin/bash'))
-    scripts = ['code/RSmol/mizar_layer_pair_search/run.sh', 'code/RSmol/run_mizar_layer_pair_search_8gpu_3090.sh']
+    scripts = ['code/RSmol/mizar_layer_pair_search/run.sh', 'code/RSmol/run_mizar_layer_pair_search_8gpu_3090.sh',
+               'code/RSmol/run_mizar_layer_pair_search_1gpu_4090.sh']
     checks = []
     for script in scripts:
         run = subprocess.run([str(bash), '-n', script], cwd=ROOT, capture_output=True, text=True)
@@ -38,13 +39,16 @@ def shell_checks():
         args = ['--check-args', '--manifest', str(Path(directory)/'input with spaces/manifest.json'),
                 '--output-dir', str(Path(directory)/'output with spaces')]
         env = dict(os.environ, RSMOL_CONDA_BASE=fake.parents[2].as_posix(), PYTHONUTF8='1')
-        run = subprocess.run([str(bash), scripts[1], *args], cwd=ROOT, env=env,
-                             capture_output=True, text=True, encoding='utf-8')
-        if run.returncode:
-            raise RuntimeError(f'Parse-only shell integration failed: {run.stderr}')
-        parsed = json.loads(run.stdout)
-        if parsed['submitted_jobs'] != 1 or parsed['vc_args'].count('submit') != 1:
-            raise ValueError('single-job shell plan changed')
+        for script, world in ((scripts[1], 8), (scripts[2], 1)):
+            run = subprocess.run([str(bash), script, *args], cwd=ROOT, env=env,
+                                 capture_output=True, text=True, encoding='utf-8')
+            if run.returncode:
+                raise RuntimeError(f'Parse-only shell integration failed: {run.stderr}')
+            parsed = json.loads(run.stdout)
+            vc_args = parsed['vc_args']
+            if (parsed['submitted_jobs'] != 1 or vc_args.count('submit') != 1
+                    or parsed['protocol']['world_size'] != world or vc_args[vc_args.index('-g')+1] != str(world)):
+                raise ValueError('single-job shell plan changed')
     return {'status': 'PASS', 'syntax': checks, 'real_shell_parse_only': True,
             'conda_activation': 'explicit fake fixture', 'vc_called': False, 'CUDA_started': False}
 

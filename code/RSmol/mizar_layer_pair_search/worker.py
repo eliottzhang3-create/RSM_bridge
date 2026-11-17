@@ -1,17 +1,17 @@
-"""One synchronized mask at a time, with independent 13/12-row GPU shards."""
+"""One synchronized mask at a time, supporting one or eight GPU workers."""
 import json
 import time
 import traceback
 from datetime import timedelta
 
-from . import arguments, config, device, identity, results, storage
+from . import config, device, execution, identity, results, storage
 
 
-def print_first(rows, records):
+def print_first(rows, records, world_size=8):
     for row in rows:
         record = records[row['global_index']]
         print(json.dumps({'event': 'FIRST_MASK_SAMPLE', 'index': row['global_index'], 'key': record['key'],
-            'dataset': record['dataset'], 'id': record['id'], 'rank': row['global_index'] % 8,
+            'dataset': record['dataset'], 'id': record['id'], 'rank': row['global_index'] % world_size,
             'drop_pair_0based': row['drop_pair_0based'], 'drop_pair_1based': [i+1 for i in row['drop_pair_0based']],
             'prompt': record['prompt'], 'choice_bodies': record['choice_bodies'],
             'generated_output': row['generation']['generated_output'],
@@ -26,7 +26,7 @@ def print_first(rows, records):
             ensure_ascii=False, allow_nan=False), flush=True)
 
 
-def evaluate_mask(args, loaded, prefixes, records, expected, index, rank, dist):
+def evaluate_mask(args, loaded, prefixes, records, expected, index, rank, dist, world_size=8):
     from . import runtime
     started = time.monotonic()
     pair = config.PAIRS[index] if index < len(config.PAIRS) else ()
@@ -35,9 +35,9 @@ def evaluate_mask(args, loaded, prefixes, records, expected, index, rank, dist):
     if tuple(control[0]) != (index, list(pair), expected['identity_sha256']):
         raise ValueError('ranks disagree on active mask or run identity')
     loaded['controller'].set_pair(pair)
-    rows = results.read_rank(args.output_dir, rank, records, index, expected['identity_sha256'])
+    rows = results.read_rank(args.output_dir, rank, records, index, expected['identity_sha256'], world_size)
     path = args.output_dir / 'ranks' / f'rank{rank:02d}' / (config.mask_name(index)+'.jsonl')
-    for global_index in config.rank_indices(rank)[len(rows):]:
+    for global_index in execution.rank_indices(rank, world_size)[len(rows):]:
         record, prefix = records[global_index], prefixes[global_index]
         # Free generation has no candidate or reference continuation as input.
         generation = runtime.generate(loaded, prefix) if index == 0 else None
@@ -52,13 +52,13 @@ def evaluate_mask(args, loaded, prefixes, records, expected, index, rank, dist):
         if index == 0:
             print(json.dumps({'event': 'FIRST_MASK_WORKER_PROGRESS', 'rank': rank,
                               'global_index': global_index, 'finished': len(rows),
-                              'total': len(config.rank_indices(rank))}), flush=True)
-    gathered = [None]*8 if rank == 0 else None
+                              'total': len(execution.rank_indices(rank, world_size))}), flush=True)
+    gathered = [None]*world_size if rank == 0 else None
     dist.gather_object(rows, gathered, dst=0)
     if rank == 0:
-        combined = results.merge_rank_rows(gathered, records, index, expected['identity_sha256'])
+        combined = results.merge_rank_rows(gathered, records, index, expected['identity_sha256'], world_size)
         if index == 0:
-            print_first(combined, records)
+            print_first(combined, records, world_size)
         summary = results.save_mask(args.output_dir, records, index, combined,
                                     expected['identity_sha256'], time.monotonic()-started)
         print(json.dumps({'event': 'MASK_DONE' if index < 378 else 'BASELINE_DONE',
@@ -68,11 +68,11 @@ def evaluate_mask(args, loaded, prefixes, records, expected, index, rank, dist):
     dist.barrier()
 
 
-def main(argv=None):
-    binding = device.bind_worker()
-    args = arguments.parse_args(argv)
+def main(argv=None, *, world_size=8):
+    binding = device.bind_worker(world_size)
+    args = execution.parse_args(argv, world_size)
     expected = storage.read_json(args.output_dir / 'run_config.json')
-    frozen = identity.verify(args, expected)
+    frozen = identity.verify(args, expected, world_size=world_size)
     records = frozen['records']
     import torch.distributed as dist
     from . import cache, runtime
@@ -84,9 +84,9 @@ def main(argv=None):
         storage.write_json(rank_dir / 'model_audit.json', storage.seal(loaded['audit']))
         dist.init_process_group('gloo', timeout=timedelta(hours=1))
         initialized = True
-        audits = [None]*8
+        audits = [None]*world_size
         dist.all_gather_object(audits, loaded['audit'])
-        if (len({a['binding']['worker_cuda_visible_devices'] for a in audits}) != 8
+        if (len({a['binding']['worker_cuda_visible_devices'] for a in audits}) != world_size
                 or any(cache.precision_identity(a) != cache.precision_identity(audits[0]) for a in audits)):
             raise ValueError('GPU bindings or runtime precision/backend differ across ranks')
         if rank == 0:
@@ -101,11 +101,11 @@ def main(argv=None):
                 'online_cache_check': cache_meta['online_serialized_check'], 'rank_audits': audits}))
         dist.barrier()
         for index in range(len(config.PAIRS)+1):
-            evaluate_mask(args, loaded, prefixes, records, expected, index, rank, dist)
-        identity.verify(args, expected)
+            evaluate_mask(args, loaded, prefixes, records, expected, index, rank, dist, world_size)
+        identity.verify(args, expected, world_size=world_size)
         storage.write_json(rank_dir / 'rank_report.json', storage.seal({
             'status': 'PASS', 'identity_sha256': expected['identity_sha256'], 'binding': binding,
-            'masks_completed': 379, 'rows_per_mask': len(config.rank_indices(rank)),
+            'masks_completed': 379, 'rows_per_mask': len(execution.rank_indices(rank, world_size)),
             'execution_audit': loaded['controller'].report()}))
         dist.barrier()
         return 0

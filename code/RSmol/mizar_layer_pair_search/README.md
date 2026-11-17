@@ -22,6 +22,32 @@ bash run_mizar_layer_pair_search_8gpu_3090.sh
 
 入口沿用项目 `vc` wrapper、镜像 `docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1` 及 `mellow_c8204d8` conda 环境。默认 conda 根为 `/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3`，可通过 `RSMOL_CONDA_BASE` 指定其他根。权重及 tokenizer 仅从本地资产离线加载。
 
+## pdgpu-4090 单卡入口
+
+同步本地新增代码到远程后执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
+bash run_mizar_layer_pair_search_1gpu_4090.sh
+```
+
+资源固定为 `pdgpu-4090 / 1 GPU / 1 node / 8 CPU / 32G RAM`，同样只提交一个作业。可追加 `--check-args` 预览资源和参数。单卡由一个 worker 顺序完成每组全部 100 题，完整运行 378 组以及末尾 30 层基线；BF16、正文 likelihood 求和、首组 100 条自由生成、缓存和恢复规则与八卡一致。
+
+单卡复用同一份冻结 manifest，不重新抽样；默认独立输出目录为：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_30to28_pair_search_bf16_seed1234_1gpu4090_v1
+```
+
+需要指定已有 manifest 时：
+
+```bash
+bash run_mizar_layer_pair_search_1gpu_4090.sh \
+  --manifest /absolute/path/calibration100/manifest.json
+```
+
+在已分配单卡的计算作业内，已有 manifest 的直接评测入口为 `bash mizar_layer_pair_search/run.sh evaluate_single_gpu ...`。单卡产物仅有 `ranks/rank00/`，完成校验要求该 worker 每组覆盖全部 100 题。单卡与八卡的运行身份和缓存分别管理，请保留各自的独立输出目录。源码发生变化后，旧评测输出仍按原有规则拒绝跨版本续跑；冻结 manifest 的生成源码在本次单卡扩展中未变。
+
 ## 单独生成冻结 manifest
 
 这是 CPU 数据准备入口，需要环境里的 Torch、torchaudio、Transformers、PyArrow、SoundFile；不加载模型、不初始化 CUDA。
@@ -112,7 +138,7 @@ baseline.json                      30 层无剪 likelihood 基线，独立于候
 search_report.json                 完整性校验与最终状态
 ```
 
-提交记录写到 `code/RSmol/log/mizar-prune28.<tag>.submission.json`；调度日志为同目录下 `mizar-prune28.<tag>.JOB.log`。每组完成立即打印 `MASK_DONE`，末尾基线为 `BASELINE_DONE`。最终 `PASS` 要求 378×100 个候选决策、100 个基线决策、首组 100 条生成、八卡完成报告、缓存和真实运行检查全部通过。CPU 测试的模拟产物不作为真实 GPU 结果交付。
+提交记录写到 `code/RSmol/log/mizar-prune28.<tag>.submission.json`；调度日志为同目录下 `mizar-prune28.<tag>.JOB.log`。每组完成立即打印 `MASK_DONE`，末尾基线为 `BASELINE_DONE`。最终 `PASS` 要求 378×100 个候选决策、100 个基线决策、首组 100 条生成、所选模式全部 worker 的完成报告、缓存和真实运行检查全部通过。CPU 测试的模拟产物不作为真实 GPU 结果交付。
 
 100 题用于选择删层组合，accuracy 步长为 1%，每个子集为 4%；选中的组合仍需在未参与选择的数据上复核。
 
