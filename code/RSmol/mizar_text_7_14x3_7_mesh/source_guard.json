@@ -1,0 +1,18 @@
+{
+  "code/RSmol/mizar_text_7_14x2_7_mesh/contract.py": "20940d9d6e6cbadeb77059c9b9a0fed4bddf30ce52b4c9e5b9c27af07ddc6273",
+  "code/RSmol/mizar_text_7_14x2_7_mesh/conversion.py": "f18ab1994125e20e3b52374a2375546ea04b044de989ed3cb29d43eea0255c20",
+  "code/RSmol/mizar_text_7_14x2_7_mesh/data.py": "bd20232e920347b64b9444a98d96a457d43001c2c85d2d00d4e4b0c17c0c0f56",
+  "code/RSmol/mizar_text_7_14x2_7_mesh/publication.py": "c19e573d9da4c0519d5a7058b80d450609e67a90c136186dbf444f9e119b2fb0",
+  "code/RSmol/mizar_text_7_14x2_7_mesh/README.md": "d2423d3fbe020857a2bcd1ab3a9e0d216c96ee4cb1007309b30f413fce92f894",
+  "code/RSmol/mizar_text_7_14x2_7_mesh/recipe.py": "dd53ca31d2cf1c8214b30818fa95ebb8742f67aa656163475a9acb6bd5435123",
+  "code/RSmol/mizar_text_7_14x2_7_mesh/__init__.py": "0408d39dc8a4f07df16ca84c8093817577b3302914ed334a0f34f97b968f9f7d",
+  "code/RSmol/recursive_model_mizar_text_7_14x2_7_mesh.py": "08cfbd9c8f159d98032198b76e5979eca620dd5d60a60fc01fe9f04dfc8c1d83",
+  "code/RSmol/scripts/convert_mizar_text_7_14x2_7_mesh.py": "8f731f1d54867aaafe529b0cb5fb2f41b0d4a6867c8e71a59cf9faddbfae2629",
+  "code/RSmol/scripts/convert_mizar_text_7_14x2_7_mesh.sh": "00d8542ec43567ef43fa4f74bcc7919ad0b8543f933abf305401e603fbf06008",
+  "code/RSmol/scripts/train_stage4_mizar_text_7_14x2_7_mesh_ddp.py": "9a2ea7e3d3244ad6bc191bf240d0195d17f970982106f97fcd94bfcd99b3438d",
+  "code/RSmol/scripts/train_stage4_mizar_text_7_14x2_7_mesh_ddp.sh": "9261b2bd18e05737262ce0b8fa12ce291da700dd6a3015161756cf4278cda75e",
+  "code/RSmol/run_stage4_mizar_text_7_14x2_7_mesh_training_5090.sh": "c2662c4e787c1a6103fcdd7234b28a5d078776239ca964429af99491842b54aa",
+  "tests/test_mizar_text_7_14x2_7_mesh.py": "1fb4967a402be71cbf9ab663edecd399399858e0afee2c533634daaa8b939b23",
+  "tests/test_mizar_text_7_14x2_7_mesh_shell.py": "6114693ba6218e8d7b05999ba652d7514bbe5545eda79b9a9f7a302f75f22bfb",
+  "tests/test_mizar_text_7_14x2_7_mesh_tensors.py": "c16eae38a8c31e87371cd62aba7fe70930405b5137d61ba5d489fd81c332fa64"
+}
