@@ -26,6 +26,10 @@ bash run_mizar_layer_pair_search_8gpu_3090.sh
 
 这是 CPU 数据准备入口，需要环境里的 Torch、torchaudio、Transformers、PyArrow、SoundFile；不加载模型、不初始化 CUDA。
 
+文件和 parquet 内嵌音频字节均使用 `soundfile.read()` 解码为 FP32；torchaudio 仅用于重采样，不调用 `torchaudio.load()`，因此不需要 TorchCodec。解码后仍按“重采样 32kHz → mono → 前 20 秒 → 右补零”的顺序处理。
+
+如果此前在 `build()` 的音频解码阶段遇到缺少 TorchCodec 的错误，最终 manifest 尚未写入；同步本次修复后直接重跑原生成命令即可。已成功冻结的旧版本 manifest 绑定旧解码源码，须使用新 manifest 路径重新生成，不能跳过身份校验混用缓存。
+
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM/code/RSmol
 bash mizar_layer_pair_search/run.sh manifest
@@ -118,7 +122,7 @@ search_report.json                 完整性校验与最终状态
 
 ```bash
 python -B tests/validate_mizar_layer_pair_search.py
-# 远程已有 Torch 的环境可要求三项真实 CPU 张量测试全部执行：
+# 远程依赖齐全的环境可要求真实 CPU 张量及音频集成测试全部执行：
 python -B tests/validate_mizar_layer_pair_search.py --require-tensors
 ```
 

@@ -51,7 +51,7 @@ def parquet_row(path, index):
 
 def payload(ref):
     if ref['kind'] == 'file':
-        return Path(ref['path']), {'audio_source_sha256': storage.file_sha(ref['path']), 'decoder': 'torchaudio_file'}
+        return Path(ref['path']), {'audio_source_sha256': storage.file_sha(ref['path']), 'decoder': 'soundfile_file'}
     row = parquet_row(ref['path'], ref['row_index'])
     if ref['format'] == 'mmau':
         helper = data.legacy_mmau()
@@ -78,36 +78,50 @@ def payload(ref):
     path = Path(raw_path)
     if not path.is_absolute():
         path = data.contained(ref['base_dir'], str(path))
-    return path, {'audio_source_sha256': storage.file_sha(path), 'decoder': 'torchaudio_payload_path'}
+    return path, {'audio_source_sha256': storage.file_sha(path), 'decoder': 'soundfile_payload_path'}
 
 
 def tensor_sha(tensor):
     return hashlib.sha256(tensor.detach().cpu().contiguous().view(__import__('torch').uint8).numpy().tobytes()).hexdigest()
 
 
-def load_fixed20(ref):
+def decode_source(source):
+    """Decode files and embedded bytes through the project's SoundFile route.
+
+    Return contiguous channels-first FP32 samples and the actual sample rate.
+    Keeping this boundary free of Torch also avoids torchaudio.load dispatching
+    to TorchCodec in environments where that optional package is not installed.
+    """
     import numpy as np
-    import torch
-    import torchaudio
-    source, audit = payload(ref)
-    if isinstance(source, io.BytesIO):
-        import soundfile as sf
-        array, rate = sf.read(source, dtype='float32', always_2d=True)
-        wave = torch.from_numpy(np.ascontiguousarray(array.T))
-    elif isinstance(source, tuple):
+    if isinstance(source, tuple):
         array, rate = source
         array = np.asarray(array, dtype=np.float32)
         if array.ndim != 1:
             raise ValueError('embedded array must be mono; do not guess channel axis')
-        wave = torch.from_numpy(array.copy()).unsqueeze(0)
+        samples = np.ascontiguousarray(array[None, :])
     else:
-        wave, rate = torchaudio.load(str(source))
+        import soundfile as sf
+        # SoundFile accepts both a filesystem path and an in-memory BytesIO.
+        array, rate = sf.read(str(source) if isinstance(source, Path) else source,
+                              dtype='float32', always_2d=True)
+        samples = np.ascontiguousarray(array.T, dtype=np.float32)
+    if samples.ndim != 2 or not samples.size or not np.isfinite(samples).all() or rate <= 0:
+        raise ValueError('empty/nonfinite/invalid decoded audio')
+    return samples, int(rate)
+
+
+def load_fixed20(ref):
+    import torch
+    source, audit = payload(ref)
+    samples, rate = decode_source(source)
+    wave = torch.from_numpy(samples)
     if wave.ndim != 2 or not wave.numel() or rate <= 0 or not bool(torch.isfinite(wave).all()):
         raise ValueError('empty/nonfinite/invalid decoded audio')
     audit.update(original_sample_rate=int(rate), original_channels=wave.shape[0], original_samples=wave.shape[1])
     wave = wave.float()
     # Match official prepare_inference.py: resample channels first, then mono.
     if rate != 32000:
+        import torchaudio
         wave = torchaudio.transforms.Resample(int(rate), 32000)(wave)
     wave = wave.mean(dim=0)
     length = wave.numel()

@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'code/RSmol'))
-from mizar_layer_pair_search import (arguments, config, data, device, evaluate, identity,
+from mizar_layer_pair_search import (arguments, audio, config, data, device, evaluate, identity,
                                      manifest, results, runtime, storage, submit, worker)
 
 
@@ -81,6 +81,63 @@ class TempCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get('RSMOL_TEST_TMP'))
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name)
+
+
+class SoundFileRouting(TempCase):
+    """Exercise the decoder boundary even without local Torch/SoundFile installs."""
+    def test_file_and_embedded_bytes_use_same_FP32_channels_first_decoder(self):
+        import numpy as np
+        path = self.path/'stereo.wav'
+        path.write_bytes(b'explicit-routing-fixture-not-real-WAV')
+        frames = np.array([[.25, -.5], [.75, 0], [-1, .5]], dtype=np.float32)
+        decoder = SimpleNamespace(read=lambda *a, **kw: (frames.copy(), 44100))
+        forbidden = SimpleNamespace(load=lambda *a, **kw: self.fail('must not call torchaudio.load'))
+        with patch.dict(sys.modules, {'soundfile': decoder, 'torchaudio': forbidden, 'torchcodec': None}), \
+             patch.object(decoder, 'read', wraps=decoder.read) as read:
+            file_source, audit = audio.payload({'kind': 'file', 'path': str(path)})
+            file_samples, rate = audio.decode_source(file_source)
+            embedded_samples, embedded_rate = audio.decode_source(io.BytesIO(path.read_bytes()))
+        self.assertEqual(audit['decoder'], 'soundfile_file')
+        self.assertEqual((rate, embedded_rate), (44100, 44100))
+        self.assertEqual(file_samples.dtype, np.float32)
+        self.assertTrue(file_samples.flags.c_contiguous)
+        np.testing.assert_array_equal(file_samples, frames.T)
+        np.testing.assert_array_equal(embedded_samples, file_samples)
+        self.assertEqual(read.call_count, 2)
+        self.assertEqual(read.call_args_list[0].args, (str(path),))
+        self.assertIsInstance(read.call_args_list[1].args[0], io.BytesIO)
+        for call in read.call_args_list:
+            self.assertEqual(call.kwargs, {'dtype': 'float32', 'always_2d': True})
+
+    def test_parquet_external_path_and_bytes_have_SoundFile_decoder_identity(self):
+        path = self.path/'audio.wav'
+        path.write_bytes(b'payload-routing-fixture')
+        ref = {'kind': 'parquet', 'path': 'fixture.parquet', 'row_index': 3,
+               'format': 'mmsu', 'expected_id': '3', 'base_dir': str(self.path)}
+        with patch.object(audio, 'parquet_row', return_value={'id': 3, 'audio': {'path': path.name, 'bytes': None}}):
+            source, audit = audio.payload(ref)
+        self.assertEqual(source, path)
+        self.assertEqual(audit['decoder'], 'soundfile_payload_path')
+        with patch.object(audio, 'parquet_row', return_value={'id': 3, 'audio': {'path': 'stale', 'bytes': path.read_bytes()}}):
+            source, audit = audio.payload(ref)
+        self.assertEqual(source.getvalue(), path.read_bytes())
+        self.assertEqual(audit['decoder'], 'soundfile_embedded_bytes')
+
+    def test_decode_failure_never_falls_back_to_TorchCodec(self):
+        decoder = SimpleNamespace(read=lambda *a, **kw: None)
+        forbidden = SimpleNamespace(load=lambda *a, **kw: self.fail('must not fall back to TorchCodec'))
+        with patch.dict(sys.modules, {'soundfile': decoder, 'torchaudio': forbidden, 'torchcodec': None}), \
+             patch.object(decoder, 'read', side_effect=RuntimeError('invalid codec header')):
+            with self.assertRaisesRegex(RuntimeError, 'invalid codec header'):
+                audio.decode_source(Path('bad.wav'))
+
+    def test_array_payload_stays_mono_FP32_and_rejects_ambiguous_axis(self):
+        import numpy as np
+        samples, rate = audio.decode_source(([0, .25, -.5], 32000))
+        np.testing.assert_array_equal(samples, np.array([[0, .25, -.5]], dtype=np.float32))
+        self.assertEqual(rate, 32000)
+        with self.assertRaisesRegex(ValueError, 'must be mono'):
+            audio.decode_source(([[0, 1], [2, 3]], 32000))
 
 
 class DataContracts(TempCase):
@@ -421,6 +478,52 @@ class FullFinalizationSimulation(TempCase):
 
 
 HAS_TORCH = importlib.util.find_spec('torch') is not None
+
+
+@unittest.skipUnless(HAS_TORCH and importlib.util.find_spec('soundfile') is not None,
+                     'requires real torch and soundfile for WAV/fixed20 integration')
+class TensorAudio(TempCase):
+    def write_wav(self, rate, seconds):
+        import numpy as np
+        import wave
+        count = int(rate*seconds)
+        pcm = np.zeros((count, 2), dtype='<i2')
+        pcm[:, 0], pcm[:, 1] = 8192, -4096
+        if count > 640000:
+            pcm[640000:] = 30000  # Distinguish first20 cropping from center cropping.
+        path = self.path/'real_stereo.wav'
+        with wave.open(str(path), 'wb') as stream:
+            stream.setparams((2, 2, rate, count, 'NONE', 'not compressed'))
+            stream.writeframes(pcm.tobytes())
+        return path
+
+    def test_real_WAV_file_and_bytes_fixed20_work_without_TorchCodec(self):
+        import torch
+        path = self.write_wav(32000, 21)
+        forbidden = SimpleNamespace(load=lambda *a, **kw: self.fail('must not invoke torchaudio.load'))
+        with patch.dict(sys.modules, {'torchaudio': forbidden, 'torchcodec': None}):
+            file_wave, audit = audio.load_fixed20({'kind': 'file', 'path': str(path)})
+            with patch.object(audio, 'payload', return_value=(io.BytesIO(path.read_bytes()), {})):
+                bytes_wave, _ = audio.load_fixed20({})
+        torch.testing.assert_close(file_wave, torch.full((640000,), .0625), rtol=0, atol=0)
+        self.assertTrue(torch.equal(file_wave, bytes_wave))
+        self.assertEqual((audit['crop_start'], audit['cropped_samples'], audit['right_pad_samples']), (0, 32000, 0))
+
+    @unittest.skipUnless(importlib.util.find_spec('torchaudio') is not None, 'requires real torchaudio resampler')
+    def test_real_resample_then_mono_and_right_padding_unchanged(self):
+        import torch
+        import torchaudio
+        import soundfile as sf
+        import numpy as np
+        path = self.write_wav(16000, .1)
+        raw, rate = sf.read(str(path), dtype='float32', always_2d=True)
+        expected = torchaudio.transforms.Resample(rate, 32000)(torch.from_numpy(np.ascontiguousarray(raw.T))).mean(0)
+        with patch.object(torchaudio, 'load', side_effect=AssertionError('must not call torchaudio.load')):
+            actual, audit = audio.load_fixed20({'kind': 'file', 'path': str(path)})
+        torch.testing.assert_close(actual[:len(expected)], expected, rtol=0, atol=0)
+        self.assertEqual(int(torch.count_nonzero(actual[len(expected):])), 0)
+        self.assertEqual((audit['original_sample_rate'], audit['original_channels'], audit['right_pad_samples']),
+                         (16000, 2, 640000-len(expected)))
 
 
 @unittest.skipUnless(HAS_TORCH, 'requires real torch; run in remote mellow_c8204d8 for tensor checks')
