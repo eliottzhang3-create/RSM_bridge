@@ -17,7 +17,7 @@ def validate_recipe(config):
         expected = {'world_size': 8, 'context_length': 1024, 'max_optimizer_steps': 9244,
                     'scheduler_total_steps': 9244, 'warmup_steps': 463,
                     'steps_per_epoch': 9244, 'epochs': 1, 'save_every': 500,
-                    'checkpoint_retention': 3, 'max_lr': 8e-4, 'min_lr': 8e-5,
+                    'checkpoint_retention': 3, 'max_lr': 6e-4, 'min_lr': 6e-5,
                     'max_microbatches': None}
         if any(getattr(config, k) != v for k, v in expected.items()):
             raise ValueError('FORMAL requires the isolated 9244-step Mizar MeSH recipe')

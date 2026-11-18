@@ -59,8 +59,8 @@ DEFAULT_STEPS_PER_EPOCH = 9244
 DEFAULT_FORMAL_EPOCHS = 1
 DEFAULT_FORMAL_OPTIMIZER_STEPS = DEFAULT_STEPS_PER_EPOCH * DEFAULT_FORMAL_EPOCHS
 DEFAULT_FORMAL_WARMUP_STEPS = 463
-DEFAULT_MAX_LR = 8e-4
-DEFAULT_MIN_LR = 0.1 * DEFAULT_MAX_LR
+DEFAULT_MAX_LR = 6e-4
+DEFAULT_MIN_LR = 6e-5
 DEFAULT_SAVE_EVERY = 500
 DEFAULT_CHECKPOINT_RETENTION = 3
 DEFAULT_LOG_INTERVAL_STEPS = 10
@@ -138,7 +138,7 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
         if not math.isfinite(args.max_lr) or not math.isfinite(args.min_lr) or args.max_lr <= 0.0 or args.min_lr <= 0.0 or args.min_lr >= args.max_lr:
             raise ValueError("FORMAL requires finite positive learning rates with 0 < min_lr < max_lr")
         if not math.isclose(args.max_lr, DEFAULT_MAX_LR, rel_tol=0.0, abs_tol=1e-12) or not math.isclose(args.min_lr, DEFAULT_MIN_LR, rel_tol=0.0, abs_tol=1e-12):
-            raise ValueError("FORMAL requires max_lr=8e-4 and min_lr=8e-5")
+            raise ValueError("FORMAL requires max_lr=6e-4 and min_lr=6e-5")
         if args.save_every != 500:
             raise ValueError("FORMAL requires save_every=500")
         if args.context_length != DEFAULT_CONTEXT_LENGTH or args.max_microbatches is not None:

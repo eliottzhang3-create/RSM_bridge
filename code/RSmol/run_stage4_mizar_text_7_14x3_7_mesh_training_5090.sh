@@ -16,7 +16,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) export "${PREFIX}_DRY_RUN=1"; shift;;
     --help|-h)
       echo 'Usage: bash run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh [--dry-run] [--output-dir NEW_PATH] [--resume-from CHECKPOINT] [--micro-batch-size 4 --gradient-accumulation-steps 32] [--gate FORMAL|D|E]'
-      echo 'Default: vc submit pdgpu-5090, 8 GPUs, BF16 forward, GBS1024, 9244 updates.'; exit 0;;
+      echo 'Default: vc submit pdgpu-5090, 8 GPUs, BF16 forward, GBS1024, 9244 updates, max_lr=6e-4/min_lr=6e-5.'; exit 0;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done

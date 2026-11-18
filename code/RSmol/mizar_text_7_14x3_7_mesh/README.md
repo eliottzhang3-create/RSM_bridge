@@ -97,7 +97,7 @@ bash code/RSmol/run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh --dry-run
 | 分片内 | buffer4096打乱，过滤空文本；独立样本、不packing、不补EOS或special tokens |
 | Context | 1024，动态右padding，padding label=-100，分片不足microbatch的尾部丢弃 |
 | 一轮定义 | 9244次optimizer更新；不是每条数据恰好一次；允许rank内数据轮转 |
-| LR | max8e-4、min8e-5、warmup463，沿用Mizar completed-step cosine公式 |
+| LR | max6e-4、min6e-5、warmup463，沿用Mizar completed-step cosine公式；首个更新使用6e-5 |
 | AdamW | betas(0.9,0.95)、eps1e-8；矩阵WD0.1，bias/norm/低维WD0 |
 | Loss | 全文本causal CE；按所有rank和整个GA窗口的有效shifted token数归一化 |
 | 梯度 | 每micro反传CE sum，DDP平均后乘world/global_tokens；clip L2=1 |
@@ -117,6 +117,9 @@ bash code/RSmol/run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh \
 ```
 
 micro变化会改变动态padding和分片尾部处理，不保证数值轨迹相同。
+2026-11-18用户报告micro8在`loss_sum.backward()`发生CUDA OOM；建议使用上述micro4/GA32命令。
+同日按用户要求将三循环max/min LR由8e-4/8e-5降至6e-4/6e-5，GBS1024及9244步保持。
+完整resume仍要求checkpoint的LR与当前配置相同；新提交从原三循环转换产物重新开始。
 所有入口参数、CLI覆盖及配置写入`run_manifest.json`。默认输出：
 
 ```text
@@ -168,7 +171,7 @@ CUDA_VISIBLE_DEVICES="" python -B -m unittest discover -s tests -p 'test_mizar_t
 Bash测试用stub vc验证参数传递，不触碰真实队列。CPU或模拟通过不能记作远程GPU PASS。
 `source_guard.json`保留复制时二循环源文件的历史SHA256（换行统一为LF后计算）。
 二循环后续可独立修改；测试仅将本三循环路线的共用数据/发布工具与历史摘要比较。
-该记录不在转换或训练入口执行，不构成提交前置条件。三循环仍使用原8e-4/8e-5配方。
+该记录不在转换或训练入口执行，不构成提交前置条件。
 
 - 模型：`../recursive_model_mizar_text_7_14x3_7_mesh.py`
 - 来源/架构/转换/数据/配方：本目录的`contract.py`、`conversion.py`、`data.py`、`recipe.py`

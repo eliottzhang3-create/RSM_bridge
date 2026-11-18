@@ -25,7 +25,7 @@ esac
 ARGS=(--gate "$GATE" --model-path "$MODEL" --data-dir "$DATA" --output-dir "$OUTPUT"
   --world-size "$WORLD" --micro-batch-size "$MICRO" --gradient-accumulation-steps "$GA"
   --context-length 1024 --max-optimizer-steps "$STEPS" --scheduler-total-steps 9244
-  --warmup-steps 463 --steps-per-epoch 9244 --epochs 1 --max-lr 8e-4 --min-lr 8e-5
+  --warmup-steps 463 --steps-per-epoch 9244 --epochs 1 --max-lr 6e-4 --min-lr 6e-5
   --save-every 500 --seed "$(read_var SEED 0)")
 [[ -z "$RESUME" ]] || ARGS+=(--resume-from "$RESUME")
 COMMAND=(torchrun --standalone --nproc_per_node="$WORLD" code/RSmol/scripts/train_stage4_mizar_text_7_14x3_7_mesh_ddp.py "${ARGS[@]}" "$@")

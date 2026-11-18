@@ -23,8 +23,8 @@ def recipe(**kwargs):
     values = dict(gate='FORMAL', world_size=8, micro_batch_size=8,
                   gradient_accumulation_steps=16, max_optimizer_steps=9244,
                   scheduler_total_steps=9244, warmup_steps=463, save_every=500,
-                  context_length=1024, checkpoint_retention=3, max_lr=8e-4,
-                  min_lr=8e-5, steps_per_epoch=9244, epochs=1, max_microbatches=None)
+                  context_length=1024, checkpoint_retention=3, max_lr=6e-4,
+                  min_lr=6e-5, steps_per_epoch=9244, epochs=1, max_microbatches=None)
     return SimpleNamespace(**{**values, **kwargs})
 
 
@@ -146,14 +146,15 @@ class ContractTests(unittest.TestCase):
         R.validate_recipe(recipe())
         R.validate_recipe(recipe(micro_batch_size=4, gradient_accumulation_steps=32))
         for overrides in ({'micro_batch_size':4}, {'max_optimizer_steps':3081},
-                          {'world_size':1}, {'max_lr':2e-4}, {'context_length':2048}):
+                          {'world_size':1}, {'max_lr':2e-4},
+                          {'max_lr':8e-4, 'min_lr':8e-5}, {'context_length':2048}):
             with self.assertRaises(ValueError):
                 R.validate_recipe(recipe(**overrides))
         cfg = recipe()
         rates = [R.learning_rate(step, cfg) for step in range(9245)]
-        self.assertEqual(rates[0], 8e-5)
-        self.assertAlmostEqual(rates[463], 8e-4)
-        self.assertEqual(rates[9244], 8e-5)
+        self.assertEqual(rates[0], 6e-5)
+        self.assertAlmostEqual(rates[463], 6e-4)
+        self.assertEqual(rates[9244], 6e-5)
         self.assertTrue(all(a <= b for a,b in zip(rates[:463], rates[1:464])))
         self.assertTrue(all(a >= b for a,b in zip(rates[463:], rates[464:])))
         # Analytic DDP-average gradient, for unequal token populations.
