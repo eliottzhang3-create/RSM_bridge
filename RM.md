@@ -1,3 +1,26 @@
+## 2026-11-18：7–14×2–7文本从step1000权重重新训练，LR降至6e-4
+
+用户报告二循环文本run `formal_20261117_202454_1706253`已产出
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_20261117_202454_1706253/checkpoint-001000`，
+随后在打印step1070的有限loss/gradient日志后出现`RuntimeError('nonfinite gradient norm')`。
+片段不能确定失败的精确step及非有限值来源；NCCL Destroy是退出清理，不登记为通信根因。
+
+按用户要求直接修改原入口`code/RSmol/run_stage4_mizar_text_7_14x2_7_mesh_training_5090.sh`：
+默认从上述checkpoint仅加载完整模型及tokenizer（保留已训练routers），不读取旧training_state.pt；
+新AdamW/scheduler/RNG/数据游标、optimizer step0起，完整训练9244次更新。
+max_lr=6e-4、min_lr=6e-5，warmup463、GBS1024、BF16 forward及原数据策略保持；
+输出到新的`formal_reinit1000_lr6e4_<timestamp_pid>`目录，不覆盖或清理旧run。
+不需重新转换，不增加smoke/审查报告/人工放行前置条件，非有限值失败机制保留。
+本次仅模型初始化允许旧8e-4/8e-5 checkpoint；完整`--resume-from`仍严格匹配当前训练超参。
+三循环模型、转换、训练及提交代码保持不变，仍使用8e-4/8e-5；只更新其历史复制快照测试说明，
+允许二循环后续独立演进，而不再要求二循环源码永远匹配复制日SHA。
+
+本地二、三循环回归51项：32通过，19因缺Torch等真实张量依赖明确跳过。
+覆盖checkpoint仅权重初始化（不可读取旧pickle不影响）、新LR调度、Bash语法/dry-run、模拟vc及隔离。
+新增真实小模型测试覆盖已训练routers继承、新optimizer空状态、两步新训练及不读取旧训练状态，
+因本地缺依赖尚未执行。远程权重加载及新GPU训练待用户运行，不记作远程PASS。
+提交命令和完整语义见`code/RSmol/mizar_text_7_14x2_7_mesh/README.md`。
+
 ## 2026-11-17：MeSH四循环MMSU异常的独立三题诊断
 
 用户反馈recursive_mesh_5_10x4_5的MMAU/MMAR正常、MMSU约1%。其提供的三条

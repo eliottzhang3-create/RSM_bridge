@@ -29,13 +29,19 @@ def recipe(**kwargs):
 
 
 class ContractTests(unittest.TestCase):
-    def test_two_loop_source_files_are_unchanged(self):
+    def test_historical_copy_snapshot_and_independent_helpers(self):
         guard = json.loads((RSMOL/'mizar_text_7_14x3_7_mesh/source_guard.json').read_text(encoding='utf-8'))
         self.assertEqual(len(guard), 16)
         for name, digest in guard.items():
+            self.assertIn('7_14x2_7_mesh',name)
+            self.assertRegex(digest,r'^[0-9a-f]{64}$')
+        # The two-loop route can evolve independently after the copy (e.g. its LR).
+        # Verify the three-loop shared helpers against their original snapshot.
+        for helper in ('data.py','publication.py'):
+            name = 'code/RSmol/mizar_text_7_14x2_7_mesh/'+helper
             # Git may convert checkout line endings on another host.
-            content = (ROOT/name).read_bytes().replace(b'\r\n', b'\n')
-            self.assertEqual(hashlib.sha256(content).hexdigest(), digest, name)
+            content = (RSMOL/'mizar_text_7_14x3_7_mesh'/helper).read_bytes().replace(b'\r\n', b'\n')
+            self.assertEqual(hashlib.sha256(content).hexdigest(), guard[name], helper)
 
     def test_confirmed_mapping_and_full_execution(self):
         self.assertEqual([i+1 for i in C.SOURCE_LAYERS[:7]], [1,2,4,5,6,7,8])

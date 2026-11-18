@@ -11,6 +11,7 @@ ENTRY = ROOT/'code/RSmol/run_stage4_mizar_text_7_14x2_7_mesh_training_5090.sh'
 RUNTIME = ROOT/'code/RSmol/scripts/train_stage4_mizar_text_7_14x2_7_mesh_ddp.sh'
 CONVERTER = ROOT/'code/RSmol/scripts/convert_mizar_text_7_14x2_7_mesh.sh'
 PREFIX = 'RSMOL_MIZAR_TEXT_7_14X2_7_MESH_'
+INITIAL_MODEL = '/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_20261117_202454_1706253/checkpoint-001000'
 BASH = os.environ.get('CODEX_BASH') or ('C:/Program Files/Git/bin/bash.exe' if os.name == 'nt' else shutil.which('bash'))
 
 
@@ -31,8 +32,17 @@ class ShellTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         for expected in ('--gate FORMAL','--nproc_per_node=8','--micro-batch-size 8',
                          '--gradient-accumulation-steps 16','--max-optimizer-steps 9244',
-                         '--warmup-steps 463','--save-every 500'):
+                         '--warmup-steps 463','--save-every 500',
+                         '--max-lr 6e-4','--min-lr 6e-5','--model-path '+INITIAL_MODEL,
+                         'formal_reinit1000_lr6e4_'):
             self.assertIn(expected,result.stdout)
+        self.assertNotIn('--resume-from',result.stdout)
+        self.assertNotIn('--max-lr 8e-4',result.stdout)
+
+    def test_explicit_model_override_remains_weights_only(self):
+        result = self.run_bash(ENTRY,'--dry-run','--model-dir','/external/another/checkpoint-002000')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('--model-path /external/another/checkpoint-002000',result.stdout)
         self.assertNotIn('--resume-from',result.stdout)
 
     def test_explicit_memory_fallback_and_invalid_batch(self):
@@ -70,6 +80,7 @@ class ShellTests(unittest.TestCase):
             cmd = arguments[arguments.index('--cmd')+1]
             self.assertIn(PREFIX+'RESUME_FROM=',cmd)
             self.assertIn(PREFIX+'MODEL_DIR=',cmd)
+            self.assertIn(INITIAL_MODEL,cmd)
             self.assertNotIn('/foreign',cmd)
             self.assertIn('/external/new\\ run',cmd)
 

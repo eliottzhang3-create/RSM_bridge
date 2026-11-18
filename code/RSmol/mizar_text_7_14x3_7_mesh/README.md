@@ -166,8 +166,9 @@ CUDA_VISIBLE_DEVICES="" python -B -m unittest discover -s tests -p 'test_mizar_t
 全局token梯度归一化、optimizer分组、RNG及checkpoint保存/恢复/保留策略。
 纯Python检查覆盖来源校验、全部配置别名、层映射、调度、真实shuffle循环的准确重放。
 Bash测试用stub vc验证参数传递，不触碰真实队列。CPU或模拟通过不能记作远程GPU PASS。
-`source_guard.json`记录复制时二循环源文件的SHA256（换行统一为LF后计算），仅供隔离回归测试，
-不在转换或训练入口执行，不构成提交前置条件。
+`source_guard.json`保留复制时二循环源文件的历史SHA256（换行统一为LF后计算）。
+二循环后续可独立修改；测试仅将本三循环路线的共用数据/发布工具与历史摘要比较。
+该记录不在转换或训练入口执行，不构成提交前置条件。三循环仍使用原8e-4/8e-5配方。
 
 - 模型：`../recursive_model_mizar_text_7_14x3_7_mesh.py`
 - 来源/架构/转换/数据/配方：本目录的`contract.py`、`conversion.py`、`data.py`、`recipe.py`

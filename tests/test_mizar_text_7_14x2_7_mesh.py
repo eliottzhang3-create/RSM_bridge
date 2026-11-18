@@ -22,8 +22,8 @@ def recipe(**kwargs):
     values = dict(gate='FORMAL', world_size=8, micro_batch_size=8,
                   gradient_accumulation_steps=16, max_optimizer_steps=9244,
                   scheduler_total_steps=9244, warmup_steps=463, save_every=500,
-                  context_length=1024, checkpoint_retention=3, max_lr=8e-4,
-                  min_lr=8e-5, steps_per_epoch=9244, epochs=1, max_microbatches=None)
+                  context_length=1024, checkpoint_retention=3, max_lr=6e-4,
+                  min_lr=6e-5, steps_per_epoch=9244, epochs=1, max_microbatches=None)
     return SimpleNamespace(**{**values, **kwargs})
 
 
@@ -106,6 +106,39 @@ class ContractTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     V.verify_source_files(root)
 
+    def test_checkpoint_weights_only_ignores_old_training_state_and_lr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)/'checkpoint-001000'; folder.mkdir()
+            raw = {**C.architecture_fields(), 'hidden_size':576, 'vocab_size':49152,
+                   'model_type':'llama', 'tie_word_embeddings':True}
+            marker = {'status':'complete', 'architecture_contract':C.ARCHITECTURE,
+                      'optimizer_step':1000}
+            metadata = {**marker, 'memory_slots':5, 'router_groups':3,
+                        'router_module_count':6, 'logical_to_physical':list(C.SCHEDULE),
+                        'max_lr':8e-4, 'min_lr':8e-5}
+            for name, value in (('config.json',raw), ('checkpoint_manifest.json',marker),
+                                ('checkpoint_complete.json',{**marker,'complete_marker':True}),
+                                ('mesh_checkpoint_metadata.json',metadata)):
+                (folder/name).write_text(json.dumps(value),encoding='utf-8')
+            (folder/'model.safetensors').touch(); (folder/'tokenizer.json').write_text('{}')
+            # Unreadable pickle contents must not matter for model-only initialization.
+            (folder/'training_state.pt').write_bytes(b'not a readable optimizer checkpoint')
+            inspected = C.inspect_initialization(folder)
+            self.assertEqual(inspected['mode'],'trained_checkpoint_weights_only')
+            self.assertEqual(inspected['source_checkpoint_step'],1000)
+            self.assertEqual(inspected['start_optimizer_step'],0)
+            self.assertFalse(inspected['restore_optimizer_scheduler_rng_cursor'])
+            self.assertEqual(inspected['routers'],'loaded_from_checkpoint')
+            for key, value in (('memory_slots',6), ('optimizer_step',999),
+                               ('architecture_contract','another-route')):
+                (folder/'mesh_checkpoint_metadata.json').write_text(json.dumps({**metadata,key:value}))
+                with self.assertRaises(ValueError):
+                    C.inspect_initialization(folder)
+            (folder/'mesh_checkpoint_metadata.json').write_text(json.dumps(metadata))
+            (folder/'checkpoint_complete.json').unlink()
+            with self.assertRaisesRegex(ValueError,'complete route checkpoint'):
+                C.inspect_initialization(folder)
+
     def test_no_overwrite_publication_and_code_output_rejection(self):
         with self.assertRaises(ValueError):
             V.validate_output(Path('/source'), ROOT/'new-model')
@@ -123,14 +156,15 @@ class ContractTests(unittest.TestCase):
         R.validate_recipe(recipe())
         R.validate_recipe(recipe(micro_batch_size=4, gradient_accumulation_steps=32))
         for overrides in ({'micro_batch_size':4}, {'max_optimizer_steps':3081},
-                          {'world_size':1}, {'max_lr':2e-4}, {'context_length':2048}):
+                          {'world_size':1}, {'max_lr':8e-4, 'min_lr':8e-5},
+                          {'max_lr':2e-4}, {'context_length':2048}):
             with self.assertRaises(ValueError):
                 R.validate_recipe(recipe(**overrides))
         cfg = recipe()
         rates = [R.learning_rate(step, cfg) for step in range(9245)]
-        self.assertEqual(rates[0], 8e-5)
-        self.assertAlmostEqual(rates[463], 8e-4)
-        self.assertEqual(rates[9244], 8e-5)
+        self.assertEqual(rates[0], 6e-5)
+        self.assertAlmostEqual(rates[463], 6e-4)
+        self.assertEqual(rates[9244], 6e-5)
         self.assertTrue(all(a <= b for a,b in zip(rates[:463], rates[1:464])))
         self.assertTrue(all(a >= b for a,b in zip(rates[463:], rates[464:])))
         # Analytic DDP-average gradient, for unequal token populations.

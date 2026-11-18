@@ -69,6 +69,18 @@ bash code/RSmol/scripts/convert_mizar_text_7_14x2_7_mesh.sh
 
 ## 正式文本训练
 
+2026-11-18起，原提交入口默认改为从以下已训练checkpoint**仅加载模型及tokenizer**，
+完整保留其文本权重与三组routers：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_20261117_202454_1706253/checkpoint-001000
+```
+
+这是一次新训练：不读取`training_state.pt`，不恢复旧AdamW动量、scheduler、RNG或数据游标；
+重新seed0、从数据流起点及optimizer step0开始，重新warmup463步，再完成全新9244次更新。
+checkpoint的来源步数1000只写入初始化记录，不从本轮步数中扣除；routers不重新初始化。
+无需再次模型转换。`--model-dir`表示仅加载权重来源，`--resume-from`才表示完整恢复。
+
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
 bash code/RSmol/run_stage4_mizar_text_7_14x2_7_mesh_training_5090.sh
@@ -85,7 +97,7 @@ bash code/RSmol/run_stage4_mizar_text_7_14x2_7_mesh_training_5090.sh --dry-run
 
 | 项目 | 固定配置 |
 |---|---|
-| 初始状态 | 本路线转换产物；新optimizer/scheduler/RNG/数据游标 |
+| 初始状态 | 上述checkpoint-001000的完整模型/tokenizer；新optimizer/scheduler/RNG/数据游标 |
 | Batch | 8 GPU × micro8 × GA16 = GBS1024 |
 | 精度 | FP32参数/AdamW状态；BF16 autocast仅覆盖forward；FP32 CE/softmax；无Scaler/TF32 |
 | 数据 | `data/SmolLM2-135M-10Bsubset`或其`data`下精确85片Parquet，直接流读persistent存储 |
@@ -93,7 +105,7 @@ bash code/RSmol/run_stage4_mizar_text_7_14x2_7_mesh_training_5090.sh --dry-run
 | 分片内 | buffer4096打乱，过滤空文本；独立样本、不packing、不补EOS或special tokens |
 | Context | 1024，动态右padding，padding label=-100，分片不足microbatch的尾部丢弃 |
 | 一轮定义 | 9244次optimizer更新；不是每条数据恰好一次；允许rank内数据轮转 |
-| LR | max8e-4、min8e-5、warmup463，沿用Mizar completed-step cosine公式 |
+| LR | max6e-4、min6e-5、warmup463，沿用Mizar completed-step cosine公式；首个更新使用6e-5 |
 | AdamW | betas(0.9,0.95)、eps1e-8；矩阵WD0.1，bias/norm/低维WD0 |
 | Loss | 全文本causal CE；按所有rank和整个GA窗口的有效shifted token数归一化 |
 | 梯度 | 每micro反传CE sum，DDP平均后乘world/global_tokens；clip L2=1 |
@@ -116,7 +128,7 @@ micro变化会改变动态padding和分片尾部处理，不保证数值轨迹�
 所有入口参数、CLI覆盖及配置写入`run_manifest.json`。默认输出：
 
 ```text
-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_<timestamp_pid>/
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_reinit1000_lr6e4_<timestamp_pid>/
 ```
 
 其中`train_metrics.jsonl`记录每步全局loss、有效tokens、LR、梯度范数和显存；
@@ -124,9 +136,17 @@ micro变化会改变动态padding和分片尾部处理，不保证数值轨迹�
 最终checkpoint为`checkpoint-009244`，正常完整运行最后保留8500、9000、9244。
 job日志独立位于该路线的`job_logs`，不写入Git checkout。
 
+用户提供的旧run日志在打印step1070后出现`RuntimeError('nonfinite gradient norm')`；
+NCCL Destroy日志是退出清理，不能据此归因为通信故障，也无法仅凭此片段确定非有限值来源。
+本次按用户要求降低LR并重新训练；保留原非有限loss/gradient失败机制，不自动跳步或修改优化算法。
+已训练checkpoint仅检查本路线架构、完整标记和模型/tokenizer文件，允许旧LR与新配方不同。
+三循环路线仍保持原8e-4/8e-5和原初始化，未随本次调整。
+
 ## 中断恢复及可选短验证
 
 完整恢复仅接受本路线、相同batch/精度/训练超参、未完成的一轮checkpoint。
+当前入口的完整resume只适用于新6e-4/6e-5配方的checkpoint；旧8e-4/8e-5产物可通过
+`--model-dir`仅初始化模型，不能当作本次的完整resume。
 恢复模型、optimizer、schedule步数、每rank Python/CPU/CUDA RNG和数据游标。
 游标保存当前分片入口的专用shuffle RNG及已消费batch数，重放当前分片即可准确恢复
 shuffle buffer和后续样本；不保存整段文本buffer，不需要重读此前分片。
@@ -160,7 +180,8 @@ CUDA_VISIBLE_DEVICES="" python -B -m unittest discover -s tests -p 'test_mizar_t
 真实tensor测试覆盖官方router初始化/meta-safe、最终LM namespace/严格加载、
 28层继承、42次轨迹、三组query/记忆初态、两轮梯度、全量保存重载、42逻辑KV cache、
 全局token梯度归一化、optimizer分组、RNG及checkpoint保存/恢复/保留策略。
-纯Python检查覆盖来源校验、全部配置别名、层映射、调度、真实shuffle循环的准确重放。
+另覆盖已训练routers逐张量保留、旧training_state不可读取时仍可模型初始化、新optimizer空状态和新步数。
+纯Python检查覆盖来源校验、全部配置别名、层映射、新LR调度、checkpoint仅权重初始化、真实shuffle循环的准确重放。
 Bash测试用stub vc验证参数传递，不触碰真实队列。CPU或模拟通过不能记作远程GPU PASS。
 
 - 模型：`../recursive_model_mizar_text_7_14x2_7_mesh.py`

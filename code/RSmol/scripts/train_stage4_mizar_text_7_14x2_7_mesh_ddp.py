@@ -39,6 +39,7 @@ from recursive_model_mizar_text_7_14x2_7_mesh import (  # noqa: E402
     RecursiveLlamaForCausalLM,
     parameter_audit,
 )
+from mizar_text_7_14x2_7_mesh.contract import DEFAULT_TRAINING_MODEL
 
 TRAINING_CONTRACT = "mizar_final_text_7_14x2_7_mesh_5slot_bf16_epoch_v1"
 PRECISION_CONTRACT = "bf16"
@@ -48,7 +49,7 @@ PRECISION_POLICY = {
     "router_softmax_dtype": "float32", "grad_scaler_enabled": False,
     "tf32_enabled": False,
 }
-DEFAULT_MODEL_PATH = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M-text-7-14x2-7-mesh-5slot")
+DEFAULT_MODEL_PATH = DEFAULT_TRAINING_MODEL
 DATA_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data")
 OUTPUT_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh")
 DEFAULT_WORLD_SIZE = 8
@@ -59,8 +60,8 @@ DEFAULT_STEPS_PER_EPOCH = 9244
 DEFAULT_FORMAL_EPOCHS = 1
 DEFAULT_FORMAL_OPTIMIZER_STEPS = DEFAULT_STEPS_PER_EPOCH * DEFAULT_FORMAL_EPOCHS
 DEFAULT_FORMAL_WARMUP_STEPS = 463
-DEFAULT_MAX_LR = 8e-4
-DEFAULT_MIN_LR = 0.1 * DEFAULT_MAX_LR
+DEFAULT_MAX_LR = 6e-4
+DEFAULT_MIN_LR = 6e-5
 DEFAULT_SAVE_EVERY = 500
 DEFAULT_CHECKPOINT_RETENTION = 3
 DEFAULT_LOG_INTERVAL_STEPS = 10
@@ -85,7 +86,7 @@ class Stage4Config:
     micro_batch_size: int = DEFAULT_MICRO_BATCH_SIZE
     gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS
     context_length: int = DEFAULT_CONTEXT_LENGTH
-    max_optimizer_steps: int = 10
+    max_optimizer_steps: int = DEFAULT_FORMAL_OPTIMIZER_STEPS
     scheduler_total_steps: int = DEFAULT_FORMAL_OPTIMIZER_STEPS
     warmup_steps: int = DEFAULT_FORMAL_WARMUP_STEPS
     steps_per_epoch: int = DEFAULT_STEPS_PER_EPOCH
@@ -138,7 +139,7 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
         if not math.isfinite(args.max_lr) or not math.isfinite(args.min_lr) or args.max_lr <= 0.0 or args.min_lr <= 0.0 or args.min_lr >= args.max_lr:
             raise ValueError("FORMAL requires finite positive learning rates with 0 < min_lr < max_lr")
         if not math.isclose(args.max_lr, DEFAULT_MAX_LR, rel_tol=0.0, abs_tol=1e-12) or not math.isclose(args.min_lr, DEFAULT_MIN_LR, rel_tol=0.0, abs_tol=1e-12):
-            raise ValueError("FORMAL requires max_lr=8e-4 and min_lr=8e-5")
+            raise ValueError("FORMAL requires max_lr=6e-4 and min_lr=6e-5")
         if args.save_every != 500:
             raise ValueError("FORMAL requires save_every=500")
         if args.context_length != DEFAULT_CONTEXT_LENGTH or args.max_microbatches is not None:
@@ -212,8 +213,8 @@ from mizar_text_7_14x2_7_mesh.recipe import validate_recipe, learning_rate, grad
 from mizar_text_7_14x2_7_mesh.publication import atomic_publish
 
 
-def _validate_fresh_model(path: Path) -> None:
-    inspect_initialization(path)
+def _validate_fresh_model(path: Path) -> dict[str, Any]:
+    return inspect_initialization(path)
 
 
 def _capture_rng_state(device: torch.device) -> dict[str, Any]:
@@ -601,15 +602,18 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         if model_path is None:
             raise ValueError("Stage 4 requires --model-path or --resume-from")
         resume_state = None
+        initialization_source = None
         if config.resume_from is not None:
             resume_state = _load_checkpoint_state(config.resume_from)
             _validate_resume_contract(resume_state, config)
         else:
-            _validate_fresh_model(model_path)
+            initialization_source = _validate_fresh_model(model_path)
         from transformers import AutoTokenizer
         model, loading_info = RecursiveLlamaForCausalLM.from_pretrained(model_path, local_files_only=True, torch_dtype=torch.float32, output_loading_info=True)
         _validate_loading_info(loading_info)
         validate_model_config(model.config.to_dict())
+        if any(not bool(torch.isfinite(p).all()) for p in model.parameters()):
+            raise ValueError('Initialization model contains nonfinite parameters')
         if not all(p.requires_grad for p in model.parameters()):
             raise ValueError('Every retained LM and router parameter must be trainable')
         model_audit = parameter_audit(model)
@@ -629,7 +633,9 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         model.model.routing_stats_mode = False
         optimizer, optimizer_group_audit = _optimizer(model, config)
         optimizer_step = int(resume_state.get("optimizer_step", 0)) if resume_state else 0
-        report["initialization"] = {"mode": "full_state_resume" if resume_state is not None else "weights_only_new_training_state", "loaded_model_path": str(model_path), "source_model_path": str(config.model_path), "starting_optimizer_step": optimizer_step, "precision": PRECISION_CONTRACT}
+        report["initialization"] = {"mode": "full_state_resume" if resume_state is not None else "weights_only_new_training_state", "loaded_model_path": str(model_path), "source_model_path": str(config.model_path), "starting_optimizer_step": optimizer_step, "precision": PRECISION_CONTRACT,
+                                    "restore_optimizer_scheduler_rng_cursor": resume_state is not None,
+                                    "weights_source": initialization_source}
         if rank == 0:
             print(f"[initialization] {json.dumps(report['initialization'])}", flush=True)
         if config.gate == "E":
