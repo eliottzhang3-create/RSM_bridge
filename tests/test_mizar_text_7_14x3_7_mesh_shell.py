@@ -31,7 +31,7 @@ class ShellTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         for expected in ('--gate FORMAL','--nproc_per_node=8','--micro-batch-size 8',
                          '--gradient-accumulation-steps 16','--max-optimizer-steps 9244',
-                         '--warmup-steps 463','--save-every 500',
+                         '--warmup-steps 463','--save-every 400',
                          '--max-lr 6e-4','--min-lr 6e-5',
                          'train_stage4_mizar_text_7_14x3_7_mesh_ddp.py',
                          'Mizar159M-text-7-14x3-7-mesh-6slot'):

@@ -22,7 +22,7 @@ from mizar_text_7_14x3_7_mesh.publication import atomic_publish
 def recipe(**kwargs):
     values = dict(gate='FORMAL', world_size=8, micro_batch_size=8,
                   gradient_accumulation_steps=16, max_optimizer_steps=9244,
-                  scheduler_total_steps=9244, warmup_steps=463, save_every=500,
+                  scheduler_total_steps=9244, warmup_steps=463, save_every=400,
                   context_length=1024, checkpoint_retention=3, max_lr=6e-4,
                   min_lr=6e-5, steps_per_epoch=9244, epochs=1, max_microbatches=None)
     return SimpleNamespace(**{**values, **kwargs})

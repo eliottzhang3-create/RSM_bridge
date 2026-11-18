@@ -102,7 +102,7 @@ bash code/RSmol/run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh --dry-run
 | Loss | 全文本causal CE；按所有rank和整个GA窗口的有效shifted token数归一化 |
 | 梯度 | 每micro反传CE sum，DDP平均后乘world/global_tokens；clip L2=1 |
 | DDP | broadcast_buffers=False、find_unused_parameters=False；前GA-1次no_sync |
-| 保存 | 每500步及最终9244步；本次输出仅保留最近三个完整checkpoint |
+| 保存 | 每400步及最终9244步；本次输出仅保留最近三个完整checkpoint |
 | Seed | 默认0；各rank为seed+rank |
 
 CUDA必须支持BF16，不能静默回退。前7、中14、后7、embedding/head/norm及routers全部训练。
@@ -128,7 +128,9 @@ micro变化会改变动态padding和分片尾部处理，不保证数值轨迹�
 
 其中`train_metrics.jsonl`记录每步全局loss、有效tokens、LR、梯度范数和显存；
 `ddp_diagnostics`记录各rank心跳/失败；router collapse仅作非致命诊断。
-最终checkpoint为`checkpoint-009244`，正常完整运行最后保留8500、9000、9244。
+第400步保存`checkpoint-000400`；最终checkpoint为`checkpoint-009244`，
+正常完整运行最后保留8800、9200、9244。若需后续重新初始化使用第400步权重，
+应在其被最近三个checkpoint保留策略淘汰前另存到本run之外。
 job日志独立位于该路线的`job_logs`，不写入Git checkout。
 
 ## 中断恢复及可选短验证

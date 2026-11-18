@@ -1,3 +1,15 @@
+## 2026-11-18：三循环文本checkpoint改为每400步保存
+
+用户报告三循环在打印step410后再次出现nonfinite gradient norm，暂不加LayerNorm，
+计划重新运行取得step400 checkpoint，再以其模型权重重新启动完整9244步。
+本次按要求仅把三循环保存间隔由500改为400，同步runtime shell、trainer默认值及
+FORMAL配置限制、recipe、既有测试和README。首次保存checkpoint-000400，最终仍保存9244。
+最近三个checkpoint保留策略保持，完整运行最后保留8800/9200/9244；长期使用400权重需另存。
+本次没有改变模型结构、初始化来源、LR6e-4/6e-5、warmup463或总步数。
+从400权重重新训练的默认路径尚未配置；不能把完整resume当作从零重新训练。
+三循环回归25项：16通过、9缺Torch等真实张量依赖跳过；模拟vc及Bash检查通过。
+未执行远程训练，实际checkpoint-000400产出仍待用户重新提交后的结果。
+
 ## 2026-11-18：MMSU补充独立CPU细分类报告
 
 用户询问为何MMSU只有Perception/Reasoning×Linguistics/Paralinguistics四组，
