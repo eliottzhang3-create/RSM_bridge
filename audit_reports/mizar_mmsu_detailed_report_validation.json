@@ -1,0 +1,61 @@
+{
+  "status": "PASS_LOCAL",
+  "utc": "2026-11-18T05:43:04.814438+00:00",
+  "scope": "CPU-only reporting with synthetic 5000-row fixtures and the real pinned official scorer; no production outputs, models, weights, audio or GPU used.",
+  "test_command": "python -B tests/test_mizar_mmsu_detailed_report.py",
+  "tests_run": 15,
+  "passed": 15,
+  "skipped": [],
+  "errors": [],
+  "failures": [],
+  "test_wall_seconds": 15.187,
+  "coverage": [
+    "all seven grouping views and full5000 coverage",
+    "47 tasks and six leaderboard domains from fixture metadata",
+    "same v2 parser including letter-only failure and declared negation matching",
+    "real pinned official scorer agrees with counts and original four groups",
+    "CSV/Markdown/JSON output and stable repeat",
+    "raw per-row hashes and prediction-only fallback",
+    "source corruption/incomplete/duplicate/metadata errors refused",
+    "source bytes and historical report preservation",
+    "historical v2 total mismatch and output identity mismatch refused",
+    "busy source and unsafe output refused",
+    "external input mutation and official group mismatch withhold successful tables",
+    "CPU import and CLI preview without inference dependencies",
+    "batch continues after failure",
+    "actual Bash entry and full CPU reporting with conda mocked; no vc invoked"
+  ],
+  "syntax": {
+    "status": "PASS",
+    "python310_files": 3,
+    "bash": "actual Bash entry covered by passing test"
+  },
+  "official_local_scorer": {
+    "path": "C:\\Xlance\\assets\\MMSU\\MMSU code\\mmsu_evaluation.py",
+    "sha256": "b6d5d35d2755244019a78e601495ea74e722681bf6f7e1fd0179bab7cabca3eb",
+    "lf_sha256": "b6d5d35d2755244019a78e601495ea74e722681bf6f7e1fd0179bab7cabca3eb",
+    "source": "https://github.com/dingdongwang/MMSU/blob/main/mmsu_evaluation.py"
+  },
+  "preservation": {
+    "files_checked": 1768,
+    "raw_bytes_preserved": true,
+    "raw_changed": [],
+    "lf_content_preserved": true,
+    "lf_changed": [],
+    "rm_history_bytes_preserved": true,
+    "status": "PASS"
+  },
+  "previous_diagnostic_preservation": {
+    "status": "PASS",
+    "changed": []
+  },
+  "files": {
+    "code/RSmol/mizar_mmsu_detailed_report/__init__.py": "7ed45d5ba617f9181cbb55fc49acdb2d0b375145d3b765b2bd894f45d1a475c4",
+    "code/RSmol/mizar_mmsu_detailed_report/README.md": "168b14eae2b3a07663f84a544a5caf977a22c815047f27ec4d75f049cdb1f09f",
+    "code/RSmol/mizar_mmsu_detailed_report/report.py": "30faa44f1925a1be8bd65b243744eea090475eef30c4d9debd3a5c8751d622dd",
+    "code/RSmol/mizar_mmsu_detailed_report/run.sh": "fc5c55bdd67a50cf405d577629acfd16b321b235b4ce1ce0ea042fff99d2f249",
+    "tests/test_mizar_mmsu_detailed_report.py": "612bcea84700054d9e44c3f740b5d10b4f3e86185f8df0a6577268f7b8702ca3"
+  },
+  "production_result_processing": "NOT_RUN; user results reside on remote Linux server",
+  "cpu_only": true
+}

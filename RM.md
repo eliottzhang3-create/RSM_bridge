@@ -1,3 +1,34 @@
+## 2026-11-18：MMSU补充独立CPU细分类报告
+
+用户询问为何MMSU只有Perception/Reasoning×Linguistics/Paralinguistics四组，
+是否能输出更细分类。核对本地固定官方scorer及官方GitHub：评分脚本仅读取
+category和sub-category聚合；官方README描述三层分类、47个任务，数据及我们
+原始输出已保留sub-sub-category、linguistics_sub_discipline和task_name。
+
+新增code/RSmol/mizar_mmsu_detailed_report/，直接读取任意架构完整5000条旧结果，
+优先逐行哈希校验raw，或在raw不存在时读取原始predictions_official.jsonl。
+不读权重/音频/Parquet，不启动GPU，复用原mmsu_answer_text_contains_v2和固定
+官方scorer。独立子目录detailed_mmsu_answer_text_v2输出JSON/CSV/Markdown及评分副本。
+七种视图：category、原四组、三层taxonomy、完整路径discipline、task_name、
+完整路径task、榜单六维category×Semantics/Phonology/Paralinguistics。
+每组输出正确数/错误数/样本数/准确率，各view必须汇总为5000和相同总正确数，
+原四组和总分核对官方scorer；历史成功v2总分也核对，失配拒绝成功报告。
+空分类不丢题、未知榜单标签列Unmapped并警告；任务数按实际字段统计，不硬凑47。
+分类依据官方字段，判分仍为本项目既有v2文本包含协议，不宣称更换为榜单字母协议。
+
+入口bash code/RSmol/mizar_mmsu_detailed_report/run.sh --source-output-dir <原MMSU输出目录>；
+可重复传入source批量处理，不需要vc提交。默认各自独立子目录，支持新output-dir，
+同身份可重复运行、错误身份/完整性损坏/忙锁拒绝，发布前复核来源。生产评测代码、
+旧原始回答/报告及续跑身份均未改；RM本条仅前置，原历史字节保留。
+
+15项本地测试全部通过、无跳过，包含真实固定官方scorer对合成5000条结果评分、
+所有分组/47任务/六维/计数守恒、原v2边界行为、CSV/Markdown/JSON、重复运行、
+历史总分和源文件保护、损坏/部分/重复/外部修改拒绝、多源失败继续、无推理依赖导入、
+真实Bash入口+模拟conda。Python3.10语法通过；1768份原源码raw/LF SHA及此前三题
+诊断5份文件LF SHA保持。报告audit_reports/mizar_mmsu_detailed_report_validation.json。
+Windows沙箱此前阻止临时目录和Bash，本次获准沙箱外运行本地测试；无远程资产、
+生产结果处理、GPU、真实作业提交或commit/push。真实结果需用户在Linux服务器执行。
+
 ## 2026-11-18：7–14×3–7文本训练LR同步降至6e-4/6e-5
 
 用户确认三循环OOM发生在正式训练的`loss_sum.backward()`，显存23.57GiB、
