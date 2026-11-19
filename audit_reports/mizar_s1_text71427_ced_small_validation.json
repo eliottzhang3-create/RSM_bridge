@@ -1,0 +1,113 @@
+{
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "scope": "local source, synthetic fixtures and simulated commands; no production assets or GPU training",
+  "executed_tests": 58,
+  "skipped_tests": 31,
+  "missing_dependencies": [
+    "torch",
+    "torchaudio",
+    "transformers",
+    "soundfile",
+    "safetensors"
+  ],
+  "checks": [
+    {
+      "check": "python_3_10_syntax",
+      "status": "PASS",
+      "files": 35
+    },
+    {
+      "check": "run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "run.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "test_mizar_s1_text71427_ced_small_route.py",
+      "status": "PASS",
+      "tests": 10,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_center_crop_before_split_and_independent_real_pair (__main__.RouteTests.test_center_crop_before_split_and_independent_real_pair) ... ok\ntest_gbs128_horizon_lr_and_save_points (__main__.RouteTests.test_gbs128_horizon_lr_and_save_points) ... ok\ntest_launcher_defaults_and_tmpfs_guard (__main__.RouteTests.test_launcher_defaults_and_tmpfs_guard) ... ok\ntest_loading_info_rejects_missing_routers_extra_and_mismatched_tensors (__main__.RouteTests.test_loading_info_rejects_missing_routers_extra_and_mismatched_tensors) ... ok\ntest_parent_sources_data_optimizer_and_loop_are_preserved (__main__.RouteTests.test_parent_sources_data_optimizer_and_loop_are_preserved) ... ok\ntest_prompt_and_answer_keep_eos_and_original_tokenizer_arguments (__main__.RouteTests.test_prompt_and_answer_keep_eos_and_original_tokenizer_arguments) ... ok\ntest_real_bash_launcher_argument_flow_and_early_rejections (__main__.RouteTests.test_real_bash_launcher_argument_flow_and_early_rejections) ... ok\ntest_resume_identity_excludes_job_staging_and_separates_architecture_batch (__main__.RouteTests.test_resume_identity_excludes_job_staging_and_separates_architecture_batch) ... ok\ntest_weights_only_checkpoint_does_not_read_old_training_state (__main__.RouteTests.test_weights_only_checkpoint_does_not_read_old_training_state) ... ok\ntest_wrong_architecture_schedule_and_incomplete_checkpoint_rejected (__main__.RouteTests.test_wrong_architecture_schedule_and_incomplete_checkpoint_rejected) ... ok\n\n----------------------------------------------------------------------\nRan 10 tests in 3.738s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_text71427_ced_small_shared_start.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[cpu-index] verifying manifest/audit TSV SHA256; no raw audio scan\n[cpu-index] manifest/audit TSV contents verified\n[staging] phase=COPYING staged 0/1 files (0.00/0.00 GiB) ready_through_batch=0 MiB_per_second=0.0 cgroup_remaining_bytes=None\n[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues\n[staging] training can start: read_policy=shared_until_complete prefill_steps=0 ready_through_batch=0 report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmpi1pgm5pf\\report.json\n[staging] phase=COMPLETE staged 1/1 files (0.00/0.00 GiB) ready_through_batch=11542 MiB_per_second=0.0 cgroup_remaining_bytes=None\ntest_content_check_identifies_size_change_and_keeps_expected_paths (__main__.Text71427SharedStartTests.test_content_check_identifies_size_change_and_keeps_expected_paths) ... ok\ntest_copy_failure_dead_process_and_stale_heartbeat_still_abort (__main__.Text71427SharedStartTests.test_copy_failure_dead_process_and_stale_heartbeat_still_abort) ... ok\ntest_cpu_index_reuses_mapping_and_rejects_changed_inputs (__main__.Text71427SharedStartTests.test_cpu_index_reuses_mapping_and_rejects_changed_inputs) ... ok\ntest_final_report_requires_full_copy_even_in_shared_mode (__main__.Text71427SharedStartTests.test_final_report_requires_full_copy_even_in_shared_mode) ... ok\ntest_formal_config_is_created_with_zero_staged_files (__main__.Text71427SharedStartTests.test_formal_config_is_created_with_zero_staged_files) ... ok\ntest_legacy_timestamp_only_identity_requires_rebuild (__main__.Text71427SharedStartTests.test_legacy_timestamp_only_identity_requires_rebuild) ... ok\ntest_runner_starts_real_training_during_copy_and_cleans_on_failure (__main__.Text71427SharedStartTests.test_runner_starts_real_training_during_copy_and_cleans_on_failure) ... ok\ntest_shared_path_remains_selected_until_explicit_boundary_switch (__main__.Text71427SharedStartTests.test_shared_path_remains_selected_until_explicit_boundary_switch) ... ok\ntest_source_identity_change_is_rejected_and_partial_copy_removed (__main__.Text71427SharedStartTests.test_source_identity_change_is_rejected_and_partial_copy_removed) ... ok\ntest_switch_is_collective_before_loading_all_four_microbatches (__main__.Text71427SharedStartTests.test_switch_is_collective_before_loading_all_four_microbatches) ... ok\ntest_training_starts_before_first_copy_and_crosses_epoch_without_waiting (__main__.Text71427SharedStartTests.test_training_starts_before_first_copy_and_crosses_epoch_without_waiting) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 3.125s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_text71427_ced_small_tensors.py",
+      "status": "PASS_WITH_SKIPS",
+      "tests": 5,
+      "skipped": 5,
+      "exit_code": 0,
+      "output": "test_actual_42_calls_memory_and_both_loop_gradients (__main__.TensorTests.test_actual_42_calls_memory_and_both_loop_gradients) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_actual_683_positions_and_answer_only_shift (__main__.TensorTests.test_actual_683_positions_and_answer_only_shift) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_explicit_loader_inherits_trained_routers_and_never_loads_pickle (__main__.TensorTests.test_explicit_loader_inherits_trained_routers_and_never_loads_pickle) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_new_optimizer_and_full_state_roundtrip_continue_identically (__main__.TensorTests.test_new_optimizer_and_full_state_roundtrip_continue_identically) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_tensor_audit_rejects_changed_router_missing_and_extra_keys (__main__.TensorTests.test_tensor_audit_rejects_changed_router_missing_and_extra_keys) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\n\n----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK (skipped=5)\n"
+    },
+    {
+      "check": "test_mizar_s1_recursive_mesh_ced_small_route.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_assets_validate_geometry_without_onnx_and_reject_incompatible_config (__main__.CEDRouteTests.test_assets_validate_geometry_without_onnx_and_reject_incompatible_config) ... ok\ntest_formal_schedule_and_shorter_sequence (__main__.CEDRouteTests.test_formal_schedule_and_shorter_sequence) ... ok\ntest_launcher_resources_arguments_and_rejections_before_submit (__main__.CEDRouteTests.test_launcher_resources_arguments_and_rejections_before_submit) ... ok\ntest_optimizer_classifies_only_mapper_and_full_lm (__main__.CEDRouteTests.test_optimizer_classifies_only_mapper_and_full_lm) ... ok\ntest_parent_data_and_real_update_loop_preserved (__main__.CEDRouteTests.test_parent_data_and_real_update_loop_preserved) ... ok\ntest_resume_contract_separates_routes_and_is_independent_of_staging_root (__main__.CEDRouteTests.test_resume_contract_separates_routes_and_is_independent_of_staging_root) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 2.923s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_recursive_mesh_ced_small_parity.py",
+      "status": "PASS",
+      "tests": 4,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_mesh_loader_and_checkpoint_contract_preserved (__main__.MeSHCEDParityTests.test_mesh_loader_and_checkpoint_contract_preserved) ... ok\ntest_model_build_order_preserves_mapper_initialization (__main__.MeSHCEDParityTests.test_model_build_order_preserves_mapper_initialization) ... ok\ntest_official_mapper_and_report_identity (__main__.MeSHCEDParityTests.test_official_mapper_and_report_identity) ... ok\ntest_original_mesh_semantics_and_ced_baseline_match (__main__.MeSHCEDParityTests.test_original_mesh_semantics_and_ced_baseline_match) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 1.139s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_recursive_mesh_ced_small_shared_start.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[cpu-index] verifying manifest/audit TSV SHA256; no raw audio scan\n[cpu-index] manifest/audit TSV contents verified\n[staging] phase=COPYING staged 0/1 files (0.00/0.00 GiB) ready_through_batch=0 MiB_per_second=0.0 cgroup_remaining_bytes=None\n[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues\n[staging] training can start: read_policy=shared_until_complete prefill_steps=0 ready_through_batch=0 report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmp1d3uc290\\report.json\n[staging] phase=COMPLETE staged 1/1 files (0.00/0.00 GiB) ready_through_batch=5771 MiB_per_second=0.0 cgroup_remaining_bytes=None\ntest_content_check_identifies_size_change_and_keeps_expected_paths (__main__.CEDSharedStartTests.test_content_check_identifies_size_change_and_keeps_expected_paths) ... ok\ntest_copy_failure_dead_process_and_stale_heartbeat_still_abort (__main__.CEDSharedStartTests.test_copy_failure_dead_process_and_stale_heartbeat_still_abort) ... ok\ntest_cpu_index_reuses_mapping_and_rejects_changed_inputs (__main__.CEDSharedStartTests.test_cpu_index_reuses_mapping_and_rejects_changed_inputs) ... ok\ntest_final_report_requires_full_copy_even_in_shared_mode (__main__.CEDSharedStartTests.test_final_report_requires_full_copy_even_in_shared_mode) ... ok\ntest_formal_config_is_created_with_zero_staged_files (__main__.CEDSharedStartTests.test_formal_config_is_created_with_zero_staged_files) ... ok\ntest_legacy_timestamp_only_identity_requires_rebuild (__main__.CEDSharedStartTests.test_legacy_timestamp_only_identity_requires_rebuild) ... ok\ntest_runner_starts_real_training_during_copy_and_cleans_on_failure (__main__.CEDSharedStartTests.test_runner_starts_real_training_during_copy_and_cleans_on_failure) ... ok\ntest_shared_path_remains_selected_until_explicit_boundary_switch (__main__.CEDSharedStartTests.test_shared_path_remains_selected_until_explicit_boundary_switch) ... ok\ntest_source_identity_change_is_rejected_and_partial_copy_removed (__main__.CEDSharedStartTests.test_source_identity_change_is_rejected_and_partial_copy_removed) ... ok\ntest_switch_is_collective_before_loading_all_four_microbatches (__main__.CEDSharedStartTests.test_switch_is_collective_before_loading_all_four_microbatches) ... ok\ntest_training_starts_before_first_copy_and_crosses_epoch_without_waiting (__main__.CEDSharedStartTests.test_training_starts_before_first_copy_and_crosses_epoch_without_waiting) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 2.844s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_text_7_14x2_7_mesh.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_all_new_python_parses_and_has_no_old_route_import (__main__.ContractTests.test_all_new_python_parses_and_has_no_old_route_import) ... ok\ntest_checkpoint_weights_only_ignores_old_training_state_and_lr (__main__.ContractTests.test_checkpoint_weights_only_ignores_old_training_state_and_lr) ... ok\ntest_config_aliases_and_wrong_routes_fail_closed (__main__.ContractTests.test_config_aliases_and_wrong_routes_fail_closed) ... ok\ntest_confirmed_mapping_and_full_execution (__main__.ContractTests.test_confirmed_mapping_and_full_execution) ... ok\ntest_formal_batch_and_scheduler_contract (__main__.ContractTests.test_formal_batch_and_scheduler_contract) ... ok\ntest_fresh_json_identity_rejects_wrong_initialization_and_training_state (__main__.ContractTests.test_fresh_json_identity_rejects_wrong_initialization_and_training_state) ... ok\ntest_no_overwrite_publication_and_code_output_rejection (__main__.ContractTests.test_no_overwrite_publication_and_code_output_rejection) ... ok\ntest_official_final_source_and_layer_key_mapping (__main__.ContractTests.test_official_final_source_and_layer_key_mapping) ... ok\ntest_source_assets_exclude_base_weights (__main__.ContractTests.test_source_assets_exclude_base_weights) ... ok\ntest_manifest_and_rank_assignment (__main__.DataTests.test_manifest_and_rank_assignment) ... ok\ntest_resume_replays_real_shuffle_buffer_across_shards_and_rollover (__main__.DataTests.test_resume_replays_real_shuffle_buffer_across_shards_and_rollover) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 0.537s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_text_7_14x2_7_mesh_shell.py",
+      "status": "PASS",
+      "tests": 5,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_explicit_memory_fallback_and_invalid_batch (__main__.ShellTests.test_explicit_memory_fallback_and_invalid_batch) ... ok\ntest_explicit_model_override_remains_weights_only (__main__.ShellTests.test_explicit_model_override_remains_weights_only) ... ok\ntest_short_and_resume_contracts (__main__.ShellTests.test_short_and_resume_contracts) ... ok\ntest_stub_vc_receives_isolated_environment_and_resource_arguments (__main__.ShellTests.test_stub_vc_receives_isolated_environment_and_resource_arguments) ... ok\ntest_syntax_and_default_formal_dry_run (__main__.ShellTests.test_syntax_and_default_formal_dry_run) ... ok\n\n----------------------------------------------------------------------\nRan 5 tests in 4.649s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_text_7_14x2_7_mesh_tensors.py",
+      "status": "PASS_WITH_SKIPS",
+      "tests": 10,
+      "skipped": 10,
+      "exit_code": 0,
+      "output": "test_all_retained_weights_and_independent_physical_layers (__main__.TensorTests.test_all_retained_weights_and_independent_physical_layers) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_cache_42_slots_matches_full_context_and_generation (__main__.TensorTests.test_cache_42_slots_matches_full_context_and_generation) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_ddp_and_accumulation_gradient_equals_global_token_mean (__main__.TensorTests.test_ddp_and_accumulation_gradient_equals_global_token_mean) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_memory_queries_trace_and_both_loop_gradients (__main__.TensorTests.test_memory_queries_trace_and_both_loop_gradients) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_official_truncated_normal_exact_seed_and_meta_safe (__main__.TensorTests.test_official_truncated_normal_exact_seed_and_meta_safe) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_optimizer_groups_rng_and_complete_checkpoint_roundtrip (__main__.TensorTests.test_optimizer_groups_rng_and_complete_checkpoint_roundtrip) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_padding_masks_only_padding_and_keeps_real_pad_id_supervised (__main__.TensorTests.test_padding_masks_only_padding_and_keeps_real_pad_id_supervised) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_source_namespace_tied_values_and_strict_errors (__main__.TensorTests.test_source_namespace_tied_values_and_strict_errors) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_strict_save_reload_preserves_every_tensor_and_logits (__main__.TensorTests.test_strict_save_reload_preserves_every_tensor_and_logits) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\ntest_trained_checkpoint_starts_new_run_without_deserializing_training_state (__main__.TensorTests.test_trained_checkpoint_starts_new_run_without_deserializing_training_state) ... skipped \"Real tensor dependencies unavailable: No module named 'torch'\"\n\n----------------------------------------------------------------------\nRan 10 tests in 0.000s\n\nOK (skipped=10)\n"
+    },
+    {
+      "check": "runtime_checks.py",
+      "status": "PASS_WITH_SKIPS",
+      "tests": 16,
+      "skipped": 16,
+      "reason": "ML dependencies missing; no real tensor/audio/CUDA execution"
+    },
+    {
+      "check": "official_reference_audit_identity",
+      "status": "PASS"
+    }
+  ]
+}

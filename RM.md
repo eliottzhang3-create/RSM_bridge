@@ -1,3 +1,157 @@
+## 2026-11-19：7–14×2–7 CED4/8 listen + 两轮独立LoRA r8，隔离GBS128正式音频路线
+
+按用户确认，复制3090/GBS128的text71427 CED-small母本，新增隔离包
+`code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced48_listen_lora_r8/`
+及入口`code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced48_listen_lora_r8_3090.sh`。
+指定checkpoint-009244模型/config/tokenizer及六个原MeSH router的12张量完整继承，音频optimizer从step0新训练。
+不读取文本training_state.pt。严格loading_info/全部safetensors逐张量精确继承检查后才注册新分支，
+再检查继承值及Parameter对象、embedding/head绑定保持。
+
+本包模型源独立复制共享71427模型，保留28物理层/42执行、五槽全683位置memory及原write/read查询规则。
+一次冻结/eval CED-small forward取得最终特征和第4/8完整block输出（final norm前）；
+最终特征保留原freq_merge_126主mapper，第4/8层各有独立1536-576-576 projector。
+边界7/21执行“原write → listen写memory音频位置 → 原read”，分别接CED4/8；
+gate/listen router查询前段输出/第一轮输出，原循环router继续查询该轮输入，write value为该轮输出。
+非原地写入原五槽，仅前126音频位置，无第三次listen、额外gamma或除以4。
+gate全零；listen router正态std=sqrt(2/(5*576))后clamp±3std、bias零，非trunc_normal重采样。
+
+仅物理层7..20七投影q/k/v/o/gate/up/down加入两轮独立LoRA，基础W共享且全量训练；
+rank8/alpha16/scale2/dropout0，A Kaiming/B零，392矩阵、2,279,424参数。
+两个projector/gate/listen新增2,450,700参数，合计新增4,730,124。CPU fork_rng保持外部RNG，拒绝decoder gradient checkpointing。
+原数据/中心fixed20/EOS/PAD/683布局/answer-only CE/原损失归约、FP32/AdamW/LambdaLR/GradNorm/GradScaler保持。
+pdgpu-3090/64CPU/256G/8GPU，micro4×GA4=GBS128，3epoch/34626步/warmup1731；
+基础LM/原routers最大LR3e-4，其余新分支与主mapper6e-4，原保存节奏保持。
+独立output/log/index/tmpfs，保留CPU index及共享音频立即训练/后台复制/optimizer边界集体切换和安全清理。
+完整音频resume保存全部新增分支、优化器等全状态、8rank RNG/数据游标及累计梯度解锁状态，严格核对身份/库存/LR/游标。
+首次microbatch审计两轮边界后释放；首步允许零gate/B的预期零任务梯度，全部新角色需32次真实更新内全rank累计解锁。
+
+本地回归87项通过、19项缺Torch/Transformers/Torchaudio等真实ML依赖明确跳过。
+通过实际Bash+模拟vc、CPU index/后台复制/失败清理、生产listen/LoRA NumPy数值/有限差分、
+12角色梯度审计、完整恢复拒绝条件及原音频/文本回归；103份母本/参考/共享文件normalized-LF SHA保持。
+官方对照1344次文本/RNG、8组tokenize、34627个LR位置误差0、10000次GradNorm标量及mapper AST一致。
+新增真实CPU测试覆盖CED hooks/梯度、严格继承、零分支等价、392独立矩阵、42调用/683/两轮反传、
+answer shift和完整恢复后下一步一致；本机缺依赖未执行，不记作GPU PASS。
+报告`audit_reports/mizar_s1_text71427_ced48_listen_lora_r8_validation.json`及包内`reference_audit.json`。
+Windows沙箱阻止临时目录/Bash后获准沙箱外离线回归；未访问远程权重/数据、提交GPU作业或commit/push。
+本条仅前置，以下已有RM字节完整保留；提交与完整恢复命令见新包README。GitHub同步后远程执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced48_listen_lora_r8_3090.sh
+```
+
+## 2026-11-19：7–14×2–7 MeSH接CED4→8注入与两轮独立LoRA r8，GBS128/3090
+
+按用户批准方案，完整复制隔离现有text71427 CED-small音频包，新增
+`code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced48_loop_lora_r8/`
+及入口`code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced48_loop_lora_r8_3090.sh`。
+用户再次确认GBS128（8GPU×micro4×GA4）、3epoch/34626步，并选择最新RM配置pdgpu-3090/64CPU/256G/单节点8GPU。
+
+严格从指定文本来源
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_reinit1000_lr6e4_20261118_112042_3962870/checkpoint-009244`
+继承全部文本/routers，先逐张量核对safetensors，再加入新模块并核验原值不变。只继承权重，音频step0新训，
+不读取文本training_state.pt，不重做抽层或初始化routers。保留28物理层/42执行、五槽、六router模块/12张量/17310参数及绑定embedding/head。
+
+冻结/eval CED-small单次编码获得最终特征及block4/8完整输出（final norm之前）；主输入保持官方freq_merge_126 mapper、dropout0.05、外置Identity。
+两套独立LN1536→Linear1536→576→GELU→Dropout0→Linear576→576→LN576 MLP；两套零初始化tanh逐token gate，
+在MeSH read0/read1之后、逻辑7/21处、两轮14层之前分别注入A4/A8，仅直接写前126个音频位置。
+循环router查询各自注入后的输入、写入循环输出，原memory规则保留。
+
+LoRA仅覆盖物理7..20的q/k/v/o与gate/up/down七projection，rank8/alpha16/scale2/dropout0；
+每层每projection每轮A/B独立，基础W共享并全量训练，前后各7层无LoRA。392个矩阵/2279424参数；
+音频MLP/gate共2444930参数，较无注入母本新增4724354参数。主mapper/新分支/LoRA最大LR6e-4，LM/router3e-4。
+新模块隔离CPU RNG初始化；use_cache=False，不支持decoder gradient checkpointing。A4/A8显式随每次forward传递。
+
+保留原hybrid1477492行、S1 prompt/answer EOS、中心裁剪fixed20、整段mel/BN/逐样本dB、683位置、answer-only shifted CE、
+rank内microbatch token mean→GA4→DDP均值、FP32/GradScaler/无autocast无TF32、原AdamW/LambdaLR/GradNorm及1731步warmup。
+保留CPU index、共享立即训练/4worker后台复制、完成后optimizer边界8rank集体切换、停止/reap producer后owner/token清理。
+tmpfs前缀`/dev/shm/mizar_s1_gbs256_text71427_mesh_ced48_loop_lora_r8_`满足原安全守卫，实际GBS128。
+route/output/index/job/log/resume隔离；输出根`outputs/RSmol/mizar_s1_ced48_loop_lora_r8_gbs128_text71427_mesh_3090/formal_<timestamp>`，
+实际训练在其formal/。保存5771/11542/17313/23084/28855/34626及model--epo-3.ckpt，完整恢复模型/新模块/优化器等状态、8rank RNG和下一数据游标。
+
+保留母本42调用/683位置memory、两轮边界及12router梯度审计，加入首步零B/零gate与第二步梯度打开、两轮LoRA trace及gate统计。
+63份母本/共享依赖normalized-LF SHA未变；剥离明确新增分支后完整骨干及train函数AST一致，公共训练语义合同一致。
+本地验证`python -B tests/validate_mizar_s1_text71427_ced48_loop_lora.py`：109项已执行通过，33项真实ML张量测试因缺Torch等明确跳过。
+报告`audit_reports/mizar_s1_text71427_ced48_loop_lora_validation.json`及包内reference_audit.json。
+包含实际Bash+模拟vc参数、后台复制/失败清理、CPU index、非零LoRA和read后注入的NumPy行为检查、原音频/文本回归。
+Windows沙箱阻止临时目录/Git Bash后获准在沙箱外运行离线测试；未读取远程资产、未真实提交训练、未commit/push。
+远程实际权重加载、3090峰值显存和正式训练结果尚待计算节点执行；formal直接提交，无额外smoke前置。
+
+GitHub同步后在远程仓库根执行：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced48_loop_lora_r8_3090.sh
+```
+完整恢复命令与合同见新增包README。本条仅前置，以下既有RM字节保留。
+
+
+## 2026-11-19：7–14×2–7 CED-small音频训练切换3090队列/64CPU
+
+按用户补充要求，本次新增音频路线改为pdgpu-3090、64CPU、256G、8GPU、单节点。
+提交入口重命名为`code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh`；
+默认output/index namespace同步改为mizar_s1_ced_small_gbs128_text71427_mesh_3090。
+指定文本checkpoint-009244、GBS128（micro4/GA4）、模型/音频/优化器/34626步等合同保持。
+只同步新入口、runtime提示、README、测试及参考审计源码身份；旧GBS256路线不改。
+58项本地回归通过，31项缺真实ML依赖明确跳过，实际Bash+模拟vc确认-p pdgpu-3090和-c 64。
+未实际提交训练或commit/push；本条仅前置，以下历史字节保留。
+GitHub同步后远程执行：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh
+```
+
+## 2026-11-19：CED-small接已训练7–14×2–7 MeSH，隔离GBS128正式音频路线
+
+用户指定文本权重来源：
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_reinit1000_lr6e4_20261118_112042_3963870/checkpoint-009244`。
+新增隔离包`code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced_small/`
+及入口`code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_5090.sh`。
+母本为既有GBS256 recursive_mesh_ced_small；原路线、旧入口和共享文本模型源码均不修改。
+
+只读调研用户提供的本地Mizar源码，确认S1训练prompt/answer共用追加EOS函数、fixed20中心裁剪；
+公开推理入口才是prompt无EOS/单音频前20秒。用户最终明确选择严格保留S1训练EOS和中心裁剪。
+原text_pair/模板/CoT规则、截断后不补回EOS、PAD已有!、SEP/EOS0、固定683序列及answer-only CE均保持。
+原single录音路径恢复规则保持，历史processed filepath2不视为第二条原录音。
+
+显式MizarText7_14x2_7MeshForCausalLM加载28物理层/42执行、五槽/三组write-read（六模块、12张量、17310参数）；
+完整继承checkpoint-009244文本权重及已训练routers。不读取training_state.pt，不恢复文本优化器等状态，
+音频optimizer从step0新训练，不需再转换或重新初始化routers。校验完成标记/config/全部schedule与来源映射、
+严格loading_info、全部safetensors逐张量精确一致及router SHA；只允许省略一个tied embedding/head别名。
+共享模型、其contract及release manifest均纳入音频完整resume源码身份。
+
+CED-small原资产严格离线加载、冻结/eval，保持原FP32在线编码、整段mel/BN/1012帧分段与逐样本dB。
+新随机训练官方freq_merge_126 mapper（384×4→126×576、dropout0.05、resampleFalse、外置Identity）；
+全LM/routers训练。用户因显存顾虑指定8GPU×micro4×GA4=GBS128；3epoch保持，1477492行得到
+每epoch11542步/共34626步、warmup1731、每epoch丢弃116行。
+LM/router最大LR3e-4、mapper6e-4，原AdamW/LambdaLR/GradNorm/GradScaler/FP32无autocast无TF32保持。
+保存5771/11542/17313/23084/28855/34626及model--epo-3；完整状态、8rank RNG和数据游标恢复保持。
+
+沿用pdgpu-5090/8GPU/32CPU/256G/原镜像/mellow_c8204d8，通过vc submit正式提交，无独立smoke前置。
+保留CPU index、共享音频立即训练/默认4线程后台复制、完成后optimizer边界8rank MIN集体切换。
+新tmpfs使用mizar_s1_gbs256_text71427_mesh_ced_small_前缀以满足原安全守卫（实际GBS128），
+保留停止/reap producer后owner/token校验清理，job完整名含后缀小于60字符。
+正式任务内部审计实际42次前向/683位置memory及首次两轮边界和12router梯度，及时释放保留张量。
+
+本地回归58项通过，31项真实Torch/Transformers/Torchaudio等依赖检查明确跳过。
+通过Python3.10/Bash语法、真实Bash+模拟vc提交参数、CPU index、后台复制/失败清理及原音频/文本回归；
+35份母本/共享文件normalized-LF SHA保持。与本地官方源码比较1344次文本/RNG、8组tokenize、
+34627个LR位置（误差0）、10000次GradNorm标量及mapper类AST一致。
+报告`audit_reports/mizar_s1_text71427_ced_small_validation.json`及包内`reference_audit.json`。
+新增真实小模型测试覆盖权重/router继承与缺失拒绝、42调用/683位置、两轮梯度、answer shift及完整恢复；
+因本机缺ML依赖未执行，未记为GPU PASS。Windows沙箱阻止测试临时目录/Git Bash后获准沙箱外离线回归。
+未读取远程权重/数据，未提交真实训练，未commit/push；远程加载、显存及正式训练结果待服务器执行。
+
+本次RM只前置，以下既有历史字节完整保留。GitHub同步后，在远程仓库根正式提交：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_5090.sh
+```
+完整配置、输出位置及同run root完整resume命令见新包README。
+
 ## 2026-11-19：三循环从checkpoint-001200权重重新训练9244步，seed1换序
 
 用户指定初始化来源：
