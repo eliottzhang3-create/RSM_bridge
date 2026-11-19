@@ -5,6 +5,7 @@ import ast
 import copy
 import hashlib
 import json
+import random
 from pathlib import Path
 import sys
 import tempfile
@@ -129,6 +130,36 @@ class ContractTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     V.verify_source_files(root)
 
+    def test_checkpoint_weights_only_ignores_old_training_state_and_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)/'checkpoint-001200'; folder.mkdir()
+            config = {**C.architecture_fields(), 'hidden_size':576, 'vocab_size':49152,
+                      'model_type':'llama', 'tie_word_embeddings':True}
+            marker = {'status':'complete', 'complete_marker':True,
+                      'architecture_contract':C.ARCHITECTURE, 'optimizer_step':1200}
+            manifest = {**marker, 'configuration':{'seed':0, 'max_lr':8e-4}}
+            metadata = {**marker, 'memory_slots':6, 'router_groups':4, 'router_module_count':8,
+                        'logical_to_physical':list(C.SCHEDULE)}
+            for name, value in (('config.json',config), ('checkpoint_complete.json',marker),
+                                ('checkpoint_manifest.json',manifest), ('mesh_checkpoint_metadata.json',metadata)):
+                (folder/name).write_text(json.dumps(value),encoding='utf-8')
+            (folder/'training_state.pt').write_bytes(b'unreadable old optimizer/RNG/cursor; do not load')
+            (folder/'model.safetensors').touch(); (folder/'tokenizer.json').write_text('{}')
+            inspected = C.inspect_initialization(folder)
+            self.assertEqual(inspected['mode'],'trained_checkpoint_weights_only')
+            self.assertEqual(inspected['start_optimizer_step'],0)
+            self.assertEqual(inspected['source_checkpoint_step'],1200)
+            self.assertFalse(inspected['restore_optimizer_scheduler_rng_cursor'])
+            self.assertEqual(inspected['routers'],'loaded_from_checkpoint')
+            for key, value in (('memory_slots',5), ('router_groups',3), ('router_module_count',6),
+                               ('logical_to_physical',list(range(28))), ('optimizer_step',400),
+                               ('architecture_contract','foreign_route')):
+                (folder/'mesh_checkpoint_metadata.json').write_text(json.dumps({**metadata,key:value}))
+                with self.assertRaises(ValueError): C.inspect_initialization(folder)
+            (folder/'mesh_checkpoint_metadata.json').write_text(json.dumps(metadata))
+            (folder/'checkpoint_complete.json').write_text(json.dumps({**marker,'complete_marker':False}))
+            with self.assertRaises(ValueError): C.inspect_initialization(folder)
+
     def test_no_overwrite_publication_and_code_output_rejection(self):
         with self.assertRaises(ValueError):
             V.validate_output(Path('/source'), ROOT/'new-model')
@@ -182,6 +213,24 @@ class ContractTests(unittest.TestCase):
 
 
 class DataTests(unittest.TestCase):
+    def test_new_seed_changes_shards_and_within_shard_order_reproducibly(self):
+        paths = [Path(f'{i:03d}.parquet') for i in range(85)]
+        original = D.assign_shards(paths,8,0)
+        changed = D.assign_shards(paths,8,1)
+        self.assertEqual(changed,D.assign_shards(paths,8,1))
+        self.assertNotEqual(changed,original)
+        self.assertEqual(set(sum(changed,[])),set(paths))
+        parquet = ModuleType('pyarrow.parquet')
+        rows = [str(i) for i in range(100)]
+        batch = SimpleNamespace(column=lambda _:SimpleNamespace(to_pylist=lambda:rows))
+        parquet.ParquetFile = lambda _:SimpleNamespace(iter_batches=lambda **kwargs:iter([batch]))
+        arrow = ModuleType('pyarrow'); arrow.parquet = parquet
+        with patch.dict(sys.modules,{'pyarrow':arrow,'pyarrow.parquet':parquet}):
+            def order(seed): return list(D.iter_shard_texts(paths[0],random.Random(seed),7))
+            self.assertEqual(order(1),order(1))
+            self.assertNotEqual(order(0),order(1))
+            self.assertEqual(set(order(1)),set(rows))
+
     def test_manifest_and_rank_assignment(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)/'data'; folder.mkdir()

@@ -48,7 +48,7 @@ PRECISION_POLICY = {
     "router_softmax_dtype": "float32", "grad_scaler_enabled": False,
     "tf32_enabled": False,
 }
-DEFAULT_MODEL_PATH = Path("/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M-text-7-14x3-7-mesh-6slot")
+DEFAULT_MODEL_PATH = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_20261118_182750_1375514/checkpoint-001200")
 DATA_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset/data")
 OUTPUT_ROOT_DEFAULT = Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh")
 DEFAULT_WORLD_SIZE = 8
@@ -94,7 +94,7 @@ class Stage4Config:
     min_lr: float = DEFAULT_MIN_LR
     save_every: int = DEFAULT_SAVE_EVERY
     checkpoint_retention: int = DEFAULT_CHECKPOINT_RETENTION
-    seed: int = 0
+    seed: int = 1
     num_workers: int = 0
     max_microbatches: int | None = None
 
@@ -125,7 +125,7 @@ def _parse_args(argv: list[str] | None = None) -> Stage4Config:
     parser.add_argument("--max-lr", type=float, default=float(_env("RSMOL_MIZAR_TEXT_7_14X3_7_MESH_MAX_LR", DEFAULT_MAX_LR)))
     parser.add_argument("--min-lr", type=float, default=float(_env("RSMOL_MIZAR_TEXT_7_14X3_7_MESH_MIN_LR", DEFAULT_MIN_LR)))
     parser.add_argument("--save-every", type=int, default=int(_env("RSMOL_MIZAR_TEXT_7_14X3_7_MESH_SAVE_EVERY", DEFAULT_SAVE_EVERY)))
-    parser.add_argument("--seed", type=int, default=int(_env("RSMOL_MIZAR_TEXT_7_14X3_7_MESH_SEED", 0)))
+    parser.add_argument("--seed", type=int, default=int(_env("RSMOL_MIZAR_TEXT_7_14X3_7_MESH_SEED", 1)))
     parser.add_argument("--max-microbatches", type=int, default=None)
     args = parser.parse_args(argv)
     gate = str(args.gate).upper()
@@ -212,8 +212,8 @@ from mizar_text_7_14x3_7_mesh.recipe import validate_recipe, learning_rate, grad
 from mizar_text_7_14x3_7_mesh.publication import atomic_publish
 
 
-def _validate_fresh_model(path: Path) -> None:
-    inspect_initialization(path)
+def _validate_fresh_model(path: Path) -> dict[str, Any]:
+    return inspect_initialization(path)
 
 
 def _capture_rng_state(device: torch.device) -> dict[str, Any]:
@@ -601,11 +601,12 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         if model_path is None:
             raise ValueError("Stage 4 requires --model-path or --resume-from")
         resume_state = None
+        initialization_source = None
         if config.resume_from is not None:
             resume_state = _load_checkpoint_state(config.resume_from)
             _validate_resume_contract(resume_state, config)
         else:
-            _validate_fresh_model(model_path)
+            initialization_source = _validate_fresh_model(model_path)
         from transformers import AutoTokenizer
         model, loading_info = RecursiveLlamaForCausalLM.from_pretrained(model_path, local_files_only=True, torch_dtype=torch.float32, output_loading_info=True)
         _validate_loading_info(loading_info)
@@ -629,7 +630,10 @@ def run_training(config: Stage4Config) -> dict[str, Any]:
         model.model.routing_stats_mode = False
         optimizer, optimizer_group_audit = _optimizer(model, config)
         optimizer_step = int(resume_state.get("optimizer_step", 0)) if resume_state else 0
-        report["initialization"] = {"mode": "full_state_resume" if resume_state is not None else "weights_only_new_training_state", "loaded_model_path": str(model_path), "source_model_path": str(config.model_path), "starting_optimizer_step": optimizer_step, "precision": PRECISION_CONTRACT}
+        report["initialization"] = {"mode": "full_state_resume" if resume_state is not None else "weights_only_new_training_state", "loaded_model_path": str(model_path), "source_model_path": str(config.model_path), "starting_optimizer_step": optimizer_step, "precision": PRECISION_CONTRACT,
+                                    "seed": config.seed,
+                                    "restore_optimizer_scheduler_rng_cursor": resume_state is not None,
+                                    "weights_source": initialization_source}
         if rank == 0:
             print(f"[initialization] {json.dumps(report['initialization'])}", flush=True)
         if config.gate == "E":

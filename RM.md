@@ -1,3 +1,28 @@
+## 2026-11-19：三循环从checkpoint-001200权重重新训练9244步，seed1换序
+
+用户指定初始化来源：
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_20261118_182750_1375514/checkpoint-001200`。
+原三循环提交入口、runtime和trainer默认改为该路径，仅加载模型/config/tokenizer，
+完整继承LM与四组routers；新建AdamW/scheduler/RNG/数据游标，optimizer step0起完整9244步。
+不读取旧training_state.pt，不恢复旧optimizer/RNG/cursor，不需重新转换，不加LayerNorm。
+三循环28物理层/56执行/六槽、LR6e-4/6e-5、warmup463、GBS1024、每400步保存保持。
+
+默认seed由0改为1，新增提交入口--seed选项并传到计算节点；原数据管线不改，
+seed同时控制分片打乱/分配和片内buffer4096打乱，seed+rank控制训练RNG。
+日志与run_manifest记录来源step1200、新起点0、seed及不恢复旧训练状态。
+默认新目录formal_reinit1200_seed1_<timestamp_pid>；完整resume仍需匹配旧seed和训练配置。
+提交命令显式micro4/GA32及--seed 1并清空可能遗留的RESUME_FROM；脚本micro8/GA16默认仍可选。
+正式入口无新增smoke/审查报告/人工放行条件；保持正常模型身份/完成标记及防覆盖检查。
+换seed不能保证消除此前nonfinite gradient norm；本次不宣称已解决数值稳定性根因。
+
+二、三循环回归共55项：35通过、20缺Torch等真实张量依赖明确跳过。
+通过项含不可反序列化旧training_state的仅权重输入、错误架构/不完整标记拒绝、
+分片及片内换序可复现、Bash语法/default与seed覆盖/dry-run/模拟vc参数传递和隔离。
+新增真实小模型测试验证已训练routers逐张量继承、新optimizer空状态、起点0和两步新训练，
+本机缺依赖未执行。Windows沙箱阻止临时目录/Bash后获准沙箱外执行本地回归。
+未修改二循环、三循环模型/转换器/数据代码，未访问远程资产、实际提交训练或commit/push。
+本条仅前置，保留既有RM历史字节；完整用法见本路线README。
+
 ## 2026-11-18：三循环文本checkpoint改为每400步保存
 
 用户报告三循环在打印step410后再次出现nonfinite gradient norm，暂不加LayerNorm，

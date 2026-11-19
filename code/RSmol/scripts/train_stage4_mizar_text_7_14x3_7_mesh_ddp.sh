@@ -9,9 +9,10 @@ GATE="$(read_var STAGE4_GATE FORMAL)"
 WORLD="$(read_var WORLD_SIZE 8)"
 MICRO="$(read_var MICRO_BATCH_SIZE 8)"
 GA="$(read_var GRADIENT_ACCUMULATION_STEPS 16)"
-MODEL="$(read_var MODEL_DIR /hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M-text-7-14x3-7-mesh-6slot)"
+MODEL="$(read_var MODEL_DIR /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_20261118_182750_1375514/checkpoint-001200)"
 DATA="$(read_var DATA_DIR /hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset)"
-OUTPUT="$(read_var OUTPUT_DIR /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_$(date +%Y%m%d_%H%M%S)_$$)"
+SEED="$(read_var SEED 1)"
+OUTPUT="$(read_var OUTPUT_DIR /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_reinit1200_seed${SEED}_$(date +%Y%m%d_%H%M%S)_$$)"
 RESUME="$(read_var RESUME_FROM '')"
 STEPS=9244
 case "$GATE" in
@@ -26,7 +27,7 @@ ARGS=(--gate "$GATE" --model-path "$MODEL" --data-dir "$DATA" --output-dir "$OUT
   --world-size "$WORLD" --micro-batch-size "$MICRO" --gradient-accumulation-steps "$GA"
   --context-length 1024 --max-optimizer-steps "$STEPS" --scheduler-total-steps 9244
   --warmup-steps 463 --steps-per-epoch 9244 --epochs 1 --max-lr 6e-4 --min-lr 6e-5
-  --save-every 400 --seed "$(read_var SEED 0)")
+  --save-every 400 --seed "$SEED")
 [[ -z "$RESUME" ]] || ARGS+=(--resume-from "$RESUME")
 COMMAND=(torchrun --standalone --nproc_per_node="$WORLD" code/RSmol/scripts/train_stage4_mizar_text_7_14x3_7_mesh_ddp.py "${ARGS[@]}" "$@")
 if [[ "$(read_var DRY_RUN 0)" == 1 ]]; then
@@ -45,5 +46,5 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING=1 TORCH_NCCL_DUMP_ON_TIMEOUT=1
 export TORCH_NCCL_TRACE_BUFFER_SIZE="${TORCH_NCCL_TRACE_BUFFER_SIZE:-200000}"
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 echo "[Mizar MeSH] $GATE; 28 physical / 56 executions; 6 slots / 4 groups; BF16 forward"
-echo "[Mizar MeSH] world=$WORLD micro=$MICRO GA=$GA; output=$OUTPUT; resume=${RESUME:-none}"
+echo "[Mizar MeSH] world=$WORLD micro=$MICRO GA=$GA seed=$SEED; model=$MODEL; output=$OUTPUT; resume=${RESUME:-none}"
 exec "${COMMAND[@]}"

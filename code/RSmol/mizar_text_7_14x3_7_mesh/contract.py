@@ -26,6 +26,7 @@ ROUTER_INITIALIZATION = {
 DEFAULT_SOURCE = Path('/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M')
 DEFAULT_MODEL = DEFAULT_SOURCE.with_name('Mizar159M-text-7-14x3-7-mesh-6slot')
 DEFAULT_OUTPUT = Path('/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh')
+DEFAULT_TRAINING_MODEL = DEFAULT_OUTPUT / 'formal_20261118_182750_1375514/checkpoint-001200'
 LM_PREFIX = 'caption_decoder.lm.'
 
 
@@ -95,11 +96,12 @@ def validate_model_config(raw, *, production=True):
 
 
 def inspect_initialization(path):
-    """Fresh means a converted artifact, with no optimizer or old-route state."""
+    """Inspect weights-only input without deserializing any training state."""
     path = Path(path).resolve()
     validate_model_config(json.loads((path / 'config.json').read_text(encoding='utf-8')))
-    if any((path / name).exists() for name in ('training_state.pt', 'checkpoint_complete.json')):
-        raise ValueError('Fresh training requires a conversion; use --resume-from for training state')
+    if any((path / name).exists() for name in ('training_state.pt', 'checkpoint_complete.json',
+                                              'mesh_checkpoint_metadata.json')):
+        return _inspect_checkpoint_weights(path)
     marker = json.loads((path / 'conversion_complete.json').read_text(encoding='utf-8'))
     metadata = json.loads((path / 'recursive_conversion_metadata.json').read_text(encoding='utf-8'))
     expected = {'complete': True, 'text_route': ROUTE, 'source': source_identity(),
@@ -123,3 +125,30 @@ def inspect_initialization(path):
         raise FileNotFoundError(f'Tokenizer missing: {path}')
     return {'mode': 'fresh_final_lm_conversion', 'start_optimizer_step': 0,
             'restore_optimizer_scheduler_rng_cursor': False, 'source': source_identity()}
+
+
+def _inspect_checkpoint_weights(path):
+    """Old LR, optimizer, scheduler, RNG and data cursor do not constrain a new run."""
+    names = ('checkpoint_complete.json', 'checkpoint_manifest.json', 'mesh_checkpoint_metadata.json')
+    if not all((path / name).is_file() for name in names):
+        raise ValueError('Weights-only initialization requires a complete route checkpoint; '
+                         '--resume-from is reserved for full-state continuation')
+    marker, manifest, metadata = [json.loads((path / name).read_text(encoding='utf-8')) for name in names]
+    if (marker.get('status') != 'complete' or marker.get('complete_marker') is not True
+            or manifest.get('status') != 'complete'
+            or any(item.get('architecture_contract') != ARCHITECTURE for item in (marker, manifest, metadata))):
+        raise ValueError('Weights-only checkpoint has an incomplete or different architecture')
+    step = metadata.get('optimizer_step')
+    if (type(step) is not int or step < 0 or path.name != f'checkpoint-{step:06d}'
+            or any(item.get('optimizer_step') != step for item in (marker, manifest))):
+        raise ValueError('Weights-only checkpoint directory and metadata steps disagree')
+    expected = {'memory_slots': MEMORY_SLOT_COUNT, 'router_groups': ROUTER_COUNT,
+                'router_module_count': 2 * ROUTER_COUNT, 'logical_to_physical': list(SCHEDULE)}
+    if any(metadata.get(key) != value for key, value in expected.items()):
+        raise ValueError('Weights-only checkpoint must use this six-slot, three-loop MeSH architecture')
+    if not any(path.glob('*.safetensors')) or not (path / 'tokenizer.json').is_file():
+        raise FileNotFoundError(f'Checkpoint model weights or tokenizer missing: {path}')
+    return {'mode': 'trained_checkpoint_weights_only', 'start_optimizer_step': 0,
+            'source_checkpoint_step': step, 'loaded_model_path': str(path),
+            'restore_optimizer_scheduler_rng_cursor': False, 'routers': 'loaded_from_checkpoint',
+            'source': source_identity()}

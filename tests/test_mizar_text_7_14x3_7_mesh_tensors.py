@@ -167,6 +167,58 @@ class TensorTests(unittest.TestCase):
         self.assertEqual(batch['labels'].tolist(),[[3,0,5],[7,-100,-100]])
         self.assertEqual(int((batch['labels'][:,1:]!=-100).sum()),2)
 
+    def test_trained_checkpoint_starts_new_run_without_deserializing_training_state(self):
+        tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer(WordLevel(
+            {f't{i}':i for i in range(43)},unk_token='t0')),pad_token='t0',bos_token='t1',eos_token='t2')
+        old = T.Stage4Config(gate='A',world_size=1,micro_batch_size=2,gradient_accumulation_steps=1,
+                             max_lr=8e-4,min_lr=8e-5,seed=0)
+        optimizer,_ = T._optimizer(self.model,old)
+        self.model(self.ids,use_cache=False).logits.square().mean().backward()
+        optimizer.step()
+        expected = {key:value.detach().clone() for key,value in self.model.state_dict().items()}
+        validate_config = C.validate_model_config
+        validate_audit = T._validate_model_audit
+        make_optimizer = T._optimizer
+        observed = []
+        def fixture_audit(audit):
+            # Only hidden size differs from production; all structure checks run.
+            self.assertEqual(audit['router_parameter_count'],8*(16*6+6))
+            validate_audit({**audit,'router_parameter_count':C.ROUTER_PARAMETER_COUNT})
+        def fresh_optimizer(model,config):
+            for key,value in model.state_dict().items():
+                self.assertTrue(torch.equal(value,expected[key]),key)
+            fresh,audit = make_optimizer(model,config)
+            self.assertEqual(len(fresh.state),0)
+            observed.append(True)
+            return fresh,audit
+        with tempfile.TemporaryDirectory() as tmp:
+            old.output_dir = Path(tmp)/'old'
+            state = {'manifest':[], 'data_cursors_by_rank':{'0':{'synthetic':True}},
+                     'rng_states_by_rank':{'0':T._capture_rng_state(torch.device('cpu'))}}
+            saved = T._checkpoint(self.model,tokenizer,optimizer,1200,old,0,state)
+            (saved/'training_state.pt').write_bytes(b'intentionally unreadable; must not be loaded')
+            config = T.Stage4Config(gate='A',model_path=saved,output_dir=Path(tmp)/'new',world_size=1,
+                    micro_batch_size=2,gradient_accumulation_steps=1,context_length=6,
+                    max_optimizer_steps=2,scheduler_total_steps=4,warmup_steps=1)
+            with patch.object(C,'validate_model_config',side_effect=lambda raw:validate_config(raw,production=False)), \
+                 patch.object(T,'validate_model_config',side_effect=lambda raw:validate_config(raw,production=False)), \
+                 patch.object(T,'_validate_model_audit',side_effect=fixture_audit), \
+                 patch.object(T,'_optimizer',side_effect=fresh_optimizer), \
+                 patch.object(T,'_load_checkpoint_state',side_effect=AssertionError('unexpected full resume')), \
+                 patch.object(T,'_restore_rng_state',side_effect=AssertionError('unexpected old RNG restore')), \
+                 patch.object(T.torch,'load',side_effect=AssertionError('must not deserialize old training state')):
+                report = T.run_training(config)
+            self.assertEqual(observed,[True])
+            self.assertEqual(report['status'],'PASS',report['hard_failures'])
+            self.assertEqual(report['initialization']['starting_optimizer_step'],0)
+            self.assertFalse(report['initialization']['restore_optimizer_scheduler_rng_cursor'])
+            self.assertEqual(report['initialization']['weights_source']['source_checkpoint_step'],1200)
+            self.assertEqual(report['initialization']['seed'],1)
+            self.assertEqual(report['optimizer_steps'],2)
+            self.assertTrue((config.output_dir/'checkpoint-000002').is_dir())
+            self.assertEqual(report['metrics'][0]['learning_rate'],6e-5)
+            self.assertEqual((saved/'training_state.pt').read_bytes(),b'intentionally unreadable; must not be loaded')
+
     def test_optimizer_groups_rng_and_complete_checkpoint_roundtrip(self):
         config = T.Stage4Config(gate='A',world_size=1,micro_batch_size=2,gradient_accumulation_steps=2,
                               max_optimizer_steps=4,scheduler_total_steps=4,warmup_steps=1)

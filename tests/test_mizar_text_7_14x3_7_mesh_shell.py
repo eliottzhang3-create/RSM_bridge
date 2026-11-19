@@ -34,9 +34,23 @@ class ShellTests(unittest.TestCase):
                          '--warmup-steps 463','--save-every 400',
                          '--max-lr 6e-4','--min-lr 6e-5',
                          'train_stage4_mizar_text_7_14x3_7_mesh_ddp.py',
-                         'Mizar159M-text-7-14x3-7-mesh-6slot'):
+                         'formal_20261118_182750_1375514/checkpoint-001200',
+                         '--seed 1','formal_reinit1200_seed1_'):
             self.assertIn(expected,result.stdout)
         self.assertNotIn('--resume-from',result.stdout)
+
+    def test_seed_override_and_runtime_defaults(self):
+        result = self.run_bash(ENTRY,'--dry-run','--seed','2',
+                               '--micro-batch-size','4','--gradient-accumulation-steps','32')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('--seed 2',result.stdout)
+        self.assertIn('formal_reinit1200_seed2_',result.stdout)
+        self.assertNotIn('--resume-from',result.stdout)
+        result = self.run_bash(RUNTIME,env={PREFIX+'DRY_RUN':'1'})
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('--seed 1',result.stdout)
+        self.assertIn('formal_20261118_182750_1375514/checkpoint-001200',result.stdout)
+        self.assertIn('--max-optimizer-steps 9244',result.stdout)
 
     def test_explicit_memory_fallback_and_invalid_batch(self):
         result = self.run_bash(ENTRY,'--dry-run','--micro-batch-size','4','--gradient-accumulation-steps','32')
@@ -62,7 +76,7 @@ class ShellTests(unittest.TestCase):
     def test_stub_vc_receives_isolated_environment_and_resource_arguments(self):
         # Export a Bash function so even PATH resolution cannot reach real vc.
         with tempfile.TemporaryDirectory() as tmp:
-            command = 'vc() { printf "VC_ARG:%s\\n" "$@"; }; export -f vc; bash "$TEST_ENTRY" --output-dir "/external/new run"'
+            command = 'vc() { printf "VC_ARG:%s\\n" "$@"; }; export -f vc; bash "$TEST_ENTRY" --output-dir "/external/new run" --seed 2 --micro-batch-size 4 --gradient-accumulation-steps 32'
             result = self.run_bash('-c',command,env={
                 'TEST_ENTRY':ENTRY.as_posix(), PREFIX+'JOB_LOG_DIR':Path(tmp).as_posix(),
                 'RSMOL_5_10X2_5_MESH_4SLOT_RESUME_FROM':'/foreign/checkpoint',
@@ -81,7 +95,10 @@ class ShellTests(unittest.TestCase):
             self.assertIn(PREFIX+'MODEL_DIR=',cmd)
             self.assertNotIn('/foreign',cmd)
             self.assertIn(PREFIX+'STAGE4_GATE=FORMAL',cmd)
-            self.assertIn(PREFIX+'MICRO_BATCH_SIZE=8',cmd)
+            self.assertIn(PREFIX+'MICRO_BATCH_SIZE=4',cmd)
+            self.assertIn(PREFIX+'GRADIENT_ACCUMULATION_STEPS=32',cmd)
+            self.assertIn(PREFIX+'SEED=2',cmd)
+            self.assertIn('formal_20261118_182750_1375514/checkpoint-001200',cmd)
             self.assertIn('/external/new\\ run',cmd)
 
 

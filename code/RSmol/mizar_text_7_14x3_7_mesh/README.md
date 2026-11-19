@@ -3,7 +3,8 @@
 独立路线，复制二循环`7–14×2–7`的模型、转换器与训练器后隔离修改。
 原模型、转换器、训练器和提交入口保持不变；新代码不导入旧路线运行模块，
 只读取共同的官方release manifest。不注册全局AutoModel覆盖；使用本路线显式类加载。
-初始模型直接从同一个原始Mizar final checkpoint重新转换，不继承二循环产物或其routers。
+原始转换直接使用Mizar final checkpoint，不继承二循环产物或其routers。
+当前正式训练默认从本路线已训练的checkpoint-001200仅加载模型及tokenizer，详见下文。
 
 ## 结构与初始化
 
@@ -72,9 +73,30 @@ bash code/RSmol/scripts/convert_mizar_text_7_14x3_7_mesh.sh
 
 ## 正式文本训练
 
+当前默认初始化来源（2026-11-19）：
+
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_20261118_182750_1375514/checkpoint-001200
+```
+
+完整继承其中LM和四组routers权重，无需重新转换，不重新初始化routers，仍为原六槽
+`7–14×3–7`架构，不增加LayerNorm。只读取配置、模型、tokenizer及checkpoint完成标记，
+不读取旧`training_state.pt`；新建AdamW，从optimizer step0开始重新执行完整9244次更新，
+warmup从头开始，不是训练剩余8044步。旧optimizer、学习率进度、RNG和数据游标不恢复。
+
+本次默认seed从0改为1：分片列表先按seed打乱再分给rank，片内buffer4096由
+`seed+1009*rank`的独立RNG打乱，训练全局RNG为`seed+rank`。因此分片分配/顺序和片内
+顺序都会改变；加载的模型权重不受新seed影响。可用`--seed 2`等再次换序。
+换序不保证消除此前的nonfinite gradient norm。
+
+建议使用micro4/GA32提交，避免此前micro8的OOM；命令清空可能遗留的resume环境变量：
+
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
-bash code/RSmol/run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh
+RSMOL_MIZAR_TEXT_7_14X3_7_MESH_RESUME_FROM= \
+bash code/RSmol/run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh \
+  --model-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_20261118_182750_1375514/checkpoint-001200 \
+  --micro-batch-size 4 --gradient-accumulation-steps 32 --seed 1
 ```
 
 该入口通过`vc submit`申请`pdgpu-5090`、单节点8 GPU、CPU32、内存256G，
@@ -89,8 +111,8 @@ bash code/RSmol/run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh --dry-run
 
 | 项目 | 固定配置 |
 |---|---|
-| 初始状态 | 本路线转换产物；新optimizer/scheduler/RNG/数据游标 |
-| Batch | 8 GPU × micro8 × GA16 = GBS1024 |
+| 初始状态 | 本路线checkpoint-001200的模型和tokenizer；新optimizer/scheduler/RNG/数据游标 |
+| Batch | 提交命令8 GPU × micro4 × GA32 = GBS1024；脚本仍支持默认micro8/GA16 |
 | 精度 | FP32参数/AdamW状态；BF16 autocast仅覆盖forward；FP32 CE/softmax；无Scaler/TF32 |
 | 数据 | `data/SmolLM2-135M-10Bsubset`或其`data`下精确85片Parquet，直接流读persistent存储 |
 | 分片 | 排序后seed打乱，按rank连续分配，分片数11/11/11/11/11/10/10/10 |
@@ -103,7 +125,7 @@ bash code/RSmol/run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh --dry-run
 | 梯度 | 每micro反传CE sum，DDP平均后乘world/global_tokens；clip L2=1 |
 | DDP | broadcast_buffers=False、find_unused_parameters=False；前GA-1次no_sync |
 | 保存 | 每400步及最终9244步；本次输出仅保留最近三个完整checkpoint |
-| Seed | 默认0；各rank为seed+rank |
+| Seed | 默认1；各rank为seed+rank，数据buffer为seed+1009*rank |
 
 CUDA必须支持BF16，不能静默回退。前7、中14、后7、embedding/head/norm及routers全部训练。
 数据顺序采用Mizar文本路线；WD分组采用MeSH路线。残差/memory保留FP32语义，
@@ -119,11 +141,12 @@ bash code/RSmol/run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh \
 micro变化会改变动态padding和分片尾部处理，不保证数值轨迹相同。
 2026-11-18用户报告micro8在`loss_sum.backward()`发生CUDA OOM；建议使用上述micro4/GA32命令。
 同日按用户要求将三循环max/min LR由8e-4/8e-5降至6e-4/6e-5，GBS1024及9244步保持。
-完整resume仍要求checkpoint的LR与当前配置相同；新提交从原三循环转换产物重新开始。
+完整resume仍要求checkpoint的LR、seed及其余训练配置与当前配置相同。
+通过`--model-dir`也可显式选择原三循环转换产物或另一份完整的同架构checkpoint重新训练。
 所有入口参数、CLI覆盖及配置写入`run_manifest.json`。默认输出：
 
 ```text
-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_<timestamp_pid>/
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_reinit1200_seed1_<timestamp_pid>/
 ```
 
 其中`train_metrics.jsonl`记录每步全局loss、有效tokens、LR、梯度范数和显存；
@@ -147,6 +170,7 @@ bash code/RSmol/run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh \
 ```
 
 恢复会建立新的输出目录，不覆盖旧run。micro4来源恢复时也必须显式指定micro4/GA32。
+旧seed0训练若要完整resume，需要显式`--seed 0`；新seed1 run的完整resume沿用seed1。
 可选短验证使用相同初始化、数据和9244步scheduler：
 
 ```bash
@@ -168,8 +192,9 @@ CUDA_VISIBLE_DEVICES="" python -B -m unittest discover -s tests -p 'test_mizar_t
 
 真实tensor测试覆盖官方router初始化/meta-safe、最终LM namespace/严格加载、
 28层继承、56次轨迹、四组query/记忆初态、三轮梯度、全量保存重载、56逻辑KV cache、
-全局token梯度归一化、optimizer分组、RNG及checkpoint保存/恢复/保留策略。
-纯Python检查覆盖来源校验、全部配置别名、层映射、调度、真实shuffle循环的准确重放。
+全局token梯度归一化、optimizer分组、RNG及checkpoint保存/恢复/保留策略，
+以及已训练routers完整继承、新optimizer空状态、步数归零、不读取旧训练状态的新训练。
+纯Python检查覆盖来源校验、全部配置别名、层映射、调度、seed换序可复现和真实shuffle循环的准确重放。
 Bash测试用stub vc验证参数传递，不触碰真实队列。CPU或模拟通过不能记作远程GPU PASS。
 `source_guard.json`保留复制时二循环源文件的历史SHA256（换行统一为LF后计算）。
 二循环后续可独立修改；测试仅将本三循环路线的共用数据/发布工具与历史摘要比较。

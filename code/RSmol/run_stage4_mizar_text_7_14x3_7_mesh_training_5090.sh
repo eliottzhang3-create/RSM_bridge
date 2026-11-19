@@ -5,26 +5,28 @@ STAMP="$(date +%Y%m%d_%H%M%S)_$$"
 PREFIX=RSMOL_MIZAR_TEXT_7_14X3_7_MESH
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model-dir|--data-dir|--output-dir|--resume-from|--micro-batch-size|--gradient-accumulation-steps|--gate)
+    --model-dir|--data-dir|--output-dir|--resume-from|--micro-batch-size|--gradient-accumulation-steps|--seed|--gate)
       [[ $# -ge 2 && -n "$2" ]] || { echo "Missing value for $1" >&2; exit 2; }
       case "$1" in
         --model-dir) key=MODEL_DIR;; --data-dir) key=DATA_DIR;; --output-dir) key=OUTPUT_DIR;;
         --resume-from) key=RESUME_FROM;; --micro-batch-size) key=MICRO_BATCH_SIZE;;
         --gradient-accumulation-steps) key=GRADIENT_ACCUMULATION_STEPS;; --gate) key=STAGE4_GATE;;
+        --seed) key=SEED;;
       esac
       export "${PREFIX}_${key}=$2"; shift 2;;
     --dry-run) export "${PREFIX}_DRY_RUN=1"; shift;;
     --help|-h)
-      echo 'Usage: bash run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh [--dry-run] [--output-dir NEW_PATH] [--resume-from CHECKPOINT] [--micro-batch-size 4 --gradient-accumulation-steps 32] [--gate FORMAL|D|E]'
-      echo 'Default: vc submit pdgpu-5090, 8 GPUs, BF16 forward, GBS1024, 9244 updates, max_lr=6e-4/min_lr=6e-5, checkpoint every 400 updates.'; exit 0;;
+      echo 'Usage: bash run_stage4_mizar_text_7_14x3_7_mesh_training_5090.sh [--dry-run] [--model-dir CHECKPOINT_OR_CONVERSION] [--output-dir NEW_PATH] [--seed 1] [--resume-from CHECKPOINT] [--micro-batch-size 4 --gradient-accumulation-steps 32] [--gate FORMAL|D|E]'
+      echo 'Default: checkpoint-001200 weights only, new training state, seed1; vc submit pdgpu-5090, 8 GPUs, BF16 forward, GBS1024, 9244 updates, max_lr=6e-4/min_lr=6e-5, checkpoint every 400 updates.'; exit 0;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
 export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_STAGE4_GATE="${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_STAGE4_GATE:-FORMAL}"
 export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_WORLD_SIZE=8
-export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_MODEL_DIR="${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M-text-7-14x3-7-mesh-6slot}"
+export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_MODEL_DIR="${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_MODEL_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_20261118_182750_1375514/checkpoint-001200}"
 export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_DATA_DIR="${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_DATA_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/data/SmolLM2-135M-10Bsubset}"
-export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_OUTPUT_DIR="${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_STAGE4_GATE,,}_$STAMP}"
+export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_SEED="${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_SEED:-1}"
+export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_OUTPUT_DIR="${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_STAGE4_GATE,,}_reinit1200_seed${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_SEED}_$STAMP}"
 export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_RESUME_FROM="${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_RESUME_FROM:-}"
 export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_DRY_RUN="${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_DRY_RUN:-0}"
 export RSMOL_MIZAR_TEXT_7_14X3_7_MESH_MICRO_BATCH_SIZE="${RSMOL_MIZAR_TEXT_7_14X3_7_MESH_MICRO_BATCH_SIZE:-8}"
