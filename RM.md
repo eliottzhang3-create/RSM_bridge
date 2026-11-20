@@ -1,3 +1,47 @@
+## 2026-11-20：六条7–14×2–7 CED路线接入四项隔离评测，checkpoint显式传入
+
+新增独立包`code/RSmol/text71427_ced_eval/`及入口
+`code/RSmol/run_text71427_ced_eval_5090.sh`，不修改六个训练目录、共享模型或任何旧评测源码。
+模型别名base、loop_lora、listen、audio7_read2、wfuse、audio7_read2_ar6，分别对应用户指定的
+六条GBS128/text71427/3090音频训练路线；全部28物理层/42执行，完整保留各自MeSH、音频分支和两轮LoRA。
+复用原ReasonAQA5000同一manifest/完整答案精确匹配、MMAU与MMAR原始输出官方评分、
+MMSU官方大小写题面及mmsu_answer_text_contains_v2，不改变原数值推理或评分设置。
+
+FP32/eval/seed1234/TF32off、fixed20/32k、126+1+256 prefix383、PAD!/EOS0、
+原EOS后缀分词/截断、attention_mask=None、无KV完整重算、纯argmax300/首EOS停止保持。
+后五条每题编码一次并显式逐forward传入(A4,A8)，每forward重建memory；七槽seed5/6只读。
+严格加载完整音频state_dict，核对来源/代码/资产/runtime/geometry与张量库存/shape/dtype/finite、
+绑定embedding/head；训练后分支fresh=False审计在推理冻结前完成，不重置已训练参数。
+只读hooks核对42层轨迹、router/分支边界与两轮各98次LoRA投影，保留196调用/392矩阵区别。
+
+所有checkpoint必须显式--checkpoint，不扫描latest、不固定最终step，也不假设正在训练的run已完成。
+标准路径自动推导外层run root及同run formal/runtime.json；step文件核对payload，epoch文件从payload取得step。
+接受已完整保存的中间及最终checkpoint；非标准路径须显式runtime-config/output-dir。
+评测仅使用模型状态，不恢复训练optimizer等状态，不使用训练resume的“已完成不可恢复”门槛阻止最终评测。
+独立输出为<run-root>/eval/text71427_ced_v1/<任务>/<checkpoint-stem>/，身份/进程锁/坏行检查及剩余题续跑保留。
+支持单项、单模型all四项及显式JSON清单；失败继续其他任务并整体非零，SUBMITTED只表示提交成功。
+默认ReasonAQA5000为4090，其余5090，均1GPU/8CPU/32G/1node、原镜像/mellow_c8204d8；支持显式queue覆盖。
+完整四项及六模型提交、参数预览、续跑/CPU比较和精确Git同步命令见新包README。
+
+最终本地`python -B tests/validate_text71427_ced_eval.py`：38项中32项执行通过、6项真实CPU模型
+因缺Torch/Transformers/Safetensors明确跳过，PASS_LOCAL_WITH_SKIPS；3239份原tracked源码LF SHA保持。
+通过24种绑定与完整尺寸合成流程、原生成/预处理/评分输入函数AST及协议对照、严格加载顺序/错误张量拒绝、
+42层/两轮LoRA hooks、同题context、5000与1000完整分母、13题中断续跑、固定官方MMSU scorer及汇总错误拒绝。
+实际Bash→Python参数链与模拟vc通过，job完整名小于60位，Python3.10语法与Git可同步清单通过。
+模型/音频/Parquet/CUDA在合成流程中明确模拟，bulk fsync加速模拟，不冒充真实autograd或GPU验收。
+Windows沙箱临时目录与Git index.lock受限后获准沙箱外完成离线检查；报告audit_reports/text71427_ced_eval_validation.json。
+未访问远程生产权重/数据、提交真实作业或commit/push；实际权重加载、显存与正式分数仍待服务器执行。
+本条仅前置，以下RM既有历史字节完整保留。
+
+## 2026-11-20：ar6音频训练用户报告step5771后失败，给出同run完整恢复命令
+
+用户提供checkpoint：
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced48_audio7_read2_ar6_lora_r8_gbs128_text71427_3090/formal_20261120_124034240740261/formal/checkpoints/model--step-5771.ckpt`。
+用户报告任务到此失败；仅据用户信息记录推进到5771及该产物路径，失败原因/文件完整性未远程核验，不登记完整训练PASS。
+恢复沿用原run root `formal_20261120_124034240740261`（不追加内层formal），使用原训练源码/资产/配置，
+原ar6入口传`--output-dir <原run root> --resume-checkpoint <上述ckpt>`，恢复模型、优化器等全状态及8rank RNG/游标，继续至总计34626步。
+本次仅核对本地入口/README并提供命令，未代为提交远程任务；训练实现及原历史字节保持。
+
 ## 2026-11-20：7–14×2–7 CED4/8 原write value拼接融合，恒等初始化＋两轮独立LoRA r8
 
 按用户最终确认，从listen+LoRA母本完整复制隔离，新增

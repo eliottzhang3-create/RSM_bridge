@@ -1,0 +1,66 @@
+{
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "tests_run": 38,
+  "passed": 32,
+  "skipped": [
+    {
+      "test": "test_ar6_model (test_text71427_ced_eval_tensors.RealTensorTests.test_ar6_model)",
+      "reason": "Real CPU tensor dependencies missing: torch, transformers, safetensors"
+    },
+    {
+      "test": "test_audio7_read2_model (test_text71427_ced_eval_tensors.RealTensorTests.test_audio7_read2_model)",
+      "reason": "Real CPU tensor dependencies missing: torch, transformers, safetensors"
+    },
+    {
+      "test": "test_base_model (test_text71427_ced_eval_tensors.RealTensorTests.test_base_model)",
+      "reason": "Real CPU tensor dependencies missing: torch, transformers, safetensors"
+    },
+    {
+      "test": "test_listen_model (test_text71427_ced_eval_tensors.RealTensorTests.test_listen_model)",
+      "reason": "Real CPU tensor dependencies missing: torch, transformers, safetensors"
+    },
+    {
+      "test": "test_loop_lora_model (test_text71427_ced_eval_tensors.RealTensorTests.test_loop_lora_model)",
+      "reason": "Real CPU tensor dependencies missing: torch, transformers, safetensors"
+    },
+    {
+      "test": "test_wfuse_model (test_text71427_ced_eval_tensors.RealTensorTests.test_wfuse_model)",
+      "reason": "Real CPU tensor dependencies missing: torch, transformers, safetensors"
+    }
+  ],
+  "failures": [],
+  "elapsed_seconds": 156.34543639999174,
+  "sources": {
+    "code/RSmol/text71427_ced_eval/__init__.py": "79fa18487b67d1064836bd2b9d8b15a17fdc32bd03853ca15683ad97e844ffba",
+    "code/RSmol/text71427_ced_eval/arguments.py": "f972f3e5330a9e027a48b1b628c50455b2ca9fca6f4141566b88d4021d16b6a8",
+    "code/RSmol/text71427_ced_eval/benchmark.py": "fb54e33ddcd96cf387f31cc13bb7e9ee3c1097d1e8ed80fa41bc0278c24576f5",
+    "code/RSmol/text71427_ced_eval/compare.py": "60dde281c704dc3b3295bc21547da6de678fc1a9143d38f00e92c01ffa3c7763",
+    "code/RSmol/text71427_ced_eval/mmsu.py": "bc078a29808125ef51c3291cf4c54e7b36d08580f1463815290aed7b6d14e38d",
+    "code/RSmol/text71427_ced_eval/mmsu_runtime.py": "0314ed21b44845e4a7c929eef97d9110ef3134a213600133d73ce553d3f6a21e",
+    "code/RSmol/text71427_ced_eval/observers.py": "c3de3d77c894b57728458819f7adab5de23c262f2de13e875cb4c02f849d8cd6",
+    "code/RSmol/text71427_ced_eval/reasonaqa.py": "3d70b658a4bb8f60720ff86c06729b00f8ec2dcab825e6f5f124e99446b77f43",
+    "code/RSmol/text71427_ced_eval/reasonaqa_runtime.py": "714a7132f810c46a065439d423cf678f0266337cd3f35368a86793d501c0cb9c",
+    "code/RSmol/text71427_ced_eval/registry.py": "3d1abca5bdc780dfa739af60f5093d93c144ee8c599ea8b1b29696dfaa6b9e3f",
+    "code/RSmol/text71427_ced_eval/runtime.py": "1d89ab9639e39d0898248e78c97ff89ac74df16407411827e3967030b60080f5",
+    "code/RSmol/text71427_ced_eval/submit.py": "e29818dd91b2efbdf722e70ff65682b0bd8d20546ecdfee6cf4233de1fb706a6"
+  },
+  "full_sized_fixture_coverage": {
+    "models": 6,
+    "reasonaqa5000": 6,
+    "mmau": 6,
+    "mmar": 6,
+    "mmsu": 6,
+    "inference": "explicit synthetic model/audio/parquet fixtures",
+    "bulk_fsync": "mocked; existing durable storage implementation unchanged"
+  },
+  "remote_gpu": "NOT_RUN",
+  "production_checkpoint_loading": "NOT_RUN",
+  "job_submission": "MOCK_ONLY",
+  "original_sources_protected": 3239,
+  "rm_history": {
+    "previous_bytes": 477501,
+    "previous_sha256": "421216210b767b3fbc40c2585836698f94641d6418e59a9a341f4324be3dac5b",
+    "preserved_as_exact_suffix": true
+  },
+  "git_sync_check": "git add --dry-run: all 22 new implementation/test/report files eligible; no staging/commit/push"
+}
