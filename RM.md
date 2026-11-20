@@ -1,3 +1,57 @@
+## 2026-11-20：7–14×2–7 / CED4、8 七槽只读初始化 / 两个循环前音频read / 独立LoRA r8
+
+按本会话用户最终确认，新增独立正式路线：
+`code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_lora_r8/`
+及入口`code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_lora_r8_3090.sh`。
+复制text71427 CED-small母本，沿用已有CED4/8特征与14层两轮LoRA实现；原路线和共享模型不改。
+104份母本/参考/入口/共享文件normalized-LF摘要见包内`protected_sources.sha256`。
+
+默认文本权重/config/tokenizer来源为
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_reinit1000_lr6e4_20261118_112042_3963870/checkpoint-009244`。
+先校验完成标记/config/全部FP32 safetensors/原六router及绑定embedding/head，再安装新分支；
+复核继承值及Parameter对象不变。只继承权重，音频optimizer等从step0开始，不读取文本training_state.pt。
+
+仍为28物理层/42次执行，schedule为0..6、7..20、7..20、21..27。
+每完整forward在prefix前初始化audio7 `[E,0,0,0,0,A4,A8]` 与SEP/text5 `[E,0,0,0,0]`。
+仅前126音频位置、prefix后/第一轮后（第二轮前）的read0/read1扩为七槽；文本read0/read1及全部read2保持原五槽。
+三个write均用原五槽参数并仅更新前五槽，A4/A8槽5/6整次forward只读，不重复注入/无gate或额外交互。
+prefix query/value均为prefix输出；循环交互query为该轮输入，write value为该轮输出。
+两个独立新read严格执行最终公式：W_new[:5]=W_text，b_new[:5]=b_text-log(2)，
+W_new[5/6]=W_text[0]，b_new[5/6]=b_text[0]（用户最后将原讨论中的bias[2]改为bias[0]）。
+同query原五槽内部相对分布保持，两新槽初始等权；组质量随query变化，用户明确接受不固定1/2、1/4、1/4。
+新增read共8,078参数；全部router共8模块/16张量/25,388参数。
+
+CED-small离线/冻结/eval，一次编码取得最终及完整block4/8输出（final norm前）；主mapper仍官方freq_merge_126。
+两个独立1536-576-576 MLP产生A4/A8，时频reshape正确，保留反向梯度；主mapper/MLP在no_grad外。
+仅物理层7..20的q/k/v/o/gate/up/down安装两轮独立LoRA，r8/alpha16/scale2/dropout0，A Kaiming/B零。
+原主干共享且全量训练，392矩阵/2,279,424参数；加两MLP2,443,776与两read8,078，总新增4,731,278。
+逐调用选择loop并finally复位，拒绝decoder gradient checkpointing与KV cache。
+
+资源pdgpu-3090/单节点8GPU/64CPU/256G；micro4×GA4=GBS128，hybrid1,477,492行，3epochs/34,626更新/warmup1,731。
+基础LM/原router最大LR3e-4；mapper/新MLP/read/LoRA6e-4。原FP32/GradScaler/AdamW/LambdaLR/GradNorm、
+683布局/EOS/PAD/answer-only shifted CE及rank-local token mean→GA4→DDP保持。
+独立output/log/index/tmpfs，CPU index及共享音频立即训练/后台复制/optimizer边界8rank集体切换、安全清理保持。
+直接formal，不附加smoke前置。保存每5771更新及epoch3最终文件。
+完整恢复绑定新路线代码/资产/数据/配方，保存所有分支、AdamW/scheduler/Scaler/GradNorm、8rank RNG和数据/审计游标，
+检查具名参数库存/顺序/LR/WD/步数和模型张量shape/dtype/finite，恢复后不重置新read或LoRA。
+前两步及每25步检查missing/nonfinite和LoRA轨迹；零梯度作诊断，B零时A任务梯度为零符合预期；无gate解锁期限。
+
+本地101项回归通过、9项真实张量检查因缺Torch/Torchaudio/Transformers/Soundfile/Safetensors明确跳过。
+实际源码NumPy前向核对三个交互、只读seed、完整重建、指定概率公式与RNG；
+实际checkpoint writer/八rank RNG字段、具名库存恢复拒绝、梯度审计、真实Bash+模拟vc提交、
+CPU index/后台复制/失败清理及原音频/文本回归通过，104份原源码摘要保持；Python3.10及Bash语法通过。
+Windows沙箱阻止临时目录/Bash后获准在沙箱外进行离线验证。
+报告`audit_reports/mizar_s1_text71427_ced48_audio7_read2_validation.json`。
+真实CPU autograd、生产checkpoint/数据、显存和8GPU训练未验证；未访问远程或提交作业，未commit/push。
+以下已有RM字节保留。完整模型/恢复说明见新包README；代码同步到GitHub后在远程执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_lora_r8_3090.sh
+```
+
+
 ## 2026-11-19：7–14×2–7 CED4/8 listen + 两轮独立LoRA r8，隔离GBS128正式音频路线
 
 按用户确认，复制3090/GBS128的text71427 CED-small母本，新增隔离包
