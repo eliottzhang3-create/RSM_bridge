@@ -1,3 +1,56 @@
+## 2026-11-20：7–14×2–7 CED4/8 原write value拼接融合，恒等初始化＋两轮独立LoRA r8
+
+按用户最终确认，从listen+LoRA母本完整复制隔离，新增
+`code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced48_wfuse_lora_r8/`
+及入口`code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced48_wfuse_lora_r8_3090.sh`。
+母本、共享模型、其他路线不改；142份已纳入Git的母本/参考/共享文件normalized-LF SHA保护。
+新快照及历史参考JSON明确放行Git同步；旧路线两份未跟踪snapshot不作为新路线验收依赖。
+
+默认仍严格继承
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_reinit1000_lr6e4_20261118_112042_3963870/checkpoint-009244`。
+完成标记/config/全部FP32 safetensors及原六router严格核验后再注册新模块，复核继承值/Parameter对象和embedding-head绑定。
+只加载文本权重/config/tokenizer，音频optimizer等从step0新建，不读文本training_state.pt。
+
+28物理层/42执行与五槽全683位置memory保持；原六router/12张量/17310参数保持。
+两套独立无bias Linear1152→576，输入顺序[边界音频hidden;对应CED MLP输出]，权重精确[I576,0]，整个矩阵训练。
+逻辑边界7：prefix输出前126位置与A4融合，作为write0 value；边界21：第一轮输出前126位置与A8融合，作为write1 value。
+write/read query完整沿用原规则：prefix用prefix output，循环用该轮input；第三次write value仍第二轮output。
+SEP/文本value不变，非原地构造value，不覆盖query/循环边界hidden；不保留额外listen router/gate或额外memory写入。
+初始融合等价原value，LoRA B零，数学上等价同文本权重/主mapper/输入的原五槽CED+MeSH；更新后不要求训练轨迹相同。
+
+CED冻结/eval，一次编码提取final与完整block4/8 norm前输出；正确时频排列、官方freq_merge_126主mapper、两独立1536-576-576 MLP保持。
+原392矩阵/2279424参数的两轮LoRA r8保持，基础W共享并全量训练；无KV，拒绝decoder gradient checkpointing。
+融合矩阵1327104、两MLP2443776，加LoRA相对普通71427 CED母本新增6050304；比listen母本多1320180。
+首步Encoder半矩阵可有任务梯度，因该半块初值零，两MLP首步任务梯度零是预期；零B时LoRA A梯度零同理。
+分别审计融合矩阵两半、原router及两轮LoRA；保留母本32次真实更新累计解锁并随checkpoint保存。
+metrics记录融合前后/变化RMS、Encoder半矩阵L2及hidden半矩阵偏离I的L2，不把WD变化当任务梯度。
+
+原hybrid1477492行、fixed20中心裁剪、EOS/PAD、683布局、answer-only shifted CE、rank-local token mean→GA4→DDP保持。
+pdgpu-3090/64CPU/256G/单节点8GPU，micro4×GA4=GBS128，3epochs/34626更新/warmup1731。
+LM/原router maxLR3e-4，mapper/MLP/fusion/LoRA6e-4；原FP32/GradScaler/AdamW/LambdaLR/GradNorm保持。
+原数据、CED/mapper、LoRA和staging源码逐字节继承；完整epoch更新循环仅分支诊断不同。
+独立output/log/index/tmpfs，保留CPU index、共享立即训练/后台复制/optimizer边界8rank集体切换和owner/token安全清理。
+直接formal，无新增smoke前置；每5771更新及epoch3最终保存。
+完整resume保存全部模型/分支、具名optimizer库存与顺序、scheduler/Scaler/GradNorm、8rank RNG及下一数据/审计游标，
+严格检查路线/代码/资产/数据/配方、LR/WD/步数、moment和模型张量shape/dtype/finite，不重置已训练融合矩阵。
+
+本地便携验收103项通过、21项真实张量测试缺Torch/Transformers/Torchaudio/Soundfile/Safetensors明确跳过。
+覆盖实际forward NumPy独立递推/初始等价/正确query与value范围、有限差分、初始化RNG、真实checkpoint writer的8rank字段、
+具名恢复拒绝、梯度解锁、Bash+模拟vc、CPU index/后台复制/失败清理、原音频和文本回归及Git可同步性。
+此前另跑20项需本地历史snapshot的旧路线回归通过，不计入最终便携验收103项。
+官方文本/RNG1344次、tokenize8组、34627个LR位置误差0、10000次GradNorm标量与mapper AST对照通过；142份原源码摘要保持。
+Python3.10/Bash语法通过；Windows沙箱阻止临时目录后，获准在沙箱外完成本地离线测试。
+报告`audit_reports/mizar_s1_text71427_ced48_wfuse_lora_r8_validation.json`及包内`reference_audit.json`。
+真实CPU autograd/生产checkpoint和数据、3090显存及8GPU训练未验证；未访问远程、提交真实作业或commit/push。
+本条仅前置，以下既有RM字节完整保留；模型、输出、完整恢复和精确Git同步命令见新包README。
+GitHub同步后远程执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced48_wfuse_lora_r8_3090.sh
+```
+
 ## 2026-11-20：audio7 read2隔离六个独立音频routers，五槽write/read2与七槽read0/1，全部LR6e-4
 
 按用户确认计划完整复制母本audio7_read2，新增独立包
