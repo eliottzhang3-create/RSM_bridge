@@ -1,3 +1,50 @@
+## 2026-11-20：audio7 read2隔离六个独立音频routers，五槽write/read2与七槽read0/1，全部LR6e-4
+
+按用户确认计划完整复制母本audio7_read2，新增独立包
+`code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_ar6_lora_r8/`
+及入口`code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_ar6_lora_r8_3090.sh`。
+ar6表示六个独立audio routers。母本、原入口及共享文本模型不改，144份原文件normalized-LF SHA保护。
+
+仍严格继承文本来源
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_reinit1000_lr6e4_20261118_112042_3963870/checkpoint-009244`。
+先核验完成标记/config/tokenizer、全部FP32 safetensors及原六router，再安装音频副本与LoRA；
+复核原tensor值、Parameter对象及embedding/head绑定。只继承权重，音频optimizer等从step0新建，不读文本training_state.pt。
+三个audio write分别完整复制原write0/1/2，audio read2完整复制原read2的weight/bias；
+audio read0/1仍按母本扩展七槽：W[:5]=W_text，b[:5]=b_text-log(2)，两新行均取W_text[0]/b_text[0]。
+十二个router模块/24张量存储完全独立，CPU fork_rng保持外部RNG；实际loader逐张量检查六个音频分支初值。
+
+每forward prefix前仍初始化audio7 `[E,0,0,0,0,A4,A8]`、SEP/text5 `[E,0,0,0,0]`。
+前126位置的三个write均为独立五槽，只写前五槽；read维度7/7/5；位置126起由原六个五槽text routers处理。
+A4/A8槽5/6整次forward只读；prefix query/value均为prefix输出，循环query取该轮输入、write value取该轮输出。
+用户明确选择全部六个audio router最大LR6e-4，文本router/基础LM仍3e-4；
+因此相对母本同时改变四处参数共享与其音频副本的LR。audio routers共19,618参数，全部routers36,928；
+较母本额外11,540；加两MLP/两轮LoRA共新增4,742,818，主mapper另计。
+
+CED/mapper/两MLP/392矩阵LoRA及28物理层42执行保持；完整trainer AST只允许router审计及报告计数变化。
+原hybrid1,477,492行、fixed20、683布局、EOS/PAD、answer-only CE、rank-local token mean→GA4→DDP保持。
+FP32/GradScaler/AdamW/LambdaLR/GradNorm保持；pdgpu-3090/64CPU/256G/8GPU，micro4×GA4=GBS128，
+3epochs/34626更新/warmup1731、每5771更新及epoch3最终保存保持。直接formal，无额外smoke前置。
+独立route/output/log/index/tmpfs；保留CPU index、共享音频立即训练/后台复制/optimizer边界8rank共同切换及owner/token安全清理。
+完整resume保存全部audio routers及原模型/分支、具名optimizer库存、scheduler/Scaler/GradNorm、8rank RNG和数据/审计游标；
+拒绝母本或其他路线完整恢复，严格检查新增六角色/6e-4、24个router梯度及模型库存，恢复后不重置初值。
+
+本地`python -B tests/validate_mizar_s1_text71427_ced48_audio7_read2_ar6.py`：142项执行通过、20项真实张量缺依赖明确跳过。
+其中新路线41项通过/11项跳过，包含原母本及相关路线回归；实际源码NumPy初始前向对齐、
+十二router局部分支独立扰动、六audio router有限差分、正确query/只读seed、实际优化器分组、
+24张量梯度审计、全状态writer/八rank RNG/恢复拒绝、真实Bash模拟vc、CPU index/后台复制/失败清理通过。
+144份原源码摘要保持，Python3.10及Bash语法通过；Windows沙箱阻止临时目录后获准沙箱外离线验证。
+报告`audit_reports/mizar_s1_text71427_ced48_audio7_read2_ar6_validation.json`及包内`reference_audit.json`。
+真实CPU用例另覆盖HF分片加载/初值/独立存储、683位置反传/局部梯度隔离、具名优化器/GradNorm/RNG下一步恢复，
+本机缺Torch/Transformers/Torchaudio/Soundfile/Safetensors未执行，不能记为真实GPU PASS。
+未访问生产权重/数据、提交真实作业或commit/push。RM仅前置，以下旧内容字节完整保留。
+本地Git提交、模型配置、输出与同run完整恢复命令见新包README。GitHub同步后远程执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_ar6_lora_r8_3090.sh
+```
+
 ## 2026-11-20：7–14×2–7 / CED4、8 七槽只读初始化 / 两个循环前音频read / 独立LoRA r8
 
 按本会话用户最终确认，新增独立正式路线：

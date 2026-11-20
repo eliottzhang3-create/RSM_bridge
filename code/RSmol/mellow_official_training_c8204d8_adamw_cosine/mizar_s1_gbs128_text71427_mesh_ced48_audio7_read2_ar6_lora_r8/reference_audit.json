@@ -1,0 +1,256 @@
+{
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "date": "2026-11-20",
+  "route": "ced_small_mizar_s1_fixed20_gbs128_text71427_mesh_ced48_audio7_read2_ar6_lora_r8_v1",
+  "scope": "local source and synthetic fixtures; no production assets, CUDA or job submission",
+  "code_sha256": "21f4b3226d7677f30810478b1bc1843d90dd457e005ec5b6128d7b18307fce8d",
+  "source_inheritance": {
+    "status": "PASS_LOCAL_SOURCE",
+    "protected_files": 144,
+    "direct_mother": "mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_lora_r8",
+    "unchanged_mother_files": [
+      ".gitignore",
+      "check_ced_assets.py",
+      "check_text_assets.py",
+      "data/audio_paths.py",
+      "data/audiotext_dataset.py",
+      "data/fixed20.py",
+      "data/indexed_jsonl.py",
+      "data/prepared_index.py",
+      "data/sampler.py",
+      "data/staging.py",
+      "data/template.py",
+      "LICENSE",
+      "licenses/Mizar-ClearBSD.txt",
+      "models/audio.py",
+      "models/ced.py",
+      "models/ced_offline.py",
+      "models/decoder.py",
+      "models/loop_lora.py",
+      "models/mellow.py",
+      "NOTICE",
+      "prepare_index.py",
+      "runtime_checks.py",
+      "stage_data.py",
+      "utils/audio_io.py",
+      "write_config.py"
+    ],
+    "training_update_checkpoint_rng_equal": true,
+    "transformer_and_lora_forward_equal": true,
+    "unchanged_data_staging_files": [
+      "prepare_index.py",
+      "stage_data.py",
+      "write_config.py",
+      "models/audio.py",
+      "models/ced_offline.py",
+      "utils/audio_io.py",
+      "data/audiotext_dataset.py",
+      "data/audio_paths.py",
+      "data/fixed20.py",
+      "data/indexed_jsonl.py",
+      "data/prepared_index.py",
+      "data/sampler.py",
+      "data/staging.py",
+      "data/template.py"
+    ],
+    "numeric_functions_equal": {
+      "contract.py": [
+        "geometry",
+        "lr_factor",
+        "data_order",
+        "rank_seed",
+        "raw_references",
+        "validate_ced_assets",
+        "validate_ced_config",
+        "validate_checkpoint_tokenizer",
+        "validate_tokenizer_contract",
+        "recursive_checkpoint_contract"
+      ],
+      "train.py": [
+        "answer_loss",
+        "move_batch",
+        "rng_state",
+        "restore_rng",
+        "inspect_tokenizer"
+      ],
+      "optim.py": [
+        "track_and_clip_",
+        "_clip_grad"
+      ]
+    },
+    "gpu_training_verified": false
+  },
+  "validation": {
+    "executed_tests": 142,
+    "skipped_tests": 20,
+    "missing_dependencies": [
+      "torch",
+      "torchaudio",
+      "transformers",
+      "soundfile",
+      "safetensors"
+    ]
+  },
+  "validation_report": "audit_reports/mizar_s1_text71427_ced48_audio7_read2_ar6_validation.json",
+  "audio_router_contract": {
+    "ced_layers_1based": [
+      4,
+      8
+    ],
+    "capture": "complete_block_output_before_final_norm",
+    "placement": "initialize_once_before_prefix",
+    "audio_positions": [
+      0,
+      126
+    ],
+    "audio_initial_slots": [
+      "embedding",
+      0,
+      0,
+      0,
+      0,
+      "A4",
+      "A8"
+    ],
+    "audio_read_indices_0based": [
+      0,
+      1
+    ],
+    "audio_read_slots": [
+      7,
+      7,
+      5
+    ],
+    "text_read_slots": [
+      5,
+      5,
+      5
+    ],
+    "write_slots": [
+      5,
+      5,
+      5
+    ],
+    "seed_slots_read_only": [
+      5,
+      6
+    ],
+    "gates": false,
+    "reinjection": false,
+    "old_weight": "copy_all_five_rows",
+    "old_bias_offset": -0.6931471805599453,
+    "new_weight_source_row": 0,
+    "new_bias_source_row": 0,
+    "initial_group_mass": "query_dependent_old_relative_distribution_preserved_new_two_equal",
+    "independent_audio_read_routers": true,
+    "independent_audio_write_routers": true,
+    "audio_text_router_parameter_sharing": false,
+    "independent_per_stage": true,
+    "audio_write_slots": [
+      5,
+      5,
+      5
+    ],
+    "text_write_slots": [
+      5,
+      5,
+      5
+    ],
+    "five_slot_audio_initialization": "exact_weight_bias_copy_of_corresponding_text_checkpoint_router",
+    "audio_write_source_indices": [
+      0,
+      1,
+      2
+    ],
+    "audio_read_source_indices": [
+      0,
+      1,
+      2
+    ],
+    "audio_router_max_lr": 0.0006,
+    "text_router_max_lr": 0.0003,
+    "added_router_parameters": 19618,
+    "extra_parameters_over_read2_mother": 11540,
+    "total_router_modules": 12,
+    "total_router_tensors": 24,
+    "total_router_parameters": 36928,
+    "prefix_query_value": "prefix_output",
+    "loop_query": "loop_input",
+    "loop_value": "loop_output",
+    "grid": [
+      126,
+      4,
+      384
+    ],
+    "mlp": [
+      1536,
+      576,
+      576
+    ],
+    "mlp_dropout": 0.0,
+    "mlp_structure": "LayerNorm_Linear_GELU_Linear_LayerNorm",
+    "independent_mlps": true,
+    "encoder_forwards_per_batch": 1,
+    "max_lr": 0.0006,
+    "added_parameters_with_lora": 4742818
+  },
+  "loop_lora_contract": {
+    "contract": "two_independent_loop_lora_on_shared_trainable_middle_v1",
+    "physical_layers_0based": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20
+    ],
+    "logical_ranges_0based_inclusive": [
+      [
+        7,
+        20
+      ],
+      [
+        21,
+        34
+      ]
+    ],
+    "targets": [
+      "self_attn.q_proj",
+      "self_attn.k_proj",
+      "self_attn.v_proj",
+      "self_attn.o_proj",
+      "mlp.gate_proj",
+      "mlp.up_proj",
+      "mlp.down_proj"
+    ],
+    "rank": 8,
+    "alpha": 16,
+    "scale": 2.0,
+    "dropout": 0.0,
+    "loops": 2,
+    "A_init": "kaiming_uniform_a_sqrt5",
+    "B_init": "zeros",
+    "initialization_rng": "isolated_cpu",
+    "base_trainable": true,
+    "shared_base_between_loops": true,
+    "independent_per_layer_projection_loop": true,
+    "prefix_suffix_lora": false,
+    "positions": "full_sequence",
+    "max_lr": 0.0006,
+    "weight_decay": 0.01,
+    "new_parameters": 2279424,
+    "use_cache": false,
+    "gradient_checkpointing": false,
+    "merge_adapters": false
+  },
+  "production_checkpoint_loaded": false,
+  "gpu_training_verified": false
+}
