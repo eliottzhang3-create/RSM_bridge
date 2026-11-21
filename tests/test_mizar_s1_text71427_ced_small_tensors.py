@@ -161,5 +161,70 @@ class TensorTests(unittest.TestCase):
             self.assertEqual(scheduler.state_dict(), other_sched.state_dict())
             self.assertEqual(tracker.state_dict(), other_tracker.state_dict())
 
+    def make_audio_wrapper(self):
+        model = nn.Module()
+        model.caption_decoder = nn.Module(); model.caption_decoder.lm = copy.deepcopy(self.model)
+        model.audio_encoder = nn.Module(); model.audio_encoder.base = nn.Module()
+        model.audio_encoder.base.mapper = nn.Linear(16, 16)
+        model.audio_encoder.base.ced = nn.Linear(4, 4).requires_grad_(False).eval()
+        return model
+
+    def test_audio_weights_only_inherit_projector_lm_routers_then_two_new_updates(self):
+        import audio_initialization as I
+        from test_mizar_s1_text71427_audio_reinit import source_fixture
+        model = self.make_audio_wrapper()
+        with torch.no_grad():
+            model.audio_encoder.base.mapper.weight.fill_(.123)
+            model.caption_decoder.lm.model.write_routers[0].weight.add_(.05)
+        trained = copy.deepcopy(model.state_dict())
+        with tempfile.TemporaryDirectory() as directory:
+            path, header = source_fixture(Path(directory))
+            header.update(state_dict=trained, optimizer={"stale_lr": .9}, scheduler={"last_epoch": 34626},
+                          random_state_by_rank=["old rng"], epoch=3, next_optimizer_step=0)
+            torch.save(header, path)
+            source = I.inspect_audio_source(path, fingerprint=True)
+            fresh = self.make_audio_wrapper()
+            fresh.audio_encoder.base.ced.load_state_dict(model.audio_encoder.base.ced.state_dict())
+            audit = I.initialize_audio_weights(fresh, source)
+            self.assertTrue(audit["all_model_tensors_equal"])
+            self.assertEqual(audit["trained_router_tensors"], 12)
+            self.assertFalse(audit["restored_training_state"])
+            for key, value in trained.items(): self.assertTrue(torch.equal(value, fresh.state_dict()[key]), key)
+            optimizer, scheduler, groups = build_optimizer(fresh, 34626)
+            self.assertEqual(len(optimizer.state), 0)
+            self.assertEqual(scheduler.last_epoch, 0)
+            self.assertEqual({group["base_lr"] for group in groups}, {2e-4})
+            for group in optimizer.param_groups: self.assertAlmostEqual(group["lr"], 2e-5)
+            tracker = GradNormTracker()
+            for _ in range(2):
+                optimizer.zero_grad(set_to_none=True)
+                embeddings = fresh.caption_decoder.lm.get_input_embeddings()(self.ids)
+                mapped = fresh.audio_encoder.base.mapper(torch.ones_like(embeddings))
+                output = fresh.caption_decoder.lm(inputs_embeds=embeddings + mapped, use_cache=False)
+                loss = torch.nn.functional.cross_entropy(output.logits[:, :-1].reshape(-1, 43), self.ids[:, 1:].reshape(-1))
+                loss.backward(); tracker.track_and_clip_(fresh.named_parameters()); optimizer.step(); scheduler.step()
+            self.assertEqual(scheduler.last_epoch, 2)
+            for prefix in ("audio_encoder.base.mapper.", "caption_decoder.lm.model.write_routers.", "caption_decoder.lm.model.layers."):
+                self.assertTrue(any(not torch.equal(value, fresh.state_dict()[key]) for key, value in trained.items() if key.startswith(prefix)))
+            unchanged = torch.load(path, map_location="cpu", weights_only=False)
+            self.assertEqual(unchanged["total_step"], 34626)
+            for key, value in trained.items(): self.assertTrue(torch.equal(value, unchanged["state_dict"][key]))
+
+    def test_audio_weights_reject_missing_projector_dtype_nonfinite_and_tied_conflict(self):
+        import audio_initialization as I
+        from test_mizar_s1_text71427_audio_reinit import source_fixture
+        model = self.make_audio_wrapper()
+        with tempfile.TemporaryDirectory() as directory:
+            path, header = source_fixture(Path(directory))
+            source = I.inspect_audio_source(path)
+            for case in ("missing_projector", "dtype", "nonfinite", "tied"):
+                bad = dict(header, state_dict={key: tensor.clone() for key, tensor in model.state_dict().items()})
+                state = bad["state_dict"]
+                if case == "missing_projector": del state["audio_encoder.base.mapper.weight"]
+                elif case == "dtype": state["audio_encoder.base.mapper.weight"] = state["audio_encoder.base.mapper.weight"].double()
+                elif case == "nonfinite": state["audio_encoder.base.mapper.bias"][0] = float("nan")
+                else: state["caption_decoder.lm.lm_head.weight"].add_(1)
+                with self.subTest(case=case), self.assertRaises(ValueError): I.inherit_model_state(model, bad, source)
+
 
 if __name__ == "__main__": unittest.main()

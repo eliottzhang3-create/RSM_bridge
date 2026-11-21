@@ -1,12 +1,11 @@
 {
   "status": "PASS",
-  "route_code_sha256": "ce8fadec907c7c7f7084c491b7784828ef779abaf0b515a33563bbffd2f9b378",
+  "route_code_sha256": "4650268516dbe0eae9f6f2a17d2593444658d053cc39e1d1d22e2fa828cc0bde",
   "reference": "kaiyangli-ml/Mizar_159M local official download",
   "parent_route_audit": {
     "identical_files_normalized_lf": [
       "prepare_index.py",
       "utils/audio_io.py",
-      "optim.py",
       "models/audio.py",
       "models/ced.py",
       "models/ced_offline.py",
@@ -34,6 +33,13 @@
         "role_snapshots",
         "inspect_tokenizer"
       ],
+      "optim.py": [
+        "parameter_role",
+        "_clip_grad",
+        "track_and_clip_",
+        "state_dict",
+        "load_state_dict"
+      ],
       "contract.py": [
         "geometry",
         "data_order",
@@ -47,9 +53,9 @@
         "validate_tokenizer_contract"
       ]
     },
+    "authorized_recipe_changes": "uniform max_lr2e-4/min_lr2e-5; optional complete audio model/projector weights initialization",
     "optimizer_epoch_loop": "identical except first-backward recursive diagnostics",
     "identical_common_contract_fields": [
-      "adamw",
       "answer_tokens",
       "attention_mask",
       "audio_encoder",
@@ -84,7 +90,6 @@
     "identical_files_normalized_lf": [
       "prepare_index.py",
       "utils/audio_io.py",
-      "optim.py",
       "models/audio.py",
       "models/ced.py",
       "models/ced_offline.py",
@@ -112,6 +117,13 @@
         "role_snapshots",
         "inspect_tokenizer"
       ],
+      "optim.py": [
+        "parameter_role",
+        "_clip_grad",
+        "track_and_clip_",
+        "state_dict",
+        "load_state_dict"
+      ],
       "contract.py": [
         "geometry",
         "data_order",
@@ -125,9 +137,9 @@
         "validate_tokenizer_contract"
       ]
     },
+    "authorized_recipe_changes": "uniform max_lr2e-4/min_lr2e-5; optional complete audio model/projector weights initialization",
     "optimizer_epoch_loop": "identical except first-backward recursive diagnostics",
     "identical_common_contract_fields": [
-      "adamw",
       "answer_tokens",
       "attention_mask",
       "audio_encoder",

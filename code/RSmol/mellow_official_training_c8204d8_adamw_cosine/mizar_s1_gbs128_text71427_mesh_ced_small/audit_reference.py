@@ -38,7 +38,7 @@ def execute(nodes, scope):
 
 def audit_parent():
     parent = ROOT.with_name("mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small")
-    unchanged = ["prepare_index.py", "utils/audio_io.py", "optim.py",
+    unchanged = ["prepare_index.py", "utils/audio_io.py",
                  "models/audio.py", "models/ced.py", "models/ced_offline.py",
                  "models/mellow.py", "models/decoder.py"]
     unchanged += [p.relative_to(ROOT).as_posix() for p in sorted((ROOT / "data").glob("*.py"))]
@@ -50,6 +50,7 @@ def audit_parent():
         raise ValueError("parent staging implementation changed")
     pairs = {"train.py": ("answer_loss", "move_batch", "rng_state", "restore_rng", "save_checkpoint", "reload_audit",
                           "validate_trainable_model", "first_gradient_audit", "role_snapshots", "inspect_tokenizer"),
+             "optim.py": ("parameter_role", "_clip_grad", "track_and_clip_", "state_dict", "load_state_dict"),
              "contract.py": ("geometry", "data_order", "rank_seed", "raw_references", "lr_factor",
                              "ced_label_metadata", "validate_ced_config", "validate_ced_assets",
                              "validate_checkpoint_tokenizer", "validate_tokenizer_contract")}
@@ -84,7 +85,7 @@ def audit_parent():
     expected = scope["semantic_contract"](prepared, "synthetic_text", "synthetic_ced")
     actual = semantic_contract(prepared, "synthetic_text", "synthetic_ced")
     differences = {"route", "code_sha256", "recursive_model_source_sha256", "geometry",
-                   "text_model_contract", "text_model_architecture", "text_model_schedule"}
+                   "text_model_contract", "text_model_architecture", "text_model_schedule", "adamw"}
     common = sorted(set(expected) - differences)
     for key in common:
         if expected[key] != actual[key]:
@@ -96,6 +97,7 @@ def audit_parent():
         if actual_sha != expected_sha:
             raise ValueError(f"protected source changed: {name}")
     return {"identical_files_normalized_lf": unchanged, "identical_function_asts": pairs,
+            "authorized_recipe_changes": "uniform max_lr2e-4/min_lr2e-5; optional complete audio model/projector weights initialization",
             "optimizer_epoch_loop": "identical except first-backward recursive diagnostics",
             "identical_common_contract_fields": common,
             "protected_source_files": len(snapshot["sha256_normalized_lf"])}

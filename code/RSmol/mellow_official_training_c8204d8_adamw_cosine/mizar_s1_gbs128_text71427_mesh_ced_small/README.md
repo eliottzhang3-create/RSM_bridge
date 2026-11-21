@@ -8,10 +8,10 @@
 
 ## 正式提交
 
-默认精确读取用户指定的已完成文本checkpoint：
+2026-11-21起，默认从用户指定的已完成音频checkpoint初始化完整模型和projector：
 
 ```text
-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/formal_reinit1000_lr6e4_20261118_112042_3963870/checkpoint-009244
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_20261119_141531507533438/formal/checkpoints/model--step-34626.ckpt
 ```
 
 在代码已经commit/push到GitHub后，于远程仓库根执行：
@@ -26,13 +26,13 @@ bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh
 
 ```bash
 bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_$(date +%Y%m%d_%H%M%S)
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_reinit34626_lr2e4_$(date +%Y%m%d_%H%M%S)
 ```
 
 入口在登录节点只做CPU JSON/完成标记/CED配置校验及索引准备，然后通过`vc submit`申请
 `pdgpu-3090 / 单节点8 GPU / CPU64 / 256G`，使用原项目镜像、`mellow_c8204d8`环境。
 GPU任务在计算节点通过torchrun启动。正式入口直接formal，无独立smoke或审查报告前置要求。
-完整job名含后缀小于60字符。支持与母本相同的路径覆盖和`--stage-workers`参数。
+完整job名含后缀小于60字符。支持路径覆盖、`--stage-workers`及`--init-checkpoint`参数。
 
 ## 模型与初始化
 
@@ -41,13 +41,17 @@ GPU任务在计算节点通过torchrun启动。正式入口直接formal，无独
   `0..6, 7..20, 7..20, 21..27`。hidden576、vocab49152、embedding/head绑定。
 - 五槽MeSH覆盖完整683位置。前段后、每轮中段后各一组write/read，共六模块、12参数张量、17,310参数。
   保留原模型的查询位置、memory初始化/写读规则；已训练routers完整继承，不重新初始化。
-- 9244是来源步数。仅加载其模型/config/tokenizer，音频optimizer step0起重新训练。
-  不读取`training_state.pt`，不继承文本AdamW、scheduler、Scaler、RNG或数据游标，不需重新转换。
-- 校验来源JSON和完成标记；HF loading_info不得有missing/unexpected/mismatched/errors。
-  加载后逐张量核对全部safetensors与模型值精确一致，记录12个来源router SHA256。
-  只允许safetensors因embedding/head绑定省略一个别名。
+- 先用原文本checkpoint-009244/config/tokenizer及CED资产构造同一结构，再于CPU严格加载
+  音频checkpoint-34626的完整state_dict；所有LM、已训练router和projector最终值均来自后者。
+  文本assets路径仍为原`formal_reinit1000_lr6e4_20261118_112042_3963870/checkpoint-009244`。
+- 34626只表示来源步数。新建AdamW、scheduler、Scaler、GradNorm、RNG和数据游标，
+  optimizer step0起重新warmup并完成全新34,626次更新；不继承来源的epoch3/动量/调度状态。
+- CPU预检核对同run的`formal/runtime.json`及其合同，计算节点用checkpoint SHA256绑定来源；
+  mmap读取后只使用模型state_dict，不恢复旧训练状态。严格核对完整key/shape/dtype/finite、
+  已冻结CED资产值、embedding/head别名一致及Parameter绑定，加载后全部张量逐值相等。
+  来源旧LR/源码身份只作历史来源记录，不要求与新训练配方相同。
 - CED-small资产固定`/hpc_stor03/sjtu_home/jinwei.zhang/models/CED_small`，严格离线加载，冻结全部参数且保持eval。
-- mapper从头初始化并训练。结构保留官方`freq_merge_126`：384维×4频率格，输出126×576；
+- mapper继承音频checkpoint已训练权重并继续训练。结构保留官方`freq_merge_126`：384维×4频率格，输出126×576；
   dropout0.05、resample=False，外置projection为Identity。完整LM和routers全量训练。
 
 ## 输入与数据协议
@@ -84,15 +88,15 @@ GPU任务在计算节点通过torchrun启动。正式入口直接formal，无独
 | Batch | 8 GPU × micro4 × GA4 = GBS128 |
 | Epochs / steps | 3 / 每epoch11,542 / 总34,626 |
 | 每epoch丢弃尾部 | 116行 |
-| 最大LR | 全LM/router3e-4，mapper6e-4 |
+| 最大/最小LR | 所有可训练参数统一max2e-4、min2e-5，包括LM、router和projector |
 | Scheduler | 原LambdaLR；warmup1,731步；cosine floor0.1；step0至少0.1×max LR |
 | AdamW | betas(0.9,0.999)，eps1e-8，WD0.01；bias和ndim≤1不衰减 |
 | 精度 | FP32 forward/参数；原GradScaler；无autocast、无TF32 |
 | 梯度 | 原GradNormTracker(1,10,2.5,0.995)，保留原异常终止 |
 | Seed | 1234；各rank1234+rank |
 
-来源文本run名中的`lr6e4`仅描述文本训练，音频LM最大LR仍按母本为3e-4。
-本次不继承文本run的BF16/GBS1024/数据管线。
+来源旧音频run使用LM3e-4、mapper6e-4；本次统一改为2e-4/2e-5。
+保持原FP32/GBS128/数据管线，来源文本run名中的`lr6e4`不参与新LR配置。
 
 CPU索引完成后，计算节点立即通过共享路径读音频，同时默认4线程后台复制原始字节；
 全部完成后，在optimizer边界以8rank MIN共同切换到本地。保留producer健康检查、精确游标及失败处理。
@@ -105,7 +109,7 @@ CPU索引完成后，计算节点立即通过共享路径读音频，同时默�
 默认输出run root：
 
 ```text
-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_<timestamp>
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_reinit34626_lr2e4_<timestamp>
 ```
 
 checkpoint位于`<run-root>/formal/checkpoints/`，六等分保存：
@@ -115,19 +119,24 @@ checkpoint保留模型、optimizer、scheduler、GradScaler、GradNorm、8rank R
 中断后用**同一个run root**和这条音频路线的完整checkpoint恢复，例如：
 
 ```bash
-RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_REPLACE_WITH_ACTUAL_RUN
+RUN_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_reinit34626_lr2e4_REPLACE_WITH_ACTUAL_RUN
 bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh \
   --output-dir "$RUN_ROOT" \
   --resume-checkpoint "$RUN_ROOT/formal/checkpoints/model--step-5771.ckpt"
 ```
 
-`--text-model-dir`始终表示文本权重初始化来源；`--resume-checkpoint`只接受本音频路线的完整formal状态。
-恢复严格匹配架构、代码及共享依赖、来源资产、数据和训练合同，拒绝旧GBS256/旧骨干checkpoint。
+`--init-checkpoint`表示只加载音频模型/projector权重并重新训练；`--text-model-dir`提供结构/bootstrap和tokenizer。
+显式`--init-checkpoint ''`可回到仅文本权重的新训练，LR仍为本次2e-4/2e-5。
+`--resume-checkpoint`只接受新配方同run的完整formal状态，优先恢复全模型及训练状态，跳过权重重新初始化。
+恢复需保持相同`--init-checkpoint`来源以匹配合同。旧LR配方checkpoint可用于权重初始化，不能作为本配方完整resume。
+当前源码有修改，旧run的严格源码审计/评测应使用与其保存时匹配的Git版本。
 
 正式任务内部自动记录来源继承/布局/实际42次执行和完整memory形状；首次反传记录两轮中段边界梯度、
 12个router梯度、冻结CED及mapper/LM更新。边界梯度仅首次microbatch保留，随后释放。
 报告包括`runtime.json`、`config_audit.json`、`first_recursive_backward_rank<N>.json`、
 `first_gradient_rank<N>.json`、`metrics.jsonl`和最终`training_report.json`。
+`runtime.json`记录audio_initialization来源SHA/步数；`config_audit.json`的model_initialization记录实际加载模式、
+projector/router数量及逐张量相等，日志打印`AUDIO_WEIGHTS_INIT_PASS`。text_initialization仅为构造阶段文本bootstrap记录。
 这些诊断是正式任务内部检查，不是额外smoke作业。
 
 ## 本地核查
@@ -137,11 +146,12 @@ python -B tests/validate_mizar_s1_text71427_ced_small.py
 ```
 
 本地结果见`audit_reports/mizar_s1_text71427_ced_small_validation.json`。
-58项已执行通过；31项真实张量/音频依赖检查因本机缺Torch等明确跳过。
+64项已执行通过；33项真实张量/音频依赖检查因本机缺Torch等明确跳过。
 通过项包含实际Bash+模拟vc参数流、后台复制/失败清理、CPU index及原音频/文本路线回归。
 官方函数对照包含1,344次文本/RNG、8组tokenize参数、34,627个scheduler位置、10,000次GradNorm标量比较；
 mapper类AST与原实现一致，35份母本/共享模型文件SHA保持。
 
 在有完整ML依赖的环境可加`--require-tensors`，缺依赖或跳过即失败；此选项不接入formal入口。
-新增真实小模型测试覆盖逐张量继承/拒绝缺router、42次执行/683位置、两轮梯度、answer shift及完整状态恢复。
+新增真实小模型测试还覆盖音频projector/LM/router逐张量继承、旧状态不恢复、空optimizer/step0、
+两次新训练及来源文件保护；拒绝缺projector、错误dtype、nonfinite和冲突tied别名。
 本地代码检查不能证明远程权重已加载成功、GPU显存足够或34,626步已完成；实际结果由远程formal报告确认。

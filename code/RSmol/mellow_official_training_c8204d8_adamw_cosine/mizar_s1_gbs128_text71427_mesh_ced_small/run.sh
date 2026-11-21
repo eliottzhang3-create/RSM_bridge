@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-[[ $# == 7 || $# == 8 ]] || { echo "run via code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh" >&2; exit 2; }
+[[ $# == 7 || $# == 8 || $# == 9 ]] || { echo "run via code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh" >&2; exit 2; }
 MODE=$1
 RESOLVED_PATHS=$(readlink -f "$2")
 OUTPUT_ROOT=$(readlink -m "$3")
@@ -9,6 +9,7 @@ TEXT_MODEL_DIR=$(readlink -f "$5")
 CED_MODEL_DIR=$(readlink -f "$6")
 PREPARED_INDEX=$7
 STAGE_WORKERS=${8:-4}
+INIT_CHECKPOINT=${9:-}
 ROUTE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 MANIFEST=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json
 [[ "$MODE" == formal ]] || { echo "this route runs formal training only" >&2; exit 2; }
@@ -65,6 +66,9 @@ run_one() {
     --run-dir "$run_dir" --mode "$run_mode" --text-model-dir "$TEXT_MODEL_DIR" --ced-model-dir "$CED_MODEL_DIR")
   if [[ -n "$RESUME_CHECKPOINT" ]]; then
     config_args+=(--resume-checkpoint "$RESUME_CHECKPOINT")
+  fi
+  if [[ -n "$INIT_CHECKPOINT" ]]; then
+    config_args+=(--init-checkpoint "$INIT_CHECKPOINT")
   fi
   python write_config.py "${config_args[@]}"
   torchrun --standalone --nnodes=1 --nproc_per_node=8 train.py --config "$run_dir/runtime.json"

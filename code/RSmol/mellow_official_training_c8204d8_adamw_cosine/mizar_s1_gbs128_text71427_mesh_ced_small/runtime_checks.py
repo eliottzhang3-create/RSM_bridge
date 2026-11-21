@@ -345,7 +345,7 @@ class RuntimeChecks(unittest.TestCase):
 
         model = make_model()
         optimizer, scheduler, audit = build_optimizer(model, 200)
-        self.assertEqual({x["base_lr"] for x in audit}, {3e-4, 6e-4})
+        self.assertEqual({x["base_lr"] for x in audit}, {2e-4})
         self.assertEqual({x["weight_decay"] for x in audit}, {0., .01})
         for group, description in zip(optimizer.param_groups, audit):
             self.assertAlmostEqual(group["lr"], description["base_lr"] * .1)

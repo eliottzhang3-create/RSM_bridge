@@ -1,3 +1,42 @@
+## 2026-11-21：普通71427 CED音频从step34626仅权重重训3epochs，全局LR2e-4/2e-5
+
+按用户要求直接修改现有`code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh`及其配套训练代码，
+默认`--init-checkpoint`为：
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_20261119_141531507533438/formal/checkpoints/model--step-34626.ckpt`。
+这是新一轮训练：完整继承音频projector、全部LM/已训练routers及冻结CED，重新建立optimizer/scheduler/
+GradScaler/GradNorm/RNG/数据游标，从step0重新warmup1731并完整训练3epochs、34626更新。
+来源34626/epoch3只作权重来源记录，不跳过本轮训练，不恢复其AdamW动量、LR、RNG等训练状态。
+
+所有可训练参数（LM/router/projector）统一max_lr=2e-4、min_lr=2e-5，不再对mapper使用两倍LR。
+原8GPU×micro4×GA4=GBS128、pdgpu-3090/64CPU/256G/单节点、镜像和mellow_c8204d8、
+FP32/原GradScaler/AdamW/GradNorm/LambdaLR、S1 prompt和answer EOS、fixed20中心裁剪、数据及staging保持。
+默认新run目录为`formal_reinit34626_lr2e4_<timestamp>`；保存点仍5771/11542/17313/23084/28855/34626和epoch3。
+
+新增包内audio_initialization.py：登录CPU只读源run的formal/runtime.json/合同/文件metadata，不反序列化权重；
+计算节点绑定checkpoint/runtime SHA和来源步数，CPU mmap checkpoint后只使用state_dict，在优化器创建前strict加载。
+逐张量校验完整inventory/shape/dtype/finite、冻结CED与配置assets一致、embedding/head源值及绑定、12router及projector完整；
+加载后全部模型值精确相等，记录AUDIO_WEIGHTS_INIT_PASS和model_initialization。
+来源旧LR和源码hash允许与新配方不同，但checkpoint内部合同SHA必须与其自己同run runtime一致；
+缺失/错误架构、分支模型、伪造步数或矛盾别名均拒绝。文本9244仍作结构/tokenizer bootstrap，最终值由音频权重覆盖。
+--resume-checkpoint仍为本次新配方同run完整恢复（须相同init来源），不会重新执行权重初始化；
+旧配方checkpoint只可用于权重初始化，完整恢复/严格历史评测须用与其保存时匹配的Git源码版本。
+
+本地回归64项通过，33项真实Torch/Transformers/Torchaudio等依赖测试明确跳过。
+新增权重初始化/源合同、final checkpoint可作为新起点、统一LR实际分组与起终点、config绑定和Bash参数链验证；
+新增两项真实小模型测试覆盖projector/LM/router继承、旧状态不恢复、新optimizer/step0及两步新训练、
+缺张量/dtype/nonfinite/tied冲突和源文件保护，本机缺依赖未执行。
+3187份本任务范围外tracked源码LF SHA保持，原文本模型/其他训练分支/评测源码不改；Python3.10/Bash语法和git diff --check通过。
+原官方函数对照继续通过（mapper AST、文本/RNG1344、tokenize8、LR34627位置及GradNorm10000）；
+参考审计明确记录本次统一LR及音频仅权重初始化差异，不再声称优化器LR与母本相同。
+报告audit_reports/mizar_s1_text71427_ced_small_validation.json；沙箱外本地离线测试获准执行。
+未读取远程资产、提交真实训练或commit/push；实际源权重/3090显存及重训结果仍由服务器任务确认。
+本条仅前置，以下RM既有字节完整保留。GitHub同步后正式提交：
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh
+```
+
 ## 2026-11-21：修复四模型评测提交的别名错配，新增CPU预检与4090入口
 
 用户报告MMAU/MMAR/MMSU在checkpoint身份校验阶段失败，MMSU generated=0。

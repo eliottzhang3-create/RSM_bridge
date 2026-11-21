@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 [--output-dir DIR] [--resume-checkpoint PATH] [--resolved-paths TSV] [--text-model-dir DIR] [--ced-model-dir DIR] [--index-cache-root DIR] [--stage-workers N]" >&2
+  echo "usage: $0 [--output-dir DIR] [--init-checkpoint PATH] [--resume-checkpoint PATH] [--resolved-paths TSV] [--text-model-dir DIR] [--ced-model-dir DIR] [--index-cache-root DIR] [--stage-workers N]" >&2
   exit 2
 }
 
@@ -13,6 +13,7 @@ CED_MODEL_DIR=/hpc_stor03/sjtu_home/jinwei.zhang/models/CED_small
 MANIFEST=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json
 OUTPUT_DIR=""
 RESUME_CHECKPOINT=""
+INIT_CHECKPOINT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_20261119_141531507533438/formal/checkpoints/model--step-34626.ckpt
 INDEX_CACHE_ROOT=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/index_cache
 STAGE_WORKERS=4
 while [[ $# -gt 0 ]]; do
@@ -20,6 +21,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --output-dir) OUTPUT_DIR=$2 ;;
     --resume-checkpoint) RESUME_CHECKPOINT=$2 ;;
+    --init-checkpoint) INIT_CHECKPOINT=$2 ;;
     --resolved-paths) RESOLVED_PATHS=$2 ;;
     --text-model-dir) TEXT_MODEL_DIR=$2 ;;
     --ced-model-dir) CED_MODEL_DIR=$2 ;;
@@ -35,8 +37,11 @@ done
 [[ -d "$TEXT_MODEL_DIR" && -f "$TEXT_MODEL_DIR/config.json" && -d "$CED_MODEL_DIR" ]] || { echo "recursive text checkpoint or CED components missing" >&2; exit 2; }
 python "$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced_small/check_text_assets.py" --text-model-dir "$TEXT_MODEL_DIR"
 python "$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced_small/check_ced_assets.py" --ced-model-dir "$CED_MODEL_DIR"
+if [[ -n "$INIT_CHECKPOINT" ]]; then
+  python "$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced_small/audio_initialization.py" --init-checkpoint "$INIT_CHECKPOINT"
+fi
 RUN_TAG=$(date +%Y%m%d_%H%M%S%N)
-OUTPUT_DIR=${OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_${RUN_TAG}}
+OUTPUT_DIR=${OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_reinit34626_lr2e4_${RUN_TAG}}
 if [[ -e "$OUTPUT_DIR" && ! -d "$OUTPUT_DIR" ]]; then
   echo "output path is not a directory: $OUTPUT_DIR" >&2
   exit 2
@@ -54,7 +59,7 @@ python "$SCRIPT_DIR/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs12
   --cache-root "$INDEX_CACHE_ROOT" --path-output "$INDEX_PATH_FILE"
 INDEX_DIR=$(tr -d '\r\n' < "$INDEX_PATH_FILE")
 [[ -d "$INDEX_DIR" ]] || { echo "CPU-prepared index was not created: $INDEX_DIR" >&2; exit 2; }
-ARGS=(formal "$RESOLVED_PATHS" "$OUTPUT_DIR" "$RESUME_CHECKPOINT" "$TEXT_MODEL_DIR" "$CED_MODEL_DIR" "$INDEX_DIR" "$STAGE_WORKERS")
+ARGS=(formal "$RESOLVED_PATHS" "$OUTPUT_DIR" "$RESUME_CHECKPOINT" "$TEXT_MODEL_DIR" "$CED_MODEL_DIR" "$INDEX_DIR" "$STAGE_WORKERS" "$INIT_CHECKPOINT")
 printf -v CMD_ARGS '%q ' "${ARGS[@]}"
 vc submit \
   -p pdgpu-3090 \
@@ -66,3 +71,4 @@ vc submit \
   --cmd "bash mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced_small/run.sh $CMD_ARGS"
 echo "Submitted Mizar S1 / CED-Small GBS128 / recursive MeSH: 8 GPUs x microbatch4 x accumulation4; output=$OUTPUT_DIR"
 echo "Raw audio: shared-path training starts immediately; background local copy then collective switch; workers=$STAGE_WORKERS; index=$INDEX_DIR"
+echo "Weights-only initialization=$INIT_CHECKPOINT; new 3-epoch schedule=34626 updates; uniform max_lr=2e-4 min_lr=2e-5; full_resume=$RESUME_CHECKPOINT"

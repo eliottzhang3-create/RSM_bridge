@@ -18,6 +18,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 ROUTE = ROOT / "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced_small"
 TESTS = ["test_mizar_s1_text71427_ced_small_route.py", "test_mizar_s1_text71427_ced_small_shared_start.py",
+         "test_mizar_s1_text71427_audio_reinit.py",
          "test_mizar_s1_text71427_ced_small_tensors.py", "test_mizar_s1_recursive_mesh_ced_small_route.py",
          "test_mizar_s1_recursive_mesh_ced_small_parity.py", "test_mizar_s1_recursive_mesh_ced_small_shared_start.py",
          "test_mizar_text_7_14x2_7_mesh.py", "test_mizar_text_7_14x2_7_mesh_shell.py",
@@ -76,7 +77,7 @@ def main():
                   executed_tests=sum(item.get("tests", 0) - item.get("skipped", 0) for item in checks),
                   skipped_tests=skipped, missing_dependencies=missing, checks=checks)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps({k: v for k, v in report.items() if k != "checks"}), flush=True)
     return int(failed)
 

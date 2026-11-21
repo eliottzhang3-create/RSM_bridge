@@ -23,6 +23,12 @@ DEFAULT_TEXT_MODEL = (
     "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x2_7_mesh/"
     "formal_reinit1000_lr6e4_20261118_112042_3963870/checkpoint-009244"
 )
+DEFAULT_INIT_CHECKPOINT = (
+    "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/"
+    "mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_20261119_141531507533438/"
+    "formal/checkpoints/model--step-34626.ckpt"
+)
+MAX_LR, MIN_LR = 2e-4, 2e-5
 WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, EPOCHS, SEED = 8, 4, 4, 3, 1234
 RANK_UPDATE_SAMPLES = BATCH_SIZE * ACCUMULATION_STEPS
 GLOBAL_BATCH_SIZE = WORLD_SIZE * RANK_UPDATE_SAMPLES
@@ -392,7 +398,7 @@ def semantic_contract(prepared, text_model_dir, ced_model_dir):
                    "max_temporal_tokens": 512, "external_projection": "Identity"},
         "attention_mask": None, "pad_token": "!", "eos_suffix": " <|endoftext|>",
         "loss": "rank_local_token_mean_then_DDP_mean",
-        "adamw": {"decoder_lr": 3e-4, "map_lr": 6e-4, "betas": [0.9, 0.999],
+        "adamw": {"decoder_lr": MAX_LR, "map_lr": MAX_LR, "min_lr": MIN_LR, "betas": [0.9, 0.999],
                   "eps": 1e-8, "weight_decay": 0.01, "exclude_bias_ndim_le1": True},
         "scheduler": "Mizar_LambdaLR_warmup_cosine_5pct_floor_0.1_step_after_optimizer",
         "gradient_clip": {"type": "GradNormTracker", "initial_l2": 1., "initial_max": 10.,

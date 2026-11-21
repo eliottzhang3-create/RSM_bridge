@@ -1,7 +1,7 @@
-"""Mizar Stage 1 discriminative AdamW and its adaptive GradNormTracker."""
+"""Uniform-LR AdamW for audio weights-only retraining; original GradNormTracker."""
 import torch
 
-from contract import lr_factor
+from contract import MAX_LR, lr_factor
 
 
 def parameter_role(name):
@@ -18,7 +18,7 @@ def build_optimizer(model, total_steps):
         if not param.requires_grad:
             continue
         role = parameter_role(name)
-        lr = 6e-4 if role == "map" else 3e-4
+        lr = MAX_LR
         decay = 0. if param.ndim <= 1 or name.endswith(".bias") else 0.01
         key = (role, lr, decay)
         groups.setdefault(key, []).append(param)
@@ -30,7 +30,7 @@ def build_optimizer(model, total_steps):
              for role, lr, wd in sorted(groups)]
     optimizer = torch.optim.AdamW(
         [{"params": groups[key], "lr": key[1], "weight_decay": key[2]} for key in sorted(groups)],
-        lr=3e-4, weight_decay=.01, betas=(.9, .999), eps=1e-8)
+        lr=MAX_LR, weight_decay=.01, betas=(.9, .999), eps=1e-8)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: lr_factor(step, total_steps))
     return optimizer, scheduler, audit
 

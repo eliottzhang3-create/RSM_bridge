@@ -48,7 +48,7 @@ def bash_path(path):
 class RouteTests(unittest.TestCase):
     def test_parent_sources_data_optimizer_and_loop_are_preserved(self):
         audit = A.audit_parent()
-        self.assertEqual(len(audit["identical_files_normalized_lf"]), 16)
+        self.assertEqual(len(audit["identical_files_normalized_lf"]), 15)
         self.assertEqual(audit["protected_source_files"], 35)
 
     def test_gbs128_horizon_lr_and_save_points(self):
@@ -146,6 +146,7 @@ class RouteTests(unittest.TestCase):
     def test_launcher_defaults_and_tmpfs_guard(self):
         source = ENTRY.read_text(encoding="utf-8")
         self.assertIn("TEXT_MODEL_DIR=" + C.DEFAULT_TEXT_MODEL, source)
+        self.assertIn("INIT_CHECKPOINT=" + C.DEFAULT_INIT_CHECKPOINT, source)
         self.assertNotIn("stage4_5_10x2_5_mesh", source)
         runtime = (ROUTE / "run.sh").read_text(encoding="utf-8")
         self.assertIn("expected = 34626", runtime)
@@ -163,6 +164,7 @@ set -eu
 case "$1" in
   *check_text_assets.py) touch "$RSM_TEST_DIR/text_checked"; exit "$RSM_TEXT_FAIL" ;;
   *check_ced_assets.py) [[ -f "$RSM_TEST_DIR/text_checked" ]]; touch "$RSM_TEST_DIR/ced_checked"; exit "$RSM_ASSET_FAIL" ;;
+  *audio_initialization.py) [[ -f "$RSM_TEST_DIR/ced_checked" ]]; touch "$RSM_TEST_DIR/init_checked"; exit "$RSM_INIT_FAIL" ;;
   *prepare_index.py)
     [[ -f "$RSM_TEST_DIR/ced_checked" ]]
     while [[ $# -gt 0 ]]; do
@@ -172,11 +174,11 @@ case "$1" in
   *) exit 98 ;;
 esac
 '''
-        for case in ("fresh", "resume", "bad-text", "bad-ced", "bad-workers", "nonempty"):
+        for case in ("fresh", "resume", "bad-init", "bad-text", "bad-ced", "bad-workers", "nonempty"):
             with self.subTest(case=case), tempfile.TemporaryDirectory(dir=ROOT) as directory:
                 root = Path(directory)
                 for name in ("bin", "text", "CED small", "index"): (root / name).mkdir()
-                for name in ("text/config.json", "manifest", "resolved.tsv", "resume.ckpt"):
+                for name in ("text/config.json", "manifest", "resolved.tsv", "resume.ckpt", "init.ckpt"):
                     (root / name).write_text("fixture", encoding="utf-8")
                 script = root / "submit.sh"
                 script.write_text(ENTRY.read_text(encoding="utf-8").replace(
@@ -190,13 +192,15 @@ esac
                     output.mkdir(); (output / "prior.txt").write_text("preserve")
                 args = ["--output-dir", bash_path(output), "--resolved-paths", bash_path(root / "resolved.tsv"),
                         "--text-model-dir", bash_path(root / "text"), "--ced-model-dir", bash_path(root / "CED small"),
-                        "--index-cache-root", bash_path(root / "index"), "--stage-workers", "0" if case == "bad-workers" else "4"]
+                        "--index-cache-root", bash_path(root / "index"), "--stage-workers", "0" if case == "bad-workers" else "4",
+                        "--init-checkpoint", bash_path(root / "init.ckpt")]
                 if case == "resume": args += ["--resume-checkpoint", bash_path(root / "resume.ckpt")]
                 env = dict(os.environ, RSM_TEST_DIR=bash_path(root), RSM_TEXT_FAIL="9" if case == "bad-text" else "0",
+                           RSM_INIT_FAIL="8" if case == "bad-init" else "0",
                            RSM_ASSET_FAIL="7" if case == "bad-ced" else "0", PATH=f"{bash_path(root / 'bin')}:/usr/bin:/bin")
                 result = subprocess.run([bash, bash_path(script), *args], env=env, capture_output=True, text=True,
                                         encoding="utf-8", errors="replace", timeout=30)
-                expected = 0 if case in ("fresh", "resume") else 9 if case == "bad-text" else 7 if case == "bad-ced" else 2
+                expected = 0 if case in ("fresh", "resume") else 9 if case == "bad-text" else 8 if case == "bad-init" else 7 if case == "bad-ced" else 2
                 self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
                 capture = root / "vc_args"
                 self.assertEqual(capture.exists(), expected == 0)
@@ -209,7 +213,7 @@ esac
                 self.assertEqual(command[:3], ["bash", f"mellow_official_training_c8204d8_adamw_cosine/{ROUTE.name}/run.sh", "formal"])
                 self.assertEqual(command[4], bash_path(output))
                 self.assertEqual(command[5], bash_path(root / "resume.ckpt") if case == "resume" else "")
-                self.assertEqual(command[6:], [bash_path(root / "text"), bash_path(root / "CED small"), bash_path(root / "index"), "4"])
+                self.assertEqual(command[6:], [bash_path(root / "text"), bash_path(root / "CED small"), bash_path(root / "index"), "4", bash_path(root / "init.ckpt")])
 
 
 if __name__ == "__main__": unittest.main()

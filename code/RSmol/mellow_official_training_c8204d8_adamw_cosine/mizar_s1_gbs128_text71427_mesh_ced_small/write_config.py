@@ -9,6 +9,7 @@ from pathlib import Path
 from contract import (CED_ASSET_FILES, ROUTE, digest, recursive_checkpoint_contract,
                       semantic_contract, validate_ced_assets, write_json)
 from data.staging import StagingGate
+from audio_initialization import inspect_audio_source
 
 
 def file_sha256(path):
@@ -49,6 +50,8 @@ def main():
     parser.add_argument("--text-model-dir", required=True, type=Path)
     parser.add_argument("--ced-model-dir", required=True, type=Path)
     parser.add_argument("--resume-checkpoint", type=Path)
+    parser.add_argument("--init-checkpoint", type=Path,
+                        help="model/projector-only input; never restores its training state")
     args = parser.parse_args()
     prepared = json.loads(args.prepared.read_text(encoding="utf-8"))
     if prepared.get("mode") != args.mode:
@@ -60,6 +63,8 @@ def main():
     contract = semantic_contract(prepared, args.text_model_dir.resolve(), args.ced_model_dir.resolve())
     contract["recursive_text_checkpoint"] = recursive_text
     contract["assets"] = asset_identity(args.text_model_dir, args.ced_model_dir)
+    if args.init_checkpoint:
+        contract["audio_initialization"] = inspect_audio_source(args.init_checkpoint, fingerprint=True)
     contract["packages"] = {name: importlib.metadata.version(name) for name in
                             ("torch", "torchaudio", "transformers", "numpy", "soundfile", "safetensors")}
     contract["python"] = platform.python_version()
@@ -74,7 +79,7 @@ def main():
               "checkpoint_steps": [round(contract["geometry"]["total_steps"] * i / 6) for i in range(1, 7)],
               "official_reference": "Mizar_159M/configs/s1.yaml.in + runtime/stage1 + pipeline/build_ced_cache.py",
               "intentional_differences": [
-                  "trained Mizar 7-14x2-7 MeSH checkpoint and routers inherited exactly; new audio optimizer starts at zero; audio uses online CED-Small plus official freq_merge_126 mapper",
+                  "full trained audio LM/routers/projector inherited from audio_initialization when configured; new optimizer starts at zero; uniform max_lr2e-4/min_lr2e-5",
                   "S1 prompt and answer EOS / center-crop retained; single audio126 + SEP1 + prompt256 + answer300; full fixed20 waveform processed before mapping",
                   "shared raw audio decoded online, collective switch to staged bytes after full copy; no hidden-feature cache",
                   "8 GPUs x microbatch4 x accumulation4; global batch128 ablation",

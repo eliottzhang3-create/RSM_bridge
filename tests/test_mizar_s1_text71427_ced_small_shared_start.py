@@ -319,7 +319,9 @@ case "$1" in
     done
     exit 9
     ;;
-  write_config.py) [[ "$RSM_TEST_FAIL" != 1 ]] || exit 7 ;;
+  write_config.py)
+    [[ " $* " == *" --init-checkpoint $RSM_TEST_DIR/weights.ckpt "* ]]
+    [[ "$RSM_TEST_FAIL" != 1 ]] || exit 7 ;;
   -) [[ -f "$RSM_TEST_DIR/training_done" ]]; cat > /dev/null ;;
   *) exit 9 ;;
 esac
@@ -355,7 +357,7 @@ exit 9
                            RSM_TEST_FAIL=str(int(fail)), PATH=f"{bash_path(root / 'bin')}:/usr/bin:/bin")
                 result = subprocess.run([bash, bash_path(script), "formal", bash_path(root / "resolved.tsv"),
                                          bash_path(root / "output"), "", bash_path(root), bash_path(root),
-                                         bash_path(root / "index"), "4"], env=env, capture_output=True,
+                                         bash_path(root / "index"), "4", bash_path(root / "weights.ckpt")], env=env, capture_output=True,
                                         text=True, encoding="utf-8", errors="replace", timeout=20)
                 self.assertEqual(result.returncode, 7 if fail else 0, result.stdout + result.stderr)
                 self.assertTrue((root / "cleaned").exists(), result.stdout + result.stderr)

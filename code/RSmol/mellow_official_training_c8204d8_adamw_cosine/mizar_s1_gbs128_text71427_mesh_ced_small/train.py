@@ -36,6 +36,7 @@ from data.sampler import CustomDistributedSampler
 from data.staging import StagingGate
 from models.mellow import Mellow
 from optim import GradNormTracker, build_optimizer, parameter_role
+from audio_initialization import file_sha256, initialize_audio_weights
 
 
 def collective_require(condition, message, device):
@@ -373,6 +374,16 @@ def train(config, rank, device):
                    text_decoder=contract["text_model_dir"], prefix_length=PREFIX_TOKENS,
                    freeze_text_decoder_weights=False, use_pretrained_audioencoder=True,
                    freeze_audio_encoder_weights=True, pretrained_audioencoder_path=contract["ced_model_dir"])
+    initialization = {"mode": "text_checkpoint_weights_only", "start_optimizer_step": 0,
+                      "restore_optimizer_scheduler_rng_cursor": False}
+    if contract.get("audio_initialization") and not config["resume_checkpoint"]:
+        source = contract["audio_initialization"]
+        # Hash once across the job; every rank then maps the same immutable file.
+        unchanged = rank != 0 or file_sha256(source["checkpoint"]) == source["source_checkpoint_sha256"]
+        collective_require(unchanged, "audio initialization checkpoint SHA256 changed", device)
+        initialization = initialize_audio_weights(model, source)
+        if rank == 0:
+            print(json.dumps({"event": "AUDIO_WEIGHTS_INIT_PASS", "initialization": initialization}), flush=True)
     model.float().to(device)
     if any(p.requires_grad for p in model.audio_encoder.base.ced.parameters()):
         raise ValueError("CED-Small backbone must be frozen")
@@ -385,6 +396,8 @@ def train(config, rank, device):
     scaler = torch.cuda.amp.GradScaler(enabled=True)
     tracker = GradNormTracker()
     step, start_epoch, start_batch = 0, 0, 0
+    if optimizer.state or scheduler.last_epoch != 0 or tracker.running_norm:
+        raise ValueError("fresh audio training requires new optimizer/scheduler/GradNorm at step zero")
     resume_rng = None
     if config["resume_checkpoint"]:
         saved = torch.load(config["resume_checkpoint"], map_location="cpu", weights_only=False)
@@ -402,6 +415,8 @@ def train(config, rank, device):
                 or not 0 <= start_epoch <= EPOCHS):
             raise ValueError("invalid resume sampler/scheduler cursor")
         resume_rng = saved["random_state_by_rank"][rank]
+        initialization = {"mode": "full_audio_resume", "checkpoint": config["resume_checkpoint"],
+                          "restored_training_state": True, "start_optimizer_step": step}
         del saved
     if staging.info and (staging.info["epoch"], staging.info["start_batch"]) != (start_epoch, start_batch):
         raise ValueError("background staging cursor differs from the actual training resume cursor")
@@ -422,6 +437,7 @@ def train(config, rank, device):
     gradient_audit = None
     audit = {"status": "PREFLIGHT_PASS", "resolved_config": config, "tokenizer": tokenizer_audit,
              "text_initialization": model.caption_decoder.lm.audio_initialization_audit,
+             "model_initialization": initialization,
              "optimizer_groups": groups, "source_probes": source_probes,
              "model_parameters": sum(p.numel() for p in model.parameters()),
              "trainable_parameters": sum(p.numel() for p in model.parameters() if p.requires_grad),
