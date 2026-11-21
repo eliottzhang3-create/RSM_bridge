@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .registry import (ROOT, ROUTES, PACKAGE, SCHEDULE, TEXT_CONTRACT,
                        TEXT_ARCHITECTURE, TRAINING_GEOMETRY, variant_spec)
+from .preflight import validate_header
 
 if str(ROOT / 'scripts') not in sys.path:
     sys.path.insert(0, str(ROOT / 'scripts'))
@@ -53,6 +54,7 @@ def evaluation_sources():
     """Include all reused helpers, without changing any old runner's identity glob."""
     sources = set(PACKAGE.glob('*.py')) | set(PACKAGE.glob('*.sh'))
     sources.add(ROOT / 'run_text71427_ced_eval_5090.sh')
+    sources.add(ROOT / 'run_text71427_ced_eval_4090.sh')
     for name in ('mizar_s1_ced_reasonaqa5000_eval', 'mizar_s1_ced_mmsu_eval'):
         sources.update((ROOT / name).glob('*.py'))
         sources.update((ROOT / name).glob('*.sh'))
@@ -67,11 +69,8 @@ def evaluation_sources():
 
 def validate_checkpoint(saved, runtime, route_contract, expected_step, expected_geometry=None, *, eval_variant):
     spec = variant_spec(eval_variant)
+    validate_header(saved, runtime, route_contract, eval_variant)
     route, contract = spec['route'], saved.get('contract', {})
-    if (route_contract.ROUTE != route or saved.get('schema_version') != 1
-            or saved.get('route_variant') != route or saved.get('mode') != 'formal'
-            or not saved.get('state_dict')):
-        raise ValueError('expected this exact text71427 formal audio checkpoint')
     identity = route_contract.digest(contract)
     if (saved.get('contract_sha256') != identity or runtime.get('contract_sha256') != identity
             or runtime.get('contract') != contract or runtime.get('mode') != 'formal'

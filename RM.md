@@ -1,3 +1,45 @@
+## 2026-11-21：修复四模型评测提交的别名错配，新增CPU预检与4090入口
+
+用户报告MMAU/MMAR/MMSU在checkpoint身份校验阶段失败，MMSU generated=0。
+用户补充的listen runtime.json为正确的listen/formal路线；其失败报告却记录eval_variant=base、training_route为普通base。
+据此确认listen被按base模型提交并拒绝；不据此推定其他所有失败的具体字段或权重损坏。
+保留严格合同校验，新增逐字段expected/actual及checkpoint/runtime模型别名诊断；不放宽为接受其他路线。
+提交器默认在申请GPU前做CPU预检：runtime/ckpt header/step/合同及训练、共享源码；同一checkpoint四任务只读一次。
+CPU通过后仍由原GPU loader严格审计资产与完整张量；CPU不构造模型、不读optimizer张量值、不使用CUDA。
+显式错误alias拒绝；可选auto按runtime.json精确注册route/完整formal合同SHA识别，再核验ckpt内部route。
+新增run_text71427_ced_eval_4090.sh；旧5090入口兼容，所有任务均默认pdgpu-4090/单卡8CPU/32G。
+默认输出改为<run-root>/eval/text71427_ced_v2/<task>/<checkpoint-stem>，保留旧v1失败记录与身份锁。
+原推理、预处理、题面、manifest、greedy和评分函数不变，训练目录、共享模型、旧评测源码保持。
+
+本次用户先评测四个model--step-34626.ckpt，固定清单code/RSmol/text71427_ced_eval/rerun_20261121.json：
+base formal_20261119_141531507533438；audio7_read2 formal_20261120_111448563391250；
+listen formal_20261119_141724655549596；loop_lora formal_20261119_141712678007968。
+全部完整绝对路径取自用户；wfuse/ar6不在这次16项重跑清单。产物内容/远程训练与评测PASS未代为核验。
+远程仓库根执行：bash code/RSmol/run_text71427_ced_eval_4090.sh batch all --targets-json "$PWD/code/RSmol/text71427_ced_eval/rerun_20261121.json"。
+也可将all分别换为reasonaqa5000、mmau、mmar、mmsu，各提交四模型；两种方式择一。
+--preflight-only仅做CPU检查；READY_FOR_GPU不是推理通过，SUBMITTED仅代表vc提交成功。
+日志/提交诊断在code/RSmol/log/text71427_ced_eval，完整结果在各run的v2 evaluation_report.json。
+
+本地完整验收50项：44通过，6真实CPU张量因缺Torch/Transformers/Safetensors明确跳过。
+覆盖本次base/listen错误复现、提交前拦截、auto精确绑定、实际CPU预检控制流、16项清单/4090参数、
+失败继续/单checkpoint只预检一次、真实Bash参数链、六模型四任务完整尺寸合成流程与续跑、原函数AST和协议对齐。
+3239份原源码normalized-LF SHA保持，Python3.10/Bash语法及git diff --check通过。
+Windows沙箱再次阻止测试临时目录后，获准沙箱外完成离线回归；不读取远程资产或提交真实作业。
+报告audit_reports/text71427_ced_eval_debug_validation.json；原验收与4090队列记录保留并链接本次报告。
+未commit/push；本条仅前置，以下既有RM原字节完整保留。
+
+## 2026-11-21：六模型四项评测全部默认改为pdgpu-4090
+
+按用户要求，将text71427_ced_eval/submit.py统一默认队列改为pdgpu-4090，覆盖六模型的
+ReasonAQA5000、MMAU test-mini、MMAR、MMSU全部24种组合及批量提交。
+保留原run_text71427_ced_eval_5090.sh兼容入口名，现有命令直接使用，无需额外传--queue。
+单卡/8CPU/32G/1node、模型/数据/推理/评分实现保持；显式queue覆盖功能仍保留。
+README和原有队列断言同步，新增实际vc参数的4090断言。
+12项定向回归全部通过，含24种绑定、真实Bash参数链、模拟vc失败继续、3239份原源码SHA及原协议/AST保护。
+Python3.10语法和git diff --check通过；使用已确认的沙箱外临时目录测试，不访问远程或提交真实作业。
+原38项完整验收结果保留，队列复验单列audit_reports/text71427_ced_eval_validation.json的queue_4090_followup。
+本条仅前置，以下既有RM字节完整保留；未commit/push。
+
 ## 2026-11-20：六条7–14×2–7 CED路线接入四项隔离评测，checkpoint显式传入
 
 新增独立包`code/RSmol/text71427_ced_eval/`及入口

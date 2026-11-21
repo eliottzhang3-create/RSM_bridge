@@ -249,17 +249,30 @@ class BashTests(unittest.TestCase):
             env={**os.environ,'RSMOL_CONDA_BASE':posix(root/'conda'),
                  'PATH':posix(bindir)+(';' if os.name=='nt' else ':')+os.environ['PATH'],
                  'MSYS2_ARG_CONV_EXCL':'*','PYTHONIOENCODING':'utf-8'}
-            for path in (registry.PACKAGE/'run.sh',registry.ROOT/'run_text71427_ced_eval_5090.sh'):
+            for path in (registry.PACKAGE/'run.sh', registry.ROOT/'run_text71427_ced_eval_5090.sh',
+                         registry.ROOT/'run_text71427_ced_eval_4090.sh'):
                 checked=subprocess.run([str(bash),'-n',str(path)],capture_output=True,text=True,env=env)
                 self.assertEqual(checked.returncode,0,checked.stderr)
             for alias in registry.ROUTES:
-                result=subprocess.run([str(bash),str(registry.ROOT/'run_text71427_ced_eval_5090.sh'),alias,'all',
-                    '--checkpoint',str(root/"run with space's/formal/checkpoints/model--step-5771.ckpt"),'--check-args'],
-                    capture_output=True,text=True,encoding='utf-8',env=env)
-                self.assertEqual(result.returncode,0,result.stderr)
-                jobs=[json.loads(line) for line in result.stdout.splitlines()]
-                self.assertEqual(len(jobs),4)
-                self.assertTrue(all("run with space's" in j['binding']['checkpoint'] for j in jobs))
+                from test_text71427_ced_eval import checkpoint_fixture
+                _, _, config = checkpoint_fixture(alias)
+                checkpoint=root/alias/"run with space's/formal/checkpoints/model--step-5771.ckpt"
+                checkpoint.parent.parent.mkdir(parents=True)
+                (checkpoint.parent.parent/'runtime.json').write_text(json.dumps(config),encoding='utf-8')
+                for requested in (alias,'auto'):
+                    result=subprocess.run([str(bash),str(registry.ROOT/'run_text71427_ced_eval_4090.sh'),requested,'all',
+                        '--checkpoint',str(checkpoint),'--check-args'],
+                        capture_output=True,text=True,encoding='utf-8',env=env)
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    jobs=[json.loads(line) for line in result.stdout.splitlines()]
+                    self.assertEqual(len(jobs),4)
+                    self.assertTrue(all(j['vc_args'][j['vc_args'].index('-p')+1]=='pdgpu-4090' for j in jobs))
+                    self.assertTrue(all("run with space's" in j['binding']['checkpoint'] for j in jobs))
+                    self.assertTrue(all(j['model']==alias and j['binding']['eval_variant']==alias for j in jobs))
+            legacy=subprocess.run([str(bash),str(registry.ROOT/'run_text71427_ced_eval_5090.sh'),'base','all',
+                '--checkpoint',str(root/'base'/"run with space's/formal/checkpoints/model--step-5771.ckpt"),'--check-args'],
+                capture_output=True,text=True,encoding='utf-8',env=env)
+            self.assertEqual(legacy.returncode,0,legacy.stderr)
 
 
 if __name__=='__main__':unittest.main()

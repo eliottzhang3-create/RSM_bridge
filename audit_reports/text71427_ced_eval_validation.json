@@ -62,5 +62,49 @@
     "previous_sha256": "421216210b767b3fbc40c2585836698f94641d6418e59a9a341f4324be3dac5b",
     "preserved_as_exact_suffix": true
   },
-  "git_sync_check": "git add --dry-run: all 22 new implementation/test/report files eligible; no staging/commit/push"
+  "git_sync_check": "git add --dry-run: all 22 new implementation/test/report files eligible; no staging/commit/push",
+  "queue_4090_followup": {
+    "date": "2026-11-21",
+    "status": "PASS_LOCAL",
+    "tests_run": 12,
+    "passed": 12,
+    "skipped": 0,
+    "scope": "all six models x four benchmarks default pdgpu-4090; original inference/scoring code unchanged",
+    "verification": [
+      "24 pure argument bindings and actual vc -p values",
+      "real Bash to Python checks for all 24 bindings",
+      "mock vc batch failure continues",
+      "3239 original normalized-LF source digests unchanged",
+      "original protocols and critical function AST parity",
+      "Python 3.10 syntax",
+      "git diff --check"
+    ],
+    "sources": {
+      "code/RSmol/text71427_ced_eval/submit.py": "23e61948dff2309e54b48b2de59972280b1103fe566e4ddbc09de67c5153c347",
+      "code/RSmol/text71427_ced_eval/README.md": "f560429145566d6c4c1f025333e617480f32ef341a0a43700c99adc2e7ae0336",
+      "tests/test_text71427_ced_eval.py": "c6dc8d1ee46ba1b809501a986650362fddd6432e1c52c29b446a94c937440f5c",
+      "tests/test_text71427_ced_eval_workflow.py": "fc4c4e28a12e61c22e6046cc72e3daf87773a3eeba5b0055f7152da88d67c55f"
+    },
+    "original_full_validation": "38 tests / 32 passed / 6 tensor dependency skips preserved above; not rerun for queue-only change",
+    "remote_gpu": "NOT_RUN",
+    "job_submission": "MOCK_ONLY",
+    "commit_push": "NOT_RUN",
+    "rm_history": {
+      "previous_bytes": 480952,
+      "previous_sha256": "e9005ef3ff2c967c8fa9fe5f47a4e2c74f5d3e0a4d4045ad8ab8f3b3fc58ff6f",
+      "preserved_as_exact_suffix": true
+    }
+  },
+  "checkpoint_binding_followup": {
+    "date": "2026-11-21",
+    "status": "PASS_LOCAL_WITH_SKIPS",
+    "tests_run": 50,
+    "passed": 44,
+    "skipped": 6,
+    "report": "audit_reports/text71427_ced_eval_debug_validation.json",
+    "report_sha256": "49124570b3e2a93b073aeb8dac227b9f850e0be2168b8cabff9b69c822d3040d",
+    "remote_gpu": "NOT_RUN",
+    "production_checkpoint_loading": "NOT_RUN",
+    "job_submission": "MOCK_ONLY"
+  }
 }

@@ -51,7 +51,7 @@ def parse_args(benchmark, argv=None):
     if not canonical and (args.runtime_config is None or args.output_dir is None):
         parser.error('noncanonical checkpoint requires explicit --runtime-config and --output-dir')
     args.runtime_config = args.runtime_config or args.run_root / 'formal/runtime.json'
-    args.output_dir = args.output_dir or args.run_root / 'eval/text71427_ced_v1' / args.benchmark / args.checkpoint.stem
+    args.output_dir = args.output_dir or args.run_root / 'eval/text71427_ced_v2' / args.benchmark / args.checkpoint.stem
     if args.parquet_batch_size < 1:
         parser.error('--parquet-batch-size must be positive')
     if args.benchmark == 'mmsu':

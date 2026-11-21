@@ -3,6 +3,71 @@
 本地 Windows 维护核心代码，通过 GitHub 同步；checkpoint、数据和实际 GPU 评测位于远程 Linux。
 本包位于训练目录之外，不修改六条训练路线、共享模型或任何旧评测源码。
 
+## 2026-11-21：修复模型别名错配，四个指定 checkpoint 重跑
+
+用户提供的 listen 失败报告记录 `eval_variant=base`，而 checkpoint 和同 run 的
+runtime.json 均属于 listen。原通用错误没有列出字段，也没有在提交前拦截这种绑定。
+现保留严格路线校验，报告逐字段 expected/actual 和实际模型别名；明确指定错误模型仍拒绝。
+新增 `auto` 可按 runtime.json 中精确注册的 route 和完整 formal contract SHA 识别模型，
+随后再次核对 checkpoint 内部路线；不根据目录名字猜测、不自动修改错误的显式别名。
+
+默认提交先做 CPU 预检：核对 runtime、checkpoint header/step、训练合同、训练及共享源码摘要。
+每个 checkpoint 在一批四项任务中只预检一次；失败的模型不调用 vc，其他正确模型继续。
+使用训练 writer 原生 ZIP checkpoint 的 `torch.load(map_location='cpu', mmap=True)`，
+不构造模型或读取优化器张量值、不使用 CUDA。资产文件、完整张量值及推理仍在 GPU 作业内严格审计。
+预检的 `READY_FOR_GPU` 仅表示这些 CPU 检查完成；`SUBMITTED` 也仅表示 vc 提交成功。
+
+用户已给定的四个 step34626 checkpoint 已逐一固定在 `rerun_20261121.json`：
+base、audio7_read2、listen、loop_lora。wfuse/ar6 不在此次重跑清单内。
+GitHub 同步到服务器后，可一次提交全部16项：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+TARGETS="$PWD/code/RSmol/text71427_ced_eval/rerun_20261121.json"
+bash code/RSmol/run_text71427_ced_eval_4090.sh batch all --targets-json "$TARGETS"
+```
+
+或者按任务分别提交，每条命令提交四个模型（与上面的 all 二选一，避免重复提交）：
+
+```bash
+bash code/RSmol/run_text71427_ced_eval_4090.sh batch reasonaqa5000 --targets-json "$TARGETS"
+bash code/RSmol/run_text71427_ced_eval_4090.sh batch mmau --targets-json "$TARGETS"
+bash code/RSmol/run_text71427_ced_eval_4090.sh batch mmar --targets-json "$TARGETS"
+bash code/RSmol/run_text71427_ced_eval_4090.sh batch mmsu --targets-json "$TARGETS"
+```
+
+以上均为 pdgpu-4090 / 1GPU / 8CPU / 32G。4090 是新入口名，原 `_5090.sh` 入口仍兼容且同样默认4090。
+无需更改或重新生成数据、manifest、题面、推理或评分设置。
+默认输出改为 `<run-root>/eval/text71427_ced_v2/<task>/model--step-34626/`，
+保留原 v1 失败证据，不复用已被旧代码身份认领的输出目录，也不要显式指定旧 v1 输出。
+同版代码、相同身份下重提 v2 命令仍按原机制续跑。
+
+可选仅做 CPU 预检，不提交作业：
+
+```bash
+bash code/RSmol/run_text71427_ced_eval_4090.sh batch all --targets-json "$TARGETS" --preflight-only
+```
+
+日志和提交报告（远程仓库根目录下）：
+
+```bash
+ls -lt code/RSmol/log/text71427_ced_eval/
+# 用上面列出的实际日志文件名：
+tail -f code/RSmol/log/text71427_ced_eval/<job-name>.JOB.log
+```
+
+每项完整结果看该模型 run 的 v2 输出目录下 `evaluation_report.json`；
+生成过程追加到 `raw_generations.jsonl`，提交阶段诊断和各作业日志路径在 `*.submission.json`。
+这次已确认 listen 的别名错配；其余 checkpoint 的实际内容仍由远程 CPU 预检核验，
+不以该单份失败日志推定其他所有模型的根因或权重状态。
+
+本轮完整离线回归：`python -B tests/validate_text71427_ced_eval.py --report audit_reports/text71427_ced_eval_debug_validation.json`，
+50项中44项通过、6项真实 CPU 张量测试因缺 Torch/Transformers/Safetensors 跳过。
+覆盖此次错配、提交前拒绝、auto 精确绑定、四 checkpoint 的16项资源/路径、CPU 预检缓存、失败继续、
+真实 Bash 参数链、原生成函数 AST/协议、完整分母和续跑；3239份原源码摘要保持。
+权重/音频/Parquet 仍为明确合成 fixture，vc 为模拟；未在本地证明远程真实权重加载或 GPU 评测通过。
+
 ## 支持的模型
 
 | `MODEL` | 对应训练入口（`code/RSmol/` 下） | 模型交互 |
@@ -69,16 +134,16 @@ git pull --ff-only
 MODEL=base
 CKPT='/实际run路径/formal/checkpoints/model--step-5771.ckpt'
 
-bash code/RSmol/run_text71427_ced_eval_5090.sh "$MODEL" reasonaqa5000 --checkpoint "$CKPT"
-bash code/RSmol/run_text71427_ced_eval_5090.sh "$MODEL" mmau --checkpoint "$CKPT"
-bash code/RSmol/run_text71427_ced_eval_5090.sh "$MODEL" mmar --checkpoint "$CKPT"
-bash code/RSmol/run_text71427_ced_eval_5090.sh "$MODEL" mmsu --checkpoint "$CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh "$MODEL" reasonaqa5000 --checkpoint "$CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh "$MODEL" mmau --checkpoint "$CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh "$MODEL" mmar --checkpoint "$CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh "$MODEL" mmsu --checkpoint "$CKPT"
 ```
 
 四条命令各提交一个独立完整作业；也可用下面一条提交该模型的四项：
 
 ```bash
-bash code/RSmol/run_text71427_ced_eval_5090.sh "$MODEL" all --checkpoint "$CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh "$MODEL" all --checkpoint "$CKPT"
 ```
 
 六模型的四项完整评测分别提交：
@@ -92,27 +157,32 @@ READ2_CKPT='/实际read2路径/formal/checkpoints/model--step-5771.ckpt'
 WFUSE_CKPT='/实际wfuse路径/formal/checkpoints/model--step-5771.ckpt'
 AR6_CKPT='/实际ar6路径/formal/checkpoints/model--step-5771.ckpt'
 
-bash code/RSmol/run_text71427_ced_eval_5090.sh base all --checkpoint "$BASE_CKPT"
-bash code/RSmol/run_text71427_ced_eval_5090.sh loop_lora all --checkpoint "$LOOP_CKPT"
-bash code/RSmol/run_text71427_ced_eval_5090.sh listen all --checkpoint "$LISTEN_CKPT"
-bash code/RSmol/run_text71427_ced_eval_5090.sh audio7_read2 all --checkpoint "$READ2_CKPT"
-bash code/RSmol/run_text71427_ced_eval_5090.sh wfuse all --checkpoint "$WFUSE_CKPT"
-bash code/RSmol/run_text71427_ced_eval_5090.sh audio7_read2_ar6 all --checkpoint "$AR6_CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh base all --checkpoint "$BASE_CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh loop_lora all --checkpoint "$LOOP_CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh listen all --checkpoint "$LISTEN_CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh audio7_read2 all --checkpoint "$READ2_CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh wfuse all --checkpoint "$WFUSE_CKPT"
+bash code/RSmol/run_text71427_ced_eval_4090.sh audio7_read2_ar6 all --checkpoint "$AR6_CKPT"
 ```
 
 示例5771仅说明文件格式，可换成实际要比较的任意已保存 step；跨模型比较时自行选择相同训练进度。
 不需要重新生成已有的 ReasonAQA5000 manifest，也没有新增 smoke 前置。
 
-默认沿用参考入口当前实际资源：ReasonAQA5000 为 `pdgpu-4090`，其余为 `pdgpu-5090`，均1GPU/8CPU/32G/1node。
-使用原镜像与 `mellow_c8204d8`，强制离线；可显式 `--queue pdgpu-4090` 等覆盖队列。
-`_5090.sh` 为兼容命名，不表示 ReasonAQA 的默认队列。
+2026-11-21 按用户要求，六模型的 ReasonAQA5000、MMAU test-mini、MMAR、MMSU 全部默认使用 `pdgpu-4090`，均1GPU/8CPU/32G/1node。
+使用原镜像与 `mellow_c8204d8`，强制离线；保留显式 `--queue` 覆盖功能。
+`_5090.sh` 保留为兼容入口名；上述全部命令实际默认提交到4090，无需额外传队列。
+本次队列调整的12项定向回归全部通过，核对24种模型/任务绑定与实际 Bash→Python 的 `vc -p pdgpu-4090` 参数。
 完整 job 名少于60个 ASCII 字符，包含 checkpoint/模型/任务/批次摘要。
 
-先检查有效参数、输出和完整 vc 参数，不读资产、不提交：
+先检查有效参数、输出和完整 vc 参数，不提交，也不加载权重：
 
 ```bash
-bash code/RSmol/run_text71427_ced_eval_5090.sh "$MODEL" all --checkpoint "$CKPT" --check-args
+bash code/RSmol/run_text71427_ced_eval_4090.sh "$MODEL" all --checkpoint "$CKPT" --check-args
 ```
+
+显式模型的 `--check-args` 不读取任何资产；若 `MODEL=auto`，只读取 runtime.json 做精确模型绑定。
+自动识别示例：`bash code/RSmol/run_text71427_ced_eval_4090.sh auto all --checkpoint "$CKPT"`。
+实际提交无论显式或 auto 都会先执行 CPU checkpoint 预检。
 
 单任务支持原数据路径覆盖，如 ReasonAQA `--manifest`/`--test-json`/三个音频根，
 MMAU/MMAR `--dataset-dir`/`--metadata-json`/`--audio-root`/`--parquet`/`--evaluation-script`，
@@ -131,8 +201,8 @@ MMSU `--mmsu-root`/`--dataset-dir`/`--evaluation-script`；任务专属覆盖请
 ```
 
 ```bash
-bash code/RSmol/run_text71427_ced_eval_5090.sh batch all --targets-json /实际路径/targets.json --check-args
-bash code/RSmol/run_text71427_ced_eval_5090.sh batch all --targets-json /实际路径/targets.json
+bash code/RSmol/run_text71427_ced_eval_4090.sh batch all --targets-json /实际路径/targets.json --check-args
+bash code/RSmol/run_text71427_ced_eval_4090.sh batch all --targets-json /实际路径/targets.json
 ```
 
 每条清单记录提交四项；某项文件缺失或 vc 失败仍继续其余任务，整体返回失败并保留每项状态。
@@ -144,7 +214,7 @@ bash code/RSmol/run_text71427_ced_eval_5090.sh batch all --targets-json /实际�
 默认输出：
 
 ```text
-<run-root>/eval/text71427_ced_v1/<reasonaqa5000|mmau|mmar|mmsu>/<checkpoint文件名去掉.ckpt>/
+<run-root>/eval/text71427_ced_v2/<reasonaqa5000|mmau|mmar|mmsu>/<checkpoint文件名去掉.ckpt>/
 ```
 
 每项保留 run_config、raw_generations、模型/42层执行审计、评分输入及 evaluation_report。
@@ -188,7 +258,7 @@ Windows 沙箱限制临时目录与 Git index.lock 后，获准在沙箱外完�
 只暂存本次文件，RM 按块选择新增记录，保留已有修改：
 
 ```powershell
-git add -- code/RSmol/text71427_ced_eval code/RSmol/run_text71427_ced_eval_5090.sh tests/test_text71427_ced_eval.py tests/test_text71427_ced_eval_loading.py tests/test_text71427_ced_eval_tensors.py tests/test_text71427_ced_eval_workflow.py tests/validate_text71427_ced_eval.py audit_reports/text71427_ced_eval_validation.json
+git add -- code/RSmol/text71427_ced_eval code/RSmol/run_text71427_ced_eval_4090.sh code/RSmol/run_text71427_ced_eval_5090.sh tests/test_text71427_ced_eval.py tests/test_text71427_ced_eval_loading.py tests/test_text71427_ced_eval_tensors.py tests/test_text71427_ced_eval_workflow.py tests/test_text71427_ced_eval_preflight.py tests/validate_text71427_ced_eval.py audit_reports/text71427_ced_eval_validation.json audit_reports/text71427_ced_eval_debug_validation.json
 git add -p -- RM.md
 git diff --cached --stat
 git commit -m "Add isolated four-benchmark evaluation for six text71427 CED routes"

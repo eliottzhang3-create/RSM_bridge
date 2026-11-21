@@ -99,7 +99,8 @@ class ReferenceParityTests(unittest.TestCase):
     def test_python310_and_lf_shell_syntax_sources(self):
         for path in registry.PACKAGE.glob('*.py'):
             ast.parse(path.read_text(encoding='utf-8'),feature_version=(3,10))
-        for path in (registry.PACKAGE/'run.sh',registry.ROOT/'run_text71427_ced_eval_5090.sh'):
+        for path in (registry.PACKAGE/'run.sh',registry.ROOT/'run_text71427_ced_eval_5090.sh',
+                     registry.ROOT/'run_text71427_ced_eval_4090.sh'):
             self.assertNotIn(b'\r',path.read_bytes())
 
 
@@ -156,7 +157,8 @@ class ArgumentsAndSubmissionTests(unittest.TestCase):
                 self.assertEqual(cmd[cmd.index('-g')+1],'1');self.assertEqual(cmd[cmd.index('-c')+1],'8')
                 self.assertEqual(cmd[cmd.index('-m')+1],'32G');self.assertEqual(cmd[cmd.index('-n')+1],'1')
                 self.assertLess(len(cmd[cmd.index('-j')+1]),60)
-                self.assertEqual(job['queue'],'pdgpu-4090' if job['benchmark']=='reasonaqa5000' else 'pdgpu-5090')
+                self.assertEqual(job['queue'],'pdgpu-4090')
+                self.assertEqual(cmd[cmd.index('-p')+1],'pdgpu-4090')
         self.assertEqual(len(set(outputs)),24)
 
     def test_explicit_checkpoint_required_and_no_default_final_step(self):
@@ -197,6 +199,7 @@ class ArgumentsAndSubmissionTests(unittest.TestCase):
             good=types.SimpleNamespace(returncode=0,stdout='fixture submitted',stderr='')
             bad=types.SimpleNamespace(returncode=1,stdout='',stderr='fixture failed')
             with patch.object(submit.subprocess,'run',side_effect=[bad]+[good]*23) as call, \
+                 patch.object(submit.preflight,'check',return_value={'status':'READY_FOR_GPU'}), \
                  patch.object(submit,'ROOT',path),redirect_stdout(io.StringIO()):
                 self.assertEqual(submit.main(argv),1)
             self.assertEqual(call.call_count,24)
