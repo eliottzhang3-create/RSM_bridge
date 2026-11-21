@@ -89,6 +89,10 @@ bash code/RSmol/scripts/convert_text_hrm_h2l3.sh \
 
 转换验证完整源tensor库存/finite/绑定、20层映射、各层非平凡Norm折叠和gate补偿、50次轨迹、入口1/L出口6/H出口2、因果后缀扰动、保存重载全部tensor/logits/tokenizer。支持单文件/分片safetensors及bin；拒绝混合入口、坏分片、矛盾tied值、训练态来源和已有输出。原始source文件SHA在发布前再次验证；失败保留私有staging/failure报告。沿用CloudStor兼容的无覆盖原子发布实现。
 
+2026-11-22转换校验修正：源层`(RMS(x)*gamma) @ W.T`与折叠后`RMS(x) @ (W*gamma).T`改变FP32舍入次序，原逐元素allclose在输出接近零时可能误拒绝。现在先逐张量精确核对层映射、Norm类型/eps、QKV与gate/up列折叠、零gate和o_proj×2；再同时限制每token的RMS误差和逐元素误差。逐元素预算为`3e-6 + 3e-5*(该token源输出RMS + abs(该元素源输出))`，RMS预算为`3e-6 + 3e-5*该token源输出RMS`，不使用全batch最大值放宽其他token。若原allclose未通过，额外使用独立全FP64的Norm/投影/RoPE/causal attention/MLP计算，对照源FP32、目标FP32及存储折叠后的FP64误差；每层结果写入`conversion_audit.json`。原生产模型/转换权重公式/训练配方不变。
+
+用户报告的layer5最大绝对差1.52587890625e-5发生在staging创建和发布之前；正常Python异常会释放conversion lock。更新代码后可直接重跑转换，无需删除源权重或既有目录。实际权重仍须在远程用新校验确认。
+
 ## 正式训练提交
 
 转换成功后，在远程仓库根执行：
@@ -148,6 +152,6 @@ python -B tests/validate_text_hrm_h2l3.py --require-tensors
 
 CPU合成测试不读取生产权重/数据，不运行CUDA，不提交作业，不作为formal额外前置。缺ML依赖时不加`--require-tensors`会明确skip，不能当作tensor通过。报告：`audit_reports/text_hrm_h2l3_validation.json`，以实际版本/通过项/跳过项为准。Windows如沙箱阻止临时目录或Git Bash信号管道，需要获准在沙箱外执行同一离线测试。
 
-2026-11-21本地结果：27/27通过，无跳过。包含真实两进程CPU/Gloo/DDP的生产累积函数，BP3/4/5梯度与独立全局token平均对照；真实微型Llama转换/重载/因果性、非平凡gamma折叠、Prelude梯度、Adam-atan2独立NumPy对照、完整optimizer/EMA/RNG恢复后下一更新一致、Parquet重放、85片manifest启动路径、checkpoint最近3份保留及损坏拒绝，以及真实Bash到模拟vc/torchrun的参数链。生产配置在meta device核对102,420,288参数，未分配生产权重。
+2026-11-22本地结果：30/30通过，无跳过。包含真实两进程CPU/Gloo/DDP的生产累积函数，BP3/4/5梯度与独立全局token平均对照；真实微型Llama转换/重载/因果性、非平凡gamma折叠、Prelude梯度、Adam-atan2独立NumPy对照、完整optimizer/EMA/RNG恢复后下一更新一致、Parquet重放、85片manifest启动路径、checkpoint最近3份保留及损坏拒绝，以及真实Bash到模拟vc/torchrun的参数链。生产配置在meta device核对102,420,288参数，未分配生产权重。新增真实576/1536维、9:3 GQA合成块复现旧allclose拒绝（本地max_abs约2.24e-5），经精确张量证书和FP64参考通过；错误gate/o_proj/gamma/层映射/eps及正确权重但错误forward均拒绝。
 
 验证环境为Python3.13.5、Torch2.15.0+cpu、Transformers4.54.1；Torch/Python与远程rsmol环境不同。CPU验证不能代替远程Torch2.11/CUDA、3090显存和八卡NCCL训练/恢复实测。3237份既有tracked Python/Shell normalized-LF摘要保持，原数据与Llama辅助函数AST一致；官方optimizer仅清除两处空行尾空格，算法AST保持一致。

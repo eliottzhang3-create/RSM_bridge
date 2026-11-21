@@ -1,3 +1,28 @@
+## 2026-11-22：HRM转换layer5逐层校验误拒绝修正
+
+用户远程转换在阶段2的target layer5报max_abs=1.52587890625e-5；旧校验为逐元素allclose(atol3e-6,rtol3e-5)。
+gamma折叠使(RMS(x)*gamma)@W.T变为RMS(x)@(W*gamma).T，实数等价但FP32乘加次序与存储舍入不同；
+接近零的输出元素可能触发原绝对容差。之前微型hidden16测试未充分覆盖生产576维和训练后数值规模。
+本地真实576/1536维、GQA9:3合成block已复现旧allclose拒绝，max_abs约2.24e-5；独立FP64参考通过。
+这支持舍入误报判断，真实远程权重仍需重跑新校验，不宣称实际生产转换已经通过。
+
+仅修改本路线conversion.py的审计，不改变模型forward、权重转换公式、训练配方或其他路线。
+先逐张量精确校验20层映射、无参数Norm类型/eps、QKV/gate-up gamma列折叠、零attention gate与o_proj×2。
+FP32逐元素预算采用3e-6+3e-5*(当前token源输出RMS+abs(当前源元素))，另检查每token误差RMS预算3e-6+3e-5*源RMS。
+不以全batch极值扩大其他token容差；若旧逐元素allclose未通过，额外独立FP64 Norm/投影/RoPE/causal attention/MLP，
+分别比较源FP32、目标FP32与各自FP64参考，以及实际已存储折叠权重的FP64前后差（更严3e-7/3e-6预算）。
+不能仅调用model.double()冒充全FP64参考，因为现有Norm内部会强制float32。模型参数和生产计算dtype不改。
+conversion_audit.json保留每层误差/预算比、旧allclose状态及必要FP64复核；真正的张量或forward错误继续硬拒绝。
+
+新增三项回归：生产维度舍入压力及FP64参考；gate/o_proj/gamma/层映射/eps/非有限故障拒绝；正确张量但错误forward拒绝。
+本地CPU完整30/30通过、无跳过，含原两进程DDP、转换重载、checkpoint和数据恢复；3237份原源码摘要保持。
+Python3.10语法、Bash/README语法、git diff --check通过；环境仍Python3.13.5/Torch2.15.0+cpu/Transformers4.54.1。
+报告audit_reports/text_hrm_h2l3_validation.json已更新；Windows临时目录/Bash受限后获准沙箱外进行合成离线测试。
+该远程失败发生在staging创建/目标发布之前，正常Python异常的finally会释放conversion lock；无须删除权重或目录。
+本地提交修复并GitHub同步后，远程git pull --ff-only，再运行bash code/RSmol/scripts/convert_text_hrm_h2l3.sh；
+转换通过后才提交bash code/RSmol/run_text_hrm_h2l3_3090.sh。未替用户commit/push/远程转换或提交训练。
+本条仅前置，以下既有RM字节完整保留。
+
 ## 2026-11-21：20层P5/L5/H5/C5 HRM H2L3隔离文本转换与正式训练实现
 
 按用户最终确认，先文本后音频；本次仅新增`code/RSmol/text_hrm_h2l3/`及三份独立Shell入口。

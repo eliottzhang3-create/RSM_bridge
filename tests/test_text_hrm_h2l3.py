@@ -194,6 +194,76 @@ class TensorTests(unittest.TestCase):
                 for key, value in layer.state_dict().items():
                     self.assertTrue(torch.equal(value,source.model.layers[C.SOURCE_LAYERS[i]].state_dict()[key]))
 
+    def test_production_width_cancellation_fp64_and_exact_tensor_guard(self):
+        from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRotaryEmbedding
+        from text_hrm_h2l3.model import GatedLlamaAttention, ParameterlessRMSNorm
+        # Real 576/1536, 9:3 GQA block with larger learned-gamma/output scales.
+        # Aliasing identical fixture blocks limits memory; the production model
+        # remains independently tested for 20 physical modules/102420288 params.
+        torch.manual_seed(917)
+        config = LlamaConfig(**(C.SOURCE_CONFIG | {'vocab_size':97}))
+        config._attn_implementation = 'sdpa'
+        block = LlamaDecoderLayer(config,0).float()
+        with torch.no_grad():
+            block.input_layernorm.weight.copy_(torch.linspace(.7,8,576))
+            block.post_attention_layernorm.weight.copy_(torch.linspace(8,.7,576))
+            block.self_attn.o_proj.weight.mul_(2)
+            block.mlp.down_proj.weight.mul_(2)
+        middle = copy.deepcopy(block)
+        middle.self_attn = GatedLlamaAttention(C.target_config(config),5)
+        torch.nn.init.zeros_(middle.self_attn.gate_proj.weight)
+        middle.input_layernorm = ParameterlessRMSNorm(config.rms_norm_eps)
+        middle.post_attention_layernorm = ParameterlessRMSNorm(config.rms_norm_eps)
+        source, target = torch.nn.Module(), torch.nn.Module()
+        source.config, target.config = config, C.target_config(config)
+        for model, layers in ((source,[block]*30),(target,[block]*5+[middle]*10+[block]*5)):
+            model.model = torch.nn.Module()
+            model.model.layers = torch.nn.ModuleList(layers)
+            model.model.rotary_emb = LlamaRotaryEmbedding(config=model.config)
+        target.load_state_dict(convert_state(source.state_dict(),target),strict=True)
+        audit = conversion_parity(source,target)
+        fallback = [r for r in audit['layers'] if 'fp64' in r]
+        self.assertTrue(fallback,'fixture must reproduce the old FP32 elementwise rejection')
+        self.assertGreater(max(audit['layer_max_abs_errors']),3e-6)
+        for report in fallback:
+            self.assertTrue(report['fp32']['passed'])
+            self.assertTrue(all(value['passed'] for value in report['fp64'].values()))
+        # A tiny stored-weight corruption is rejected independently of output tolerances.
+        with torch.no_grad(): middle.self_attn.q_proj.weight[0,0].add_(1e-7)
+        with self.assertRaisesRegex(ValueError,'tensor check failed.*self_attn.q_proj.weight'):
+            conversion_parity(source,target)
+
+    def test_conversion_parity_rejects_gate_compensation_norm_and_nonfinite(self):
+        from text_hrm_h2l3.conversion import _parity_metrics
+        for mode in ('gate','oproj','gamma','mapping','eps'):
+            source, target = hrm_model()
+            layer = target.model.layers[5]
+            with torch.no_grad():
+                if mode == 'gate': layer.self_attn.gate_proj.weight[0,0] = 1e-7
+                if mode == 'oproj': layer.self_attn.o_proj.weight.mul_(.5)
+                if mode == 'gamma': layer.mlp.up_proj.weight[:,0].mul_(1.01)
+                if mode == 'mapping': layer.self_attn.k_proj.weight.copy_(source.model.layers[7].self_attn.k_proj.weight)
+                if mode == 'eps': layer.input_layernorm.eps *= 2
+            with self.assertRaisesRegex(ValueError,'tensor check failed'):
+                conversion_parity(source,target)
+        with self.assertRaises(ValueError): _parity_metrics(torch.tensor([float('nan')]),torch.ones(1))
+        good = torch.ones(2,4)
+        bad = good.clone(); bad[0,0] += .01
+        self.assertFalse(_parity_metrics(bad,good)['passed'])
+
+    def test_conversion_parity_rejects_wrong_forward_with_correct_tensors(self):
+        from functools import wraps
+        source, target = hrm_model()
+        layer = target.model.layers[5]
+        original_forward = layer.forward
+        @wraps(original_forward)
+        def wrong_forward(*args,**kwargs):
+            value = original_forward(*args,**kwargs)
+            return (value[0] + .01,) if isinstance(value,tuple) else value + .01
+        layer.forward = wrong_forward
+        with self.assertRaisesRegex(ValueError,'fold/gate parity failed at target layer 5'):
+            conversion_parity(source,target)
+
     def test_real_trace_norm_calls_and_causality(self):
         _, model = hrm_model()
         audit, _ = forward_audit(model)

@@ -91,8 +91,95 @@ def forward_audit(model):
                 causal_suffix_perturbation_pass=True, finite_logits=True), logits
 
 
+def _verify_layer_transform(source, target, *, middle):
+    """Exact tensor certificate, independent of any forward tolerance."""
+    import torch
+    from .model import ParameterlessRMSNorm
+    expected = dict(source.state_dict())
+    if middle:
+        for norm in ('input_layernorm', 'post_attention_layernorm'):
+            module = getattr(target, norm)
+            if not isinstance(module, ParameterlessRMSNorm) or module.eps != getattr(source, norm).variance_epsilon:
+                raise ValueError(f'converted {norm} type/epsilon mismatch')
+            gamma = expected.pop(norm + '.weight')
+            names = ('self_attn.q_proj.weight', 'self_attn.k_proj.weight', 'self_attn.v_proj.weight') if norm == 'input_layernorm' else ('mlp.gate_proj.weight', 'mlp.up_proj.weight')
+            for name in names:
+                expected[name] = expected[name] * gamma.unsqueeze(0)
+        expected['self_attn.o_proj.weight'] = expected['self_attn.o_proj.weight'] * 2.0
+        expected['self_attn.gate_proj.weight'] = torch.zeros_like(source.self_attn.q_proj.weight)
+    actual = target.state_dict()
+    if set(actual) != set(expected):
+        raise ValueError('converted layer tensor inventory mismatch')
+    for name, value in expected.items():
+        if actual[name].dtype != torch.float32 or not torch.equal(value, actual[name]):
+            raise ValueError(f'converted layer tensor mismatch: {name}')
+
+
+def _parity_metrics(actual, reference, *, atol=3e-6, rtol=3e-5):
+    """Per-token scale handles cancellation; RMS and elementwise limits both apply."""
+    import torch
+    a, b = actual.double(), reference.double()
+    if a.shape != b.shape or not bool(torch.isfinite(a).all() & torch.isfinite(b).all()):
+        raise ValueError('nonfinite/shape mismatch in conversion parity')
+    error = (a - b).abs()
+    scale = b.square().mean(-1, keepdim=True).sqrt()
+    # Fixed small-value floor plus per-token RMS and per-element relative terms.
+    # Using a per-token scale avoids hiding one bad token behind another large token.
+    envelope = atol + rtol * (scale + b.abs())
+    element_ratio = float((error / envelope).max())
+    rms_ratio = float((error.square().mean(-1, keepdim=True).sqrt() / (atol + rtol * scale)).max())
+    return dict(passed=element_ratio <= 1.0 and rms_ratio <= 1.0,
+        max_abs=float(error.max()), max_element_budget_ratio=element_ratio,
+        max_token_rms_budget_ratio=rms_ratio)
+
+
+def _layer_reference_fp64(layer, x, *, positions, cos_sin):
+    """Independent CPU FP64 block math; never casts the production module itself.
+
+    Merely calling layer.double() would still use FP32 RMSNorm math in Llama and
+    ParameterlessRMSNorm. This functional reference keeps ALL block math FP64,
+    using the same precomputed RoPE constants as the actual FP32 comparison.
+    """
+    import torch
+    import torch.nn.functional as F
+    from .model import ParameterlessRMSNorm
+
+    def norm(value, module):
+        eps = module.eps if isinstance(module, ParameterlessRMSNorm) else module.variance_epsilon
+        value = value * torch.rsqrt(value.square().mean(-1, keepdim=True) + eps)
+        return value if isinstance(module, ParameterlessRMSNorm) else value * module.weight.double()
+
+    def linear(value, module):
+        return F.linear(value, module.weight.double(), None if module.bias is None else module.bias.double())
+
+    def rotate(value):
+        first, second = value.chunk(2, dim=-1)
+        return torch.cat((-second, first), dim=-1)
+
+    x = x.double()
+    y = norm(x, layer.input_layernorm)
+    attention = layer.self_attn
+    shape = (*y.shape[:-1], -1, attention.head_dim)
+    q, k, v = [linear(y, module).view(shape).transpose(1, 2)
+               for module in (attention.q_proj, attention.k_proj, attention.v_proj)]
+    cos, sin = [value.double().unsqueeze(1) for value in cos_sin]
+    q, k = q * cos + rotate(q) * sin, k * cos + rotate(k) * sin
+    groups = q.shape[1] // k.shape[1]
+    k, v = [value.repeat_interleave(groups, dim=1) for value in (k, v)]
+    scores = (q @ k.transpose(-2, -1)) * attention.scaling
+    causal = positions[:, None, :, None] >= positions[:, None, None, :]
+    scores = scores.masked_fill(~causal, float('-inf'))
+    a = (scores.softmax(-1) @ v).transpose(1, 2).reshape(*y.shape[:-1], -1)
+    if hasattr(attention, 'gate_proj'):
+        a = a * torch.sigmoid(linear(y, attention.gate_proj))
+    x = x + linear(a, attention.o_proj)
+    y = norm(x, layer.post_attention_layernorm)
+    mlp = layer.mlp
+    return x + linear(F.silu(linear(y, mlp.gate_proj)) * linear(y, mlp.up_proj), mlp.down_proj)
+
+
 def conversion_parity(source, target):
-    """Compare every selected source block to its mapped/reparameterized target."""
+    """Exact folding certificate + scale-aware FP32 audit, FP64 on cancellation."""
     import torch
     from .llama_compat import _causal_mask, _call_decoder_layer
     generator = torch.Generator(device='cpu').manual_seed(19)
@@ -101,19 +188,38 @@ def conversion_parity(source, target):
     mask = _causal_mask(attention_mask=None, batch_size=2, query_length=5,
                        past_length=0, dtype=x.dtype, device=x.device)
     cos_sin = target.model.rotary_emb(x, positions)
-    errors = []
+    errors, reports = [], []
     source.eval(); target.eval()
     with torch.no_grad():
         for i, source_index in enumerate(SOURCE_LAYERS):
+            original, converted = source.model.layers[source_index], target.model.layers[i]
+            try:
+                _verify_layer_transform(original, converted, middle=5 <= i < 15)
+            except ValueError as exc:
+                raise ValueError(f'fold/gate tensor check failed at target layer {i}: {exc}') from exc
             args = dict(attention_mask=mask, position_ids=positions, cache=None,
                         use_cache=False, cache_position=positions[0],
                         position_embeddings=cos_sin, output_attentions=False)
-            a = _call_decoder_layer(source.model.layers[source_index], x, **args)[0]
-            b = _call_decoder_layer(target.model.layers[i], x, **args)[0]
-            if not torch.allclose(a, b, atol=3e-6, rtol=3e-5):
-                raise ValueError(f'fold/gate parity failed at target layer {i}: {(a-b).abs().max().item()}')
-            errors.append(float((a-b).abs().max()))
+            a = _call_decoder_layer(original, x, **args)[0]
+            b = _call_decoder_layer(converted, x, **args)[0]
+            metrics = _parity_metrics(b, a)
+            report = dict(target_layer=i, source_layer=source_index, fp32=metrics,
+                old_elementwise_allclose=bool(torch.allclose(a, b, atol=3e-6, rtol=3e-5)))
+            if not report['old_elementwise_allclose']:
+                a64 = _layer_reference_fp64(original, x, positions=positions, cos_sin=cos_sin)
+                b64 = _layer_reference_fp64(converted, x, positions=positions, cos_sin=cos_sin)
+                report['fp64'] = dict(source_fp32_vs_reference=_parity_metrics(a, a64),
+                    target_fp32_vs_reference=_parity_metrics(b, b64),
+                    stored_folded_vs_original=_parity_metrics(b64, a64, atol=3e-7, rtol=3e-6))
+            if not metrics['passed'] or any(not value['passed'] for value in report.get('fp64', {}).values()):
+                raise ValueError(f'fold/gate parity failed at target layer {i}: {json.dumps(report)}')
+            if 'fp64' in report:
+                print(f'[convert parity] layer={i} max_abs={metrics["max_abs"]:.8g}; exact tensors and FP64 references PASS', flush=True)
+            reports.append(report)
+            errors.append(metrics['max_abs'])
     return dict(layer_max_abs_errors=errors, atol=3e-6, rtol=3e-5,
+                policy='exact_tensors_per_token_rms_and_element_budget_fp64_on_cancellation_v2',
+                exact_layer_tensors=True, layers=reports,
                 whole_model_parity_claimed=False)
 
 

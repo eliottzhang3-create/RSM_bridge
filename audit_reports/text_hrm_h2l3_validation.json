@@ -1,7 +1,7 @@
 {
   "status": "PASS_LOCAL_CPU",
-  "tests_run": 27,
-  "passed": 27,
+  "tests_run": 30,
+  "passed": 30,
   "skipped": [],
   "failures": [],
   "python": "3.13.5",
