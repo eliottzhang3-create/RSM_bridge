@@ -1,0 +1,23 @@
+CED-Small / SmolLM2 Mizar Stage 1 adaptation
+
+The model architecture is derived from Mellow, Copyright (c) 2024 Soham,
+under the MIT License retained in LICENSE.
+
+The Stage 1 text templates, text construction/tokenization semantics,
+distributed sampler, CED wrapper, CEDFrequencyMerger, CEDTemporalMapper,
+optimizer/scheduler and adaptive gradient clipping
+are derived from kaiyangli-ml/Mizar_159M. The fixed20 online audio policy
+is adapted from its pipeline/build_ced_cache.py.
+
+Mizar: Copyright (c) 2026 NEC Laboratories America, Inc.
+All rights reserved. The Clear BSD License is retained in
+licenses/Mizar-ClearBSD.txt.
+
+The externally loaded mispeech/ced-small model code and weights retain their
+upstream Apache-2.0 terms; those assets are not vendored in this route.
+
+This route adds CED online FP32 audio decoding/staging, per-sample dB handling,
+explicit training
+audits, eight-GPU microbatch-eight with four-step gradient accumulation,
+and complete-state checkpoints.
+Reference source file identities are recorded in reference_audit.json.

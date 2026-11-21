@@ -1,3 +1,88 @@
+## 2026-11-21：原始SmolLM2 + CED-small隔离GBS128正式训练，3090/64CPU
+
+按用户确认计划，从原普通CED-small GBS256完整复制隔离，新增
+`code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs128_3epochs_ced_small/`
+和入口`code/RSmol/run_mizar_s1_ced_small_gbs128_3090.sh`。
+用户补充指定pdgpu-3090、64CPU、256G、8GPU、单节点；原镜像和mellow_c8204d8保持。
+原GBS256训练/入口、其他路线、共享模型与全部已有评测代码不改，3166份tracked源码LF SHA保护。
+
+文本仍从`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2`初始化，原始30个独立物理层、hidden576、
+全量LM训练，无递归/MeSH/LoRA。冻结eval CED-small、原官方freq_merge_126 mapper和外置Identity保持；
+不加载既有音频checkpoint作为初始化。唯一训练配方变化为micro8→4：8GPU×micro4×GA4=GBS128，
+3epochs/每epoch11542更新/总34626，沿用round(5%)得到warmup1731；每epoch消耗1477376行、丢弃116行。
+LM max/min LR3e-4/3e-5，mapper6e-4/6e-5；原AdamW/GradScaler/GradNorm/LambdaLR/FP32和TF32关闭保持。
+原hybrid1477492行、来源范围/顺序/seed、fixed20中心裁剪、整段mel/BN/时频排列、683布局、
+S1 prompt/answer EOS、PAD!/EOS0、attention_mask=None及answer-only shifted CE、rank内token mean→GA4→DDP保持。
+21份模型/数据/优化器/staging等文件normalized-LF一致，完整trainer仅描述/报错字符串变化，更新计算完全继承。
+
+保存5771/11542/17313/23084/28855/34626及model--epo-3.ckpt；run.sh完整34626步PASS检查同步。
+新route为ced_small_mizar_s1_fixed20_gbs128_v1，独立output/log/job/index-cache/tmpfs和resume身份。
+默认输出`outputs/RSmol/mizar_s1_ced_small_gbs128_3090/formal_<timestamp>/formal/`。
+CPU index、共享音频立即训练/默认4workers后台复制、optimizer边界8rank MIN一致切换、先reap再owner/token清理保持；
+tmpfs保留原守卫前缀`/dev/shm/mizar_s1_gbs256_ced_small_gbs128_<token>`，实际GBS128由合同明确记录。
+直接formal，无新增smoke前置；完整恢复保存原模型/optimizer/scheduler/scaler/GradNorm/8rank RNG和数据游标，
+只接受本新路线相同源码/资产/数据/依赖/配方checkpoint，沿用原run root，拒绝旧GBS256完整恢复。
+
+本地`python -B tests/validate_mizar_s1_ced_gbs128.py`：56项执行通过、15项真实CPU张量测试因缺依赖明确跳过。
+通过实际runtime配置/六保存点、训练geometry拦截、真实checkpoint writer全状态/8rank字段、实际恢复代码rank选择/跨合同拒绝、
+16样本rank游标、原正式完成检查、真实Bash模拟vc资源/含空格路径/失败清理、真实tmpfs守卫和原GBS256回归。
+Python3.10、2份Bash及4块README命令语法与Git同步清单通过；3166份原源码摘要保持。
+官方mapper AST、文本/RNG1344组、tokenizer8组、34627个LR位置误差0、GradNorm10000组对照通过。
+Windows沙箱拒绝测试临时目录后获准沙箱外完成同一离线回归；fixture不冒充真实autograd或8GPU恢复。
+报告`audit_reports/mizar_s1_ced_gbs128_validation.json`，包内reference_audit为本次审计、parent_reference_audit仅母本历史；
+original_files_sha256及两份审计JSON明确放行普通Git同步。完整实现、精确Git提交及恢复命令见包内README。
+未读取远程权重/数据、提交真实训练或commit/push；3090显存、生产权重加载及真实训练结果待远程执行。
+本条仅前置，原RM字节完整保留。代码经GitHub同步后，远程仓库根执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_ced_small_gbs128_3090.sh
+```
+
+## 2026-11-21：已训练7–14×3–7六槽MeSH接原CED-small/projector，隔离GBS128/3090音频训练
+
+按用户确认计划，从原mizar_stage1_fixed20_gbs256_3epochs_recursive_mesh_ced_small完整复制隔离，新增
+`code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced_small/`
+及入口`code/RSmol/run_mizar_s1_gbs128_text71437_mesh_ced_small_3090.sh`。
+默认文本来源为用户指定的
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_reinit1200_seed1_20261119_084545_3432609/checkpoint-009244`。
+无需重新转换，显式MizarText7_14x3_7MeshForCausalLM加载全部LM/tokenizer及四组已训练routers；
+校验完成标记/9244步/四种schedule别名/来源映射，逐张量核对FP32/finite/库存及embedding-head绑定。
+28物理层/56执行，0..6、(7..20)×3、21..27；六槽全683位置瞬时memory，八router/16张量/27696参数。
+原prefix输出query/value、loop输入query/输出value保持；不重置routers，不读文本training_state.pt。
+音频optimizer/scheduler/GradScaler/GradNorm/RNG/游标从step0新建，seed1234及1234+rank。
+
+原CED-small离线strict/冻结eval、whole20 mel/BN分段及正确时频排列、逐样本dB保持；
+原freq_merge_126 mapper随机训练，含完整频率MLP/global/位置/audio-type/refinement，dropout.05、resampleFalse、外置Identity。
+原hybrid1477492行、fixed20中心裁剪、S1 prompt/answer EOS及原截断/PAD、683布局和answer-only shifted CE保持。
+用户确认pdgpu-3090/64CPU/256G/8GPU单节点，micro4×GA4=GBS128，3epochs/34626更新/warmup1731。
+LM/routers maxLR3e-4、mapper6e-4；原FP32/无autocast/TF32关闭/GradScaler/AdamW/LambdaLR/GradNorm保持。
+loss仍rank-local有效token mean→GA4→DDP均值；不继承文本seed1/BF16或其他音频的统一LR2e-4配方。
+
+独立route/output/log/index/tmpfs；原CPU index、共享音频立即训练/4worker后台复制、optimizer边界8rank MIN集体切换保持。
+tmpfs保留mizar_s1_gbs256_安全前缀及text71437独立后缀/token，停止reap producer后再核对owner清理。
+直接formal，无新增smoke/人工放行前置；保留真实来源探针，首micro审计三轮输入输出梯度后立即释放引用，检查全部16router梯度。
+保存5771/11542/17313/23084/28855/34626及epoch3，完整模型/AdamW/scheduler/Scaler/GradNorm/八rank RNG和下一数据游标。
+恢复须本新路线同源码/资产/文本来源/数据/依赖/配方、原外层run-root；恢复前检查完整字段/合同SHA/几何/游标及八rank RNG。
+原路线和共享文本实现不改，旧评测器尚未登记本新合同，需后续单独适配。
+
+本地75项执行通过、32项真实ML依赖测试明确跳过，PASS_LOCAL_WITH_SKIPS；3166份原tracked源码LF SHA保持。
+包括实际生产forward控制流的独立NumPy三循环/六槽递推、分片16router库存/错误tensor拒绝、恢复实际分支/rank3 RNG、
+原完整epoch更新循环/优化器/数据AST、真实Bash+模拟vc、CPU index/后台复制/失败清理及真实tmpfs守卫。
+官方mapper AST、文本/RNG1344组、分词8组、34627个LR位置误差0、GradNorm10000标量对照通过。
+Python3.10/Bash及README命令语法通过；Windows沙箱阻止临时目录/Bash管道后获准沙箱外执行离线回归。
+报告`audit_reports/mizar_s1_text71437_ced_small_validation.json`及包内reference_audit.json；源快照JSON明确Git放行。
+真实生产权重加载、3090显存、八卡训练/恢复未执行；未访问远程资产、提交作业或commit/push。
+本条仅前置，以下RM既有字节完整保留。完整配置、同run恢复及精确Git同步清单见新包README。
+GitHub同步后在远程仓库根执行：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+git pull --ff-only
+bash code/RSmol/run_mizar_s1_gbs128_text71437_mesh_ced_small_3090.sh
+```
+
 ## 2026-11-21：普通71427 CED音频从step34626仅权重重训3epochs，全局LR2e-4/2e-5
 
 按用户要求直接修改现有`code/RSmol/run_mizar_s1_gbs128_text71427_mesh_ced_small_3090.sh`及其配套训练代码，

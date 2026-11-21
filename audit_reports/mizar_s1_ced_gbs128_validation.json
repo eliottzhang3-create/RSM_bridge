@@ -1,0 +1,158 @@
+{
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "scope": "local offline tests; synthetic tensor-free fixtures explicitly separated from real CPU tensor coverage",
+  "remote_assets_read": false,
+  "gpu_training_run": false,
+  "vc_jobs_submitted": false,
+  "require_tensors": false,
+  "missing_dependencies": [
+    "torch",
+    "torchaudio",
+    "transformers",
+    "soundfile",
+    "safetensors"
+  ],
+  "geometry": {
+    "world_size": 8,
+    "microbatch": 4,
+    "accumulation": 4,
+    "global_batch": 128,
+    "epochs": 3,
+    "steps_per_epoch": 11542,
+    "total_steps": 34626,
+    "warmup": 1731
+  },
+  "resources": {
+    "queue": "pdgpu-3090",
+    "cpu": 64,
+    "memory": "256G",
+    "gpu": 8,
+    "nodes": 1
+  },
+  "executed_tests": 56,
+  "skipped_tests": 15,
+  "checks": [
+    {
+      "check": "python_3_10_syntax",
+      "status": "PASS",
+      "files": 33
+    },
+    {
+      "check": "run_mizar_s1_ced_small_gbs128_3090.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "run.sh",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "readme_bash_block_1",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "readme_bash_block_2",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "readme_bash_block_3",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "readme_bash_block_4",
+      "status": "PASS",
+      "output": ""
+    },
+    {
+      "check": "test_mizar_s1_ced_gbs128_route.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_assets_validate_geometry_without_onnx_and_reject_incompatible_config (__main__.CEDRouteTests.test_assets_validate_geometry_without_onnx_and_reject_incompatible_config) ... ok\ntest_formal_schedule_and_shorter_sequence (__main__.CEDRouteTests.test_formal_schedule_and_shorter_sequence) ... ok\ntest_launcher_resources_arguments_and_rejections_before_submit (__main__.CEDRouteTests.test_launcher_resources_arguments_and_rejections_before_submit) ... ok\ntest_optimizer_classifies_only_mapper_and_full_lm (__main__.CEDRouteTests.test_optimizer_classifies_only_mapper_and_full_lm) ... ok\ntest_parent_data_and_real_update_loop_preserved (__main__.CEDRouteTests.test_parent_data_and_real_update_loop_preserved) ... ok\ntest_resume_contract_separates_routes_and_is_independent_of_staging_root (__main__.CEDRouteTests.test_resume_contract_separates_routes_and_is_independent_of_staging_root) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 1.822s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_gbs128_shared_start.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[cpu-index] verifying manifest/audit TSV SHA256; no raw audio scan\n[cpu-index] manifest/audit TSV contents verified\n[staging] phase=COPYING staged 0/1 files (0.00/0.00 GiB) ready_through_batch=0 MiB_per_second=0.0 cgroup_remaining_bytes=None\n[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues\n[staging] training can start: read_policy=shared_until_complete prefill_steps=0 ready_through_batch=0 report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmp17bwjq8c\\report.json\n[staging] phase=COMPLETE staged 1/1 files (0.00/0.00 GiB) ready_through_batch=11542 MiB_per_second=0.0 cgroup_remaining_bytes=None\ntest_content_check_identifies_size_change_and_keeps_expected_paths (__main__.CEDSharedStartTests.test_content_check_identifies_size_change_and_keeps_expected_paths) ... ok\ntest_copy_failure_dead_process_and_stale_heartbeat_still_abort (__main__.CEDSharedStartTests.test_copy_failure_dead_process_and_stale_heartbeat_still_abort) ... ok\ntest_cpu_index_reuses_mapping_and_rejects_changed_inputs (__main__.CEDSharedStartTests.test_cpu_index_reuses_mapping_and_rejects_changed_inputs) ... ok\ntest_final_report_requires_full_copy_even_in_shared_mode (__main__.CEDSharedStartTests.test_final_report_requires_full_copy_even_in_shared_mode) ... ok\ntest_formal_config_is_created_with_zero_staged_files (__main__.CEDSharedStartTests.test_formal_config_is_created_with_zero_staged_files) ... ok\ntest_legacy_timestamp_only_identity_requires_rebuild (__main__.CEDSharedStartTests.test_legacy_timestamp_only_identity_requires_rebuild) ... ok\ntest_runner_starts_real_training_during_copy_and_cleans_on_failure (__main__.CEDSharedStartTests.test_runner_starts_real_training_during_copy_and_cleans_on_failure) ... ok\ntest_shared_path_remains_selected_until_explicit_boundary_switch (__main__.CEDSharedStartTests.test_shared_path_remains_selected_until_explicit_boundary_switch) ... ok\ntest_source_identity_change_is_rejected_and_partial_copy_removed (__main__.CEDSharedStartTests.test_source_identity_change_is_rejected_and_partial_copy_removed) ... ok\ntest_switch_is_collective_before_loading_all_four_microbatches (__main__.CEDSharedStartTests.test_switch_is_collective_before_loading_all_four_microbatches) ... ok\ntest_training_starts_before_first_copy_and_crosses_epoch_without_waiting (__main__.CEDSharedStartTests.test_training_starts_before_first_copy_and_crosses_epoch_without_waiting) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 1.598s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_gbs128_offline_config.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_missing_or_inconsistent_labels_fail_before_dynamic_import (__main__.CEDOfflineConfigTests.test_missing_or_inconsistent_labels_fail_before_dynamic_import) ... ok\ntest_offline_config_preserves_all_labels_and_architecture_and_cleans_up (__main__.CEDOfflineConfigTests.test_offline_config_preserves_all_labels_and_architecture_and_cleans_up) ... ok\ntest_real_wrapper_constructor_supplies_config_and_keeps_strict_loading (__main__.CEDOfflineConfigTests.test_real_wrapper_constructor_supplies_config_and_keeps_strict_loading) ... ok\ntest_restores_alias_and_deletes_table_when_model_load_fails (__main__.CEDOfflineConfigTests.test_restores_alias_and_deletes_table_when_model_load_fails) ... ok\ntest_unadapted_local_config_reproduces_external_csv_failure (__main__.CEDOfflineConfigTests.test_unadapted_local_config_reproduces_external_csv_failure) ... ok\ntest_unexpected_external_dependency_fails_locally (__main__.CEDOfflineConfigTests.test_unexpected_external_dependency_fails_locally) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.245s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_gbs128_staging_roots.py",
+      "status": "PASS",
+      "tests": 4,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_cleanup_still_requires_matching_token_and_root (__main__.StagingRootTests.test_cleanup_still_requires_matching_token_and_root) ... ok\ntest_old_isolated_names_reproduce_reported_startup_and_cleanup_failure (__main__.StagingRootTests.test_old_isolated_names_reproduce_reported_startup_and_cleanup_failure) ... ok\ntest_real_shell_roots_pass_startup_and_cleanup_guards_and_remain_distinct (__main__.StagingRootTests.test_real_shell_roots_pass_startup_and_cleanup_guards_and_remain_distinct) ... ok\ntest_unsafe_paths_symlinks_and_resolved_aliases_remain_rejected (__main__.StagingRootTests.test_unsafe_paths_symlinks_and_resolved_aliases_remain_rejected) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.131s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_gbs128_behavior.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[formal] PASS: 34626 optimizer updates; report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmpeh2crtxt\\report.json\ntest_actual_checkpoint_writer_publishes_full_8rank_payload (__main__.BehaviorTests.test_actual_checkpoint_writer_publishes_full_8rank_payload) ... ok\ntest_actual_geometry_guard_accepts_844_and_rejects_old_batch (__main__.BehaviorTests.test_actual_geometry_guard_accepts_844_and_rejects_old_batch) ... ok\ntest_actual_resume_selects_rank_rng_and_restores_every_state (__main__.BehaviorTests.test_actual_resume_selects_rank_rng_and_restores_every_state) ... ok\ntest_parent_launcher_is_preserved_and_new_launcher_diff_is_only_authorized (__main__.BehaviorTests.test_parent_launcher_is_preserved_and_new_launcher_diff_is_only_authorized) ... ok\ntest_runner_requires_34626_completed_steps (__main__.BehaviorTests.test_runner_requires_34626_completed_steps) ... ok\ntest_staging_priorities_follow_16_samples_per_rank_per_update (__main__.BehaviorTests.test_staging_priorities_follow_16_samples_per_rank_per_update) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.101s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_gbs128_tensor.py",
+      "status": "PASS_WITH_SKIPS",
+      "tests": 15,
+      "skipped": 15,
+      "exit_code": 0,
+      "output": "test_accumulated_gradient_is_mean_of_microbatch_means (__main__.RuntimeChecks.test_accumulated_gradient_is_mean_of_microbatch_means) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_ced_frozen_eval_and_mapper_gradient_with_whole20_splits (__main__.RuntimeChecks.test_ced_frozen_eval_and_mapper_gradient_with_whole20_splits) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_ced_temporal_grid_preserves_chunk_frequency_time_order (__main__.RuntimeChecks.test_ced_temporal_grid_preserves_chunk_frequency_time_order) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_decode_averages_every_channel_then_resamples (__main__.RuntimeChecks.test_decode_averages_every_channel_then_resamples) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_fixed20_single_order_and_right_padding (__main__.RuntimeChecks.test_fixed20_single_order_and_right_padding) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_fixed20_true_pair_is_independent (__main__.RuntimeChecks.test_fixed20_true_pair_is_independent) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_gbs128_optimizer_geometry (__main__.RuntimeChecks.test_gbs128_optimizer_geometry) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_gradnorm_ema_common_scale_and_restore (__main__.RuntimeChecks.test_gradnorm_ema_common_scale_and_restore) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_loader_is_offline_strict_and_keeps_only_frozen_encoder (__main__.RuntimeChecks.test_loader_is_offline_strict_and_keeps_only_frozen_encoder) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_mellow_rejoins_both_halves_before_encoding (__main__.RuntimeChecks.test_mellow_rejoins_both_halves_before_encoding) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_one_separator_padding_visibility_and_next_token_ce (__main__.RuntimeChecks.test_one_separator_padding_visibility_and_next_token_ce) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_online_db_matches_individual_cache_extraction (__main__.RuntimeChecks.test_online_db_matches_individual_cache_extraction) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_optimizer_groups_scheduler_step_order_and_full_resume (__main__.RuntimeChecks.test_optimizer_groups_scheduler_step_order_and_full_resume) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_sampler_staging_and_consumed_cursor_agree (__main__.RuntimeChecks.test_sampler_staging_and_consumed_cursor_agree) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\ntest_text_metadata_fallback_and_cot_preservation (__main__.RuntimeChecks.test_text_metadata_fallback_and_cot_preservation) ... skipped 'real CPU tensor check requires: torch, torchaudio, transformers, soundfile, safetensors'\n\n----------------------------------------------------------------------\nRan 15 tests in 0.000s\n\nOK (skipped=15)\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_small_route.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_assets_validate_geometry_without_onnx_and_reject_incompatible_config (__main__.CEDRouteTests.test_assets_validate_geometry_without_onnx_and_reject_incompatible_config) ... ok\ntest_formal_schedule_and_shorter_sequence (__main__.CEDRouteTests.test_formal_schedule_and_shorter_sequence) ... ok\ntest_launcher_resources_arguments_and_rejections_before_submit (__main__.CEDRouteTests.test_launcher_resources_arguments_and_rejections_before_submit) ... ok\ntest_optimizer_classifies_only_mapper_and_full_lm (__main__.CEDRouteTests.test_optimizer_classifies_only_mapper_and_full_lm) ... ok\ntest_parent_data_and_real_update_loop_preserved (__main__.CEDRouteTests.test_parent_data_and_real_update_loop_preserved) ... ok\ntest_resume_contract_separates_routes_and_is_independent_of_staging_root (__main__.CEDRouteTests.test_resume_contract_separates_routes_and_is_independent_of_staging_root) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 1.435s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_small_shared_start.py",
+      "status": "PASS",
+      "tests": 11,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "[cpu-index] verifying manifest/audit TSV SHA256; no raw audio scan\n[cpu-index] manifest/audit TSV contents verified\n[staging] phase=COPYING staged 0/1 files (0.00/0.00 GiB) ready_through_batch=0 MiB_per_second=0.0 cgroup_remaining_bytes=None\n[staging] TRAINING_READY: shared audio available; zero-copy startup; background copy continues\n[staging] training can start: read_policy=shared_until_complete prefill_steps=0 ready_through_batch=0 report=C:\\Users\\69327\\AppData\\Local\\Temp\\tmpy18xudpi\\report.json\n[staging] phase=COMPLETE staged 1/1 files (0.00/0.00 GiB) ready_through_batch=5771 MiB_per_second=0.0 cgroup_remaining_bytes=None\ntest_content_check_identifies_size_change_and_keeps_expected_paths (__main__.CEDSharedStartTests.test_content_check_identifies_size_change_and_keeps_expected_paths) ... ok\ntest_copy_failure_dead_process_and_stale_heartbeat_still_abort (__main__.CEDSharedStartTests.test_copy_failure_dead_process_and_stale_heartbeat_still_abort) ... ok\ntest_cpu_index_reuses_mapping_and_rejects_changed_inputs (__main__.CEDSharedStartTests.test_cpu_index_reuses_mapping_and_rejects_changed_inputs) ... ok\ntest_final_report_requires_full_copy_even_in_shared_mode (__main__.CEDSharedStartTests.test_final_report_requires_full_copy_even_in_shared_mode) ... ok\ntest_formal_config_is_created_with_zero_staged_files (__main__.CEDSharedStartTests.test_formal_config_is_created_with_zero_staged_files) ... ok\ntest_legacy_timestamp_only_identity_requires_rebuild (__main__.CEDSharedStartTests.test_legacy_timestamp_only_identity_requires_rebuild) ... ok\ntest_runner_starts_real_training_during_copy_and_cleans_on_failure (__main__.CEDSharedStartTests.test_runner_starts_real_training_during_copy_and_cleans_on_failure) ... ok\ntest_shared_path_remains_selected_until_explicit_boundary_switch (__main__.CEDSharedStartTests.test_shared_path_remains_selected_until_explicit_boundary_switch) ... ok\ntest_source_identity_change_is_rejected_and_partial_copy_removed (__main__.CEDSharedStartTests.test_source_identity_change_is_rejected_and_partial_copy_removed) ... ok\ntest_switch_is_collective_before_loading_all_four_microbatches (__main__.CEDSharedStartTests.test_switch_is_collective_before_loading_all_four_microbatches) ... ok\ntest_training_starts_before_first_copy_and_crosses_epoch_without_waiting (__main__.CEDSharedStartTests.test_training_starts_before_first_copy_and_crosses_epoch_without_waiting) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 1.861s\n\nOK\n"
+    },
+    {
+      "check": "test_mizar_s1_ced_offline_config.py",
+      "status": "PASS",
+      "tests": 6,
+      "skipped": 0,
+      "exit_code": 0,
+      "output": "test_missing_or_inconsistent_labels_fail_before_dynamic_import (__main__.CEDOfflineConfigTests.test_missing_or_inconsistent_labels_fail_before_dynamic_import) ... ok\ntest_offline_config_preserves_all_labels_and_architecture_and_cleans_up (__main__.CEDOfflineConfigTests.test_offline_config_preserves_all_labels_and_architecture_and_cleans_up) ... ok\ntest_real_wrapper_constructor_supplies_config_and_keeps_strict_loading (__main__.CEDOfflineConfigTests.test_real_wrapper_constructor_supplies_config_and_keeps_strict_loading) ... ok\ntest_restores_alias_and_deletes_table_when_model_load_fails (__main__.CEDOfflineConfigTests.test_restores_alias_and_deletes_table_when_model_load_fails) ... ok\ntest_unadapted_local_config_reproduces_external_csv_failure (__main__.CEDOfflineConfigTests.test_unadapted_local_config_reproduces_external_csv_failure) ... ok\ntest_unexpected_external_dependency_fails_locally (__main__.CEDOfflineConfigTests.test_unexpected_external_dependency_fails_locally) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.401s\n\nOK\n"
+    },
+    {
+      "check": "git_sync_manifest",
+      "status": "PASS"
+    },
+    {
+      "check": "official_reference_and_parent_source_audit",
+      "status": "PASS",
+      "output": "{\n  \"status\": \"PASS\",\n  \"route_code_sha256\": \"53d85283401437b9af57d2af1356bc27a3070c6317e87c464d1ee72f1aa9e7bf\",\n  \"reference\": \"kaiyangli-ml/Mizar_159M local official download\",\n  \"parent_route_audit\": {\n    \"parent_route\": \"code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_stage1_fixed20_gbs256_3epochs_ced_small\",\n    \"byte_identical_files\": [\n      \"LICENSE\",\n      \"NOTICE\",\n      \"check_ced_assets.py\",\n      \"data/audio_paths.py\",\n      \"data/audiotext_dataset.py\",\n      \"data/fixed20.py\",\n      \"data/indexed_jsonl.py\",\n      \"data/prepared_index.py\",\n      \"data/sampler.py\",\n      \"data/staging.py\",\n      \"data/template.py\",\n      \"licenses/Mizar-ClearBSD.txt\",\n      \"models/audio.py\",\n      \"models/ced.py\",\n      \"models/ced_offline.py\",\n      \"models/decoder.py\",\n      \"models/mellow.py\",\n      \"optim.py\",\n      \"prepare_index.py\",\n      \"stage_data.py\",\n      \"utils/audio_io.py\"\n    ],\n    \"protected_original_sources\": 3166,\n    \"allowed_changes\": {\n      \"contract.py\": [\n        [\n          \"ced_small_mizar_s1_fixed20_gbs256_v1\",\n          \"ced_small_mizar_s1_fixed20_gbs128_v1\"\n        ],\n        [\n          \"= 8, 8, 4, 3, 1234\",\n          \"= 8, 4, 4, 3, 1234\"\n        ]\n      ],\n      \"train.py\": [\n        [\n          \"GBS256\",\n          \"GBS128\"\n        ],\n        [\n          \"8 GPUs x microbatch8 x accumulation4 (global batch 256)\",\n          \"8 GPUs x microbatch4 x accumulation4 (global batch 128)\"\n        ]\n      ],\n      \"write_config.py\": [\n        [\n          \"8 GPUs x microbatch8 x accumulation4; global batch256 ablation\",\n          \"8 GPUs x microbatch4 x accumulation4; global batch128 ablation\"\n        ]\n      ],\n      \"run.sh\": [\n        [\n          \"run_mizar_s1_ced_small_gbs256_5090.sh\",\n          \"run_mizar_s1_ced_small_gbs128_3090.sh\"\n        ],\n        [\n          \"mizar_s1_gbs256_ced_small_${STAGE_TOKEN}\",\n          \"mizar_s1_gbs256_ced_small_gbs128_${STAGE_TOKEN}\"\n        ],\n        [\n          \"expected = 17313\",\n          \"expected = 34626\"\n        ]\n      ],\n      \"runtime_checks.py\": [\n        [\n          \"test_gbs256_optimizer_geometry\",\n          \"test_gbs128_optimizer_geometry\"\n        ],\n        [\n          \"(8, 8, 4, 256)\",\n          \"(8, 4, 4, 128)\"\n        ],\n        [\n          \"actual[\\\"steps_per_epoch\\\"], 5771\",\n          \"actual[\\\"steps_per_epoch\\\"], 11542\"\n        ],\n        [\n          \"actual[\\\"total_steps\\\"], 17313\",\n          \"actual[\\\"total_steps\\\"], 34626\"\n        ],\n        [\n          \"actual[\\\"warmup_steps\\\"], 866\",\n          \"actual[\\\"warmup_steps\\\"], 1731\"\n        ],\n        [\n          \"count = 2073  # eight full optimizer updates plus an uneven per-rank tail\",\n          \"per_rank = 8 * RANK_UPDATE_SAMPLES + 3\\n        count = WORLD_SIZE * per_rank + 1  # eight updates plus uneven tails\"\n        ],\n        [\n          \"permutation[rank * 259:(rank + 1) * 259]\",\n          \"permutation[rank * per_rank:(rank + 1) * per_rank]\"\n        ],\n        [\n          \"259 - 3 * RANK_UPDATE_SAMPLES\",\n          \"per_rank - 3 * RANK_UPDATE_SAMPLES\"\n        ],\n        [\n          \"len(set(all_indices)), 2072\",\n          \"len(set(all_indices)), WORLD_SIZE * per_rank\"\n        ]\n      ]\n    },\n    \"optimizer_epoch_loop\": \"entire trainer identical except GBS description/error strings\",\n    \"batch_change\": {\n      \"old\": [\n        8,\n        8,\n        4,\n        256\n      ],\n      \"new\": [\n        8,\n        4,\n        4,\n        128\n      ]\n    },\n    \"submission\": {\n      \"queue\": \"pdgpu-3090\",\n      \"cpu\": 64,\n      \"memory\": \"256G\",\n      \"gpu\": 8,\n      \"nodes\": 1\n    }\n  },\n  \"official_mapper_class_asts_equal\": [\n    \"CEDFrequencyMerger\",\n    \"CEDTemporalMapper\"\n  ],\n  \"reference_file_sha256\": {\n    \"configs/s1.yaml.in\": \"1823903831e18b504cef1442b80a845aae7d5f04bd3f6772058ef85ca90b4b8b\",\n    \"runtime/stage1/training/trainer.py\": \"ab93faca9b180a6b8237564b3018d11567ccd1cefd47cc551b1946ca3525b39e\",\n    \"runtime/stage1/data/audiotext_dataset.py\": \"c791a13f0d64de409006b5bc3a0b6e336cd63cb98faa98800ac70fba4624b860\",\n    \"runtime/stage1/data/template.py\": \"0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2\",\n    \"runtime/stage1/utils/utils.py\": \"43be6ba97163969f8787c39fd14e10921edeeb72524d9b4cb5a9eace0b74741b\",\n    \"pipeline/build_ced_cache.py\": \"500d1b5c15f702c6e4508bcb76dfeb4a0aa49acfed7d541525b1ea384a65fd87\",\n    \"runtime/stage1/models/ced.py\": \"24c34dc1dc5c7aadbac97e6611de3c5c52a7af5a98e8c452ec38c2de83f19015\",\n    \"runtime/stage1/models/decoder.py\": \"f652c20a7c3aa5625295a222dc2b1dc4d58c54c2cb64723bbb477ae11cb19bca\",\n    \"runtime/stage1/models/mellow.py\": \"bb0886114a3857eaed0e47c73bb0e96f0a0e95398265e40cf7238a57dba6dbaa\"\n  },\n  \"text_and_rng_comparisons\": 1344,\n  \"tokenizer_argument_comparisons\": 8,\n  \"scheduler_positions\": 34627,\n  \"scheduler_max_abs_error\": 0.0,\n  \"gradnorm_scalar_comparisons\": 10000,\n  \"scope\": \"stdlib extracted functions only; decoding/tensor/optimizer/DDP checks require the GPU-job environment\"\n}\n"
+    }
+  ],
+  "execution_note": "Windows sandbox denied temporary directory access; identical offline suite passed after approved unsandboxed execution.",
+  "rm_history": {
+    "previous_sha256": "bc96ec02b848926e230f08c9fa9065a01a66137574ad7d0b9d44ae461648c1be",
+    "previous_bytes_preserved": true,
+    "prepended_bytes": 3743
+  }
+}
