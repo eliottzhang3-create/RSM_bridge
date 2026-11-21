@@ -1,0 +1,18 @@
+Adam-atan2 in adam_atan2.py is copied without algorithm changes from
+sapientinc/HRM-Text, models/adam_atan2.py (Apache License 2.0).
+Only two whitespace-only lines were cleared for Git whitespace checks.
+Copyright belongs to its upstream contributors. See LICENSE.HRM-Text.
+HRM-Text: https://github.com/sapientinc/HRM-Text
+Paper: https://arxiv.org/abs/2605.20613
+Upstream files from the user's downloaded HRM-Text-main source:
+models/adam_atan2.py SHA256
+795304b1a57398e42975a0f54f3b7c5d2ff7ee51381f518fb13eb222ff31a414
+LICENSE SHA256
+43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1
+This identifies the local reference files, not an inferred upstream Git commit.
+The optimizer's Python AST is unchanged from that reference.
+
+llama_compat.py copies _causal_mask and _call_decoder_layer from this project's
+recursive_model_5_20x2_5.py. data.py copies six documented data functions from
+train_stage4_mizar_text_5_10x2_5_huginn_ddp.py. publication.py is copied from
+mizar_text_5_10x2_5_huginn/publication.py. Those original files remain unchanged.

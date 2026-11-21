@@ -1,3 +1,75 @@
+## 2026-11-21：20层P5/L5/H5/C5 HRM H2L3隔离文本转换与正式训练实现
+
+按用户最终确认，先文本后音频；本次仅新增`code/RSmol/text_hrm_h2l3/`及三份独立Shell入口。
+从远程原30层SmolLM2取零基层号0,1,2,3,4,5,7,9,11,13,15,17,19,21,23,25,26,27,28,29；
+目标P0..4/L5..9/H10..14/C15..19，20物理层、50次执行、102420288独立参数。
+E=无参数RMSNorm(Prelude(embedding))，H0=E/L0=固定向量；两轮各L三次后H一次，末H进Coda/原norm/head。
+独立L/H权重各自跨调用复用；hidden576/MLP1536/GQA9:3/RoPE100000/tied head保持。
+中段MagicNorm无参数PreNorm保留源eps1e-5，L/H出口及Prelude入口eps1e-6；
+逐通道sigmoid attention gate在o_proj前，零gate及o_proj×2；源Norm gamma折叠进QKV/gate-up列。
+固定L按官方fmod截断近似、CPU seed0生成FP32持久buffer；不训练、不逐次采样、不跨batch carry。
+严格转换验证源库存/finite/绑定、逐层折叠补偿、实际50次轨迹/Norm调用/因果性、保存重载tensor/logits/tokenizer；
+原源SHA复核，拒绝已有输出，不覆盖共享资产。整体HRM不宣称与原30层logits等价。
+
+全部causal与真实padding mask，所有有效next-token监督，原85片Parquet/seed0分rank/buffer4096、max1024/动态padding/无packing。
+8GPU×micro2×GA64=GBS1024，9244更新；官方Adam-atan2 beta(.9,.95)、全部唯一参数WD.1、EMA.9999。
+第s次更新前LR=3e-4*min(s/3000,1)，3000步后恒定；无cosine、梯度裁剪、GradScaler或spike skipping。
+BP：1..924为H1/L6/H2，925..1848加L5，1849..9244再加L4；E不全局detach，Prelude从首步收到任务梯度。
+FP32参数/优化器/残差，BF16前向、FP32 Norm/CE，TF32关闭；loss为全8rank及64micro有效目标token的统一平均。
+每400及9244保存raw HF、独立ema/、全部optimizer与8rank RNG/游标/合同，最近3份正常为8800/9200/9244。
+完整resume用新output目录、同源码/数据/依赖/配方，继续总计9244；当前shard起始RNG重放恢复shuffle buffer。
+数据身份为名称/大小/mtime_ns，不做全24GB内容哈希，不承诺所有有效文档恰好一次或CUDA bitwise exact。
+
+入口：`scripts/convert_text_hrm_h2l3.sh`、`scripts/train_text_hrm_h2l3_ddp.sh`和`run_text_hrm_h2l3_3090.sh`，均位于code/RSmol。
+pdgpu-3090/64CPU/256G/8GPU/1node，原容器、rsmol；直接formal，无新增历史smoke或全量CPU数据扫描前置。
+默认转换产物`/hpc_stor03/sjtu_home/jinwei.zhang/models/SmolLM2-HRM-H2L3-P5-L5-H5-C5`；
+训练输出`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/text_hrm_h2l3/formal_<timestamp>_<pid>/`。
+音频训练、MeSH、旧评测适配均未加入本路线；既有模型/训练实现不改。
+
+本地真实CPU回归27/27通过、无跳过；包括实际两进程Gloo/DDP生产累积BP3/4/5与独立全局梯度对照，
+真实微型Llama转换/重载/因果性/Prelude梯度、非平凡gamma、完整optimizer/EMA/RNG恢复后下一更新一致、
+Parquet跨buffer/shard/epoch重放、85片manifest启动路径、checkpoint最近3份保留及损坏拒绝、真实Bash模拟vc/torchrun。
+生产参数量用meta device核对；Python3.10语法、Bash及README命令语法、全部新增文件whitespace检查通过。
+3237份原tracked Python/Shell normalized-LF SHA保持；原辅助函数AST保持；官方optimizer仅清两处空行尾空格、算法AST保持。
+验证用Python3.13.5/Torch2.15.0+cpu/Transformers4.54.1，与远程Torch2.11/CUDA不同；不冒充3090/八卡GPU PASS。
+报告`audit_reports/text_hrm_h2l3_validation.json`，详细Git清单、转换/提交/完整恢复命令见新包README。
+Windows测试临时目录/Bash管道受沙箱限制，获准沙箱外运行同一离线合成测试。
+未读取远程生产权重/数据、未提交作业或commit/push；3090显存与真实八卡运行仍待远程验证。
+本条仅前置，以下RM既有全部字节保留，包括用户本次任务开始前的修改。
+
+## 2026-11-21：MMSU低分/重复生成复核，新增题面与真实训练logits三题诊断
+
+用户反馈多个架构MMSU个位数、三题accent_identification生成无关内容与重复，补充同checkpoint其他benchmark回答正常。
+源码逐函数AST确认：text71427新旧MMSU的read_audio/decode_audio/generate/prefix_and_decode一致，
+execute/run/summarize一致，dataset/parsing/scorer复用同对象；未发现新适配器改动这些生成或评分步骤。
+核对六训练路线：普通QA经text_pair小写转换；训练EOS后缀、PAD!、prompt256、prefix383、attention_mask=None，
+answer_loss取382:-1预测answer300，推理取prefix最后logit382，无静态off-by-one；完整683与增量前缀的真实数值仍需GPU验证。
+音频mono32k/fixed20及whole CED、FP32/无autocast/TF32off、无cache全重算和完整模型/分支同训练类；eval关闭mapper dropout为预期。
+明确差异：MMSU保留官方原大小写/Question:/换行/A.选项及only A/B/C/D指令，而其他正常MMAU/MMAR使用紧凑小写a)格式。
+既有v2忽略生成字母、按完整GT文本包含评分，与字母指令不协调；该旧口径此前由用户明确指定，未暗改指标。
+格式冲突可解释纯字母被判错，但不能单独解释无关重复生成。题面分布敏感是待实测假设，不宣称根因/修复已确认。
+
+新增隔离code/RSmol/mizar_mmsu_inference_probe/及run_mmsu_inference_probe_4090.sh。
+支持text71427和legacy已有MMSU后端，默认精确三题ID；官方/紧凑两格式×原大小写/小写四对照，保留全部选项与None。
+每题四次自由生成后，再独立用GT做teacher-forced诊断，GT不进入任何自由生成或正式预测。
+比较真实Mellow.forward的683长logits[382]/[383]与prefix383及prefix+首答案embedding的LM调用，记录max差/argmax/首token。
+另比较同一小写官方题面的MMSU和MMAU runner token IDs、两音频解码器、prompt IDs/mask、prefix/波形SHA和实际模型审计。
+每个4090单卡8CPU/32G作业最多15条自由生成，无benchmark分数；PASS_NUMERICAL_PARITY仅表示数值/runner/音频一致。
+新增输出必须不存在，不覆盖或续跑正式结果；生产评测/训练/模型及旧诊断完全不改。
+
+当前base训练目录已改重训LR2e-4新配方，旧34626需要历史匹配源码，严格source hash不放宽。
+提交器可--source-revision 8a9f1f76722e77cba4be429a578c63fdcf6ee527，将Git code/RSmol快照解包到共享log子目录；
+该revision的26份base .py/.sh与原评测protected_sources一致，真实ckpt合同仍由原loader核验。
+--implementation-root选择历史code/RSmol后端，并验证导入路径；不切换当前训练源码/分支，不把登录/tmp交给GPU节点。
+以用户此前71427 base的formal_20261119_141531507533438/model--step-34626为例的精确提交命令见新README。
+
+本地联合40项：39通过，1真实CPU小型MeSH测试缺Torch/Transformers/Safetensors/Torchaudio/Soundfile跳过。
+新工具12项定向复验11通过/1跳过；原MMSU22项及旧三题诊断6项通过，2880份既有Python/Shell/JSON normalized-LF SHA保持。
+真实Bash→Python预览+模拟vc、含空格参数/4090资源、Git历史快照独立进程导入、合成数值错位/首token不符拒绝通过。
+Python3.10/Bash语法和git diff --check通过；沙箱临时目录受限后获准沙箱外执行离线测试。
+报告audit_reports/mmsu_inference_review_validation.json；模型/音频/GPU在本地诊断测试中明确模拟，真实权重/服务器结果未执行。
+未远程提交、commit/push；正式MMSU题面及分数尚未更改。本条仅前置，以下RM原字节完整保留。
+
 ## 2026-11-21：原始SmolLM2 + CED-small隔离GBS128正式训练，3090/64CPU
 
 按用户确认计划，从原普通CED-small GBS256完整复制隔离，新增

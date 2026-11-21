@@ -1,0 +1,20 @@
+{
+  "status": "PASS_LOCAL_CPU",
+  "tests_run": 27,
+  "passed": 27,
+  "skipped": [],
+  "failures": [],
+  "python": "3.13.5",
+  "versions": {
+    "torch": "2.15.0+cpu",
+    "transformers": "4.54.1",
+    "numpy": "2.5.5",
+    "safetensors": "0.8.0",
+    "pyarrow": "26.0.1",
+    "tokenizers": "0.21.4"
+  },
+  "real_tensors_available": true,
+  "gpu_training_run": false,
+  "production_weights_read": false,
+  "remote_jobs_submitted": false
+}
