@@ -1,0 +1,26 @@
+{
+  "status": "PASS_LOCAL_CPU",
+  "tests_run": 42,
+  "passed": 42,
+  "skipped": [],
+  "failures": [],
+  "python": "3.13.5",
+  "versions": {
+    "torch": "2.15.0+cpu",
+    "transformers": "4.54.1",
+    "numpy": "2.5.5",
+    "pyarrow": "26.0.1",
+    "safetensors": "0.8.0",
+    "tokenizers": "0.21.4"
+  },
+  "real_tensors_available": true,
+  "source_checkpoint": "user_specified_remote_step3600_NOT_READ_LOCALLY",
+  "gpu_training_run": false,
+  "remote_jobs_submitted": false,
+  "production_weights_read": false,
+  "superseded_inventory_test": {
+    "test": "test_text_hrm_h2l3.ContractTests.test_original_tracked_sources_unchanged",
+    "replacement": "test_isolated_recipe_and_existing_sources_unchanged",
+    "reason": "Original inventory predates approved MMSU edits; protect the full task-start checkout instead."
+  }
+}

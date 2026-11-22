@@ -1,3 +1,43 @@
+## 2026-11-22：HRM raw step3600重新完整9244步，seed1/BP5/升温后cosine隔离正式训练
+
+按用户确认计划新增code/RSmol/text_hrm_reinit3600_bp5/，复用原text_hrm_h2l3模型/数据/官方Adam-atan2/真实DDP累积。
+默认来源为用户指定/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/text_hrm_h2l3/formal_20261122_000344_4005340/checkpoint-step-003600。
+只用根部raw权重/tokenizer，继承已训练gate、全部20层、Norm、tied embedding/head和固定zL_init。
+不重新转换/折叠gamma/清gate/乘o_proj；优化器动量与计数从0建立，EMA.9999从加载的raw开始，RNG/数据游标重建。
+来源3600仅作初始化血缘，本轮从1完整训练到9244；本轮中断后才用本新路线完整resume并继续总计9244。
+
+P5/L5/H5/C5、H2L3、20物理/50执行、MagicNorm和causal padding保持；全程BP5：H1/L4/L5/L6/H2求导。
+Prelude五层全部trainable/进入optimizer，E不detach，保留H1到E/Prelude的任务梯度路径。
+首micro和首64micro完整累积后、optimizer/weight decay前，分别审计边界和每个Prelude物理层；grad存在/finite、每层聚合L2>0。
+任何rank审计失败集体报错；每更新继续全参数缺失/非有限检查，不以weight decay造成的参数变化冒充任务梯度。
+
+8GPU×micro2×GA64=GBS1024；Adam-atan2 beta(.9,.95)、全部唯一可训练参数WD.1、EMA.9999。
+第1步3e-4，第462步6e-4，第9244步6e-5；前5%=round(9244*.05)=462，线性含首尾，之后cosine。
+精确公式：s<=462为3e-4+3e-4*(s-1)/461；其后6e-5+2.7e-4*(1+cos(pi*(s-462)/8782))，optimizer更新前设置。
+FP32主参数/状态/残差、BF16前向、FP32 Norm/CE、TF32off；不裁剪/无GradScaler/GradNorm/异常跳步。
+原85片Parquet全局shuffle与rank分配用data seed1，rank内buffer4096用1+1009*rank；max1024/动态右pad/不packing。
+全8rank/64micro统一有效next-token平均；固定L初值继承不随data seed改变；9465856名义样本，不承诺每篇文档恰好一次。
+
+新入口run_text_hrm_reinit3600_bp5_3090.sh，CPU准备scripts/prepare_text_hrm_reinit3600_bp5.sh，GPU运行scripts/train_text_hrm_reinit3600_bp5_ddp.sh。
+正式wrapper先校验原完整checkpoint SHA，在CPU仅复制raw模型/tokenizer到独立外部快照，成功后才vc submit；不反序列化旧training_state。
+默认快照models/SmolLM2-HRM-H2L3-reinit3600-raw，记录完整来源marker/binding；同来源已验证快照可重复用，源随后清理不影响训练。
+不存在源且无快照则拒绝，不换别的step；失败不提交GPU，无新增GPU smoke或全量CPU数据内容扫描前置。
+pdgpu-3090/64CPU/256G/8GPU/1node、原镜像/rsmol；环境仅RSMOL_HRM3600_*，不继承旧resume变量。
+默认输出/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/text_hrm_reinit3600_bp5/formal_<timestamp>_<pid>/。
+每400及9244保存raw/独立ema/、完整optimizer/8rank RNG/数据游标/合同，最近3份正常为8800/9200/9244。
+本轮完整resume必须新路线相同代码/依赖/配方/初始化/数据seed，输出到新目录；不恢复旧step3600训练态，不重置本轮已存状态。
+
+本地联合42/42通过、无跳过：新路线13项及原HRM29项，含真实CPU raw3600合成checkpoint及非零gate继承、新optimizer/EMA状态，
+全部9244个LR/BP位置、seed1真实Parquet顺序/重放、462/463边界完整恢复后下一更新逐值相同、保留/损坏/错路线/错LR/参数次序拒绝。
+真实两进程Gloo/DDP全局梯度对照与逐层Prelude审计通过；实际正式启动+首64micro更新CPU控制流通过，CUDA/八rank通信明确模拟。
+真实Bash→模拟prepare/vc/torchrun验证3090资源/含空格参数、准备失败不提交、resume跳过原来源准备。
+原历史全仓guard早于后续已授权MMSU修改，报告明确用本任务开始时3280份tracked Python/Shell摘要替代该历史库存断言；全部保持。
+首轮两项异常类型断言不符已修正；补查修正startup审计顺序并加入实际启动回归。原HRM及其他既有源码/测试不改。
+Python3.10语法、三Bash与README四块命令语法、全部新增文件whitespace/Git可见性通过；Windows受限测试获准沙箱外离线运行。
+环境Python3.13.5/Torch2.15.0+cpu/Transformers4.54.1，与远程Torch2.11/CUDA不同；不冒充3090/真实八卡/生产checkpoint PASS。
+报告audit_reports/text_hrm_reinit3600_bp5_validation.json，精确Git同步与初始化/正式提交/完整resume命令见新包README。
+未读取远程生产资产、提交作业或commit/push；以下RM既有全部字节完整保留。
+
 ## 2026-11-22：七个指定checkpoint的19项统一4090评测适配完成
 
 用户授权按计划实现，新增独立code/RSmol/ced_eval_20261122/及run_ced_eval_20261122_4090.sh。
