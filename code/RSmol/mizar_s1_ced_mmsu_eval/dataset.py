@@ -12,10 +12,25 @@ METADATA = ("id", "task_name", "question", *CHOICES, "answer_gt", "category",
             "sub-category", "sub-sub-category", "linguistics_sub_discipline")
 INSTRUCTION = ("Choose the most suitable answer from options A, B, C, and D. "
                "You must respond with only A, B, C, or D.")
+PROMPT_VERSION = "mmsu_compact_lowercase_ced_fixed20_raw_greedy_answer_text_v3"
+PROMPT_POLICY = "MMSU_compact_question_abcd_parentheses_lowercase_preserve_null_positions_v1"
+OUTPUT_NAMESPACE = "mmsu_compact_lowercase_v1"
 
 
 def prompt(record):
-    # Match official f-strings, including the literal 'None' for a null choice.
+    """Match MMAU's fixed-order builder followed by lower(), without instructions.
+
+    Keep the four original slots: str(None) becomes 'none', never drop/relabel
+    choices. Ground-truth/category metadata are not used to construct the input.
+    """
+    lines = [f"{chr(ord('a') + index)}) {str(record[key]).strip()}"
+             for index, key in enumerate(CHOICES)]
+    question = str(record['question']).strip()
+    return f"{question} {' '.join(lines)}".strip().lower()
+
+
+def official_prompt(record):
+    """Historical template for diagnostic ablations only; not production input."""
     choices = "\n".join(f"{letter}. {record[key]}" for letter, key in zip("ABCD", CHOICES))
     return f"{INSTRUCTION}\n\nQuestion: {record['question']}\n\n{choices}"
 

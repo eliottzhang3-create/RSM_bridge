@@ -48,5 +48,5 @@ exec bash "$SCRIPT_DIR/run_mizar_s1_ced_small_mmsu_eval_5090.sh" \
   --runtime-config "$RUN_ROOT/formal/runtime.json" \
   --route-root "$ROUTE_ROOT" \
   --expected-step 17313 --expected-geometry 8,8,4 \
-  --output-dir "$RUN_ROOT/eval/mmsu_step17313" \
+  --output-dir "$RUN_ROOT/eval/mmsu_compact_lowercase_v1/step17313" \
   "${EXTRA_ARGS[@]}"

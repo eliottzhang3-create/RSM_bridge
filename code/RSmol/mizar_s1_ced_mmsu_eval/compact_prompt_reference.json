@@ -1,0 +1,109 @@
+{
+  "date": "2026-11-22",
+  "authorization": "User requested formal MMSU compact lowercase inputs; no jobs or target reselection. Historical snapshots preserved; explicit before/after transition only.",
+  "protocol": "mmsu_compact_lowercase_ced_fixed20_raw_greedy_answer_text_v3",
+  "files": {
+    "code/RSmol/mizar_mmsu_inference_probe/probe.py": {
+      "before_lf_sha256": "a655bd392975d456032771e2b96b745a27104f561e6fc0b1d34ef29f4b0703f1",
+      "after_lf_sha256": "076a8e6ca337bfe895f46f95aa089948073bf6a4ce210950aebb59ba25c5719a",
+      "before_raw_sha256": "a655bd392975d456032771e2b96b745a27104f561e6fc0b1d34ef29f4b0703f1",
+      "after_raw_sha256": "076a8e6ca337bfe895f46f95aa089948073bf6a4ce210950aebb59ba25c5719a"
+    },
+    "code/RSmol/mizar_mmsu_meshx4_diagnostics/probe.py": {
+      "before_lf_sha256": "833e975847af608bea0d321e4849f6c2da04d3db9ef1a6a070e2319364116810",
+      "after_lf_sha256": "b4154c94d1eba8be11d7716a5e95579b7d9c74fa72b05339889332a1d674b669",
+      "before_raw_sha256": "833e975847af608bea0d321e4849f6c2da04d3db9ef1a6a070e2319364116810",
+      "after_raw_sha256": "b4154c94d1eba8be11d7716a5e95579b7d9c74fa72b05339889332a1d674b669"
+    },
+    "code/RSmol/mizar_s1_ced_mmsu_eval/dataset.py": {
+      "before_lf_sha256": "7fd1abda9070166767d2b46b8145517c47d4ec6770cf0d7b659c30f7649aba1b",
+      "after_lf_sha256": "a512cb89bda8e41f47ed1b1cccfd676c4f7bc6aaad9cb0dbd3948f0eac6a2ed5",
+      "before_raw_sha256": "7fd1abda9070166767d2b46b8145517c47d4ec6770cf0d7b659c30f7649aba1b",
+      "after_raw_sha256": "a512cb89bda8e41f47ed1b1cccfd676c4f7bc6aaad9cb0dbd3948f0eac6a2ed5"
+    },
+    "code/RSmol/mizar_s1_ced_mmsu_eval/evaluate.py": {
+      "before_lf_sha256": "ed1571218a6ddf6f848efae35f90d3b8fb6b28ad57fc157551fde845982201b2",
+      "after_lf_sha256": "b787dc9906ab1a51806b95a813dcc90333cfa7e483d0b030b2d15564796a7f7f",
+      "before_raw_sha256": "ed1571218a6ddf6f848efae35f90d3b8fb6b28ad57fc157551fde845982201b2",
+      "after_raw_sha256": "b787dc9906ab1a51806b95a813dcc90333cfa7e483d0b030b2d15564796a7f7f"
+    },
+    "code/RSmol/mizar_s1_ced_mmsu_eval/runtime.py": {
+      "before_lf_sha256": "ed171ed50d8886db14468a4f89162c064a70634f9dca86ad36ae7673d9a2e760",
+      "after_lf_sha256": "bfa414bf43d82bae44e5d63de9cea6c31a33541fc95ce6438d47036ab3b1fe6f",
+      "before_raw_sha256": "ed171ed50d8886db14468a4f89162c064a70634f9dca86ad36ae7673d9a2e760",
+      "after_raw_sha256": "bfa414bf43d82bae44e5d63de9cea6c31a33541fc95ce6438d47036ab3b1fe6f"
+    },
+    "code/RSmol/mizar_s1_ced_mmsu_remaining_eval/inspection.py": {
+      "before_lf_sha256": "59f6c45c485fcb68a1c6c036738dcad76ecb8d5a05662238727b73435509f722",
+      "after_lf_sha256": "0105feeeebbe8f3ab71abb4d92daacbb8eb074443fa7068224e6f22dcaf74510",
+      "before_raw_sha256": "59f6c45c485fcb68a1c6c036738dcad76ecb8d5a05662238727b73435509f722",
+      "after_raw_sha256": "0105feeeebbe8f3ab71abb4d92daacbb8eb074443fa7068224e6f22dcaf74510"
+    },
+    "code/RSmol/run_mizar_mmsu_mesh48_lora_r8_5090.sh": {
+      "before_lf_sha256": "744ad00a15a23a6f72292cb34f5194d059a6300aa17abcd3246db6e771a49d63",
+      "after_lf_sha256": "57f0d9b6b35b4d58c93ef55d21c05b8c04ceaa487f1a4da08f983f4756bb9ee5",
+      "before_raw_sha256": "744ad00a15a23a6f72292cb34f5194d059a6300aa17abcd3246db6e771a49d63",
+      "after_raw_sha256": "57f0d9b6b35b4d58c93ef55d21c05b8c04ceaa487f1a4da08f983f4756bb9ee5"
+    },
+    "code/RSmol/run_mizar_mmsu_selected5_5090.sh": {
+      "before_lf_sha256": "02c1cae6d006066e8de83f30c4048f8cd53fce9b0961df5ebc131a6e152f8266",
+      "after_lf_sha256": "71b4af7ec6dd7a13b7befb04f26e8c0b82a4d552a0c7f3749448088127b5c4e7",
+      "before_raw_sha256": "02c1cae6d006066e8de83f30c4048f8cd53fce9b0961df5ebc131a6e152f8266",
+      "after_raw_sha256": "71b4af7ec6dd7a13b7befb04f26e8c0b82a4d552a0c7f3749448088127b5c4e7"
+    },
+    "code/RSmol/text71427_ced_eval/arguments.py": {
+      "before_lf_sha256": "1b6e1d2fed3c68cdab45a83fbd6b57cfe0269a03fb531d39d62ef17837027347",
+      "after_lf_sha256": "c0e3e67ed9712d1b1c330fb8cc9c194f1ced6c8ba5a1d4d88957040e38157adb",
+      "before_raw_sha256": "1b6e1d2fed3c68cdab45a83fbd6b57cfe0269a03fb531d39d62ef17837027347",
+      "after_raw_sha256": "c0e3e67ed9712d1b1c330fb8cc9c194f1ced6c8ba5a1d4d88957040e38157adb"
+    },
+    "code/RSmol/text71427_ced_eval/mmsu.py": {
+      "before_lf_sha256": "bc078a29808125ef51c3291cf4c54e7b36d08580f1463815290aed7b6d14e38d",
+      "after_lf_sha256": "faabdd998038935927bf404f1d37fa1ad99a233e92cf0e703e4efe81aab17be4",
+      "before_raw_sha256": "bc078a29808125ef51c3291cf4c54e7b36d08580f1463815290aed7b6d14e38d",
+      "after_raw_sha256": "faabdd998038935927bf404f1d37fa1ad99a233e92cf0e703e4efe81aab17be4"
+    },
+    "code/RSmol/text71427_ced_eval/mmsu_runtime.py": {
+      "before_lf_sha256": "0314ed21b44845e4a7c929eef97d9110ef3134a213600133d73ce553d3f6a21e",
+      "after_lf_sha256": "6d70581f484df233379b492116b41ad10b6395e2582ba3cf7a6637bf8e73a98b",
+      "before_raw_sha256": "0314ed21b44845e4a7c929eef97d9110ef3134a213600133d73ce553d3f6a21e",
+      "after_raw_sha256": "6d70581f484df233379b492116b41ad10b6395e2582ba3cf7a6637bf8e73a98b"
+    },
+    "code/RSmol/text71427_ced_eval/submit.py": {
+      "before_lf_sha256": "19f2ef6de41aff99761311159be9164f4c37a0b85e6228f88777caeb7529daf1",
+      "after_lf_sha256": "ab40fdbc2f900e707370d427d3f134df916d72395f17ab46a7788d4c1ce32d70",
+      "before_raw_sha256": "19f2ef6de41aff99761311159be9164f4c37a0b85e6228f88777caeb7529daf1",
+      "after_raw_sha256": "ab40fdbc2f900e707370d427d3f134df916d72395f17ab46a7788d4c1ce32d70"
+    },
+    "code/RSmol/mizar_s1_ced_mmsu_eval/README.md": {
+      "before_lf_sha256": "a7fea70d9e8409c2a3e397552dc88e56382aca44fdba836b63a3870e5dce3562",
+      "after_lf_sha256": "7ccbfb3534fc8b2168a65d72342f380cee7afe2ae64f0a9e9269af99fa9007bf",
+      "before_raw_sha256": "a7fea70d9e8409c2a3e397552dc88e56382aca44fdba836b63a3870e5dce3562",
+      "after_raw_sha256": "7ccbfb3534fc8b2168a65d72342f380cee7afe2ae64f0a9e9269af99fa9007bf"
+    },
+    "code/RSmol/mizar_s1_ced_mmsu_eval/SELECTED5.md": {
+      "before_lf_sha256": "3d5f1758768e3d10ec71c1787cbfb62b585492fd7c7865631ed04943c0001d80",
+      "after_lf_sha256": "c94526cf1ebf4c075749ab64973decca911cc4e3e80213064b03c9f123da2d1d",
+      "before_raw_sha256": "3d5f1758768e3d10ec71c1787cbfb62b585492fd7c7865631ed04943c0001d80",
+      "after_raw_sha256": "c94526cf1ebf4c075749ab64973decca911cc4e3e80213064b03c9f123da2d1d"
+    },
+    "code/RSmol/mizar_s1_ced_mmsu_eval/MESH48_LORA_R8.md": {
+      "before_lf_sha256": "85a1dcf1313a00def0e23e4f3854c9bd4dd078f1c40631ea02b7e1c2908ac22f",
+      "after_lf_sha256": "97f749c53df0dcca498e8d4f932e0ae5d1b3ba3778b011a7a998fce8e58ed17e",
+      "before_raw_sha256": "85a1dcf1313a00def0e23e4f3854c9bd4dd078f1c40631ea02b7e1c2908ac22f",
+      "after_raw_sha256": "97f749c53df0dcca498e8d4f932e0ae5d1b3ba3778b011a7a998fce8e58ed17e"
+    },
+    "code/RSmol/text71427_ced_eval/README.md": {
+      "before_lf_sha256": "d80e84717a901f95e36b382b1c0e985d4d32b9ed96473fec48afcc6b72914db2",
+      "after_lf_sha256": "61dc802b8385fc64f0654312a4a5e33975ef59c3300c77e75f3845c00cf37595",
+      "before_raw_sha256": "d80e84717a901f95e36b382b1c0e985d4d32b9ed96473fec48afcc6b72914db2",
+      "after_raw_sha256": "61dc802b8385fc64f0654312a4a5e33975ef59c3300c77e75f3845c00cf37595"
+    },
+    "code/RSmol/mizar_s1_ced_mmsu_remaining_eval/README.md": {
+      "before_lf_sha256": "e3d5f259c561d4285fde7b96111a9fd6e8cbef76093a3d9035a3e9efeb0b7d0c",
+      "after_lf_sha256": "040cfee28f9edd08af3c5edcedb2b904b02a0f0ca25850c3b6d8161b3a967191",
+      "before_raw_sha256": "e3d5f259c561d4285fde7b96111a9fd6e8cbef76093a3d9035a3e9efeb0b7d0c",
+      "after_raw_sha256": "040cfee28f9edd08af3c5edcedb2b904b02a0f0ca25850c3b6d8161b3a967191"
+    }
+  }
+}

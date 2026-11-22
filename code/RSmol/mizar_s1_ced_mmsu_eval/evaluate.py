@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full 5000-row MMSU evaluation, official prompt and existing CED generation."""
+"""Full 5000-row MMSU evaluation, compact lowercase prompt and existing generation."""
 from __future__ import annotations
 
 import argparse
@@ -52,7 +52,7 @@ def parse_args(argv=None):
         if args.run_root is not None:
             args.checkpoint = args.checkpoint or args.run_root / f"formal/checkpoints/model--step-{args.expected_step}.ckpt"
             args.runtime_config = args.runtime_config or args.run_root / "formal/runtime.json"
-            args.output_dir = args.output_dir or args.run_root / f"eval/mmsu_step{args.expected_step}"
+            args.output_dir = args.output_dir or args.run_root / 'eval' / dataset.OUTPUT_NAMESPACE / f"step{args.expected_step}"
         if not all((args.checkpoint, args.runtime_config, args.output_dir)):
             parser.error("provide --run-root or explicit --checkpoint, --runtime-config and --output-dir")
         args.route_root = args.route_root or default_route

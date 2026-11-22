@@ -1,3 +1,91 @@
+## 2026-11-22：七个指定checkpoint的19项统一4090评测适配完成
+
+用户授权按计划实现，新增独立code/RSmol/ced_eval_20261122/及run_ced_eval_20261122_4090.sh。
+固定targets.json完整绑定七个用户路径，均step34626；MMSU7项，ReasonAQA5000/MMAU test-mini/MMAR各4项，共19项。
+mesh_original/listen/loop_lora仅MMSU；audio7_read2/wfuse/mesh_reinit/smol_gbs128四项。
+audio7_read2两组需求去重，其四任务从本批次新目录重跑，旧半程目录保留。
+全部pdgpu-4090、单卡8CPU/32G/1node，原镜像与mellow_c8204d8。
+
+所有目标复用当前同一评测数值和评分实现，MMSU统一最新紧凑全小写四槽，无只答字母指令。
+FP32/eval/seed1234/TF32off、fixed20/32k、prefix383/首logit382、PAD!/EOS0、无mask/无KV/argmax300保持。
+Reason固定5000manifest及完整答案exact；MMAU/MMAR原raw官方评分各1000；MMSU原答案文本包含v2及官方5000分母。
+完整分母、坏行拒绝、身份锁/进程锁及断点续跑保持；真实生成/预处理/runner核心函数AST对齐原实现。
+
+前五目标训练源码固定8a9f1f76722e77cba4be429a578c63fdcf6ee527，重训/普通Smol固定75dcda3a7bcd8765044b14ecd4e408fe33dfdda6。
+仅git archive所需训练后端到共享log/ced_eval_20261122_sources，逐文件SHA/库存及各训练code_digest固定核对。
+旧/重训MeSH同route但不同源码，严格区分；不放宽checkpoint/source合同，不用历史评测器覆盖最新MMSU题面。
+每目标提交前CPU mmap合同预检一次，失败目标不申请GPU，其他目标继续；GPU再严格加载完整state并核对资产/架构。
+MeSH保留28物理/42执行及各自音频分支/LoRA；普通Smol为标准HF LlamaForCausalLM的30独立层/0..29，无MeSH/LoRA。
+重训额外核对原音频仅权重初始化来源与2e-4/2e-5配方；eval不初始化或恢复optimizer/RNG。
+并发读取已核对源码快照不争用准备锁；run_identity/model_audit显式记录目标、训练route与源码revision。
+
+新输出<run>/eval/ced_eval_20261122_v1/<task>/model--step-34626/，MMSU task为mmsu_compact_lowercase_v1。
+提交报告和GPU日志在code/RSmol/log/ced_eval_20261122；各输出evaluation_report.json才是评测完成依据。
+GitHub同步后，远程仓库根运行bash code/RSmol/run_ced_eval_20261122_4090.sh all提交19项；
+或七个目标逐条提交，不能与all重复；README同时给出19条单项命令、预览/CPU预检/日志/只读比较方式。
+
+最终新包35项28通过7真实CPU张量缺Torch/Transformers/Safetensors跳过；另7项紧凑MMSU回归全通过，总42项35通过7跳过。
+覆盖真实Git快照/训练合同、七架构加载控制流/错route或同route错源码拒绝、真实Bash参数链和mock vc，
+四组Reason5000、四组MMAU1000/四组MMAR1000、七组MMSU5000完整尺寸合成流程、原官方scorer和中断续跑。
+2898份本轮开始前生产源码normalized-LF SHA保持，Python3.10/两入口/README5块Bash和whitespace通过。
+首轮2项夹具错误已修正；长测期间曾修改缓存锁源码，旧身份保护如预期拒绝重评分；固定源码后完整重测通过，记录保留。
+报告audit_reports/ced_eval_20261122_validation.json；模型/音频/Parquet/CUDA和bulk fsync合成模拟，未声称生产GPU PASS。
+未读取远程权重/数据、提交真实作业、commit/push。本条仅前置，以下RM原字节完整保留。
+
+## 2026-11-22：MMSU正式输入修正为紧凑格式＋全小写，等待用户指定重评范围
+
+用户明确授权修正实现，后续具体待测模型/checkpoint再提供；本轮未挑选目标、未变动历史targets/excluded或提交真实作业。
+共享mizar_s1_ced_mmsu_eval/dataset.prompt改为question a) choice_a b) choice_b c) choice_c d) choice_d整体lower。
+逐字符对齐已有MMAU build_fixed_order_prompt(...).lower()及真实三题诊断compact_lowercase。
+问题/选项外侧strip，保留全部四槽原顺序，null输入占位none；无新增Question/Choices前缀、模板换行或字母指令；GT/分类不入输入。
+通用MMSU38个已有variant与text71427六路线共用同模板；原始元数据和raw不改写大小写。
+原官方模板保留为dataset.official_prompt，仅诊断工具显式使用；历史Git快照无此函数时仍取该快照旧prompt。
+
+两套MMSU protocol统一升级mmsu_compact_lowercase_ced_fixed20_raw_greedy_answer_text_v3，prompt_policy明确紧凑小写。
+评分仍mmsu_answer_text_contains_v2，原解析/官方scorer/完整5000分母保持。
+音频、模型类/权重严格加载、28/42或各自架构分支、FP32/无autocast/TF32off、PAD!/EOS0、prefix383/首logit382、无KV/argmax300保持。
+真实生成/音频/runner核心函数AST保持；训练目录、共享模型、MMAU/MMAR/ReasonAQA数值实现未改。
+
+通用MMSU默认eval/mmsu_compact_lowercase_v1/stepN；selected5/mesh48快捷入口同步新命名空间，官方release用mmsu_compact_lowercase_v1。
+text71427 MMSU默认eval/text71427_ced_v2/mmsu_compact_lowercase_v1/<ckpt-stem>，显式output-root也使用新任务目录名。
+其他三个任务默认目录保持。旧模板目录显式传入也在模型加载前被身份拒绝，raw/报告不覆盖；同版新协议继续原续跑。
+旧rescore/detailed report及历史rescore_selected5路径保持，旧raw重新评分不能代替新模板重新生成。
+剩余27目标调度器按新prompt_policy拒绝旧结果，原历史排除清单不代表新题面已完成，具体重评范围等待用户。
+
+本地联合134独立用例最终125通过、9真实ML/音频/Parquet依赖缺失跳过；第一轮47项针对检查通过。
+覆盖题面与MMAU精确对齐/GT不泄漏/null不重排、通用38+六路线新协议与新默认路径、旧输出拒绝且字节保留、
+通用5000题和六路线5000题合成流程逐行题面检查、断点续跑、旧raw离线重评分、原官方scorer、真实Bash+模拟vc资源/参数链。
+联合初次1项旧源码保护未组合此前selected4/init0904授权注册；明确组合已有注册审计和本次前后摘要后，8项定向复验全部通过。
+初次失败和后续通过均保留报告，不重复计数；mmsu_v2_audit的生产源码保护不再把历史测试脚本演进当作模型/benchmark改动。
+2886份范围外生产源码normalized-LF SHA保持，12份明确授权生产实现/入口变更；旧快照不覆盖，compact_prompt_reference单列前后摘要。
+Python3.10、Bash参数链与git diff --check通过；沙箱临时目录受限后获准沙箱外完成离线测试。
+报告audit_reports/mmsu_compact_lowercase_validation.json；本地模型/音频/Parquet及bulk fsync明确模拟，未声称新模板全量生产GPU通过。
+细节code/RSmol/mizar_s1_ced_mmsu_eval/COMPACT_PROMPT.md和各README；当前base旧权重仍要求匹配历史源码，未放宽strict source。
+未commit/push或远程提交。本条仅前置，以下RM既有字节及用户本轮开始前修改完整保留。
+
+## 2026-11-22：MMSU三题真实回传确认题面触发退化，数值布局对照通过
+
+用户回传71427 base step34626三题对照，远程报告为：
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_20261119_141531507533438/eval/mmsu_probe_20261122_112042_1279907/diagnostic_report.json。
+证据来自用户粘贴日志，本地未独立读取服务器完整报告；不覆盖原本地NOT_RUN记录。
+三题runner_parity均true，四题面共12项training_layout_passed均true，最终PASS_NUMERICAL_PARITY。
+按工具实现，最终PASS还要求两音频解码器一致；训练683与推理383/384的首/第二答案位置logits在容差内一致且argmax相同，首自由生成token一致。
+这些证据仅覆盖本checkpoint/三题的对应检查，不推广为所有token/所有模型无bug，也不代表答案正确。
+
+官方原大小写题面重现ppe/ibe循环及无关文本；仅改小写仍混乱/复述反驳指令；紧凑原大小写仍输出south continent/dered sibling/humour。
+紧凑全小写分别生成c) india、a) new zealand、c) singapore，均正常EOS结束。
+此前用户提供GT分别India、New Zealand、Australia，按原v2解析核对为true/true/false；第三题仅格式恢复、仍答错。
+官方小写第三题同时提australia与singapore，原v2会命中文本，但不能据此认为生成正常。
+三题是已知异常样本而非随机抽样，不把2/3当完整MMSU分数。
+
+同权重/音频/生成设置的受控题面变化足以触发或解除这三题的退化，支持输入模板/大小写适配问题。
+仅lowercase不够，四case未独立拆分instruction/换行/Question/选项符号，不能单独断言某一项是唯一原因。
+新旧MMSU实现一致只保证复现旧口径，未保证官方模板适配普通QA小写训练分布；此前仅复用旧模板的评测适配不充分。
+正式处理方向为统一MMAU构造器的紧凑小写题面、原模型/音频/greedy和评分保持，并另立协议/新目录，所有比较模型统一重评。
+本轮用户询问结果含义，仅记录与解释，尚未改正式评测题面、提交作业或重跑5000题。
+README及audit_reports/mmsu_inference_review_validation.json追加user_supplied_remote_followup；原本地验收和生产代码保持。
+RM仅前置，以下原字节完整保留，未commit/push。
+
 ## 2026-11-22：HRM转换layer5逐层校验误拒绝修正
 
 用户远程转换在阶段2的target layer5报max_abs=1.52587890625e-5；旧校验为逐元素allclose(atol3e-6,rtol3e-5)。

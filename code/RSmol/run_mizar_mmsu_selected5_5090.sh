@@ -63,7 +63,7 @@ case "$TARGET" in
     ARGS=(--eval-variant official_mizar
           --model-dir "$MODEL_DIR"
           --checkpoint "$MODEL_DIR/checkpoints/final/stage3_q4_seed20260905.ckpt"
-          --output-dir "$OUTPUT_ROOT/mizar_official_stage3_q4_seed20260905_matched_ced_v1/mmsu")
+          --output-dir "$OUTPUT_ROOT/mizar_official_stage3_q4_seed20260905_matched_ced_v1/mmsu_compact_lowercase_v1")
     ;;
   base)
     VARIANT=base
@@ -94,7 +94,7 @@ if [[ "$TARGET" != official_mizar ]]; then
         --runtime-config "$RUN_ROOT/formal/runtime.json"
         --route-root "$ROUTE_ROOT"
         --expected-step 17313 --expected-geometry 8,8,4
-        --output-dir "$RUN_ROOT/eval/mmsu_step17313")
+        --output-dir "$RUN_ROOT/eval/mmsu_compact_lowercase_v1/step17313")
 fi
 
 exec bash "$SCRIPT_DIR/run_mizar_s1_ced_small_mmsu_eval_5090.sh" "${ARGS[@]}" "${EXTRA_ARGS[@]}"

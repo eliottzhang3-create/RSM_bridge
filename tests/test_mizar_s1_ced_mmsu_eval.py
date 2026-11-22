@@ -33,14 +33,19 @@ def generation(text="  A<|endoftext|>  "):
 
 
 class ProtocolTests(unittest.TestCase):
-    def test_official_prompt_preserves_case_null_slots_and_excludes_labels(self):
+    def test_compact_prompt_lowercases_preserves_null_slots_and_excludes_labels(self):
         row = record()
-        expected = ("Choose the most suitable answer from options A, B, C, and D. "
-                    "You must respond with only A, B, C, or D.\n\nQuestion: Which Country?\n\n"
-                    "A. India\nB. None\nC. China\nD. Japan")
+        expected = "which country? a) india b) none c) china d) japan"
         self.assertEqual(dataset.prompt(row), expected)
         row["answer_gt"], row["category"], row["task_name"] = "secret", "secret2", "secret3"
         self.assertEqual(dataset.prompt(row), expected)
+
+    def test_historical_official_prompt_is_retained_only_for_diagnostics(self):
+        expected = ("Choose the most suitable answer from options A, B, C, and D. "
+                    "You must respond with only A, B, C, or D.\n\nQuestion: Which Country?\n\n"
+                    "A. India\nB. None\nC. China\nD. Japan")
+        self.assertEqual(dataset.official_prompt(record()), expected)
+        self.assertNotEqual(dataset.prompt(record()), expected)
 
     def test_metadata_validation_and_exact_text_answers(self):
         dataset.validate_record(record())
@@ -321,7 +326,10 @@ class WorkflowTests(unittest.TestCase):
     def test_full_5000_flow_then_rescore_without_loading_model(self):
         with tempfile.TemporaryDirectory() as directory:
             args, rows, loaded = self.fixture(directory)
-            generate = Mock(side_effect=lambda *a, **k: generation())
+            def checked_generation(_loaded, sample, **kwargs):
+                self.assertEqual(sample['prompt'], 'which country? a) india b) none c) china d) japan')
+                return generation()
+            generate = Mock(side_effect=checked_generation)
             report, loader, decoder, scorer = self.execute(args, rows, loaded, generate)
             self.assertEqual(report["status"], "PASS", report["fatal_error"])
             self.assertEqual(generate.call_count, 5000)

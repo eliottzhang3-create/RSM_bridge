@@ -1,5 +1,9 @@
 # 指定 MeSH 4→8 注入 / Loop-LoRA r8 checkpoint 的 MMSU 评测
 
+2026-11-22：快捷入口随共享MMSU改为紧凑格式＋全小写和v3题面协议，原模型/数值推理/文本v2评分保持。
+默认输出改为独立的`eval/mmsu_compact_lowercase_v1/step17313/`；历史官方题面结果不续用。
+此目标只是既有快捷入口绑定，本次未安排或提交它的重新评测。
+
 新增快捷入口 `code/RSmol/run_mizar_mmsu_mesh48_lora_r8_5090.sh`。精确绑定用户给定的：
 
 ```text
@@ -31,10 +35,10 @@ bash code/RSmol/run_mizar_mmsu_mesh48_lora_r8_5090.sh
 输出目录：
 
 ```text
-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_inject_loop_lora_r8_5090/formal_20261104_161727489909082/eval/mmsu_step17313/
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs256_recursive_mesh_layer4_8_inject_loop_lora_r8_5090/formal_20261104_161727489909082/eval/mmsu_compact_lowercase_v1/step17313/
 ```
 
-音频32kHz mono/fixed20、FP32、prompt256、greedy300、无KV及官方题面保持现有设置。
+音频32kHz mono/fixed20、FP32、prompt256、greedy300、无KV保持；题面改为紧凑格式＋全小写。
 评分沿用用户确认的 `mmsu_answer_text_contains_v2`：忽略生成选项字母，归一化生成/完整GT文本后做包含匹配，
 命中编码为对应正确字母，未命中编码为空字符串，再调用未修改官方 scorer；5000题均参与分母。
 解释、否定句或多个候选中提到GT也会命中。定义与解析审计见 [RESCORE.md](RESCORE.md)。

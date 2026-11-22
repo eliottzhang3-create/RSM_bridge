@@ -82,8 +82,8 @@ def check_identity(args, identity, cache):
         raise ValueError('saved training model source identity differs')
     if identity.get('scorer') != scoring.audit_scorer(args.evaluation_script):
         raise ValueError('saved official scorer identity differs')
-    # Completed v1 generations can be scored on CPU. Generation settings and
-    # the official case-preserving prompt must still match every shared field.
+    # CPU scoring can change only the score version, never the prompt policy.
+    # Historical official-template raw must not count as completed compact input.
     shared = lambda p: {k: v for k, v in p.items() if k not in ('version', 'scoring')}
     if shared(identity.get('protocol', {})) != shared(runtime.PROTOCOL):
         raise ValueError('saved MMSU generation protocol differs')

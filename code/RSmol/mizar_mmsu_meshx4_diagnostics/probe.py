@@ -37,7 +37,7 @@ def diagnostic_sources(benchmark):
 
 
 def prompts(record, benchmark):
-    official = dataset.prompt(record)
+    official = dataset.official_prompt(record)
     compact = benchmark.mmau.build_fixed_order_prompt(record['question'],
                                                        [record[key] for key in dataset.CHOICES]).lower()
     return {'mmsu_original': official, 'mmsu_lowercase': official.lower(),

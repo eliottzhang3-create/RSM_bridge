@@ -1,4 +1,4 @@
-"""Preserve official MMSU prompts while reusing existing strict CED runtimes."""
+"""Compact lowercase MMSU inputs with the existing strict CED runtimes."""
 from __future__ import annotations
 
 import copy
@@ -16,12 +16,13 @@ import mizar_s1_ced_eval_runtime as base  # noqa: E402
 import mizar_s1_ced_recursive_mesh_eval_runtime as mesh  # noqa: E402
 import mizar_s1_ced_recursive_eval_runtime as recursive  # noqa: E402
 import mizar_s1_ced_multilayer_eval_runtime as multilayer  # noqa: E402
+from mizar_s1_ced_mmsu_eval import dataset
 
 from . import runtime as selected_runtime
 VARIANTS = tuple(selected_runtime.ROUTES)
 PROTOCOL = copy.deepcopy(base.PROTOCOL)
-PROTOCOL.update(version="mmsu_official_prompt_ced_fixed20_raw_greedy_answer_text_v2",
-                prompt_policy="MMSU_official_instruction_ABCD_original_case_and_null_positions",
+PROTOCOL.update(version=dataset.PROMPT_VERSION,
+                prompt_policy=dataset.PROMPT_POLICY,
                 scoring="mmsu_answer_text_contains_v2_then_pinned_external_official_scorer")
 
 
@@ -114,7 +115,8 @@ def generate(loaded, sample, *, variant):
 
     selected, family, _ = adapter(variant)
     _, tokenizer, device, text_encoder, fixed20, _, _ = loaded
-    # The existing MMAU/MMAR runners lowercase here. MMSU uses official case.
+    # Production dataset.prompt supplies the compact lowercase input. Keep the
+    # supplied text unchanged here so diagnostic prompt ablations remain valid.
     text = sample["prompt"]
     tokens = text_encoder.tokenize(text, 256)
     count = len(tokenizer.encode(text + " <|endoftext|>", add_special_tokens=True))

@@ -33,8 +33,8 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(args.expected_step, 34626)
         row = fixture.record()
         variants = probe.prompts(row, benchmark)
-        self.assertEqual(variants['mmsu_original'], dataset.prompt(row))
-        self.assertEqual(variants['mmsu_lowercase'], dataset.prompt(row).lower())
+        self.assertEqual(variants['mmsu_original'], dataset.official_prompt(row))
+        self.assertEqual(variants['mmsu_lowercase'], dataset.official_prompt(row).lower())
         self.assertEqual(variants['mmau_format_lowercase'],
                          'which country? a) india b) none c) china d) japan')
 
@@ -67,7 +67,7 @@ class DiagnosticTests(unittest.TestCase):
             self.assertEqual([call.args[1]['prompt'] for call in generate.call_args_list],
                              list(probe.prompts(row, benchmark).values()))
             other.generate.assert_called_once()
-            self.assertEqual(other.generate.call_args.args[1]['prompt'], dataset.prompt(row).lower())
+            self.assertEqual(other.generate.call_args.args[1]['prompt'], dataset.official_prompt(row).lower())
             self.assertTrue(all(call.args[1]['waveform'] is wave for call in generate.call_args_list))
             self.assertEqual(first['cases']['mmsu_original']['generation']['generated_text'], expected['generated_text'])
             other.generate.return_value = {'generated_token_ids': [4, 0], 'generated_text': 'other'}

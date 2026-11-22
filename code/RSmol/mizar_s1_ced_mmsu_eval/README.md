@@ -1,8 +1,15 @@
-# MMSU：官方题面、官方 scorer、项目 CED 推理协议
+# MMSU：紧凑小写题面、原文本评分、项目 CED 推理协议
+
+2026-11-22 按用户确认，正式题面统一改为“紧凑格式＋全小写”，与MMAU固定选项构造器一致。
+三题真实对照已确认旧官方模板触发该checkpoint生成退化；新模板与诊断的compact_lowercase逐字符一致。
+本次仅修实现，后续评测模型/checkpoint范围等待用户指定，未提交任何评测。
+统一协议版本为`mmsu_compact_lowercase_ced_fixed20_raw_greedy_answer_text_v3`，评分仍为原`mmsu_answer_text_contains_v2`。
+新输出命名空间为`mmsu_compact_lowercase_v1`；旧raw、旧分数和旧离线rescore路径保留。
+旧raw不能靠重新评分变成新题面结果；新题面需要重新推理，不能与旧题面分数混作同协议比较。
 
 正式入口是 `code/RSmol/run_mizar_s1_ced_small_mmsu_eval_5090.sh`。原 MMAU test mini、MMAR 的入口、runner、runtime、模型和训练文件均保持原样。
 
-**评分更新（v2）**：按用户确认，忽略生成的选项字母，只检查归一化生成中是否包含完整 `answer_gt` 文本，再转换为未改动官方 scorer 接受的格式。这是答案文本包含指标；解释或否定句中提到标准答案也会命中。已完成的五份结果直接用 CPU 离线重评，无需再次推理：`bash code/RSmol/rescore_mizar_mmsu_selected5.sh all`。完整定义、命令和 Git 同步清单见 [RESCORE.md](RESCORE.md)。
+**评分仍为v2**：按用户确认，忽略生成的选项字母，只检查归一化生成中是否包含完整 `answer_gt` 文本，再转换为未改动官方 scorer 接受的格式。这是答案文本包含指标；解释或否定句中提到标准答案也会命中。历史五份结果仍可用CPU脚本`rescore_mizar_mmsu_selected5.sh`复核其原分数，但不能代替新题面推理。原评分定义见 [RESCORE.md](RESCORE.md)。
 
 本地 Windows 维护代码，通过 GitHub 同步到远程 Linux；权重、真实推理和输出仍在远程。通用入口不预选架构、训练 run、checkpoint 或 step，也没有默认触发 smoke、额外测试作业或训练。提交入口默认执行完整 5000 条评测。
 
@@ -25,7 +32,7 @@ bash code/RSmol/run_mizar_s1_ced_small_mmsu_eval_5090.sh \
 ```text
 <run-root>/formal/checkpoints/model--step-<step>.ckpt
 <run-root>/formal/runtime.json
-<run-root>/eval/mmsu_step<step>/
+<run-root>/eval/mmsu_compact_lowercase_v1/step<step>/
 ```
 
 checkpoint 不在标准布局时，显式提供完整参数：
@@ -78,28 +85,23 @@ bash code/RSmol/mizar_s1_ced_mmsu_eval/run.sh <同一组目标参数>
 
 `--mmsu-root` 可整体改位置；`--dataset-dir` 指向包含 `data/` 的 HF 目录，`--evaluation-script` 指向官方脚本，二者也可单独覆盖。包含空格的路径始终作为单个参数传递。不访问 Hugging Face 网络，不解包或批量导出音频。
 
-按 shard 文件名及其原始行序建立全局 row_index；模型加载前核验三片的 schema、1667/1667/1666 行数、5000 个唯一 ID、字段类型，以及 `answer_gt` 与原选项的文本精确匹配。四个选项的位置和 JSON null 均保持。官方 f-string 题面中的空选项显示为 `None`。
+按 shard 文件名及其原始行序建立全局 row_index；模型加载前核验三片的 schema、1667/1667/1666 行数、5000 个唯一 ID、字段类型，以及 `answer_gt` 与原选项的文本精确匹配。四个选项的位置和原始元数据的 JSON null 均保持。输入题面空选项占位为小写 `none`，不会丢弃选项或重排字母。
 
-经用户确认，题面采用 MMSU 官方英文指令与原始大小写：
+正式输入先按现有MMAU固定顺序构造`question a) ... b) ... c) ... d) ...`，再对整串执行`.lower()`：
 
 ```text
-Choose the most suitable answer from options A, B, C, and D. You must respond with only A, B, C, or D.
-
-Question: <原始 question>
-
-A. <choice_a>
-B. <choice_b>
-C. <choice_c>
-D. <choice_d>
+which country? a) india b) none c) china d) japan
 ```
 
-GT、任务名和分类不进入模型输入。其他推理设置沿用当前 CED：
+不添加`Question:`、`Choices:`或仅答字母的指令，不额外插入模板换行；问题/选项原有内容保持，外侧strip及整体lower与MMAU一致。
+GT、任务名和分类不进入模型输入，原始元数据和生成文本不做输入之外的大小写改写。
+`dataset.official_prompt`仅保留给旧模板诊断，不用于正式5000题生成。其他推理设置沿用当前 CED：
 
 | 项目 | 设置 |
 | --- | --- |
 | 音频 | 优先 Parquet bytes；SoundFile FP32 解码，以真实头部采样率为准；先单声道，再 torchaudio resample 至 32 kHz |
 | 时长 | 使用训练 `fixed20.fixed_len`：整段居中截到 20 秒或右补零，再连续分成两个 10 秒输入；不复制短音频 |
-| Prompt | 使用训练 tokenize：EOS suffix、右侧 PAD `!`、固定 256 tokens；保留 MMSU 大小写 |
+| Prompt | 紧凑小写；使用训练 tokenize：EOS suffix、右侧 PAD `!`、固定 256 tokens |
 | Prefix | 126 audio + 1 SEP + 256 prompt = 383；首个答案 logit 在 382 |
 | 数值 | FP32、eval/frozen、无 autocast、TF32 关闭；沿用已有 seed 与运行时审计 |
 | 生成 | 逐 token argmax、每次完整 forward、attention_mask=None、无 KV cache；首个 EOS 或 300 新 tokens 停止 |
@@ -126,7 +128,8 @@ GT、任务名和分类不进入模型输入。其他推理设置沿用当前 CE
 
 每个输出目录持有进程锁，进程异常退出后锁自动释放。再次用相同参数、相同输出目录启动，会校验 run identity，恢复已经落盘的连续样本，只推理剩余样本。raw 写成功但 progress 未写的样本也能恢复。只修复最后一个缺少换行的未完成写入；已完整换行但 JSON 损坏、样本顺序/ID/内容不匹配均报错。更换权重、runtime、数据、scorer 或源码时使用新输出目录。同版本完整 5000 条 raw 已存在时只重评分，不再加载模型。
 
-旧 v1 代码/协议身份与 v2 不同，已完成的旧目录必须使用 [离线入口](RESCORE.md)，不要用新生成入口覆盖。未完成的旧生成先沿用旧代码完成，再离线重评。离线入口只读源 JSONL，不修补源文件，并将新评分写入独立子目录。
+旧官方题面v1/v2与当前紧凑小写v3具有不同身份，不能续用旧目录。显式指定旧目录也会在模型加载前拒绝，不覆盖旧结果。
+同版新协议仍正常续跑；旧结果可继续用[离线入口](RESCORE.md)按原评分复核，但这不会改变它的旧题面身份。
 
 遇到音频、数据、模型或生成错误立即停止并保留结果，不跳过样本。严格完成 5000 条唯一预测后才调用：
 

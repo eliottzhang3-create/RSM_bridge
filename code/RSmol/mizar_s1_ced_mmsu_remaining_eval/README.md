@@ -1,5 +1,10 @@
 # 剩余27项 MMSU：pdgpu-4090 单卡入口
 
+2026-11-22题面更新：通用MMSU已统一改为紧凑格式＋全小写，v3协议，评分仍为答案文本v2。
+默认输出现在是`<run-root>/eval/mmsu_compact_lowercase_v1/step<step>/`，旧官方题面结果不会被视为新协议已完成或可续跑。
+本页27/11目标划分是此前旧题面批次的历史绑定，本次未选择新的重评范围、未修改targets/excluded，也未提交作业。
+后续重评范围以用户新指定为准，不能由这份历史排除清单推定。既有旧raw离线评分入口仍可用，但不会改变题面。
+
 入口 `code/RSmol/run_mizar_mmsu_remaining_4090.sh` 固定覆盖当前38个已适配版本中尚未完成MMSU的27项，排除用户确认已完成的11项。每项独立提交一个作业，统一 `pdgpu-4090 / 1GPU / 8CPU / 32G / 1node`，原镜像 `docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1`、conda `mellow_c8204d8`、HF/Transformers离线设置。
 
 本地Windows维护代码，经GitHub同步到远程Linux；数据、权重及正式推理仍在远程。本包只增加目标绑定、调度、既有结果检查和汇总，计算节点直接执行原 `mizar_s1_ced_mmsu_eval/run.sh`。训练、模型、既有MMSU/MMAU/MMAR和ReasonAQA源码均保持原样，新包不进入原MMSU源码身份集合。

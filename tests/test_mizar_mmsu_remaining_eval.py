@@ -82,7 +82,7 @@ class ScopeTests(unittest.TestCase):
             self.assertEqual(args.runtime_config, (Path(old['run_root']) / 'formal/runtime.json').resolve())
             self.assertEqual(args.route_root, (config.ROOT / old['route_root']).resolve())
             self.assertEqual(args.expected_geometry, (8, 4, 4) if args.expected_step == 34626 else (8, 8, 4))
-            self.assertEqual(args.output_dir, (Path(old['run_root']) / f'eval/mmsu_step{args.expected_step}').resolve())
+            self.assertEqual(args.output_dir, (Path(old['run_root']) / 'eval' / dataset.OUTPUT_NAMESPACE / f'step{args.expected_step}').resolve())
             selected, family, default_route = runtime.adapter(args.eval_variant)
             self.assertEqual(family, config.TARGETS[name]['runtime_family'])
             self.assertEqual(args.route_root, default_route.resolve())

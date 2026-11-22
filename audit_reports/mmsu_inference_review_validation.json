@@ -2940,5 +2940,69 @@
     "previous_bytes": 496238,
     "previous_sha256": "2bbd7fa77cb3671145e276444ce42f9286a2fe56330864ac7a9b23aff7be5d38",
     "preserved_as_exact_suffix": true
+  },
+  "user_supplied_remote_followup": {
+    "date": "2026-11-22",
+    "provenance": "USER_SUPPLIED_REMOTE_LOG; complete report not independently read locally",
+    "reported_status": "PASS_NUMERICAL_PARITY",
+    "remote_report": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_20261119_141531507533438/eval/mmsu_probe_20261122_112042_1279907/diagnostic_report.json",
+    "model": "text71427 base",
+    "checkpoint_step": 34626,
+    "samples": [
+      {
+        "id": "accent_identification_41693afa-2627-4e38-82de-f7659cd554c2",
+        "answer_gt_user_reported": "India",
+        "compact_lowercase_response": "c) india <|endoftext|>",
+        "compact_lowercase_matches_existing_text_v2": true,
+        "runner_parity_user_reported": true,
+        "training_layout_passed_user_reported": {
+          "official_original": true,
+          "official_lowercase": true,
+          "compact_original": true,
+          "compact_lowercase": true
+        }
+      },
+      {
+        "id": "accent_identification_54a482c5-7f75-4b2d-bb78-db7236d6b3cf",
+        "answer_gt_user_reported": "New Zealand",
+        "compact_lowercase_response": "a) new zealand <|endoftext|>",
+        "compact_lowercase_matches_existing_text_v2": true,
+        "runner_parity_user_reported": true,
+        "training_layout_passed_user_reported": {
+          "official_original": true,
+          "official_lowercase": true,
+          "compact_original": true,
+          "compact_lowercase": true
+        }
+      },
+      {
+        "id": "accent_identification_0c8bd102-6c1c-4b35-a6b2-fc7990435618",
+        "answer_gt_user_reported": "Australia",
+        "compact_lowercase_response": "c) singapore <|endoftext|>",
+        "compact_lowercase_matches_existing_text_v2": false,
+        "runner_parity_user_reported": true,
+        "training_layout_passed_user_reported": {
+          "official_original": true,
+          "official_lowercase": true,
+          "compact_original": true,
+          "compact_lowercase": true
+        }
+      }
+    ],
+    "evidence_scope": "three preselected anomalous accent_identification rows; not full MMSU, random sample, all decoding steps, or all architectures",
+    "inference_from_pass": "diagnostic implementation requires same-input runner tokens, both audio decoders, first/second answer-position allclose and argmax, first free token equality",
+    "prompt_effect": "official original reproduces degeneration; lowercase alone and compact format alone remain abnormal; compact lowercase yields option-like answers plus EOS",
+    "conclusion": "controlled prompt changes trigger degeneration on these rows; input-template compatibility is implicated, not a newly demonstrated numerical decoder fault",
+    "unresolved": "exact contribution of instruction, newline, Question prefix, choice delimiter, capitalization; full5000 and other architectures not measured",
+    "production_prompt_change": "NOT_IMPLEMENTED_THIS_TURN",
+    "full5000_rerun": "NOT_RUN",
+    "compact_lowercase_sample_correct": 2,
+    "sample_count": 3,
+    "accuracy_note": "diagnostic examples only, not benchmark accuracy",
+    "rm_history": {
+      "previous_bytes": 506524,
+      "previous_sha256": "ca2395e08fed12c9354537650584f7605eabf1d7bb30ab19e7e8b7abd9abfb46",
+      "preserved_as_exact_suffix": true
+    }
   }
 }

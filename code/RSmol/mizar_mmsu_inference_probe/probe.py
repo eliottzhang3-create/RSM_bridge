@@ -56,7 +56,8 @@ def parse_args(argv=None):
 
 def prompt_cases(record, dataset, paired):
     # Never read answer_gt here. Keep all four original slots, including None.
-    official = dataset.prompt(record)
+    # Historical backend snapshots may predate the named diagnostic helper.
+    official = getattr(dataset, 'official_prompt', dataset.prompt)(record)
     compact = paired.mmau.build_fixed_order_prompt(record['question'], [record[k] for k in dataset.CHOICES])
     return {'official_original': official, 'official_lowercase': official.lower(),
             'compact_original': compact, 'compact_lowercase': compact.lower()}

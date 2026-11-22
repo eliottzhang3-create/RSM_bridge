@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full 5000-row MMSU evaluation, official prompt and existing CED generation."""
+"""Full 5000-row MMSU evaluation, compact lowercase prompt and existing generation."""
 from __future__ import annotations
 
 import argparse

@@ -1,7 +1,22 @@
 # 7–14×2–7 CED：六条路线、四项隔离评测
 
 本地 Windows 维护核心代码，通过 GitHub 同步；checkpoint、数据和实际 GPU 评测位于远程 Linux。
-本包位于训练目录之外，不修改六条训练路线、共享模型或任何旧评测源码。
+本包位于训练目录之外；六条训练路线和共享模型保持隔离。2026-11-22的MMSU题面修正同时更新共享通用MMSU，见下文。
+
+## 2026-11-22：MMSU统一紧凑格式＋全小写
+
+按用户确认，MMSU生产题面已改为`question a) choice_a b) choice_b c) choice_c d) choice_d`整体lower，
+与真实三题诊断的compact_lowercase及MMAU构造结果一致；不添加仅答字母指令、Question/Choices前缀或模板换行。
+全部四选项的顺序和null位置保留（输入占位为`none`），GT/分类不进入输入。
+共享旧通用MMSU和本包六路线使用同一dataset.prompt与新协议
+`mmsu_compact_lowercase_ced_fixed20_raw_greedy_answer_text_v3`。
+FP32/PAD/EOS/prefix/音频/greedy/各模型分支与原文本包含v2评分保持。
+此次授权仅修实现，尚未选择重评目标或提交作业。
+
+MMSU新默认输出为`<run-root>/eval/text71427_ced_v2/mmsu_compact_lowercase_v1/<checkpoint-stem>/`；
+使用`--output-root`时为`ROOT/MODEL/mmsu_compact_lowercase_v1/CHECKPOINT_STEM`。
+其他三个任务的默认目录不变。旧官方题面目录不能续写；显式指定旧目录同样由身份校验拒绝。
+本页以下2026-11-21记录和旧输出示例属于历史；旧raw重评分不能替代新题面推理。
 
 ## 2026-11-21：修复模型别名错配，四个指定 checkpoint 重跑
 
@@ -102,7 +117,7 @@ tail -f code/RSmol/log/text71427_ced_eval/<job-name>.JOB.log
 | `reasonaqa5000` | 已有同一份 seed1234 的5000条 manifest | 原 input 小写，无新增指令；完整答案规范化精确匹配，保留字母/括号/标点 |
 | `mmau` | test-mini 全1000条 | 原固定选项顺序、小写题面；完整 raw generation 交原官方 scorer |
 | `mmar` | 全1000条 | 原固定选项顺序、小写题面；完整 raw generation 交原官方 scorer，预测字段按其代码探测 |
-| `mmsu` | 全5000条、三份原 parquet | 官方大小写题面；原 `mmsu_answer_text_contains_v2`，再执行固定官方 scorer |
+| `mmsu` | 全5000条、三份原 parquet | 紧凑格式＋全小写题面；原 `mmsu_answer_text_contains_v2`，再执行固定官方 scorer |
 
 MMSU 沿用原方案：生成字母不参与判分，归一化后包含完整 GT 文本才计对。
 解释、否定或多个候选中出现 GT 也可能命中；没有切换为字母准确率。
@@ -217,11 +232,13 @@ bash code/RSmol/run_text71427_ced_eval_4090.sh batch all --targets-json /实际�
 <run-root>/eval/text71427_ced_v2/<reasonaqa5000|mmau|mmar|mmsu>/<checkpoint文件名去掉.ckpt>/
 ```
 
+2026-11-22起上式的MMSU任务目录为`mmsu_compact_lowercase_v1`；其他三项仍按任务名。
+
 每项保留 run_config、raw_generations、模型/42层执行审计、评分输入及 evaluation_report。
 ReasonAQA 另有 accuracy/per_sample_results/input fingerprints；MMSU 保留原始及 normalized predictions/parsing audit。
 重提相同命令、相同身份仅续跑剩余题目；ReasonAQA/MMSU 完整 raw 重评分不构造模型。
 进程锁拒绝同时写同一输出；完整坏行、错误身份或非空无主目录拒绝，只有未完成末尾写按原 storage 恢复。
-不覆盖旧评测目录。`--output-root DIR` 可让批量结果放到 `DIR/MODEL/TASK/CHECKPOINT_STEM`；单项可用 `--output-dir`。
+不覆盖旧评测目录。`--output-root DIR` 可让批量结果放到 `DIR/MODEL/TASK/CHECKPOINT_STEM`，MMSU的TASK使用`mmsu_compact_lowercase_v1`；单项可用 `--output-dir`。
 
 显式列出同一任务的已完成输出，CPU 汇总为 CSV/JSON：
 

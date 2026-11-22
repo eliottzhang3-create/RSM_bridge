@@ -69,7 +69,7 @@ class SelectedTargetTests(unittest.TestCase):
                 if target == "official_mizar":
                     self.assertEqual(options["--model-dir"], MODEL_DIR)
                     self.assertEqual(options["--checkpoint"], MODEL_DIR + "/checkpoints/final/stage3_q4_seed20260905.ckpt")
-                    self.assertEqual(options["--output-dir"], OUTPUT_ROOT + "/mizar_official_stage3_q4_seed20260905_matched_ced_v1/mmsu")
+                    self.assertEqual(options["--output-dir"], OUTPUT_ROOT + "/mizar_official_stage3_q4_seed20260905_matched_ced_v1/mmsu_compact_lowercase_v1")
                     for forbidden in ("--runtime-config", "--route-root", "--expected-step", "--expected-geometry"):
                         self.assertNotIn(forbidden, options)
                     self.assertIsNone(config["runtime_config"])
@@ -80,7 +80,7 @@ class SelectedTargetTests(unittest.TestCase):
                     self.assertEqual(options["--checkpoint"], root + "/formal/checkpoints/model--step-17313.ckpt")
                     self.assertEqual(options["--runtime-config"], root + "/formal/runtime.json")
                     self.assertTrue(options["--route-root"].endswith("/" + route))
-                    self.assertEqual(options["--output-dir"], root + "/eval/mmsu_step17313")
+                    self.assertEqual(options["--output-dir"], root + "/eval/mmsu_compact_lowercase_v1/step17313")
                     self.assertEqual(options["--expected-step"], "17313")
                     self.assertEqual(options["--expected-geometry"], "8,8,4")
                     self.assertEqual(config["expected_geometry"], [8, 8, 4])

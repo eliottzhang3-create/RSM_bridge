@@ -67,8 +67,9 @@ class SourceReviewTests(unittest.TestCase):
         cases=probe.prompt_cases(row,dataset,benchmark)
         changed={**row,'answer_gt':'DO_NOT_INSERT_THIS_GROUND_TRUTH'}
         self.assertEqual(cases,probe.prompt_cases(changed,dataset,benchmark))
-        self.assertEqual(cases['official_original'],dataset.prompt(row))
-        self.assertEqual(cases['official_lowercase'],dataset.prompt(row).lower())
+        self.assertEqual(cases['official_original'],dataset.official_prompt(row))
+        self.assertEqual(cases['official_lowercase'],dataset.official_prompt(row).lower())
+        self.assertEqual(cases['compact_lowercase'],dataset.prompt(row))
         self.assertEqual(cases['compact_original'],'Which Country? a) India b) None c) China d) Japan')
         self.assertEqual(cases['compact_lowercase'],'which country? a) india b) none c) china d) japan')
         self.assertIn('only A, B, C, or D',cases['official_original'])

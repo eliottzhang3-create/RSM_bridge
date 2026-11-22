@@ -147,7 +147,7 @@ class RealAudioTensorTests(unittest.TestCase):
         self.assertEqual(int(short[16000:].count_nonzero()), 0)
         self.assertEqual(int(short[320000:].count_nonzero()), 0)
 
-    def test_generation_preserves_uppercase_and_actual_greedy_decoder_eos(self):
+    def test_generation_uses_compact_lowercase_prompt_and_actual_greedy_decoder_eos(self):
         torch = self.torch
         calls = []
         class LM(torch.nn.Module):
@@ -165,6 +165,7 @@ class RealAudioTensorTests(unittest.TestCase):
         text_encoder = SimpleNamespace(tokenize=Mock(return_value={"input_ids": torch.ones((1, 256), dtype=torch.long)}))
         loaded = (model, tokenizer, torch.device("cpu"), text_encoder, self.fixed20, {}, {})
         text = dataset.prompt(record())
+        self.assertEqual(text, 'which country? a) india b) none c) china d) japan')
         result = runtime.generate(loaded, {"prompt": text, "waveform": torch.ones(16000), "audio_audit": {}}, variant="base")
         text_encoder.tokenize.assert_called_once_with(text, 256)
         self.assertEqual(result["generated_token_ids"], [3, 0])

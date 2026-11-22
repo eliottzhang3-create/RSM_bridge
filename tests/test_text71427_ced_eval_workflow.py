@@ -107,6 +107,7 @@ class MmsuWorkflowTests(unittest.TestCase):
     def execute(self,args,paths,records,callback=None,forbid_loader=False):
         loaded=(None,None,None,None,None,{'status':'PASS','fixture':True},None)
         def generate(_,sample,**kw):
+            self.assertEqual(sample['prompt'], 'which country? a) india b) none c) china d) japan')
             # A wrong letter is ignored; only the complete answer text decides v2 correctness.
             return mmsu_generation('B) India<|endoftext|>')
         with patch.object(runtime,'read_checkpoint',return_value={}), \

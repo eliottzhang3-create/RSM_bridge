@@ -1,5 +1,10 @@
 # 用户指定的五个 Mizar MMSU 测评目标（2026-11-13）
 
+2026-11-22更新：此处是历史固定目标快捷入口，当前正式输入已统一为紧凑格式＋全小写，评分仍为原文本包含v2。
+四条训练run的新默认输出为`eval/mmsu_compact_lowercase_v1/step17313/`，官方release为同输出根下`mmsu_compact_lowercase_v1/`。
+旧结果离线rescore脚本仍指向历史目录，不能把旧raw重评分当作新题面重评；新旧题面使用不同protocol和输出身份。
+本次仅修实现，没有选定或提交这五项重评，后续范围等待用户指定。下方“无需重跑”仅描述2026-11-13当时的评分升级。
+
 已核对现有 MMAU test mini、MMAR 的提交分支和 runtime 注册。五个目标全部复用现成适配，`code/RSmol/run_mizar_mmsu_selected5_5090.sh` 组装固定参数；既有 MMAU/MMAR 和 MMSU 推理设置保持。
 
 **已有五份生成无需重跑**：同步代码后执行 `bash code/RSmol/rescore_mizar_mmsu_selected5.sh all`，在 CPU 上按用户确认的 v2 完整答案文本包含规则重评，忽略生成字母，转换后调用未改动官方 scorer。新结果写入各源目录的 `rescore_mmsu_answer_text_v2/`。详细定义、完整命令和本次 Git 同步清单见 [RESCORE.md](RESCORE.md)。本页以下提交命令用于新的完整推理作业，更新代码后自动使用 v2 评分。

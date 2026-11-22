@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .registry import ROOT, ROUTES, BENCHMARKS
-from .arguments import printable
+from .arguments import printable, MMSU_OUTPUT_NAMESPACE
 from . import preflight
 
 
@@ -96,7 +96,8 @@ def planned(args):
                     argv += ['--' + key.replace('_', '-'), str(record[key])]
             output = args.output_dir
             if args.output_root:
-                output = args.output_root / model / benchmark / Path(record['checkpoint']).stem
+                task_dir = MMSU_OUTPUT_NAMESPACE if benchmark == 'mmsu' else benchmark
+                output = args.output_root / model / task_dir / Path(record['checkpoint']).stem
             if output:
                 argv += ['--output-dir', str(output)]
             argv += args.forwarded

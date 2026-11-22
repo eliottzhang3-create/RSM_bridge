@@ -4,6 +4,40 @@
 三个 accent_identification 原始回答出现无关内容和重复，问题发生在 scorer 之前。
 本目录提供三题隔离诊断，不改生产评测、训练模型或既有结果，不输出完整 benchmark 分数。
 
+2026-11-22用户随后授权正式MMSU改为紧凑格式＋全小写，现已接入共享dataset.prompt。
+本工具的official_original/official_lowercase继续显式使用保留的历史official_prompt，
+因此不会随着正式默认输入改变而丢失旧模板对照；compact_lowercase与新正式输入一致。
+历史Git后端没有official_prompt时仍读取该快照当时的dataset.prompt，保留原诊断可复现性。
+
+## 2026-11-22：用户回传真实三题对照
+
+用户回传71427 base / step34626诊断，报告路径：
+`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_20261119_141531507533438/eval/mmsu_probe_20261122_112042_1279907/diagnostic_report.json`。
+以下证据来自用户贴出的作业日志，未在本地独立读取远程完整报告。
+
+三题 runner_parity 均为true；四种题面共12项 training_layout_passed 均为true，
+最终状态PASS_NUMERICAL_PARITY。按该诊断实现，最终PASS还要求三题双音频解码器逐位一致。
+这支持三题上同输入runner一致、首/第二teacher-forced答案位置logits在既定容差内对齐，
+首预测argmax一致；不代表所有生成步/所有架构验证完成，也不代表回答正确。
+
+| 题面 | 用户回传的三题行为 |
+|---|---|
+| 官方原大小写 | 重现此前无关文本/反复ppe、ibe等异常 |
+| 官方题面只转小写 | 仍出现复述或反驳字母指令、混杂选项等异常 |
+| 紧凑题面原大小写 | south continent、dered sibling、humour，仍有非选项回答 |
+| 紧凑题面全小写 | `c) india`、`a) new zealand`、`c) singapore`，均正常结束于EOS |
+
+此前用户给出的GT分别为India、New Zealand、Australia，所以紧凑小写为两题正确、一题错误；
+第三题恢复正常回答格式并不等于答对。这是针对已知异常三题的诊断，不是随机样本分数或完整5000题准确率。
+官方小写第三题同时提到australia和singapore，原v2文本包含指标会计对，仍不能据此称其生成已恢复正常。
+
+控制同一checkpoint、音频和生成设置，只改变题面即可改变退化行为，支持**题面格式/大小写触发退化**的判断。
+仅lowercase不足；四个case没有分别隔离instruction/换行/Question前缀/选项符号，不能单独归罪其中某一项。
+新旧MMSU一致只能说明复现旧协议，不能保证官方题面适合该模型的训练输入分布。
+正式重评宜统一采用现有MMAU构造器的紧凑小写题面，保留原greedy/音频/模型和既有评分规则，
+另立prompt协议与输出目录，对全部待比较架构使用同一模板；不能把新旧题面分数混作同协议比较。
+本次仅解释和记录用户回传证据，尚未修改正式MMSU题面或执行5000题重评。
+
 ## 已确认的源码结论
 
 新 `text71427_ced_eval/mmsu_runtime.py` 的 read_audio、decode_audio、generate、
