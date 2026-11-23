@@ -1,3 +1,50 @@
+## 2026-11-23：隔离实现 MyEval MMAR8 三模型全排列评测及 A4/A8 零 seed 干预
+
+用户授权按既定计划复制隔离后实现。新增 code/RSmol/myeval_mmar8/、run_myeval_mmar8_4090.sh，
+复制既有 ced_eval_20261122 的严格历史源码/模型加载及生成流程；既有正式评测、训练、模型文件均保持。
+本轮开始时 3529 份 tracked Python/Shell/JSON 的 normalized-LF SHA 全部保持，库存见本包 source_guard.json。
+
+固定 base 为 mizar_s1_ced_small_gbs128_text71427_mesh_3090/formal_20261119_141531507533438，
+read2 为 mizar_s1_ced48_audio7_read2_lora_r8_gbs128_text71427_3090/formal_20261120_111448563391250，
+均 /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/ 下 formal/checkpoints/model--step-34626.ckpt；
+第三模型 read2_zero48 使用同一 read2 checkpoint，完整参数严格覆盖/审计后，仅将投影后的 A4/A8 只读 seed 值置零。
+保留最终音频 prefix、七槽及原七路 softmax 分母、全部原五槽读写、两轮 LoRA 的392矩阵和28物理/42执行；
+不删槽、不重新归一化、不改权重、不训练。每题显式独立 context，每token forward 核查本题零context身份，拒绝跨题陈旧值。
+
+标注本地 C:\Xlance\assets\MMAU analysis\MyEval\mmar8selected.jsonl，远程 /hpc_stor03/sjtu_home/jinwei.zhang/data/MyEval/mmar8selected.jsonl。
+normalized-LF SHA a670c97eef24859c6dc015ba137e723fa2e7205d198a0b4d234ced0e642b7815；8音频/67自定义题，
+53选择题（P29/S11/W7/R6）和14开放题（含caption），只用 questions 的题目/选项，原MMAR问题和旧模型回答不进自定义推理。
+按选项索引全排列并重新标a..e；2选需2/2，3选需6/6，4选至少21/24，5选按用户明确要求至少115/120。
+734次排列+14开放=每模型748次生成；按原题通过与否统计四维和总ACC（分母53），不是按734次排列加权。
+开放题只生成不评分，保存逐题raw及三模型并排MD/JSONL。保留原MMAR来源分类，不自动等同于新题能力维度。
+
+四个独立作业为三模型各MyEval8，及read2_zero48额外完整1000题MMAR；共3244次生成。
+完整MMAR使用原问题/原固定选项及官方完整评分，不对其1000题另做全排列。
+每排列仍按约定将原始生成直接交官方MMAR string_match，不增加字母parser、EOS清洗或语义打分。
+官方词集合匹配忽略词序和角色；已查出6道自定义题存在错误选项与正确答案词集合相同，
+README/验收报告及scores.json逐题标明；全排列不能消除此评分局限，后续严格parser须另立版本。
+另5段音频超过20秒，保持原中心裁剪/右补零后10+10协议，dataset_audit记录标注推算裁剪区间，可能丢失首尾证据。
+
+FP32/eval/seed1234/TF32off、mono32k/fixed20、紧凑整体小写题面、原EOS后缀/PAD!、prompt256/prefix383/首logit382，
+无mask/无KV/每token全序列重算/argmax最多300及首EOS停止保持。实际prompt token和解码音频指纹逐题记录，比较时一致性核对。
+两checkpoint均绑定历史训练Git 8a9f1f76722e77cba4be429a578c63fdcf6ee527；不能用已演进的当前同名base训练目录。
+只git archive指定训练后端和共享源码到新 log/myeval_mmar8_sources，逐文件/训练code_digest校验，旧正式缓存不变。
+提交前八音频标注/路径CPU预检、两checkpoint各一次mmap合同/源码预检，失败目标不提交、其他继续。
+全部pdgpu-4090、1GPU/8CPU/32G/1node、原镜像和mellow_c8204d8，无额外GPU smoke。
+
+默认输出 <run>/eval/myeval_mmar8_v1/<alias>/<myeval8|mmar>/model--step-34626/；四目录隔离。
+源码/权重/runtime/标注/任务/音频文件/scorer/门槛/干预身份锁定，追加raw/fsync/断点续跑，完整坏行拒绝，未完成不出完整分数。
+compare/rescore仅CPU读取完整保存产物、校验raw/输入/scorer/代码并重算；源评测目录只读，不改其进度/分数/报告。
+GitHub同步后远程仓库根 bash code/RSmol/run_myeval_mmar8_4090.sh all 提交四项；单项/预览/预检/续跑/比较和精确同步清单见本包README。
+
+本地联合33项最终32通过，1真实微型CPU模型测试缺Torch/Transformers/Safetensors明确跳过；
+覆盖3x748及额外1000完整尺寸合成流程、四门槛、同源题分母、数据隔离、真实Git/Bash、原核心AST、断点恢复、
+真实未改MMAR官方scorer CLI及既有loader/hooks的5项回归。NumPy执行实际生产七槽混合/读写方法核对零seed与7路分母。
+官方CLI测试仅补齐未调用的tqdm显示导入依赖，评分实现不替换；生成/解码/CUDA及bulk fsync在批量合成测试明确模拟。
+初次发现重复排列ID检查缺口已补齐；随后评分测试缺tqdm及Windows环境变量测试夹具恢复问题已修正，最终复验通过，运行报告保留历史失败。
+报告 audit_reports/myeval_mmar8_validation.json；未读取远程生产权重/音频、提交真实vc作业或commit/push，不声称生产4090 PASS。
+本条仅前置，以下原RM的525110字节完整保留，原SHA256为1d1fcb12826d97ed479e48e682ec577dacad70c009c89c184164aa81980e7110。
+
 ## 2026-11-23：修复audio7_read2校验接口，新增三循环71437及两checkpoint八项4090评测
 
 用户授权按计划实现。原read2报错由评测器向历史validate_audio_read2(model)误传fresh=False导致，

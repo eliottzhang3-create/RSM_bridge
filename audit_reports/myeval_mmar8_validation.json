@@ -1,0 +1,257 @@
+{
+  "validation_runs": [
+    {
+      "status": "FAILED",
+      "tests_run": 33,
+      "passed": 30,
+      "skipped": [
+        {
+          "test": "test_actual_read2_zero_seeds_keep_weights_lora_prefix_and_42_call_trace (test_myeval_mmar8.RealZero48Tests.test_actual_read2_zero_seeds_keep_weights_lora_prefix_and_42_call_trace)",
+          "reason": "Real CPU tensor dependencies missing: torch, transformers, safetensors"
+        }
+      ],
+      "failures": [
+        {
+          "test": "test_full_mmar_interruption_never_scores_partial_and_resumes_remaining (test_myeval_mmar8_runtime.FullMmarTests.test_full_mmar_interruption_never_scores_partial_and_resumes_remaining)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_myeval_mmar8_runtime.py\", line 174, in test_full_mmar_interruption_never_scores_partial_and_resumes_remaining\n    self.assertEqual(passed['status'], 'PASS', passed.get('fatal_error'))\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 'FAILED' != 'PASS'\n- FAILED\n+ PASS\n\n"
+        },
+        {
+          "test": "test_full_thousand_uses_original_questions_raw_predictions_and_real_official_cli (test_myeval_mmar8_runtime.FullMmarTests.test_full_thousand_uses_original_questions_raw_predictions_and_real_official_cli)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_myeval_mmar8_runtime.py\", line 155, in test_full_thousand_uses_original_questions_raw_predictions_and_real_official_cli\n    self.assertEqual(report['status'], 'PASS', report.get('fatal_error'))\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 'FAILED' != 'PASS'\n- FAILED\n+ PASS\n\n"
+        }
+      ],
+      "elapsed_seconds": 21.579173600010108
+    },
+    {
+      "status": "FAILED",
+      "tests_run": 33,
+      "passed": 26,
+      "skipped": [
+        {
+          "test": "test_actual_read2_zero_seeds_keep_weights_lora_prefix_and_42_call_trace (test_myeval_mmar8.RealZero48Tests.test_actual_read2_zero_seeds_keep_weights_lora_prefix_and_42_call_trace)",
+          "reason": "Real CPU tensor dependencies missing: torch, transformers, safetensors"
+        }
+      ],
+      "failures": [
+        {
+          "test": "test_cpu_preflight_reads_only_cpu_mmap_and_never_needs_optimizer (test_myeval_mmar8_runtime.HeaderTests.test_cpu_preflight_reads_only_cpu_mmap_and_never_needs_optimizer)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_myeval_mmar8_runtime.py\", line 70, in test_cpu_preflight_reads_only_cpu_mmap_and_never_needs_optimizer\n    args = fixture_args(root, target); sources.prepare(target, args.sources_cache)\n                                       ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\myeval_mmar8\\sources.py\", line 59, in prepare\n    result = subprocess.run(['git','archive','--format=tar',revision,*expected['archive_paths']],\n        cwd=ROOT.parents[1],capture_output=True,check=True)\n  File \"C:\\Program Files\\Python313\\Lib\\subprocess.py\", line 577, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['git', 'archive', '--format=tar', '8a9f1f76722e77cba4be429a578c63fdcf6ee527', 'code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_lora_r8', 'code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced_small', 'code/RSmol/mizar_official_eval/release_manifest.json', 'code/RSmol/mizar_text_7_14x2_7_mesh/__init__.py', 'code/RSmol/mizar_text_7_14x2_7_mesh/contract.py', 'code/RSmol/recursive_model_mizar_text_7_14x2_7_mesh.py']' returned non-zero exit status 128.\n"
+        },
+        {
+          "test": "test_three_actual_contracts_and_trained_read2_validator_signature (test_myeval_mmar8_runtime.HeaderTests.test_three_actual_contracts_and_trained_read2_validator_signature)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_myeval_mmar8_runtime.py\", line 42, in test_three_actual_contracts_and_trained_read2_validator_signature\n    sources.prepare(target, directory)\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\myeval_mmar8\\sources.py\", line 59, in prepare\n    result = subprocess.run(['git','archive','--format=tar',revision,*expected['archive_paths']],\n        cwd=ROOT.parents[1],capture_output=True,check=True)\n  File \"C:\\Program Files\\Python313\\Lib\\subprocess.py\", line 577, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['git', 'archive', '--format=tar', '8a9f1f76722e77cba4be429a578c63fdcf6ee527', 'code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_lora_r8', 'code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced_small', 'code/RSmol/mizar_official_eval/release_manifest.json', 'code/RSmol/mizar_text_7_14x2_7_mesh/__init__.py', 'code/RSmol/mizar_text_7_14x2_7_mesh/contract.py', 'code/RSmol/recursive_model_mizar_text_7_14x2_7_mesh.py']' returned non-zero exit status 128.\n"
+        },
+        {
+          "test": "test_wrong_architecture_source_precision_and_geometry_rejected (test_myeval_mmar8_runtime.HeaderTests.test_wrong_architecture_source_precision_and_geometry_rejected)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_myeval_mmar8_runtime.py\", line 53, in test_wrong_architecture_source_precision_and_geometry_rejected\n    sources.prepare('base', directory); sources.prepare('read2', directory)\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\myeval_mmar8\\sources.py\", line 59, in prepare\n    result = subprocess.run(['git','archive','--format=tar',revision,*expected['archive_paths']],\n        cwd=ROOT.parents[1],capture_output=True,check=True)\n  File \"C:\\Program Files\\Python313\\Lib\\subprocess.py\", line 577, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['git', 'archive', '--format=tar', '8a9f1f76722e77cba4be429a578c63fdcf6ee527', 'code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_lora_r8', 'code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71427_mesh_ced_small', 'code/RSmol/mizar_official_eval/release_manifest.json', 'code/RSmol/mizar_text_7_14x2_7_mesh/__init__.py', 'code/RSmol/mizar_text_7_14x2_7_mesh/contract.py', 'code/RSmol/recursive_model_mizar_text_7_14x2_7_mesh.py']' returned non-zero exit status 128.\n"
+        },
+        {
+          "test": "test_actual_loader_strict_overwrite_audit_then_freeze_and_pad_override_both_models (test_ced_eval_20261123_loading.LoadingTests.test_actual_loader_strict_overwrite_audit_then_freeze_and_pad_override_both_models) (alias='mesh_71437')",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_ced_eval_20261123_loading.py\", line 52, in test_actual_loader_strict_overwrite_audit_then_freeze_and_pad_override_both_models\n    c,saved,config=checkpoint_fixture(alias,5771)\n                   ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_ced_eval_20261123.py\", line 36, in checkpoint_fixture\n    c=sources.load_contract(target,cache())\n                                   ~~~~~^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_ced_eval_20261123.py\", line 32, in cache\n    for target in registry.ROUTES:sources.prepare(target,_cache.name)\n                                  ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\ced_eval_20261123\\sources.py\", line 59, in prepare\n    result = subprocess.run(['git','archive','--format=tar',revision,*expected['archive_paths']],\n        cwd=ROOT.parents[1],capture_output=True,check=True)\n  File \"C:\\Program Files\\Python313\\Lib\\subprocess.py\", line 577, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['git', 'archive', '--format=tar', '75dcda3a7bcd8765044b14ecd4e408fe33dfdda6', 'code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced_small', 'code/RSmol/mizar_text_7_14x3_7_mesh/__init__.py', 'code/RSmol/mizar_text_7_14x3_7_mesh/contract.py', 'code/RSmol/recursive_model_mizar_text_7_14x3_7_mesh.py', 'code/RSmol/mizar_official_eval/release_manifest.json']' returned non-zero exit status 128.\n"
+        },
+        {
+          "test": "test_actual_loader_strict_overwrite_audit_then_freeze_and_pad_override_both_models (test_ced_eval_20261123_loading.LoadingTests.test_actual_loader_strict_overwrite_audit_then_freeze_and_pad_override_both_models) (alias='audio7_read2')",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_ced_eval_20261123_loading.py\", line 52, in test_actual_loader_strict_overwrite_audit_then_freeze_and_pad_override_both_models\n    c,saved,config=checkpoint_fixture(alias,5771)\n                   ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_ced_eval_20261123.py\", line 36, in checkpoint_fixture\n    c=sources.load_contract(target,cache())\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\ced_eval_20261123\\sources.py\", line 100, in load_contract\n    root = activate(target,cache)\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\ced_eval_20261123\\sources.py\", line 86, in activate\n    root = verify(target,cache)\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\ced_eval_20261123\\sources.py\", line 38, in verify\n    raise ValueError(f'training snapshot content mismatch: {path}')\nValueError: training snapshot content mismatch: C:\\Users\\69327\\AppData\\Local\\Temp\\ced23_sources_p88wok78\\8a9f1f76722e77cba4be429a578c63fdcf6ee527\\code\\RSmol\\mellow_official_training_c8204d8_adamw_cosine\\mizar_s1_gbs128_text71427_mesh_ced48_audio7_read2_lora_r8\\audit_reference.py\n"
+        },
+        {
+          "test": "test_cached_checkpoint_detects_replacement_between_identity_and_load (test_ced_eval_20261123_loading.LoadingTests.test_cached_checkpoint_detects_replacement_between_identity_and_load)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_ced_eval_20261123_loading.py\", line 119, in test_cached_checkpoint_detects_replacement_between_identity_and_load\n    runtime.read_checkpoint(args)\n    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\ced_eval_20261123\\runtime.py\", line 33, in read_checkpoint\n    sources.prepare(args.eval_variant,args.sources_cache)\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\ced_eval_20261123\\sources.py\", line 59, in prepare\n    result = subprocess.run(['git','archive','--format=tar',revision,*expected['archive_paths']],\n        cwd=ROOT.parents[1],capture_output=True,check=True)\n  File \"C:\\Program Files\\Python313\\Lib\\subprocess.py\", line 577, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['git', 'archive', '--format=tar', '75dcda3a7bcd8765044b14ecd4e408fe33dfdda6', 'code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced_small', 'code/RSmol/mizar_text_7_14x3_7_mesh/__init__.py', 'code/RSmol/mizar_text_7_14x3_7_mesh/contract.py', 'code/RSmol/recursive_model_mizar_text_7_14x3_7_mesh.py', 'code/RSmol/mizar_official_eval/release_manifest.json']' returned non-zero exit status 128.\n"
+        }
+      ],
+      "elapsed_seconds": 19.865592799993465
+    },
+    {
+      "status": "PASS_LOCAL_WITH_SKIPS",
+      "tests_run": 33,
+      "passed": 32,
+      "skipped": [
+        {
+          "test": "test_actual_read2_zero_seeds_keep_weights_lora_prefix_and_42_call_trace (test_myeval_mmar8.RealZero48Tests.test_actual_read2_zero_seeds_keep_weights_lora_prefix_and_42_call_trace)",
+          "reason": "Real CPU tensor dependencies missing: torch, transformers, safetensors"
+        }
+      ],
+      "failures": [],
+      "elapsed_seconds": 26.341454099994735
+    }
+  ],
+  "status": "PASS_LOCAL_WITH_SKIPS",
+  "latest": {
+    "status": "PASS_LOCAL_WITH_SKIPS",
+    "tests_run": 33,
+    "passed": 32,
+    "skipped": [
+      {
+        "test": "test_actual_read2_zero_seeds_keep_weights_lora_prefix_and_42_call_trace (test_myeval_mmar8.RealZero48Tests.test_actual_read2_zero_seeds_keep_weights_lora_prefix_and_42_call_trace)",
+        "reason": "Real CPU tensor dependencies missing: torch, transformers, safetensors"
+      }
+    ],
+    "failures": [],
+    "elapsed_seconds": 26.341454099994735
+  },
+  "python": "3.13.5",
+  "dependencies": {
+    "torch": false,
+    "transformers": false,
+    "safetensors": false,
+    "numpy": true,
+    "torchaudio": false
+  },
+  "python310_syntax": [
+    "code/RSmol/myeval_mmar8/arguments.py",
+    "code/RSmol/myeval_mmar8/benchmark.py",
+    "code/RSmol/myeval_mmar8/compare.py",
+    "code/RSmol/myeval_mmar8/dataset.py",
+    "code/RSmol/myeval_mmar8/evaluate.py",
+    "code/RSmol/myeval_mmar8/observers.py",
+    "code/RSmol/myeval_mmar8/preflight.py",
+    "code/RSmol/myeval_mmar8/registry.py",
+    "code/RSmol/myeval_mmar8/rescore.py",
+    "code/RSmol/myeval_mmar8/runtime.py",
+    "code/RSmol/myeval_mmar8/scoring.py",
+    "code/RSmol/myeval_mmar8/sources.py",
+    "code/RSmol/myeval_mmar8/storage.py",
+    "code/RSmol/myeval_mmar8/submit.py",
+    "code/RSmol/myeval_mmar8/__init__.py",
+    "tests/test_myeval_mmar8.py",
+    "tests/test_myeval_mmar8_runtime.py",
+    "tests/validate_myeval_mmar8.py"
+  ],
+  "annotations": {
+    "status": "ANNOTATION_AND_METADATA_BINDING_VERIFIED",
+    "audio_decoding": "NOT_RUN",
+    "production_inference": "NOT_RUN",
+    "audio_rows": 8,
+    "original_questions": 67,
+    "closed_questions": 53,
+    "closed_permutations": 734,
+    "open_questions": 14,
+    "generations_per_model": 748,
+    "normalized_lf_sha256": "a670c97eef24859c6dc015ba137e723fa2e7205d198a0b4d234ced0e642b7815",
+    "official_token_set_collisions": [
+      {
+        "question_key": "v2oCIDFP4oU_00-00-29_00-00-59::q3",
+        "answer": "The violin has a brighter and higher sound, while the cello sounds warmer and deeper.",
+        "same_token_set_incorrect_options": [
+          "The cello has a brighter and higher sound, while the violin sounds warmer and deeper."
+        ]
+      },
+      {
+        "question_key": "H3ixLqnHqCg_00-00-00_00-00-13::q2",
+        "answer": "[a], [o], [a], [o], [eh], [a], [se], [di]",
+        "same_token_set_incorrect_options": [
+          "[a], [se], [a], [se], [o], [a], [eh], [di]",
+          "[a], [eh], [a], [eh], [a], [o], [se], [di]",
+          "[a], [eh], [a], [eh], [o], [a], [se], [di]"
+        ]
+      },
+      {
+        "question_key": "H3ixLqnHqCg_00-00-00_00-00-13::q5",
+        "answer": "[a], [o], [a], [o]",
+        "same_token_set_incorrect_options": [
+          "[o], [a], [o], [a]"
+        ]
+      },
+      {
+        "question_key": "kJkMJJMoVIc_00-00-00_00-00-30::q5",
+        "answer": "A log flume slides down and plunges into water with splashes, while a roller coaster drops directly.",
+        "same_token_set_incorrect_options": [
+          "A roller coaster slides down and plunges into water with splashes, while a log flume drops directly."
+        ]
+      },
+      {
+        "question_key": "kJkMJJMoVIc_00-00-00_00-00-30::q6",
+        "answer": "A log flume usually has only one downhill section, while a roller coaster has multiple ups and downs.",
+        "same_token_set_incorrect_options": [
+          "A roller coaster usually has only one downhill section, while a log flume has multiple ups and downs."
+        ]
+      },
+      {
+        "question_key": "e-Q-lcBY89c_00-00-00_00-00-25::q5",
+        "answer": "News anchor, news reporter, interviewee",
+        "same_token_set_incorrect_options": [
+          "Interviewee, news reporter, news anchor",
+          "News reporter, interviewee, news anchor",
+          "Interviewee, news anchor, news reporter"
+        ]
+      }
+    ]
+  },
+  "source_sha256": {
+    "code/RSmol/myeval_mmar8/__init__.py": "79fa18487b67d1064836bd2b9d8b15a17fdc32bd03853ca15683ad97e844ffba",
+    "code/RSmol/myeval_mmar8/arguments.py": "46653606b23f20864794275ba808966913dd943e1389799126bf7d594aa07c29",
+    "code/RSmol/myeval_mmar8/benchmark.py": "110538ea5e363cc25e8ad2c8d57866bacb4a0cf9dd6a7866557b976c936b02c0",
+    "code/RSmol/myeval_mmar8/compare.py": "0c07203dad97e6ebb4eccf7ca0c83684ea60f3818ecc84e67adfcbc62c3081e0",
+    "code/RSmol/myeval_mmar8/dataset.py": "2f6e2d947b8d0a6669412daf9b52498a4d21a75cd38280644272966fa413b71b",
+    "code/RSmol/myeval_mmar8/evaluate.py": "317a29a9c125cbb10e04cba0b2d396acedaff41bd341789a79d07bdcd7461167",
+    "code/RSmol/myeval_mmar8/observers.py": "7776fa7008bf201406a44ab3b73a098ac51cd3475a765055a8447e834957899e",
+    "code/RSmol/myeval_mmar8/preflight.py": "02b6df7d194ea4ed7d7d71eb64d5181eda3545adaf7bd370c8df7897a7f39b9b",
+    "code/RSmol/myeval_mmar8/README.md": "0508b866453a8c1ddcec5fad60e370b1d465d377a651f2599c1d576b18810fbf",
+    "code/RSmol/myeval_mmar8/registry.py": "f97b5296d69b0082d9d853f51fb16cb58586b9eb346b92c1a4922dcceb5e8656",
+    "code/RSmol/myeval_mmar8/rescore.py": "f45c0a6a5309edc1c33c821096d777d5154a499af8a6403d5dd65df13d0c6255",
+    "code/RSmol/myeval_mmar8/run.sh": "77c05e99e7dbd442e8963e8ef320a605233a0ed775232c8e662cb056658a4a62",
+    "code/RSmol/myeval_mmar8/runtime.py": "35fa12091ac1c091d2de612efbf01e543dc2cc7f67d46f251372cd81961ee80a",
+    "code/RSmol/myeval_mmar8/scoring.py": "03ee4b9b24d2b5b90be23c711742f5326f6103f437217fb2d400fc9a53f5a11c",
+    "code/RSmol/myeval_mmar8/source_guard.json": "da0bdccbf26bcae1e0ba93b1d5582b38bf29f923a46928e798155c92b208c5a1",
+    "code/RSmol/myeval_mmar8/source_manifest.json": "0e96ac4085fb8e354be235b35685b60321a75c6ae79b0358588a2daa26d4a731",
+    "code/RSmol/myeval_mmar8/sources.py": "f7b3421718fa3c341be6e2588d04750a4b7dbef970dc5ccd581866f5170d364d",
+    "code/RSmol/myeval_mmar8/storage.py": "ed711f64cef81177bef208f1976479e6ecaff888a3a88280a5fdc6d75d6d0191",
+    "code/RSmol/myeval_mmar8/submit.py": "7c43a274b29d3dd462d224f941cddc7b581f9ddb0fc69f08c250cedb56bd015c"
+  },
+  "full_size_synthetic": {
+    "custom_models": 3,
+    "generations_each": 748,
+    "extra_mmar": 1000,
+    "model_audio_cuda": "explicit synthetic fixtures",
+    "bulk_fsync": "mocked in bulk fixtures"
+  },
+  "cpu_numerical": "NumPy executing actual production _mixed_interaction/_read/_write; not Torch autograd",
+  "tensor_test": "real tiny CPU model when dependencies are present, otherwise explicitly skipped",
+  "remote_weights": "NOT_READ",
+  "gpu": "NOT_RUN",
+  "real_vc_submission": "NOT_RUN",
+  "commit_push": "NOT_RUN",
+  "rm_history": {
+    "previous_bytes": 525110,
+    "previous_sha256": "1d1fcb12826d97ed479e48e682ec577dacad70c009c89c184164aa81980e7110",
+    "preserved_exactly_as_suffix": true
+  },
+  "packaging_checks": {
+    "status": "PASS",
+    "existing_guarded_sources_unchanged": 3529,
+    "rm_history_suffix_verified": true,
+    "readme_bash_blocks_syntax_checked": 7,
+    "new_handwritten_files_whitespace": "PASS",
+    "official_fixture_original_whitespace_preserved": true,
+    "git_diff_check": "PASS",
+    "all_delivery_files_git_visible": true,
+    "delivery_files": [
+      "RM.md",
+      "audit_reports/myeval_mmar8_validation.json",
+      "code/RSmol/myeval_mmar8/README.md",
+      "code/RSmol/myeval_mmar8/__init__.py",
+      "code/RSmol/myeval_mmar8/arguments.py",
+      "code/RSmol/myeval_mmar8/benchmark.py",
+      "code/RSmol/myeval_mmar8/compare.py",
+      "code/RSmol/myeval_mmar8/dataset.py",
+      "code/RSmol/myeval_mmar8/evaluate.py",
+      "code/RSmol/myeval_mmar8/observers.py",
+      "code/RSmol/myeval_mmar8/preflight.py",
+      "code/RSmol/myeval_mmar8/registry.py",
+      "code/RSmol/myeval_mmar8/rescore.py",
+      "code/RSmol/myeval_mmar8/run.sh",
+      "code/RSmol/myeval_mmar8/runtime.py",
+      "code/RSmol/myeval_mmar8/scoring.py",
+      "code/RSmol/myeval_mmar8/source_guard.json",
+      "code/RSmol/myeval_mmar8/source_manifest.json",
+      "code/RSmol/myeval_mmar8/sources.py",
+      "code/RSmol/myeval_mmar8/storage.py",
+      "code/RSmol/myeval_mmar8/submit.py",
+      "code/RSmol/run_myeval_mmar8_4090.sh",
+      "tests/fixtures/myeval_mmar8_official_scorer.py",
+      "tests/test_myeval_mmar8.py",
+      "tests/test_myeval_mmar8_runtime.py",
+      "tests/validate_myeval_mmar8.py"
+    ]
+  },
+  "official_cli_test_dependency": "Only unused tqdm import supplied from test directory; actual official scorer and CLI unchanged"
+}

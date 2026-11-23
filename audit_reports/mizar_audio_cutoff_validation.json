@@ -1,0 +1,43 @@
+{
+  "timestamp_utc": "2026-11-23T12:57:23.322108+00:00",
+  "status": "PASS_LOCAL_CPU",
+  "production_GPU_run": false,
+  "production_weights_read": false,
+  "remote_jobs_submitted": false,
+  "simulations": "19x100 finalization and 1/8-worker control flow use explicit synthetic scores and runtime artifacts",
+  "python310_AST_files": 13,
+  "versions": {
+    "torch": "2.9.0+cpu",
+    "transformers": "4.54.1",
+    "matplotlib": "3.11.2"
+  },
+  "tests": {
+    "run": 19,
+    "passed": 19,
+    "skipped": [],
+    "errors": 0,
+    "failures": 0,
+    "log": "test_cli_preview_imports_no_torch_or_production_assets (test_mizar_audio_cutoff.Contracts.test_cli_preview_imports_no_torch_or_production_assets) ... ok\ntest_exact19_conditions_layer_boundaries_and_rank_coverage (test_mizar_audio_cutoff.Contracts.test_exact19_conditions_layer_boundaries_and_rank_coverage) ... ok\ntest_existing_tracked_sources_and_reference_guard_unchanged (test_mizar_audio_cutoff.Contracts.test_existing_tracked_sources_and_reference_guard_unchanged) ... ok\ntest_manifest_is_shared_outputs_are_distinct_and_no_generator (test_mizar_audio_cutoff.Contracts.test_manifest_is_shared_outputs_are_distinct_and_no_generator) ... ok\ntest_source_identity_rejects_cross_world_and_protocol (test_mizar_audio_cutoff.Contracts.test_source_identity_rejects_cross_world_and_protocol) ... ok\ntest_submit_one_job_correct_resources_quoting_and_worker_count (test_mizar_audio_cutoff.Contracts.test_submit_one_job_correct_resources_quoting_and_worker_count) ... ok\ntest_actual_finalizer19x100_both_topologies_csv_and_plot (test_mizar_audio_cutoff.FullSimulation.test_actual_finalizer19x100_both_topologies_csv_and_plot) ... ok\ntest_failed_runtime_or_duplicate_GPU_audits_rejected (test_mizar_audio_cutoff.FullSimulation.test_failed_runtime_or_duplicate_GPU_audits_rejected) ... ok\ntest_BF16_autocast_real383prefix_audio126_SEP1_both_backends (test_mizar_audio_cutoff.RealLlama.test_BF16_autocast_real383prefix_audio126_SEP1_both_backends) ... ok\ntest_boundary_intervention_isolated_but_early_audio_is_retained (test_mizar_audio_cutoff.RealLlama.test_boundary_intervention_isolated_but_early_audio_is_retained) ... ok\ntest_masks_audio_AND_separator_no_empty_rows_and_causality (test_mizar_audio_cutoff.RealLlama.test_masks_audio_AND_separator_no_empty_rows_and_causality) ... ok\ntest_native_baseline_all19_and_weights_exactly_preserved (test_mizar_audio_cutoff.RealLlama.test_native_baseline_all19_and_weights_exactly_preserved) ... ok\ntest_reject_pruned_layers_cache_and_reordered_modules (test_mizar_audio_cutoff.RealLlama.test_reject_pruned_layers_cache_and_reordered_modules) ... ok\ntest_runtime_checks_execute_real_native_and_cutoff_comparisons (test_mizar_audio_cutoff.RealLlama.test_runtime_checks_execute_real_native_and_cutoff_comparisons) ... ok\ntest_sum_likelihood_shift_matches_stepwise_manual_no_future_targets (test_mizar_audio_cutoff.RealLlama.test_sum_likelihood_shift_matches_stepwise_manual_no_future_targets) ... ok\ntest_actual_worker_baseline_cutoffs_and_resume_both_topologies (test_mizar_audio_cutoff.ResultsAndResume.test_actual_worker_baseline_cutoffs_and_resume_both_topologies) ... ok\ntest_exact_weighted_coverage_100_not104_and_pair_changes (test_mizar_audio_cutoff.ResultsAndResume.test_exact_weighted_coverage_100_not104_and_pair_changes) ... ok\ntest_journal_partial_write_resume_and_complete_corruption (test_mizar_audio_cutoff.ResultsAndResume.test_journal_partial_write_resume_and_complete_corruption) ... ok\ntest_raw_sums_and_all_trace_fields_verified (test_mizar_audio_cutoff.ResultsAndResume.test_raw_sums_and_all_trace_fields_verified) ... ok\n\n----------------------------------------------------------------------\nRan 19 tests in 30.353s\n\nOK\n"
+  },
+  "shell": {
+    "status": "PASS",
+    "syntax": [
+      "code/RSmol/mizar_audio_cutoff/run.sh",
+      "code/RSmol/run_mizar_audio_cutoff_4090.sh",
+      "code/RSmol/run_mizar_audio_cutoff_8gpu_3090.sh"
+    ],
+    "real_shell_parse_only": [
+      {
+        "world": 1,
+        "partition": "pdgpu-4090",
+        "actual_vc_called": false
+      },
+      {
+        "world": 8,
+        "partition": "pdgpu-3090",
+        "actual_vc_called": false
+      }
+    ],
+    "conda": "explicit fake activation"
+  }
+}
