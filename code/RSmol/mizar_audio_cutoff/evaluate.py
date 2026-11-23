@@ -5,8 +5,8 @@ import subprocess
 import sys
 import time
 import traceback
-from mizar_layer_pair_search import manifest, storage
-from . import arguments, config, identity, results
+from mizar_layer_pair_search import storage
+from . import arguments, config, frozen_manifest, identity, results
 
 
 def launch(args):
@@ -89,7 +89,7 @@ def run(args):
     started = time.monotonic()
     report = {'schema':config.SCHEMA, 'status':'FAILED'}
     try:
-        frozen = manifest.load(args.manifest)
+        frozen = frozen_manifest.load(args.manifest, log=True)
         expected = identity.build(args, frozen)
         with storage.output_lock(args.output_dir):
             storage.claim(args.output_dir, expected)

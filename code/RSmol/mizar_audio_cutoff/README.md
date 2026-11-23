@@ -33,6 +33,10 @@ bash run_mizar_audio_cutoff_4090.sh \
 
 它必须是之前已经成功冻结的同一份 100 题。新入口只读取和校验，不重新抽样或分词；保存的 token IDs、音频指纹、原问题、选项和 GT 全部复用。若不存在，先使用原 manifest 生成命令准备；新作业不会静默生成替代样本。
 
+历史 manifest 的源码校验兼容：2026-11-22 的 Git `444ff7f` 更新了普通 MMSU 评测的 `dataset.py` prompt 模板，但没有改动 manifest 生成器实际使用的元数据读取函数。新包 `frozen_manifest.py` 仅允许该文件从已核实的旧 SHA `7fd1abda…` 对应到当前 SHA `a512cb89…`；其余生成源码仍须精确匹配。完整历史/当前 SHA 和 Git revision 均记录在实现和 run identity 中，兼容判断输出为日志 `FROZEN_MANIFEST_SOURCE_AUDIT`。manifest 内容、自身哈希、100 题、原 token IDs、源文件及音频指纹全部保留；不重新生成或 reseal 原 manifest，也不修改原剪层搜索的严格校验。任何其他差异会列出具体文件和两侧 SHA 后拒绝运行。
+
+若此前日志报 `manifest was generated with a different parser/tokenizer/audio implementation`，同步本次修复后直接重跑原提交命令。该错误发生在输出身份和模型加载之前，不需要删除 manifest 或失败日志。
+
 沿用 `mellow_c8204d8` 环境、原 vc wrapper 和镜像。`RSMOL_CONDA_BASE` 可覆盖 conda 根，默认 `/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3`。所有 GPU 推理均在 vc 分配的作业内执行。
 
 ## 实验定义

@@ -1,7 +1,7 @@
 """Pin reused files without changing the earlier experiment's identity rules."""
 from importlib.metadata import version
-from mizar_layer_pair_search import manifest, storage
-from . import config
+from mizar_layer_pair_search import storage
+from . import config, frozen_manifest
 
 
 def sources():
@@ -25,7 +25,7 @@ def build(args, frozen):
         'manifest_path': str(args.manifest), 'manifest_sha256': frozen['manifest_sha256'],
         'model_dir': str(args.model_dir), 'checkpoint': str(args.checkpoint),
         'official_bundle': official.audit_bundle(args.model_dir, args.checkpoint), 'sources': sources(),
-        'environment': environment()}, 'identity_sha256')
+        'environment': environment(), 'manifest_source_audit': frozen_manifest.source_audit(frozen)}, 'identity_sha256')
 
 
 def verify(args, expected, *, full=False):
@@ -35,9 +35,11 @@ def verify(args, expected, *, full=False):
             or expected['manifest_path'] != str(args.manifest) or expected['model_dir'] != str(args.model_dir)
             or expected['checkpoint'] != str(args.checkpoint)):
         raise ValueError('run topology/code/model/protocol/path identity mismatch')
-    frozen = manifest.load(args.manifest, full=full)
+    frozen = frozen_manifest.load(args.manifest, full=full)
     if frozen['manifest_sha256'] != expected['manifest_sha256']:
         raise ValueError('frozen manifest changed')
+    if expected['manifest_source_audit'] != frozen_manifest.source_audit(frozen):
+        raise ValueError('manifest compatibility decision changed')
     if expected['environment'] != environment():
         raise ValueError('runtime dependency versions changed')
     from mizar_official_eval import runtime as official

@@ -17,7 +17,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'code/RSmol'))
 from mizar_layer_pair_search import storage
-from mizar_audio_cutoff import arguments, config, evaluate, identity, results, runtime, submit, worker
+from mizar_audio_cutoff import arguments, config, evaluate, frozen_manifest, identity, results, runtime, submit, worker
 
 
 def records_fixture():
@@ -167,6 +167,91 @@ class ResultsAndResume(TempCase):
             self.assertEqual(score.call_count,300)
             lines = [json.loads(line) for line in output.getvalue().splitlines()]
             self.assertEqual([row['event'] for row in lines],['BASELINE_DONE','CUTOFF_DONE','CUTOFF_DONE','CUTOFF_DONE'])
+
+
+class FrozenManifestCompatibility(TempCase):
+    def manifest_fixture(self, historical=True):
+        from mizar_layer_pair_search import config as old_config
+        file=self.path/'real-source-bytes.wav'
+        file.write_bytes(b'explicit file-hash fixture; audio not decoded by manifest loading')
+        records=records_fixture()
+        for row in records:
+            row.update(prompt_token_ids=[17]*256, audio_audit={'waveform_sha256':'explicit fixture'})
+        sources=frozen_manifest.reference.generator_sources()
+        if historical:
+            sources[frozen_manifest.MMSU_SOURCE]=frozen_manifest.HISTORICAL_MMSU
+        value=storage.seal({'schema':old_config.SCHEMA,'protocol':old_config.PROTOCOL,'seed':1234,
+            'records':records,'files':[storage.file_identity(file)],'generator_sources':sources},'manifest_sha256')
+        path=self.path/'manifest.json'
+        storage.write_json(path,value)
+        return path,value,file
+
+    def test_real_git_change_is_only_unused_prompt_helpers_and_constants(self):
+        import ast,hashlib
+        C=frozen_manifest.COMPATIBILITY
+        path='code/RSmol/'+frozen_manifest.MMSU_SOURCE
+        def read(revision):
+            return subprocess.run(['git','show',revision+':'+path],cwd=ROOT,check=True,
+                                  capture_output=True).stdout.decode('utf-8').replace('\r\n','\n')
+        old,new=read(C['historical_git']),read(C['prompt_update_git'])
+        self.assertEqual(hashlib.sha256(old.encode()).hexdigest(),frozen_manifest.HISTORICAL_MMSU)
+        self.assertEqual(hashlib.sha256(new.encode()).hexdigest(),frozen_manifest.CURRENT_MMSU)
+        def used_tree(text):
+            tree=ast.parse(text)
+            tree.body=[node for node in tree.body if not (
+                isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)) and node.name in ('prompt','official_prompt'))
+                and not (isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id in
+                    ('PROMPT_VERSION','PROMPT_POLICY','OUTPUT_NAMESPACE') for t in node.targets))]
+            return ast.dump(tree,include_attributes=False)
+        self.assertEqual(used_tree(old),used_tree(new))
+
+    def test_historical_manifest_original_error_reproduced_then_load_unchanged(self):
+        path,value,_=self.manifest_fixture()
+        before=path.read_bytes()
+        with self.assertRaisesRegex(ValueError,'different parser/tokenizer/audio'):
+            frozen_manifest.reference.load(path)
+        loaded=frozen_manifest.load(path)
+        self.assertEqual(loaded,value)
+        self.assertEqual(path.read_bytes(),before)
+        self.assertEqual(loaded['manifest_sha256'],value['manifest_sha256'])
+        self.assertEqual(frozen_manifest.source_audit(loaded)['status'],'COMPATIBLE')
+        # The old search remains strict after using the new cutoff-only adapter.
+        with self.assertRaises(ValueError): frozen_manifest.reference.load(path)
+
+    def test_current_manifest_keeps_exact_source_status(self):
+        path,value,_=self.manifest_fixture(historical=False)
+        self.assertEqual(frozen_manifest.load(path),value)
+        self.assertEqual(frozen_manifest.source_audit(value)['status'],'EXACT')
+
+    def test_other_audio_parser_missing_source_or_unknown_MMSU_change_rejected(self):
+        _,value,_=self.manifest_fixture()
+        for name in ('mizar_layer_pair_search/audio.py','mizar_layer_pair_search/data.py',frozen_manifest.MMSU_SOURCE):
+            broken=copy.deepcopy(value); broken['generator_sources'][name]='unknown-sha'
+            with self.assertRaisesRegex(ValueError,'unapproved frozen manifest source differences'):
+                frozen_manifest.source_audit(broken)
+        broken=copy.deepcopy(value); broken['generator_sources'].pop('mizar_layer_pair_search/audio.py')
+        with self.assertRaises(ValueError): frozen_manifest.source_audit(broken)
+
+    def test_manifest_record_tampering_and_source_file_changes_still_rejected(self):
+        path,value,file=self.manifest_fixture()
+        broken=copy.deepcopy(value); broken['records'][0]['prompt_token_ids'][0]=99
+        storage.write_json(path,broken)
+        with self.assertRaisesRegex(ValueError,'content hash mismatch'): frozen_manifest.load(path)
+        storage.write_json(path,value); file.write_bytes(b'different audio bytes')
+        with self.assertRaisesRegex(ValueError,'file identity changed'): frozen_manifest.load(path)
+
+    def test_coordinator_and_worker_identity_both_use_compatible_loader(self):
+        path,value,_=self.manifest_fixture()
+        args=arguments.parse_args(['--manifest',str(path),'--output-dir',str(self.path/'out')])
+        expected=storage.seal({'identity_sha256':'synthetic-identity','manifest_sha256':value['manifest_sha256']})
+        with patch.object(identity,'build',return_value=expected),patch.object(identity,'verify') as verify, \
+             patch.object(evaluate,'launch') as launch,patch.object(evaluate,'finalize',side_effect=[None,{'status':'PASS','decisions':1900}]), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            report=evaluate.run(args)
+        self.assertEqual(report['status'],'PASS')
+        self.assertEqual(launch.call_count,1)
+        self.assertIn('COMPATIBLE',output.getvalue())
+        self.assertIn('frozen_manifest.load',Path(identity.__file__).read_text())
 
 
 def runtime_fixture(directory,world):
