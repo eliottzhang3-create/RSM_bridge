@@ -1,3 +1,49 @@
+## 2026-11-23：修复audio7_read2校验接口，新增三循环71437及两checkpoint八项4090评测
+
+用户授权按计划实现。原read2报错由评测器向历史validate_audio_read2(model)误传fresh=False导致，
+本地从固定Git真实函数复现相同TypeError；普通read2校验本就只检查训练后结构/存储，不需要fresh。
+修正text71427_ced_eval/runtime.py及ced_eval_20261122/runtime.py各新增5行明确read2分支，只传model；
+ar6/wfuse支持fresh的原调用保持，训练源码/权重加载/数据/生成/评分不改，不捕获异常跳过审计。
+
+新增独立code/RSmol/ced_eval_20261123/及run_ced_eval_20261123_4090.sh。
+固定targets.json为用户指定71437 formal_20261121_150120579947686及read2 formal_20261120_111448563391250，
+均formal/checkpoints/model--step-34626.ckpt，各ReasonAQA5000/MMAU test-mini/MMAR/MMSU，共8项；旧19项不自动重投。
+别名mesh_71437、audio7_read2。全部pdgpu-4090、1GPU/8CPU/32G/1node，原镜像/mellow_c8204d8。
+
+三循环显式MizarText7_14x3_7MeshForCausalLM，28物理层/56执行，0..6,7..20三次,21..27；
+六槽memory，四组write/read共8独立Linear(576,6)，16张量/27696参数；路由在执行7/21/35/49层后。
+read2保留42执行、392矩阵两轮LoRA、CED4/8两个独立MLP/两七槽audio read，完整新增参数4731278。
+严格源码/架构/来源/资产/完整state_dict、FP32/finite/绑定及训练后值审计；不恢复或重新初始化optimizer/RNG。
+只读forward hooks核对56次轨迹及4组router边界；read2复用原42次/LoRA hooks，memory每完整forward重建。
+
+三循环训练后端固定75dcda3a7bcd8765044b14ecd4e408fe33dfdda6，code_digest=ea3677917df06121dfb0cbbc6254f2cd5b707ea4787bfd3eb9e5f4daa1fece9d；
+read2固定8a9f1f76722e77cba4be429a578c63fdcf6ee527，原f0ab5b...code_digest保持。
+仅git archive各训练目录/对应x2或x3共享模型/合同/release到新共享log/ced_eval_20261123_sources，逐文件SHA/库存固定。
+动态隔离x2/x3共享包并核对实际导入路径；不扩写旧按revision缓存清单。当前评测器及紧凑MMSU保持当前checkout。
+CPU预检每checkpoint一次，核对合同/源码及真实函数签名再申请GPU；失败目标不提交，其他继续；GPU再严格模型审计。
+
+推理/评分与上一版核心函数AST对齐：FP32/eval/seed1234/TF32off、mono32k/fixed20、prefix383/首logit382、
+PAD!/EOS0/原EOS后缀分词顺序、无mask/无KV/全序列重算/argmax最多300及首EOS停止。
+Reason原seed1234固定5000及完整答案exact；MMAU/MMAR各1000原raw官方评分；
+MMSU最新紧凑全小写四槽，原答案文本包含v2/官方5000分母不改；GT不进生成输入。
+完整覆盖、身份/进程锁、raw坏行拒绝与断点续跑保持。
+
+新输出<run>/eval/ced_eval_20261123_v1/<task>/model--step-34626/，MMSU task=mmsu_compact_lowercase_v1。
+旧失败/半程输出保留，read2本次从新目录重跑；本批次之后中断同身份可续跑。
+日志/提交报告code/RSmol/log/ced_eval_20261123，最终状态看各evaluation_report.json；READY_FOR_GPU/SUBMITTED不代表推理PASS。
+GitHub同步后远程根执行bash code/RSmol/run_ced_eval_20261123_4090.sh all提交8项，或README八条单项命令择一。
+无额外GPU smoke作业；未代为commit/push、远程读取生产权重/数据或提交真实作业。
+
+首轮新包30项全通过。最终联合39项37通过2真实CPU张量因缺Torch/Transformers/Safetensors跳过；
+包含实际audit_model及真实固定源码router/LoRA/parameter_audit函数（明确元数据张量/模块夹具，非模拟审计返回值），
+原fresh错误/修复、两个旧入口、错层/形状/共享存储/LoRA未复位/dtype/来源拒绝，56次hooks和架构源码合同，
+真实Git/Bash参数链、mock vc、两组各Reason5000/MMAU1000/MMAR1000/MMSU5000完整尺寸合成流程及续跑、原官方scorer。
+联合初次一项历史整文件SHA守卫因本轮授权read2修复失败；保留历史报告，compatibility_reference登记精确前后SHA，
+并确认其他函数AST不变；修正对应测试后7项MMSU回归及完整39项复验通过，初次失败记录保留。
+2927份其他已有生产源码normalized-LF SHA保持，仅两旧runtime本轮授权修复；Python3.10/两入口/README5块Bash/whitespace通过。
+报告audit_reports/ced_eval_20261123_validation.json；音频/Parquet/CUDA/生成及bulk fsync在全量合成流程明确模拟，不冒充生产4090 PASS。
+本条仅前置，以下RM既有全部字节完整保留。
+
 ## 2026-11-22：HRM raw step3600重新完整9244步，seed1/BP5/升温后cosine隔离正式训练
 
 按用户确认计划新增code/RSmol/text_hrm_reinit3600_bp5/，复用原text_hrm_h2l3模型/数据/官方Adam-atan2/真实DDP累积。

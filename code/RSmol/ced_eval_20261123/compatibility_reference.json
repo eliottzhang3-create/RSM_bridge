@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-23",
+  "authorization": "User requested the ordinary audio7_read2 validator-call fix in both existing evaluation loaders; training/generation/scoring unchanged.",
+  "files": {
+    "code/RSmol/text71427_ced_eval/runtime.py": {
+      "before_lf_sha256": "0d92bf85c42955f7e76a1cb79705ad22db21f6e8b07000ce8fff32855539c4fb",
+      "after_lf_sha256": "e10fcc246a8667f9edb142b36a0098f6746a543533502f162ffeec55aed32e0e",
+      "audit_model_before_ast_sha256": "17616f3f9010956ba98a4802f0d2874f935583f5d58e54463d118ff2bf51a874",
+      "audit_model_after_ast_sha256": "ba803e0466f17fdd501c13915b84e0777ff5eaae4e9b38027a8c09754ee050f2",
+      "all_other_function_asts_identical": true
+    },
+    "code/RSmol/ced_eval_20261122/runtime.py": {
+      "before_lf_sha256": "4c89718840c7c61a3f25ddad562ce56788fa33d779d5708dcfc65b57d5f42af2",
+      "after_lf_sha256": "afd926d262adb09709843a364d0c7eabcc55e1da6a1607ade93ac4ea975ff4b3",
+      "audit_model_before_ast_sha256": "67bdf41161bfe2155b46246327c19e9a670d5a71f1d0fe5a1b3033d9f78515d4",
+      "audit_model_after_ast_sha256": "56b559291ef585cf9c90f270fde8280e8ff5e33e4a8984c0231552e7235769ca",
+      "all_other_function_asts_identical": true
+    }
+  }
+}

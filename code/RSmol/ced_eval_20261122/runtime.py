@@ -235,6 +235,11 @@ def audit_model(model, route_contract, contract, variant, route_root=None):
         elif variant == 'wfuse':
             branch = loader.validate_audio_fusion(lm, fresh=False)
             extras.append(core.audio_fusions)
+        elif variant == 'audio7_read2':
+            # This pinned route validates trained geometry and has no fresh flag.
+            branch = loader.validate_audio_read2(lm)
+            extras.append(core.audio_read_routers)
+            routers += list(core.audio_read_routers)
         else:
             branch = loader.validate_audio_read2(lm, fresh=False)
             extras.append(core.audio_read_routers)

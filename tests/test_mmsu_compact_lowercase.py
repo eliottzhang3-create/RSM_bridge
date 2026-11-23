@@ -73,8 +73,17 @@ class CompactPromptTests(unittest.TestCase):
                      'code/RSmol/mizar_s1_ced_mmsu_eval/scoring.py',
                      'code/RSmol/text71427_ced_eval/runtime.py',
                      'code/RSmol/scripts/evaluate_mmau_test_mini_5_10x2_5_mesh_mellow.py'):
+            expected=report['production_sources_before'][name]
+            if name=='code/RSmol/text71427_ced_eval/runtime.py':
+                # The later authorized read2 call fix changes only audit_model.
+                # Keep the historical snapshot; admit exactly its recorded SHA
+                # transition instead of disabling this complete-file guard.
+                transition=json.loads((ROOT/'code/RSmol/ced_eval_20261123/compatibility_reference.json').read_text())['files'][name]
+                self.assertEqual(transition['before_lf_sha256'],expected)
+                self.assertTrue(transition['all_other_function_asts_identical'])
+                expected=transition['after_lf_sha256']
             self.assertEqual(hashlib.sha256((ROOT/name).read_bytes().replace(b'\r\n',b'\n')).hexdigest(),
-                             report['production_sources_before'][name],name)
+                             expected,name)
 
 
 class OutputIsolationTests(unittest.TestCase):

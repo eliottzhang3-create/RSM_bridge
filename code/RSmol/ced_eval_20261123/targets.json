@@ -1,0 +1,4 @@
+[
+  {"target":"mesh_71437","checkpoint":"/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced_small_gbs128_text71437_mesh_3090/formal_20261121_150120579947686/formal/checkpoints/model--step-34626.ckpt","benchmarks":["reasonaqa5000","mmau","mmar","mmsu"]},
+  {"target":"audio7_read2","checkpoint":"/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced48_audio7_read2_lora_r8_gbs128_text71427_3090/formal_20261120_111448563391250/formal/checkpoints/model--step-34626.ckpt","benchmarks":["reasonaqa5000","mmau","mmar","mmsu"]}
+]
