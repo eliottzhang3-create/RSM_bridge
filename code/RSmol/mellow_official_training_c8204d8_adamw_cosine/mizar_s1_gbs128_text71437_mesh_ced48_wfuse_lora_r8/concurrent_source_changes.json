@@ -1,0 +1,13 @@
+{
+  "reason": "Changes observed during this task in the independent audio8/read3 route; no commands in this task edit these files. Preserve without staging.",
+  "unrelated_concurrent_changes": {
+    "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/write_config.py": {
+      "task_start_sha256": "e945ef95b1f4a5b3e9d0057d3a788a41ba77ce288878b2f1d1fedaaed6efab83",
+      "observed_sha256": "09f1f7602cc33a92b21e614c76bd1344c12373c8a7b8d2b64a97aa55f0d2d207"
+    },
+    "tests/test_mizar_s1_text71437_ced48_audio8_read3_behavior.py": {
+      "task_start_sha256": "a2a35ddafb1bbc2c2926df554e52bf53537dcdfced1967d384e7185e6fc3a0cf",
+      "observed_sha256": "d7e7360b1a03d520058493ec0292dac864c0ea41b1d146e7785beb0445931bfe"
+    }
+  }
+}

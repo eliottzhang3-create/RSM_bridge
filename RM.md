@@ -1,3 +1,106 @@
+## 2026-11-24：三循环71437 CED4/8 write-value融合与三轮独立LoRA r8隔离训练
+
+用户按确认计划授权复制隔离后实现。新增
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_wfuse_lora_r8/
+及run_mizar_s1_gbs128_text71437_mesh_ced48_wfuse_lora_r8_3090.sh。
+完整复制三循环CED-small母本，迁入二循环wfuse的原两处value融合、具名优化器库存及完整恢复。
+既有三循环/二循环wfuse训练、共享文本模型和所有评测实现保持；并行audio8/read3改动保留。
+
+初始化固定为/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/
+formal_reinit1200_seed1_20261119_084545_3432609/checkpoint-009244。
+严格核对9244完整标记、全部schedule别名/来源映射、FP32 safetensors及16个已训练router张量，
+注册新模块前后核对全部继承值/Parameter对象/tied embedding-head；不读文本training_state.pt。
+音频optimizer/scheduler/GradScaler/GradNorm/RNG/游标从step0新建，不继承文本seed1或BF16配方。
+
+28物理层/56执行，0..6、(7..20)三次、21..27；六槽全683位置memory每forward新建，
+四组write/read、八独立router/16张量/27696参数保持；四边界7/21/35/49原读写完整执行。
+仅边界7将prefix output前126位置与A4融合，边界21将第一轮output前126位置与A8融合。
+两个独立无bias Linear1152→576，输入[边界hidden;CED MLP输出]、初始[I576,0]、整个矩阵训练。
+只替换write value；prefix query仍prefix output，循环query仍该轮input，SEP/text value保持。
+边界35/49原output直接写入，第三轮无新增融合，但仍可使用先前进入memory的音频信息。
+无额外seed槽、listen router、gate或hidden残差；CED单次冻结eval提取final和完整block4/8 norm前输出，
+原freq_merge_126 mapper与两个独立1536-576-576 MLP保持，正确时频排列及MLP在no_grad外。
+
+物理7..20七投影三轮独立LoRA r8/alpha16/scale2/dropout0，294对/588矩阵/3419136参数；
+基础W共享并全量训练，前后七层无LoRA；逐调用finally复位、无KV、拒绝decoder gradient checkpointing。
+加两MLP2443776与融合1327104，相对普通三循环CED新增7190016。
+首次三轮边界反传和全部16router梯度审计后立即释放引用；融合Encoder半初值0时MLP首步任务梯度0、
+LoRA B零时A首步任务梯度0均按预期检查；新增10角色32次真实更新内全rank累计解锁并保存恢复。
+
+原hybrid1477492行/fixed20/原S1 EOS/PAD/683布局、answer-only shifted CE、
+rank-local token mean→GA4→DDP、FP32/GradScaler/AdamW/LambdaLR/GradNorm/TF32关闭保持。
+pdgpu-3090/64CPU/256G/8GPU/1node，micro4×GA4=GBS128，3epochs/34626更新/warmup1731。
+LM/原router maxLR3e-4；mapper/MLP/fusion/三轮LoRA6e-4。CPU index/共享音频立即训练、
+4workers后台复制、optimizer边界8rank MIN集体切换及先reap再owner/token清理保持；直接formal。
+默认输出outputs/RSmol/mizar_s1_ced48_wfuse_lora_r8_gbs128_text71437_mesh_3090/formal_<timestamp>/formal/。
+保存5771/11542/17313/23084/28855/34626及epoch3；完整模型/AdamW具名库存和moments、scheduler/
+Scaler/GradNorm/8rank RNG/下一数据游标/解锁状态；只接受本新路线同源码/资产/数据/依赖/配方完整恢复。
+
+最终联合139项，111执行通过、28缺torchaudio/soundfile音频依赖明确跳过；新路线57通过/11跳过。
+复用既有本地依赖，6项真实CPU核心覆盖严格继承/初始logits和梯度、56调用/683位置/三轮反传/16router、
+588矩阵独立与第三轮选择、非零两次融合且后两次value原样、完整模型/AdamW moments/RNG恢复后下一更新逐值一致。
+CPU collective/CUDA RNG为显式fixture，NumPy及Bash/mock vc覆盖四次读写、优化器/恢复拒绝/启动清理；
+15份data/staging与三循环母本字节一致，CED/mapper/接口与wfuse母本字节一致，核心函数及完整epoch更新AST对照通过。
+Python3.10、两Shell、README两块Bash、48份Git可见文件和新增whitespace通过。
+本任务开始3654份tracked Python/Shell/JSON中3652保持，两份并行audio8/read3修改单列concurrent_source_changes.json。
+初次两母本历史摘要守卫已在任务前过时，原失败报告保留；新validator只以本任务库存替代这两条旧断言，旧测试/快照不改。
+后续测试入口的stdlib code遮蔽和runpy测试路径问题已修正，previous_runs保留失败过程。
+本地Python3.13.5/Torch2.9.0+cpu/Transformers4.54.1，与远程Torch2.11/CUDA不同；不冒充3090/八卡PASS。
+报告audit_reports/mizar_s1_text71437_ced48_wfuse_lora_r8_validation.json；Windows临时目录/Bash限制获准沙箱外离线验证。
+GitHub同步后远程仓库根执行bash code/RSmol/run_mizar_s1_gbs128_text71437_mesh_ced48_wfuse_lora_r8_3090.sh。
+精确Git清单、提交/完整恢复、输出及验证说明见新包README和sync_files.txt；既有评测器需后续独立适配。
+未代为commit/push、读取远程生产资产或提交真实GPU作业。本条仅前置，以下全部RM字节完整保留。
+
+## 2026-11-23：7–14×3–7 CED4/8 音频八槽read3及三套LoRA r8隔离正式训练
+
+按用户确认计划复制三循环CED-small母本，新增独立
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/
+及run_mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8_3090.sh。
+迁入双循环audio7_read2的CED特征/只读seed/LoRA机制；用户明确三轮前均读A4/A8。
+原双循环、普通三循环、共享文本模型与全部既有评测源码保持，3609份本任务开始时tracked Python/Shell/JSON normalized-LF SHA保护。
+
+默认严格继承/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_text_7_14x3_7_mesh/formal_reinit1200_seed1_20261119_084545_3432609/checkpoint-009244。
+不重新转换，校验完整9244步/完成标记/全部schedule别名、FP32/finite/全部safetensors及16个已训练router张量。
+先strict加载，再注册新read/LoRA，复核原值、Parameter对象及embedding/head绑定；不读文本training_state.pt。
+音频optimizer/scheduler/Scaler/GradNorm/RNG/数据游标从step0新建，文本seed1/来源1200不成为音频训练游标。
+
+28物理层/56执行，0..6,(7..20)三次,21..27；suffix逻辑起点49。
+每forward在prefix前重建audio8 [E,0,0,0,0,0,A4,A8]及SEP/text6 [E,0,0,0,0,0]。
+四个原write均只更新前六槽；三个新audio read在累计7/21/35层后读取八槽，49层后最终audio read仍为原六槽read3。
+A4/A8槽6/7全程只读，不加gate/listen/residual或重复注入。prefix query/value为prefix输出，循环query为本轮输入、write value为输出。
+三新read分别复制对应原read0/1/2：前六行W保持、bias减log2；新两行W/b均取对应原第0行，独立存储/CPU RNG保护。
+原六槽内部相对概率保持、新两槽初始等权，组概率随query变化，不固定为1/2、1/4、1/4。
+
+CED-small严格离线/冻结eval，每批一次whole20编码捕获完整block4/8 final norm前输出；正确时频排列、原freq_merge_126主mapper、
+两套1536-576-576 MLP及其no_grad外梯度保持。主mapper随机训练；不是继承旧双循环音频权重。
+物理7..20七投影挂三套独立r8/alpha16/scale2/dropout0 LoRA，A Kaiming/B零，基础W共享且全量训练。
+588矩阵/3419136 LoRA参数，三个read13848、两MLP2443776，总新增5876760（主mapper另计）。
+全部routers 11模块/22张量/41544参数；三轮各98共294次投影，逐调用选轮次且finally复位，无KV/decoder checkpointing。
+
+原hybrid1477492行、fixed20中心裁剪/右补零、683布局、EOS/PAD及answer-only shifted CE和rank-local token mean→GA4→DDP保持。
+pdgpu-3090/64CPU/256G/8GPU/1node，micro4×GA4=GBS128，3epochs/34626更新/warmup1731。
+基础LM/原routers maxLR3e-4，mapper/两MLP/三新read/三套LoRA6e-4；原AdamW/GradNorm/LambdaLR/GradScaler、FP32/无autocast/TF32off保持。
+15份数据/索引/staging运行文件逐字节继承，完整epoch更新循环与read2母本AST保持，仅三轮错误提示修正。
+保留CPU index、共享立即训练/默认4worker后台复制、optimizer边界八rank MIN共同切换；tmpfs保留mizar_s1_gbs256_守卫前缀及独立token，
+先stop/reap producer后owner/token清理。直接formal，无额外GPU smoke前置。
+
+独立输出/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_ced48_audio8_read3_lora_r8_gbs128_text71437_3090/formal_<timestamp>/formal/。
+每5771及最终保存5771/11542/17313/23084/28855/34626和epoch3。
+完整resume保存/校验模型全部分支、具名optimizer库存与顺序/moments、scheduler/Scaler/GradNorm、8rank RNG和数据/梯度审计游标；
+同新路线/源码/资产/配方在原外层run-root恢复到总34626，恢复不重置已训练read或LoRA，其他路线及已完成run拒绝。
+
+最终联合96项：78执行通过、18真实张量缺Torch/Transformers/Torchaudio/Soundfile/Safetensors明确跳过（新路线9、原回归9）。
+包含实际生产forward/LoRA/stack的NumPy独立递推、三轮非零分支/有限差分/294调用及scope清理、只读seed/六槽最后read、
+16router分片库存/缺失重复shape/dtype/nonfinite/tied拒绝、真实optimizer分组588矩阵/13角色/34627个LR位置、
+实际checkpoint writer/8rank字段、完整恢复分支第三LoRA/read值/各rank RNG及拒绝条件、真实Bash+模拟vc/torchrun、CPU index/复制/清理路径守卫。
+首轮77执行通过后补充恢复回归，历史结果保存在报告previous_runs；早期fixture.events遗漏已修正，Windows临时目录受限后获准沙箱外离线复验。
+Python3.10/Bash及README命令语法通过，Git同步清单核对无忽略遗漏。报告audit_reports/mizar_s1_text71437_ced48_audio8_read3_validation.json。
+真实Torch/autograd、生产资产加载、3090显存与八卡训练未执行，不声明GPU PASS；未代为commit/push或远程提交。
+
+经GitHub同步后，远程仓库根执行bash code/RSmol/run_mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8_3090.sh。
+完整提交、显式输出、同run恢复和精确Git清单见新包README；既有评测器尚未登记新合同。
+本条仅前置，以下原RM全部字节完整保留。
+
 ## 2026-11-23：隔离实现 MyEval MMAR8 三模型全排列评测及 A4/A8 零 seed 干预
 
 用户授权按既定计划复制隔离后实现。新增 code/RSmol/myeval_mmar8/、run_myeval_mmar8_4090.sh，

@@ -156,6 +156,9 @@ python -B tests/validate_mizar_s1_text71437_ced48_audio8_read3.py --require-tens
 ```
 
 报告：audit_reports/mizar_s1_text71437_ced48_audio8_read3_validation.json。
+本地最终联合96项：78项执行通过，18项真实张量因缺ML依赖明确跳过（新路线9项、原路线回归9项）。
+真实Torch/autograd、生产checkpoint/CED资产加载、3090显存和八卡训练未执行；不登记GPU PASS。
+首轮77项通过后补充第三轮恢复控制流测试，原结果保存在报告previous_runs中。
 验证执行实际生产routing、LoRA、stack、optimizer、checkpoint writer与恢复守卫，
 NumPy独立递推/有限差分，真实Bash+模拟vc/torchrun、CPU index/复制/切换/失败清理及路径守卫；
 另含可选真实小模型autograd、strict loader、保存重载和恢复后下一更新对照。

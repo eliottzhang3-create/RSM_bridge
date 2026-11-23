@@ -171,6 +171,64 @@ class ExecutionTests(unittest.TestCase):
 
 
 class OptimizerTests(unittest.TestCase):
+    def test_actual_resume_branch_preserves_third_lora_read_and_rank_specific_state(self):
+        saved, config, geometry = core_tests.valid_resume()
+        config["resume_checkpoint"] = "synthetic_full_checkpoint"
+        saved["state_dict"] = {
+            "caption_decoder.lm.model.audio_read_routers.2.weight": T(np.ones((8, 3))),
+            "caption_decoder.lm.model.layers.7.self_attn.q_proj.lora_B.2": T(np.ones((3, 8))),
+        }
+        saved["random_state_by_rank"] = [dict(python=i, numpy=i+10, torch=i+20, cuda=i+30) for i in range(8)]
+        fn = A.find_function(A.tree(ROUTE / "train.py"), "train")
+        branch = next(n for n in fn.body if isinstance(n, ast.If)
+                      and ast.unparse(n.test) == "config['resume_checkpoint']")
+
+        class State:
+            def load_state_dict(self, value):
+                self.loaded = copy.deepcopy(value)
+                self.last_epoch = value.get("last_epoch", 0)
+
+        class Model:
+            def state_dict(self):
+                return {name: T(np.zeros(value.shape)) for name, value in saved["state_dict"].items()}
+            def load_state_dict(self, state, strict):
+                assert strict
+                self.loaded = copy.deepcopy(state)
+
+        def execute(payload):
+            model, optimizer, scheduler, scaler, tracker = Model(), State(), State(), State(), State()
+            scope = dict(config=config, geometry=geometry, groups=saved["optimizer_inventory"], rank=3,
+                         model=model, optimizer=optimizer, scheduler=scheduler, scaler=scaler, tracker=tracker,
+                         audio_core=types.SimpleNamespace(audio_gradient_state=None), EPOCHS=3,
+                         validate_resume_payload=C.validate_resume_payload,
+                         torch=types.SimpleNamespace(Tensor=core_tests.Tensor, isfinite=np.isfinite,
+                                                     load=lambda *a, **k: copy.deepcopy(payload)))
+            A.execute([copy.deepcopy(branch)], scope)
+            return model, scope
+
+        model, scope = execute(saved)
+        for name, value in saved["state_dict"].items():
+            np.testing.assert_array_equal(model.loaded[name], value)
+        self.assertEqual((scope["step"], scope["start_epoch"], scope["start_batch"]), (2, 0, 2))
+        self.assertEqual(scope["resume_rng"], saved["random_state_by_rank"][3])
+        self.assertEqual(scope["audio_core"].audio_gradient_state, saved["audio_gradient_state"])
+        for component, key in (("optimizer", "optimizer"), ("scheduler", "scheduler"),
+                               ("scaler", "grad_scaler"), ("tracker", "grad_norm_tracker")):
+            self.assertEqual(scope[component].loaded, saved[key])
+        for failure in ("inventory", "shape", "finite", "route"):
+            payload = copy.deepcopy(saved)
+            if failure == "inventory":
+                payload["optimizer_inventory"] = list(reversed(payload["optimizer_inventory"]))
+            elif failure == "shape":
+                key = next(iter(payload["state_dict"]))
+                payload["state_dict"][key] = T(np.zeros((7, 3)))
+            elif failure == "finite":
+                next(iter(payload["state_dict"].values())).fill(np.nan)
+            else:
+                payload["route_variant"] = "old_read2_route"
+            with self.subTest(failure=failure), self.assertRaises(ValueError):
+                execute(payload)
+
     def test_real_group_builder_includes_588_matrices_13_roles_and_entire_schedule(self):
         class Parameter:
             requires_grad = True

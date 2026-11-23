@@ -75,6 +75,7 @@ def main():
               "official_reference": "Mizar_159M/configs/s1.yaml.in + runtime/stage1 + pipeline/build_ced_cache.py",
               "intentional_differences": [
                   "trained Mizar 7-14x3-7 MeSH checkpoint and routers inherited exactly; new audio optimizer starts at zero; audio uses online CED-Small plus official freq_merge_126 mapper",
+                  "read-only A4/A8 seeds extend six base audio slots to eight; three independent pre-loop audio reads and three independent middle-loop LoRA r8 sets; final audio read remains six-slot",
                   "S1 prompt and answer EOS / center-crop retained; single audio126 + SEP1 + prompt256 + answer300; full fixed20 waveform processed before mapping",
                   "shared raw audio decoded online, collective switch to staged bytes after full copy; no hidden-feature cache",
                   "8 GPUs x microbatch4 x accumulation4; global batch128 ablation",
