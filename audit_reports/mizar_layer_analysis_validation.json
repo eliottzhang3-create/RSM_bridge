@@ -1,0 +1,46 @@
+{
+  "timestamp_utc": "2026-11-23T14:14:26.534946+00:00",
+  "status": "PASS_LOCAL_CPU",
+  "production_weights_read": false,
+  "remote_GPU_run": false,
+  "jobs_submitted": false,
+  "scope": "real CPU CKA and small 30-layer Llama; full 100-row CKA/29000-decision ablation use explicit synthetic artifacts",
+  "python310_AST_files": 27,
+  "versions": {
+    "numpy": "2.5.5",
+    "torch": "2.9.0+cpu",
+    "transformers": "4.54.1",
+    "matplotlib": "3.11.2"
+  },
+  "tests": {
+    "run": 20,
+    "passed": 20,
+    "skipped": [],
+    "failures": 0,
+    "errors": 0,
+    "log": "test_degenerate_inputs_and_wrong_shapes_rejected (test_mizar_layer_analysis.CKAMath.test_degenerate_inputs_and_wrong_shapes_rejected) ... ok\ntest_permutation_null_is_deterministic_and_breaks_correspondence (test_mizar_layer_analysis.CKAMath.test_permutation_null_is_deterministic_and_breaks_correspondence) ... ok\ntest_small_sample_high_dimensional_bias_and_negative_values_not_clipped (test_mizar_layer_analysis.CKAMath.test_small_sample_high_dimensional_bias_and_negative_values_not_clipped) ... ok\ntest_standard_and_debiased_match_official_reference (test_mizar_layer_analysis.CKAMath.test_standard_and_debiased_match_official_reference) ... ok\ntest_translation_rotation_and_scaling_invariance (test_mizar_layer_analysis.CKAMath.test_translation_rotation_and_scaling_invariance) ... ok\ntest_cli_preview_does_not_import_torch (test_mizar_layer_analysis.Contracts.test_cli_preview_does_not_import_torch) ... ok\ntest_exact28_layers_and_fixed_eight_rank_shards (test_mizar_layer_analysis.Contracts.test_exact28_layers_and_fixed_eight_rank_shards) ... ok\ntest_independent_commands_resources_outputs_and_long_paths (test_mizar_layer_analysis.Contracts.test_independent_commands_resources_outputs_and_long_paths) ... ok\ntest_original_sources_unchanged_and_task_identity_is_separate (test_mizar_layer_analysis.Contracts.test_original_sources_unchanged_and_task_identity_is_separate) ... ok\ntest_actual_synchronized_worker_condition_and_resume (test_mizar_layer_analysis.DatasetContracts.test_actual_synchronized_worker_condition_and_resume) ... ok\ntest_duplicate_slots_preserved_and_original_label_maps_GT (test_mizar_layer_analysis.DatasetContracts.test_duplicate_slots_preserved_and_original_label_maps_GT) ... ok\ntest_full1000_real_metadata_has_no_filtered_rows (test_mizar_layer_analysis.DatasetContracts.test_full1000_real_metadata_has_no_filtered_rows) ... ok\ntest_invalid_GT_and_empty_options_fail_instead_of_skipping (test_mizar_layer_analysis.DatasetContracts.test_invalid_GT_and_empty_options_fail_instead_of_skipping) ... ok\ntest_partial_journal_recovery_wrong_identity_and_wrong_order (test_mizar_layer_analysis.DatasetContracts.test_partial_journal_recovery_wrong_identity_and_wrong_order) ... ok\ntest_summaries_count_all1000_and_only_sum_scores (test_mizar_layer_analysis.DatasetContracts.test_summaries_count_all1000_and_only_sum_scores) ... ok\ntest_full29x1000_actual_finalizer_outputs_and_cache_tampering (test_mizar_layer_analysis.FullAblation.test_full29x1000_actual_finalizer_outputs_and_cache_tampering) ... ok\ntest_CKA_all100_real_tensor_artifacts_actual_global_finalizer (test_mizar_layer_analysis.RealLlama.test_CKA_all100_real_tensor_artifacts_actual_global_finalizer) ... ok\ntest_FP32_prefix_cache_computes_each_assigned_encoder_once_and_rejects_changes (test_mizar_layer_analysis.RealLlama.test_FP32_prefix_cache_computes_each_assigned_encoder_once_and_rejects_changes) ... ok\ntest_every_single_layer_skip_trace_and_identity_equivalence_BF16 (test_mizar_layer_analysis.RealLlama.test_every_single_layer_skip_trace_and_identity_equivalence_BF16) ... ok\ntest_raw_block_capture_pools_valid_tokens_and_preserves_baseline (test_mizar_layer_analysis.RealLlama.test_raw_block_capture_pools_valid_tokens_and_preserves_baseline) ... ok\n\n----------------------------------------------------------------------\nRan 20 tests in 83.365s\n\nOK\n"
+  },
+  "shell": {
+    "status": "PASS",
+    "syntax": [
+      "code/RSmol/mizar_layer_analysis_common/run.sh",
+      "code/RSmol/run_mizar_layer_cka_8gpu_3090.sh",
+      "code/RSmol/run_mizar_layer_ablation_8gpu_3090.sh"
+    ],
+    "real_shell_parameter_chain": [
+      {
+        "task": "cka",
+        "partition": "pdgpu-3090",
+        "GPU_count": 8,
+        "actual_vc_called": false
+      },
+      {
+        "task": "ablation",
+        "partition": "pdgpu-3090",
+        "GPU_count": 8,
+        "actual_vc_called": false
+      }
+    ],
+    "conda": "explicit fixture activation"
+  }
+}
