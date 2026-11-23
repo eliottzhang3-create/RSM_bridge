@@ -1,0 +1,26 @@
+{
+  "timestamp_utc": "2026-11-23T15:59:22.241680+00:00",
+  "status": "PASS_LOCAL_CPU",
+  "scope": "Synthetic complete 29-condition summaries; actual CPU aggregation and PNG rendering",
+  "remote_results_read": false,
+  "jobs_submitted": false,
+  "GPU_used": false,
+  "python310_AST_files": 4,
+  "tests": {
+    "run": 10,
+    "passed": 10,
+    "skipped": [],
+    "failures": 0,
+    "errors": 0,
+    "log": "test_actual_CLI_outputs29rows_PNG_SVG_and_source_bytes_unchanged (test_mizar_ablation_regroup.RegroupTests.test_actual_CLI_outputs29rows_PNG_SVG_and_source_bytes_unchanged) ... ok\ntest_bad_accuracy_and_other_baseline_reference_rejected (test_mizar_ablation_regroup.RegroupTests.test_bad_accuracy_and_other_baseline_reference_rejected) ... ok\ntest_count_weighted_accuracy_and_percentage_point_delta_not_macro_mean (test_mizar_ablation_regroup.RegroupTests.test_count_weighted_accuracy_and_percentage_point_delta_not_macro_mean) ... ok\ntest_duplicate_group_mapping_rejected (test_mizar_ablation_regroup.RegroupTests.test_duplicate_group_mapping_rejected) ... ok\ntest_exact_user_mapping_full27_and_real_metadata_counts (test_mizar_ablation_regroup.RegroupTests.test_exact_user_mapping_full27_and_real_metadata_counts) ... ok\ntest_hash_tampering_or_summary_disagreement_rejected (test_mizar_ablation_regroup.RegroupTests.test_hash_tampering_or_summary_disagreement_rejected) ... ok\ntest_loader_requires_completed_source_and_exact29_conditions (test_mizar_ablation_regroup.RegroupTests.test_loader_requires_completed_source_and_exact29_conditions) ... ok\ntest_parser_and_module_are_CPU_only_no_torch_import (test_mizar_ablation_regroup.RegroupTests.test_parser_and_module_are_CPU_only_no_torch_import) ... ok\ntest_source_output_overlap_rejected_and_default_is_sibling (test_mizar_ablation_regroup.RegroupTests.test_source_output_overlap_rejected_and_default_is_sibling) ... ok\ntest_unknown_missing_subcategory_and_changed_denominator_rejected (test_mizar_ablation_regroup.RegroupTests.test_unknown_missing_subcategory_and_changed_denominator_rejected) ... ok\n\n----------------------------------------------------------------------\nRan 10 tests in 7.591s\n\nOK\n"
+  },
+  "shell": {
+    "status": "PASS",
+    "bash_syntax": true,
+    "real_shell_parameter_chain": true,
+    "conda": "explicit fake activation of mellow_c8204d8",
+    "vc_called": false,
+    "GPU_used": false
+  },
+  "matplotlib": "3.11.2"
+}
