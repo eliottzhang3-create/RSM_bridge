@@ -1,3 +1,57 @@
+## 2026-11-24：HRM H2L3固定BP5、CED-small PrefixLM隔离音频正式训练
+
+用户明确从HRM文本最终raw权重开始音频训练，并最终指定LM max/min6e-4/3e-5、mapper8e-4/6e-5。
+完整复制隔离参考mizar_s1_gbs128_text71427_mesh_ced_small，新增
+code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/
+及run_mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small_3090.sh；既有音频/HRM文本/评测代码不改。
+
+默认来源/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/text_hrm_reinit3600_bp5/formal_20261122_200554_2644345/checkpoint-step-009244。
+CPU核对原reinit3600 BP5 seed1完整9244身份；GPU校验根部raw文件SHA与全部FP32 tensor库存/形状/finite/值及tied绑定。
+不读EMA权重、不反序列化文本training_state，不继承文本优化器/RNG/游标；不重新转换/折叠Norm/清gate/补偿o_proj。
+继承P5/L5/H5/C5、20物理层/50执行、H2L3、MagicNorm、已训练gate与固定zL_init；无MeSH/LoRA。
+音频CED-small严格离线冻结eval，原freq_merge_126 mapper随机训练、外置Identity；whole fixed20 mel/BN及正确时频重排保持。
+删除母本默认旧音频step34626初始化入口；音频AdamW/scheduler/Scaler/GradNorm/RNG/数据游标从step0新建。
+
+全程BP5：H1/L4/L5/L6/H2记录梯度，Prelude/Coda正常求导，E不detach；保留loss→H1→E/Prelude→mapper路径。
+首micro及首完整GA4累积unscale后、clip/optimizer/WD前审计前五物理层逐层任务梯度，存在/finite且每层聚合L2>0。
+边界/prelude/entry/H1/H2/L4..L6及mapper梯度、冻结CED无梯度检查保持；立即释放retain_grad引用，每更新继续全参数finite/缺失检查。
+
+保留audio126+SEP1+prompt256+answer300=683，prefix383；所有50次层执行共用同一显式PrefixLM mask。
+audio/SEP/prompt之间双向，prefix完全不能读任何answer；answer读全部有效prefix及当前/以前answer。
+prompt/answer PAD按tokenizer mask屏蔽K/V，query382即使为prompt PAD也保留计算，继续预测首答案，不把整行mask/清零。
+原S1 prompt/answer EOS、256/300截断/右pad、PAD!且不扩词表、模板/小写/CoT规则保持。
+外部answer-only shifted CE仍logits382..681对齐300答案，rank-local有效token mean→GA4→DDP平均。
+正式第一个source探针核对完整683与prefix383首答案logits/argmax，以及改变answer后prefix输出逐值不变；非独立smoke。
+Decoder提供PrefixLM一致的无cache inference_logits；旧通用generate/benchmark本次未适配。
+
+8GPU×micro4×GA4=GBS128，原hybrid1477492行，3epochs/每epoch11542/总34626更新，warmup1731。
+LM max/min6e-4/3e-5，mapper8e-4/6e-5；预热保留startup最低.1×max，之后分别cosine到.05/.075下限。
+scheduler在optimizer之后更新，cosine分母total-1-warmup，最后一次真实更新即使用指定最小LR。
+AdamW beta(.9,.999)/eps1e-8/WD.01及bias/ndim≤1不衰减，原FP32/GradScaler/GradNorm/TF32off保持；不沿用文本Adam-atan2/EMA/BF16。
+pdgpu-3090/64CPU/256G/8GPU/1node，原镜像/mellow_c8204d8；resolved config与trainer核对Transformers4.54.1，不自动更改共享环境。
+保留CPU index、共享音频立即训练、4workers后台复制及optimizer边界8rank MIN共同切本地；先stop/reap再owner/token清理。
+tmpfs为/dev/shm/mizar_s1_gbs256_hrm_prefixlm_<token>，其中gbs256仅保留原安全守卫前缀。
+
+输出/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_hrm_bp5_prefixlm_ced_small_3090/formal_<timestamp>/formal/。
+保存5771/11542/17313/23084/28855/34626和epoch3；完整模型/具名optimizer库存及moments、scheduler/Scaler/GradNorm/8rank RNG/下一epoch-update游标。
+同新路线/源码/文本与CED资产/数据/依赖/PrefixLM/BP5/LR合同在同外层run-root完整恢复；拒绝错路线、错库存/顺序/dtype/非有限、错LR/步数、冻结CED或固定初值变化。
+写checkpoint或source探针/首micro审计失败集体报错；metrics异常也关闭。直接formal，无额外GPU smoke或人工PASS前置。
+
+本地最终22/22通过、无跳过：10路线/脚本/staging、11真实CPU张量/音频、1真实双进程Gloo/DDP。
+真实HRM/SDPA/mapper/autograd验证50次mask、双向影响/答案未来泄漏隔离、padding/query382、首答案训练-推理对照、逐层Prelude/mapper梯度；
+源raw各tensor/非零gate继承且旧optimizer不反序列化，缺失/多余/dtype/nonfinite/tied冲突拒绝；两角色全部34627个LR位置对照。
+完整checkpoint/RNG/GradNorm/AdamW恢复后下一更新逐值一致；实际训练函数128行合成夹具三epoch×一步、每步4micro，之后从step1走实际resume到step3，最终参数逐值一致。
+CUDA、八rank及生产CED encoder在上述完整流程中明确fixture；另真实两进程Gloo使用实际HRM/Decoder和原mapper/loss精确AST，梯度差约2.98e-8。
+合成WAV真实解码/fixed20/whole mel/时频排列通过，真实Bash+模拟vc/torchrun检查3090资源/含空格参数/失败清理，复制完成前继续训练的原staging线程测试通过。
+音频CPU环境Python3.13.5/Torch2.9.0+cpu/Transformers4.54.1/torchaudio2.9.0+cpu/soundfile.14；Torch2.9 Windows Gloo初始化unsupported，
+双进程另用已有Torch2.15.0+cpu，版本和限制单列。torchaudio/soundfile仅装到忽略的.hrm_test_runtime/audio_packages，不改共享环境。
+早期Bash夹具cwd、CE舍入断言和模拟encoder闭包deepcopy已修正，失败历史在报告保留；未修改旧测试或历史快照。
+3701份本任务开始tracked Python/Shell/JSON normalized-LF SHA保持；14份数据/索引/staging/CED源码逐字节继承，Mellow两类及answer_loss/GradNorm AST保持，HRM recurrence AST保持。
+Python3.10、两Shell、README四块Bash、whitespace和精确Git同步清单通过；报告audit_reports/audio_hrm_prefixlm_validation.json及包内sync_files.txt。
+未访问远程生产资产、提交真实GPU作业或commit/push；生产来源/CED加载、Torch2.11/CUDA、3090显存与八卡训练仍待远程验证。
+GitHub同步后远程仓库根运行bash code/RSmol/run_mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small_3090.sh；精确提交和完整恢复命令见新README。
+本条仅前置，以下原RM全部字节及用户已有记录完整保留。
+
 ## 2026-11-24：三循环71437 CED4/8 write-value融合与三轮独立LoRA r8隔离训练
 
 用户按确认计划授权复制隔离后实现。新增

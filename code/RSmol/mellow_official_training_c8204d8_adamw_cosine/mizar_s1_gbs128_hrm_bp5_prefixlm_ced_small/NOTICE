@@ -1,0 +1,28 @@
+CED-Small / trained HRM H2L3 BP5 PrefixLM Stage1 adaptation (GBS128)
+
+The model architecture is derived from Mellow, Copyright (c) 2024 Soham,
+under the MIT License retained in LICENSE.
+
+The Stage 1 text templates, text construction/tokenization semantics,
+distributed sampler, optimizer/scheduler and adaptive gradient clipping
+are derived from kaiyangli-ml/Mizar_159M. The fixed20 online audio policy
+is adapted from its pipeline/build_ced_cache.py.
+
+Mizar: Copyright (c) 2026 NEC Laboratories America, Inc.
+All rights reserved. The Clear BSD License is retained in
+licenses/Mizar-ClearBSD.txt.
+
+The CEDFrequencyMerger and CEDTemporalMapper definitions and initialization
+are retained from Mizar runtime/stage1/models/ced.py. The CED encoder model
+code and weights are separate remote assets and retain their own terms.
+
+This isolated route inherits the original CED/mapper/data/staging definitions,
+and uses eight GPUs, microbatch4, accumulation4. It adds explicit raw HRM text
+inheritance, fixed BP5, PrefixLM attention, role-specific LR floors and named
+full-state restore validation. The existing source implementations are unchanged.
+Task-start source identities are recorded in source_guard.json.
+
+The HRM recurrence and attention gate derive from sapientinc/HRM-Text;
+see ../../text_hrm_h2l3/NOTICE and LICENSE.HRM-Text for Apache-2.0 provenance.
+This route imports the project's trained SmolLM2 HRM implementation, including
+its MagicNorm adaptation, without converting or reinitializing trained weights.
