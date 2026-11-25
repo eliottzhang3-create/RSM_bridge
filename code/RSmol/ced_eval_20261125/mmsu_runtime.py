@@ -26,6 +26,10 @@ PROTOCOL.update(version=dataset.PROMPT_VERSION,
                 scoring="mmsu_answer_text_contains_v2_then_pinned_external_official_scorer")
 
 
+def protocol_for(variant):
+    return selected_runtime.protocol_for(variant,PROTOCOL)
+
+
 def adapter(variant):
     return selected_runtime, 'multilayer', selected_runtime.variant_spec(variant)['route_root']
 

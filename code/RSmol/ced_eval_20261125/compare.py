@@ -8,6 +8,7 @@ from pathlib import Path
 
 from mizar_s1_ced_reasonaqa5000_eval import config, scoring, storage
 from .registry import ROUTES
+from .comparison_policy import known_variants, common_protocol, shared_evaluation_code, execution_columns
 
 
 def read_run(directory):
@@ -19,7 +20,7 @@ def read_run(directory):
     total = identity['expected_rows']
     if (storage.object_sha(identity_body) != identity['identity_sha256']
             or identity.get('benchmark') != 'reasonaqa_close_ended_sample5000' or identity.get('mode') != 'sample5000'
-            or total != config.SAMPLE_SIZE or identity.get('eval_variant') not in {*ROUTES, *config.VARIANT_TARGETS}
+            or total != config.SAMPLE_SIZE or identity.get('eval_variant') not in known_variants()
             or report.get('status') != 'PASS' or report.get('run_identity') != identity
             or report.get('inference_coverage') !=
                 {'status': 'PASS', 'generated': total, 'expected_rows': total, 'skipped': 0}):
@@ -50,10 +51,9 @@ def read_run(directory):
         raise ValueError(f'full-answer score disagrees with raw: {directory}')
     common = {key: identity[key] for key in
               ('manifest_sha256', 'test_json', 'selection_sha256', 'resolved_records_sha256', 'expected_rows', 'protocol')}
+    common['protocol']=common_protocol(identity,'reasonaqa5000')
     # Old/new outer runners differ; the reused data, sampling and scoring code must agree.
-    names = ('config.py', 'dataset.py', 'sample.py', 'scoring.py', 'storage.py')
-    common['shared_evaluation_code'] = {name: identity['evaluation_code'][
-        'mizar_s1_ced_reasonaqa5000_eval/' + name] for name in names}
+    common['shared_evaluation_code'] = shared_evaluation_code(identity,'reasonaqa5000')
     return identity, accuracy, common, fingerprints
 
 
@@ -66,7 +66,7 @@ def compare_runs(directories, output):
         elif common != current or fingerprints != inputs:
             raise ValueError(f'data/protocol/code or per-row model inputs differ: {name}')
         row = {'target': name, 'eval_variant': identity['eval_variant'],
-               'checkpoint': identity['checkpoint']['path'], 'output_dir': str(directory)}
+               'checkpoint': identity['checkpoint']['path'], 'output_dir': str(directory), **execution_columns(identity)}
         for label, group in [('overall', accuracy['overall']), *accuracy['by_category'].items()]:
             for field in ('correct', 'total', 'accuracy'):
                 row[f'{label}_{field}'] = group[field]
@@ -96,7 +96,7 @@ def compare_benchmarks(benchmark, directories, output):
         identity = json.loads((directory / 'run_config.json').read_text(encoding='utf-8'))
         report = json.loads((directory / 'evaluation_report.json').read_text(encoding='utf-8'))
         if (report.get('status') != 'PASS' or report.get('run_identity') != identity
-                or identity.get('benchmark') != benchmark or identity.get('eval_variant') not in ROUTES
+                or identity.get('benchmark') != benchmark or identity.get('eval_variant') not in known_variants()
                 or storage.object_sha({k:v for k,v in identity.items() if k!='identity_sha256'}) != identity['identity_sha256']):
             raise ValueError(f'incomplete/inconsistent report: {directory}')
         coverage = report.get('inference_coverage', {})
@@ -115,9 +115,9 @@ def compare_benchmarks(benchmark, directories, output):
         if official.get('status') != 'PASS':
             raise ValueError('official evaluation did not pass')
         if benchmark == 'mmsu':
-            common = {k:identity[k] for k in ('shards','scorer','protocol','evaluation_code')}
-            if common['protocol'] != mmsu_runtime.PROTOCOL:
-                raise ValueError('MMSU protocol differs')
+            common = {k:identity[k] for k in ('shards','scorer')}
+            common['protocol']=common_protocol(identity,benchmark)
+            common['shared_evaluation_code']=shared_evaluation_code(identity,benchmark)
             correct = 0
             inputs = []
             for record in raw:
@@ -131,9 +131,9 @@ def compare_benchmarks(benchmark, directories, output):
             if official['actual_denominator'] != expected or official['overall_accuracy'] != score:
                 raise ValueError('MMSU raw and score disagree')
         else:
-            common = {k:identity[k] for k in ('metadata_sha256','parquet_sha256','evaluation_sha256','generation','evaluation_code')}
-            if common['generation'] != runtime.PROTOCOL:
-                raise ValueError('MMAU/MMAR protocol differs')
+            common = {k:identity[k] for k in ('metadata_sha256','parquet_sha256','evaluation_sha256')}
+            common['generation']=common_protocol(identity,benchmark)
+            common['shared_evaluation_code']=shared_evaluation_code(identity,benchmark)
             if any(r.get('status') != 'generated' for r in raw) or official['reported_rows'] != expected:
                 raise ValueError('incomplete generation/scorer denominator')
             filename = 'predictions_fixed_order.json' if benchmark=='mmau' else 'predictions_official.json'
@@ -158,7 +158,7 @@ def compare_benchmarks(benchmark, directories, output):
             raise ValueError('benchmark data/protocol/code/record order differ across models')
         rows.append({'target':name,'eval_variant':identity['eval_variant'],
                      'checkpoint': identity['checkpoint']['path'] if isinstance(identity['checkpoint'],dict) else identity['checkpoint'],
-                     'total':expected,'accuracy':score,'output_dir':str(directory)})
+                     'total':expected,'accuracy':score,'output_dir':str(directory), **execution_columns(identity)})
     if not rows:
         raise ValueError('no runs to compare')
     output.parent.mkdir(parents=True,exist_ok=True)

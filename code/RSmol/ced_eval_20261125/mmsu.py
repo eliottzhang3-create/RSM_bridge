@@ -57,7 +57,7 @@ def identity(args, paths):
               "evaluation_code": model_runtime.evaluation_sources(),
               "dataset_dir": str(args.dataset_dir), "shards": [file_identity(p) for p in paths],
               "scorer": scoring.audit_scorer(args.evaluation_script),
-              "protocol": runtime.PROTOCOL,
+              "protocol": runtime.protocol_for(args.eval_variant),
               "audio_source_policy": "embedded_bytes_before_path_no_hub_no_export"}
     if family == "official":
         result["official_release"] = selected.audit_bundle(args.model_dir, args.checkpoint)
@@ -132,7 +132,7 @@ def execute(args, report):
 def run(args):
     started = time.monotonic()
     report = {"status": "FAILED", "benchmark": "mmsu", "mode": "full",
-              "protocol": runtime.PROTOCOL, "output_claimed": False,
+              "protocol": runtime.protocol_for(args.eval_variant), "output_claimed": False,
               "inference_coverage": {"status": "FAILED"},
               "official_evaluation": {"execution_status": "NOT_RUN", "status": "NOT_RUN"},
               "records": {}, "fatal_error": None}

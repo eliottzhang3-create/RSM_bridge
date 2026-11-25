@@ -1,3 +1,58 @@
+## 2026-11-25：三循环audio8/read3与HRM BP5 PrefixLM两个checkpoint的八项4090评测
+
+用户按只读调研计划授权实现，新增隔离code/RSmol/ced_eval_20261125/及run_ced_eval_20261125_4090.sh。
+固定targets.json完整绑定用户两个step34626：audio8/read3 formal_20261124_002101117114787，
+HRM PrefixLM formal_20261124_184519991594964，各ReasonAQA5000/MMAU test-mini/MMAR/MMSU，共8项。
+别名audio8_read3、hrm_prefixlm；pdgpu-4090、1GPU/8CPU/32G/1node、原镜像和mellow_c8204d8。
+未修改既有训练/共享模型/旧评测源码，不将其他旧任务加入本轮。
+
+固定训练源码：audio8/read3=2c7d4485979f30f23c96196533c6de5914c47888，code_sha256=3c3a4619d3ab1d019fd9d3fc288c2f4ebe81d8d6c3cf707b3af64d18627e7f2d；
+HRM=ee6f54474139fa5b86a9189617a2d2c0b9c84492，code_sha256=0814180a787ab29ab439403fff5befab2b870e4bb6b6cb50b07822a677c1ca58。
+仅git archive必要训练后端/共享源码到log/ced_eval_20261125_sources；逐文件/库存/训练与共享摘要固定核对。
+HRM还绑定原顶层训练Shell及两HRM包所有直接Python源码/原raw_audio审计器；真实合同导入与完整训练导入图路径核验。
+CPU预检每checkpoint一次header/step/合同/geometry8,4,4/源码/真实函数签名后再申请GPU；失败目标不申请，其余继续。
+GPU再核对source text/CED资产和完整state_dict库存/shape/dtype/finite、tied aliases、冻结CED及HRM固定zL_init来源值。
+只加载完整音频模型权重，文本源作bootstrap/tokenizer/资产校验；不恢复训练optimizer/RNG/EMA，不重置已训练参数。
+
+audio8/read3显式MizarText7_14x3_7MeshForCausalLM，28物理/56执行，四组write/read原六槽，前三音频read八槽，最后六槽。
+只读A4/A8槽6/7、两独立CED4/8 MLP，每题编码一次，显式pair传入每次LM完整forward。
+11router/22张量/41544参数；三轮各98共294投影、588矩阵/3419136 LoRA参数，总新增5876760。
+真实validate_audio_read3(model)只传model，不传fresh；三轮scope每次finally复位，memory每forward重建。
+
+HRM复用训练AudioPrefixHRMForCausalLM和Decoder.inference_logits；20物理/50执行，P5+(L5x3 H5)x2+C5，固定BP5。
+保留MagicNorm/已训练attention gates/固定zL_init和tied head；全量音频checkpoint覆盖构造初值后再冻结eval。
+原生PrefixLM383：有效audio/SEP/prompt双向、prefix不能看answer，answer看有效prefix和当前/以前answer。
+prompt padding按tokenizer validity屏蔽K/V，query382即使PAD也保留计算；生成历史token按native接口有效。
+每生成token传原prompt IDs/validity和全已生成IDs，完整重算50次；每forward从固定zL_init和Prelude结果开始，无跨题/跨token隐藏状态carry。
+不套旧attention_mask=None；只读hooks核对全部50次同一正确4D mask、padding/边界/轨迹/无cache及无任务梯度。
+
+共同评测口径保持：FP32/eval/batch1/seed1234/TF32off/无autocast，mono32k/fixed20中心裁剪右补零/10+10再whole CED，
+原EOS后缀/PAD!/prompt256/prefix383/首logit382，argmax/无KV/全序列重算/最多300/首EOS停和原raw decode。
+Reason原固定seed1234的5000manifest及完整答案exact；MMAU/MMAR各1000原raw官方评分；
+MMSU最新紧凑全小写四槽/无only-letter指令、原答案文本包含v2与官方5000分母，GT不进生成。
+原预处理、生成适配器、causal循环及评分核心AST对照保持；报告按模型真实记录mask/padding，避免将HRM写成可见PAD。
+比较工具核对共同benchmark协议/数据/输入fingerprint/原scorer与共享评分代码，同时独立验证并展示注册的native attention/padding。
+支持本批次及注册的历史完整结果；拒绝旧MMSU题面、不同token上限、错模型协议/不完整覆盖/原始生成和评分矛盾。
+
+新结果<run>/eval/ced_eval_20261125_v1/<task>/model--step-34626/；MMSU task=mmsu_compact_lowercase_v1。
+提交报告/GPU日志code/RSmol/log/ced_eval_20261125；READY_FOR_GPU/SUBMITTED不是推理PASS，最终看evaluation_report.json。
+新旧目录隔离；本批次同模型/数据/代码/协议身份可续跑剩余题，完整raw可重评分。无额外GPU smoke作业。
+GitHub完整同步后远程根执行bash code/RSmol/run_ced_eval_20261125_4090.sh all，或README八条单项命令择一。
+32份精确同步清单code/RSmol/ced_eval_20261125/sync_files.txt，包含新包/入口/测试/报告/RM；共享Reason/MMSU/原scripts依赖也须已同步。
+
+最终联合38/38通过、无跳过：6真实CPU用例覆盖两架构生产576维实际审计、原native read3/LoRA与50次PrefixLM，
+非初始参数重载、首/第二答案训练-推理logits/argmax、未来答案隔离、padding/query382、跨题无carry，
+真实训练完整导入图/合成WAV解码重采样/四种实际生成适配器每题一次encoder与正确context。
+两组各Reason5000/MMAU1000/MMAR1000/MMSU5000完整尺寸合成流程、续跑/原评分、真实Git/Bash参数链/mock vc，
+严格合同/加载控制流（含错误固定zL_init拒绝）、比较策略、7项MMSU紧凑题面回归通过。
+全尺寸流程模型/音频/Parquet/CUDA及bulk fsync明确fixture；生产CED encoder在实际生成适配器测试中为显式夹具。
+本地Python3.13.5/Torch2.9.0+cpu/Transformers4.54.1/Torchaudio2.9.0+cpu/SoundFile0.14.0；不冒充远程Torch2.11/CUDA生产PASS。
+Python3.10、两入口/README6块Bash、whitespace和Git可见性通过；现有本地依赖复用，不修改共享环境。
+首轮测试库存数量误用全仓预期已修正；工作期间另一实验提交42f7fdf更新audio_cutoff1000的identity/submit两文件，
+本轮保留并精确登记audit_reports/ced_eval_20261125_concurrent_sources.json；3130份任务开始已有生产源码中其余3128保持。
+旧失败快照/各轮验收结果保留，完整复验通过。报告audit_reports/ced_eval_20261125_validation.json。
+未代为commit/push、读取远程生产资产或提交真实GPU作业。本条仅前置，以下RM既有全部字节保留。
+
 ## 2026-11-25：1000题音频cutoff增加八卡5090入口
 
 新增code/RSmol/run_mizar_audio_cutoff1000_8gpu_5090.sh，单次vc提交pdgpu-5090/8GPU/64CPU/256G/1node。

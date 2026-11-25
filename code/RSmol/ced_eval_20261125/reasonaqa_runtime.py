@@ -27,6 +27,10 @@ PROTOCOL.update(version='reasonaqa_close_ended_sample5000_seed1234_full_answer_e
                 scoring=scoring.POLICY, selection=dataset.SELECTION_POLICY, sampling=sample.SAMPLING)
 
 
+def protocol_for(variant):
+    return selected_runtime.protocol_for(variant,PROTOCOL)
+
+
 def adapter(variant):
     selected_runtime.variant_spec(variant)
     return selected_runtime, 'multilayer'

@@ -46,7 +46,7 @@ def identity(args, records, audit):
               'evaluation_code': model_runtime.evaluation_sources(),
               'manifest': file_identity(args.manifest), 'manifest_sha256': audit['manifest_sha256'],
               'test_json': audit['source_test_json'], 'selection_sha256': audit['sample_records_sha256'],
-              'resolved_records_sha256': storage.object_sha(records), 'protocol': runtime.PROTOCOL}
+              'resolved_records_sha256': storage.object_sha(records), 'protocol': runtime.protocol_for(args.eval_variant)}
     result['identity_sha256'] = storage.object_sha(result)
     return result
 
@@ -96,7 +96,7 @@ def execute(args, report):
 def run(args):
     started = time.monotonic()
     report = {'status': 'FAILED', 'benchmark': 'reasonaqa_close_ended_sample5000', 'mode': 'sample5000',
-              'protocol': runtime.PROTOCOL, 'output_claimed': False, 'records': {},
+              'protocol': runtime.protocol_for(args.eval_variant), 'output_claimed': False, 'records': {},
               'inference_coverage': {'status': 'FAILED'}, 'accuracy': None, 'fatal_error': None}
     try:
         with storage.output_lock(args.output_dir):

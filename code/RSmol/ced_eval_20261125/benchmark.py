@@ -170,7 +170,7 @@ def generate(runtime: tuple, sample: Mapping[str, Any]) -> dict[str, Any]:
         "first_answer_logit_position": 382,
         "prompt_original_token_count": prompt_original_count,
         "prompt_truncated": prompt_original_count > 256,
-        "prompt_padding_visible": True,
+        "prompt_padding_visible": runtime_adapter.variant_spec(model_audit["eval_variant"])["prompt_padding_visible"],
         "prompt_pad_tokens": int(text_input["attention_mask"].eq(0).sum()),
         "prompt_padding_token_id": int(tokenizer.pad_token_id),
         "audio_half_samples": [int(first.numel()), int(second.numel())],
@@ -283,7 +283,7 @@ def _identity(args: argparse.Namespace, scorer_key: str) -> dict[str, Any]:
         "audio_root": str(args.audio_root), "evaluation_script": str(args.evaluation_script),
         "evaluation_sha256": runtime_adapter.sha256_file(args.evaluation_script),
         "evaluation_code": runtime_adapter.evaluation_sources(),
-        "prediction_key": scorer_key, "generation": dict(runtime_adapter.PROTOCOL),
+        "prediction_key": scorer_key, "generation": runtime_adapter.protocol_for(args.eval_variant),
         "expected_step": args.expected_step,
         "expected_geometry": list(args.expected_geometry),
         "identity_sha256": None,
@@ -318,7 +318,7 @@ def _validate_input_paths(args: argparse.Namespace) -> None:
 def _run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.time()
     report: dict[str, Any] = {"status": "FAILED", "benchmark": args.benchmark,
-                              "mode": "full", "protocol": dict(runtime_adapter.PROTOCOL),
+                              "mode": "full", "protocol": runtime_adapter.protocol_for(args.eval_variant),
                               "official_artifact_audit": {}, "model_audit": {},
                               "records": {}, "official_evaluation": {}, "fatal_error": None}
     store = None
@@ -390,7 +390,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                     "audio_payload_source": sample.get("audio_payload_source"),
                     **{key: value for key, value in sample.items() if key.startswith("audio_")},
                     "generated_text": generation["generated_text"],
-                    "generation_contract": dict(runtime_adapter.PROTOCOL), **generation,
+                    "generation_contract": runtime_adapter.protocol_for(args.eval_variant), **generation,
                 }
                 store.append_raw(sample_record)
             except Exception as exc:

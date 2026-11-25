@@ -1,5 +1,5 @@
 {
-  "status": "IN_PROGRESS",
+  "status": "PASS_LOCAL_CPU",
   "existing_sources_before": {
     "code/RSmol/__init__.py": "79bf62436fc7e9782697cb50440aadcf144f38bc1d9ce9c4d2fb51d23bc32e3a",
     "code/RSmol/audio_5_10_5_mellow/__init__.py": "97cabc1f96ba30efdf063197d501c444f288e988214236d2b426e51eb9f78e2c",
@@ -3131,5 +3131,159 @@
     "code/RSmol/text_hrm_reinit3600_bp5/initialization.py": "3484a29e3d4ef00f0b4d63b9354dcaf2bf0fa38904d53ec4a4aa914b35241f22",
     "code/RSmol/text_hrm_reinit3600_bp5/protected_sources.json": "9c3874d88aea357fabe31bb69d074274ff3fbbfa47651479a1bf20cbfc7bce18",
     "code/RSmol/text_hrm_reinit3600_bp5/train.py": "1baf3b92f0b7d6ebb1083686afb3338763005d07ccc77d9f18b6d6a0803c146c"
+  },
+  "validation_runs": [
+    {
+      "status": "PASS_LOCAL_CPU",
+      "pattern": "test_ced_eval_20261125_tensors.py",
+      "tests_run": 5,
+      "passed": 5,
+      "skipped": [],
+      "failures": [],
+      "elapsed_seconds": 21.211559200004558
+    },
+    {
+      "status": "FAILED",
+      "pattern": "test_ced_eval_20261125.py",
+      "tests_run": 13,
+      "passed": 12,
+      "skipped": [],
+      "failures": [
+        {
+          "test": "test_all_existing_production_sources_preserved (test_ced_eval_20261125.ParityTests.test_all_existing_production_sources_preserved)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_ced_eval_20261125.py\", line 103, in test_all_existing_production_sources_preserved\n    self.assertGreater(len(baseline),3700)\n    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\nAssertionError: 3130 not greater than 3700\n"
+        }
+      ],
+      "elapsed_seconds": 7.424989899998764
+    },
+    {
+      "status": "PASS_LOCAL_CPU",
+      "pattern": "test_ced_eval_20261125_workflow.py",
+      "tests_run": 9,
+      "passed": 9,
+      "skipped": [],
+      "failures": [],
+      "elapsed_seconds": 59.87190630000259
+    },
+    {
+      "status": "PASS_LOCAL_CPU",
+      "pattern": "test_ced_eval_20261125_tensors.py",
+      "tests_run": 6,
+      "passed": 6,
+      "skipped": [],
+      "failures": [],
+      "elapsed_seconds": 24.280576700009988
+    },
+    {
+      "status": "FAILED",
+      "pattern": "test_ced_eval_20261125*.py",
+      "tests_run": 38,
+      "passed": 37,
+      "skipped": [],
+      "failures": [
+        {
+          "test": "test_all_existing_production_sources_preserved (test_ced_eval_20261125.ParityTests.test_all_existing_production_sources_preserved)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_ced_eval_20261125.py\", line 105, in test_all_existing_production_sources_preserved\n    self.assertEqual(hashlib.sha256((ROOT/name).read_bytes().replace(b'\\r\\n',b'\\n')).hexdigest(),wanted,name)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 'f5514d50f2bf6d9c168749e3c6edab291504c2cdd7abd09363c8273e10f0f64f' != '203643b6f70b4c5907027ec83f34c9fd50c0a0b614c7cfabf564f697c5440018'\n- f5514d50f2bf6d9c168749e3c6edab291504c2cdd7abd09363c8273e10f0f64f\n+ 203643b6f70b4c5907027ec83f34c9fd50c0a0b614c7cfabf564f697c5440018\n : code/RSmol/mizar_audio_cutoff1000/identity.py\n"
+        }
+      ],
+      "elapsed_seconds": 102.77881720000005
+    },
+    {
+      "status": "PASS_LOCAL_CPU",
+      "pattern": "test_ced_eval_20261125*.py",
+      "tests_run": 38,
+      "passed": 38,
+      "skipped": [],
+      "failures": [],
+      "elapsed_seconds": 115.65946719999192
+    }
+  ],
+  "latest": {
+    "status": "PASS_LOCAL_CPU",
+    "pattern": "test_ced_eval_20261125*.py",
+    "tests_run": 38,
+    "passed": 38,
+    "skipped": [],
+    "failures": [],
+    "elapsed_seconds": 115.65946719999192
+  },
+  "python": "3.13.5",
+  "versions": {
+    "torch": "2.9.0+cpu",
+    "transformers": "4.54.1",
+    "numpy": "2.5.5",
+    "safetensors": "0.8.0",
+    "torchaudio": "2.9.0+cpu",
+    "soundfile": "0.14.0",
+    "pyarrow": "26.0.1"
+  },
+  "sources": {
+    "code/RSmol/ced_eval_20261125/__init__.py": "79fa18487b67d1064836bd2b9d8b15a17fdc32bd03853ca15683ad97e844ffba",
+    "code/RSmol/ced_eval_20261125/arguments.py": "8e5cda55e36c0bb27b41b961665beb49d95265a5e8092fdaf3d546954b0dfe4c",
+    "code/RSmol/ced_eval_20261125/benchmark.py": "1ee49a6f911ce28a6009562dd9a4ab0658b0351d4fab480130ee612166287120",
+    "code/RSmol/ced_eval_20261125/compare.py": "4ec595d8f1d0de64d3df308cc66e6241fa1365e7a5d9cd692c56f5aa3d6b2fc9",
+    "code/RSmol/ced_eval_20261125/comparison_policy.py": "1d1af38a048ffc7c83d451357487a40f694a4edb69662567d4c31b0a4b9293b9",
+    "code/RSmol/ced_eval_20261125/hrm.py": "c971182e0fd7606ef8447258981cc244cf959f7c5c8d90c8d021137403134c7c",
+    "code/RSmol/ced_eval_20261125/interfaces.py": "a6dfc382d3896ce469c79a437da4945fddb27ccc71e7d6b495c90a7ea3bf45aa",
+    "code/RSmol/ced_eval_20261125/mmsu.py": "d37d17de1bfb8540656dded81aa40e62f544b4cc0513145556f4065fe9608274",
+    "code/RSmol/ced_eval_20261125/mmsu_runtime.py": "196e36c0b7e16bdfac7fc2697f700edb589add1ff3dced5e843c747e0949bf7f",
+    "code/RSmol/ced_eval_20261125/observers.py": "710092f14e63e0f04670da2a269fe92e6d9a3b30aeb8acb076d75b20b5bb396d",
+    "code/RSmol/ced_eval_20261125/preflight.py": "a93ed4da765cb124f202c6b08e53c86d06c6766e531d28f182e37e4497aa99ca",
+    "code/RSmol/ced_eval_20261125/README.md": "a53abda02781534e0cfb61cee130a5f131d836cfe23f6a3abfecf2e7280c4c0b",
+    "code/RSmol/ced_eval_20261125/reasonaqa.py": "72d1f29469411d38757b41944e593f0a62b7d9006dc038d2dc61e14bd08769d4",
+    "code/RSmol/ced_eval_20261125/reasonaqa_runtime.py": "f999f61f026ef01b0584b0bbcafb66d2318a87d08d0a5297ac070a2afa4da81c",
+    "code/RSmol/ced_eval_20261125/registry.py": "026b894b4ebe6b8ebf6b87688be81bd1c9aaebd47c47f22ebc5241185356cf6d",
+    "code/RSmol/ced_eval_20261125/run.sh": "fc8cb8e0ea17e234008bcc6df4fb61cde2cf4db89dba72071500d3ef066f177b",
+    "code/RSmol/ced_eval_20261125/runtime.py": "93e897d5eb18a1a3b982ed2e65bda8c92a16f3cfa6c74509681d83a24c18507d",
+    "code/RSmol/ced_eval_20261125/source_manifest.json": "a10342432e03db2ccc2828f706d0f690f218c19bffd79324aff989281fea5356",
+    "code/RSmol/ced_eval_20261125/sources.py": "e03f63e097a3726f6e0e42b48d561ac6efcd75120fd0dda80a34498a2a703912",
+    "code/RSmol/ced_eval_20261125/submit.py": "9bf4e8fbaafe74d6158dc8079da1ad5ea2188f2192463824e784097c9194b7cd",
+    "code/RSmol/ced_eval_20261125/sync_files.txt": "976944f66f38cbf1fac2c05e4c056f17480da4a473aa1c1da52c12cf59d67a3c",
+    "code/RSmol/ced_eval_20261125/targets.json": "41c5fa57fa60c8c19e0328cc21d31da197ceaf1c6e058ced2ea2d75e62482e8f",
+    "code/RSmol/ced_eval_20261125/targets.py": "5541ef87ddd6f7a907fc77735096709f2ff6f30e249bc5e0fdf8fee30cceacac"
+  },
+  "full_size_synthetic": {
+    "unique_jobs": 8,
+    "reasonaqa5000": 2,
+    "mmau1000": 2,
+    "mmar1000": 2,
+    "mmsu5000": 2,
+    "scope": "native CPU model tests separate; full-sized runners use explicit model/audio/parquet/CUDA fixtures",
+    "bulk_fsync": "mocked; original durable storage implementation unchanged"
+  },
+  "source_snapshots": "real Git archive; fixed training/shared hashes; no branch switch",
+  "production_checkpoint_loading": "NOT_RUN",
+  "remote_gpu": "NOT_RUN",
+  "job_submission": "MOCK_ONLY",
+  "final_checks": {
+    "python310_syntax": "PASS",
+    "bash_entrypoints": 2,
+    "readme_bash_blocks": 6,
+    "bash_syntax": "PASS",
+    "new_file_whitespace": "PASS",
+    "git_diff_check": "PASS",
+    "baseline_production_sources": 3130,
+    "production_sources_unchanged": 3128,
+    "preserved_concurrent_other_experiment": {
+      "reason": "Concurrent unrelated audio cutoff experiment change committed during this task; preserved, not edited by this evaluation work.",
+      "commit": "42f7fdfb81a1fd03094cf2b1aa871af2c723e9ac",
+      "files": {
+        "code/RSmol/mizar_audio_cutoff1000/identity.py": {
+          "before_lf_sha256": "203643b6f70b4c5907027ec83f34c9fd50c0a0b614c7cfabf564f697c5440018",
+          "after_lf_sha256": "f5514d50f2bf6d9c168749e3c6edab291504c2cdd7abd09363c8273e10f0f64f"
+        },
+        "code/RSmol/mizar_audio_cutoff1000/submit.py": {
+          "before_lf_sha256": "762463263da6739d9a37ee1b898dfd0cf7088cae38ab88ff9a978e9ca0d518fd",
+          "after_lf_sha256": "bcdc7b327e439468a815340f318439461ae148773f10f6ada913dbb4e377d043"
+        }
+      }
+    },
+    "git_sync_files": 32,
+    "no_existing_model_training_evaluation_sources_modified_by_this_task": true
+  },
+  "rm_append_only": {
+    "prior_bytes": 550628,
+    "prior_sha256": "a498ee5ffb32cdc055fed3751dedd7e8d316b61fa2a3474858c7be3b6a044f0c",
+    "prior_bytes_preserved": true
   }
 }
