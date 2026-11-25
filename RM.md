@@ -1,3 +1,42 @@
+## 2026-11-25：三个诊断实验重做为小写字母likelihood＋题面EOT，八卡5090
+
+用户明确只改评分目标为纯小写a/b/c/d（无括号/空格/正文/答案EOS）以及原题面结尾加空格EOT再tokenize；
+保持BF16与前20秒音频，不改成中心裁剪。新隔离code/RSmol/mizar_letter_analysis/及三份letters_eot_8gpu_5090顶层入口。
+原cutoff1000、MMAU/MMAR ablation、CKA和剪层搜索相关88份文件normalized-LF SHA保持。
+复用原strict final模型加载、audio+SEP mask和单层bypass、prefix音频前处理，不修改训练或正式四项eval。
+
+三个任务分别为cutoff：原四数据集各250的同1000题，baseline+cutoff3..28共27组；
+mmau：原完整1000题，baseline+单层bypass2..29共29组；mmar：原完整1000题，同29组。
+合计85000决策、三个独立vc作业，全部pdgpu-5090/8GPU/64CPU/256G/1node，原镜像与mellow_c8204d8。
+每题只做一次383prefix LM forward，读取logit382的FP32全词表log_softmax，再gather各有效纯字母token。
+实际release tokenizer逐字母严格检查单普通token/不同ID；题面仍包含原问题与全部选项，不增加only-letter指令。
+MMAR非四选保留真实a..f等范围，空槽排除argmax且分数null，5题未映射GT继续保留分母计错。
+MMAU重复正文选项/原GT槽位保持，MMAR官方matcher诊断另存，不替换主字母acc。
+
+原冻结manifest直接转换，不重抽题、不改ID/顺序/audio/GT/选项，记录原manifest SHA和每行source_record SHA。
+原manifest存在时只读；不存在则先调用原生成器，保留原seed与资格规则。
+题面整体追加' <|endoftext|>'后按正式tokenize右截断/补齐到256；若长题截掉EOT，显式保存retained/truncated审计。
+新manifest data/mizar_{cutoff,mmau,mmar}1000_letters_eot_v1/manifest.json，独立新prefix缓存/输出/逐题恢复身份。
+cutoff仍rank0预计算1000prefix，各卡读；ablation仍每卡预计算本卡125题；各题encoder/projector一次跨全条件复用。
+八卡同一条件精确合并1000后打印/落盘/barrier再切换，源FP32/BF16/first20/可见PAD17/原RoPE/无KV/无自由生成保持。
+
+MMAU按原用户27子类8/8/11映射直接输出perception331/semantic230/reasoning439；
+MMAR保留Signal43/Perception404/Semantic412/Cultural141。分组按题数加权，不平均子类准确率。
+输出总与分组baseline/逐层acc/百分点变化/paired题目/并列排名/CSV/JSON/PNG/SVG及原始字母分数。
+默认outputs/RSmol/mizar_audio_sep_cutoff03_28_1000_letters_eot_bf16_8gpu5090_v1，
+mizar_mmau_ablation_letters_eot_bf16_8gpu5090_v1，mizar_mmar_ablation_letters_eot_bf16_8gpu5090_v1。
+日志code/RSmol/log/mizar-letters-{cutoff,mmau,mmar}.<tag>.JOB.log，提交打印确切路径。
+三个提交命令、CPU manifest转换、日志与输出说明见新README；精确同步清单sync_files.txt。
+
+本地19/19通过、无跳过：真实30层小Llama eager/SDPA/BF16/383prefix单次forward字母gather与独立log_softmax逐值一致，
+无正文token输入、空槽最高logit仍排除、全部27/29轨迹、native baseline、3/28 cutoff隔离及2/29 identity等价、参数保持。
+原题单转换与旧文件字节不变、真实本地MMAU27重复正文/三分类和MMAR4空槽/5未映射GT/六选项核对。
+真实BF16本卡125prefix和rank0缓存复用、错身份/篡改拒绝；三任务85000决策/8rank条件调度及续跑为明确合成夹具。
+Python3.10、真实Bash三入口/5090资源/单次提交计划通过，合成图布局目视核对；Windows隔离Torch沙箱问题获准外部CPU复验。
+报告audit_reports/mizar_letter_analysis_validation.json保留早期沙箱失败；Torch2.9.0+cpu/Transformers4.54.1。
+未读取远程生产权重或音频、commit/push或提交GPU作业；实际release tokenizer与生产CUDA仍由远程验证。
+本条仅前置，以下全部原RM字节保留。
+
 ## 2026-11-25：完整Mizar在MMAR1000上四类逐层消融，八卡5090隔离实现
 
 按用户确认计划复制原mizar_layer_analysis_common/mizar_layer_ablation，新增独立

@@ -1,0 +1,48 @@
+{
+  "schema": "mmau_user_perception_semantic_reasoning_v1",
+  "provenance": "User-defined analysis groups; not official MMAU capability labels or established layer roles",
+  "groups": {
+    "perception": {
+      "label": "Acoustic Perception",
+      "subcategories": [
+        "Phonemic Stress Pattern Analysis",
+        "Phonological Sequence Decoding",
+        "Instrumentation",
+        "Rhythm and Tempo Understanding",
+        "Musical Texture Interpretation",
+        "Melodic Structure Interpretation",
+        "Harmony and Chord Progressions",
+        "Ambient Sound Interpretation"
+      ]
+    },
+    "semantic": {
+      "label": "Semantic Understanding",
+      "subcategories": [
+        "Emotion State summarisation",
+        "Conversational Fact Retrieval",
+        "Key highlight Extraction",
+        "Emotional Tone Interpretation",
+        "Sound-Based Event Recognition",
+        "Musical Genre Reasoning",
+        "Socio-cultural Interpretation",
+        "Lyrical Reasoning"
+      ]
+    },
+    "reasoning": {
+      "label": "Reasoning",
+      "subcategories": [
+        "Acoustic Source Inference",
+        "Temporal Event Reasoning",
+        "Temporal Reasoning",
+        "Counting",
+        "Dissonant Emotion Interpretation",
+        "Emotion Flip Detection",
+        "Multi Speaker Role Mapping",
+        "Event-Based Knowledge Retrieval",
+        "Event-Based Sound Reasoning",
+        "Acoustic Scene Reasoning",
+        "Eco-Acoustic Knowledge"
+      ]
+    }
+  }
+}

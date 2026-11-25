@@ -1,0 +1,80 @@
+{
+  "timestamp_utc": "2026-11-25T15:26:45.735013+00:00",
+  "status": "PASS_LOCAL_CPU",
+  "production_weights_read": false,
+  "remote_GPU_run": false,
+  "jobs_submitted": false,
+  "scope": "real small 30-layer CPU Llama/BF16/one-forward letter gather, frozen input conversion and cache serialization; three full 85000-decision runs and eight-rank control use explicit synthetic fixtures",
+  "previous_runs": [
+    {
+      "timestamp_utc": "2026-11-25T15:26:08.914991+00:00",
+      "status": "FAILED",
+      "production_weights_read": false,
+      "remote_GPU_run": false,
+      "jobs_submitted": false,
+      "scope": "real small 30-layer CPU Llama/BF16/one-forward letter gather, frozen input conversion and cache serialization; three full 85000-decision runs and eight-rank control use explicit synthetic fixtures",
+      "python310_AST_files": 16,
+      "error": "AttributeError(\"module 'torch' has no attribute '__version__'\")",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_letter_analysis.py\", line 62, in main\n    report['versions']={name:importlib.import_module(name).__version__ for name in ('torch','transformers','numpy','matplotlib')}\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: module 'torch' has no attribute '__version__'\n"
+    }
+  ],
+  "python310_AST_files": 16,
+  "versions": {
+    "torch": "2.9.0+cpu",
+    "transformers": "4.54.1",
+    "numpy": "2.5.5",
+    "matplotlib": "3.11.2"
+  },
+  "tests": {
+    "run": 19,
+    "passed": 19,
+    "skipped": [],
+    "failures": 0,
+    "errors": 0,
+    "log": "test_check_args_all_tasks_imports_no_torch (test_mizar_letter_analysis.Contracts.test_check_args_all_tasks_imports_no_torch) ... ok\ntest_original_sources_and_inference_protocol_preserved (test_mizar_letter_analysis.Contracts.test_original_sources_and_inference_protocol_preserved) ... ok\ntest_three_separate_8x5090_commands_outputs_and_condition_grids (test_mizar_letter_analysis.Contracts.test_three_separate_8x5090_commands_outputs_and_condition_grids) ... ok\ntest_actual85000_decision_finalizers_group_tables_figures_and_tamper (test_mizar_letter_analysis.FullThreeExperiments.test_actual85000_decision_finalizers_group_tables_figures_and_tamper) ... ok\ntest_MMAR_six_choices_empty_slot_and_unmapped_GT_are_retained (test_mizar_letter_analysis.ManifestConversion.test_MMAR_six_choices_empty_slot_and_unmapped_GT_are_retained) ... ok\ntest_actual_converter_all_tasks_atomic_reuse_and_source_bytes_unchanged (test_mizar_letter_analysis.ManifestConversion.test_actual_converter_all_tasks_atomic_reuse_and_source_bytes_unchanged) ... ok\ntest_conversion_tampering_source_audio_and_mixed_protocol_rejected (test_mizar_letter_analysis.ManifestConversion.test_conversion_tampering_source_audio_and_mixed_protocol_rejected) ... ok\ntest_letter_ties_invalid_scores_and_multi_token_tokenizer_rejected (test_mizar_letter_analysis.ManifestConversion.test_letter_ties_invalid_scores_and_multi_token_tokenizer_rejected) ... ok\ntest_real_local_MMAU_PSR_and_MMAR_four_groups_and_exception_slots (test_mizar_letter_analysis.ManifestConversion.test_real_local_MMAU_PSR_and_MMAR_four_groups_and_exception_slots) ... ok\ntest_same_all1000_IDs_audio_GT_options_only_letters_and_EOT_change (test_mizar_letter_analysis.ManifestConversion.test_same_all1000_IDs_audio_GT_options_only_letters_and_EOT_change) ... ok\ntest_source_loader_does_not_regenerate_existing_inputs_and_bootstraps_absent_inputs (test_mizar_letter_analysis.ManifestConversion.test_source_loader_does_not_regenerate_existing_inputs_and_bootstraps_absent_inputs) ... ok\ntest_all_routes_BF16_native_baseline_cutoff_isolation_and_identity_equivalence (test_mizar_letter_analysis.RealLlama.test_all_routes_BF16_native_baseline_cutoff_isolation_and_identity_equivalence) ... ok\ntest_empty_letter_ignored_even_if_its_logit_is_highest (test_mizar_letter_analysis.RealLlama.test_empty_letter_ignored_even_if_its_logit_is_highest) ... ok\ntest_one_forward_exact_gather_first_answer383_BF16_not_body_probability (test_mizar_letter_analysis.RealLlama.test_one_forward_exact_gather_first_answer383_BF16_not_body_probability) ... ok\ntest_real_new_EOT_prefix_caches_reused_and_corruption_rejected_both_strategies (test_mizar_letter_analysis.RealLlama.test_real_new_EOT_prefix_caches_reused_and_corruption_rejected_both_strategies) ... ok\ntest_actual_eight_rank_condition_sync_and_resume_for_all_three_tasks (test_mizar_letter_analysis.ResultsAndControl.test_actual_eight_rank_condition_sync_and_resume_for_all_three_tasks) ... ok\ntest_coordinator_one_launch_and_full_coverage_for_each_task (test_mizar_letter_analysis.ResultsAndControl.test_coordinator_one_launch_and_full_coverage_for_each_task) ... ok\ntest_partial_journal_resume_wrong_identity_and_order (test_mizar_letter_analysis.ResultsAndControl.test_partial_journal_resume_wrong_identity_and_order) ... ok\ntest_sum_counts_by_group_all_tasks_trace_and_score_validation (test_mizar_letter_analysis.ResultsAndControl.test_sum_counts_by_group_all_tasks_trace_and_score_validation) ... ok\n\n----------------------------------------------------------------------\nRan 19 tests in 218.125s\n\nOK\n"
+  },
+  "shell": {
+    "status": "PASS",
+    "scripts": [
+      "code/RSmol/mizar_letter_analysis/run.sh",
+      "code/RSmol/run_mizar_audio_cutoff1000_letters_eot_8gpu_5090.sh",
+      "code/RSmol/run_mizar_layer_ablation_mmau_letters_eot_8gpu_5090.sh",
+      "code/RSmol/run_mizar_layer_ablation_mmar_letters_eot_8gpu_5090.sh"
+    ],
+    "real_shell_parse_only": [
+      {
+        "task": "cutoff",
+        "partition": "pdgpu-5090",
+        "GPU_count": 8,
+        "actual_vc_called": false
+      },
+      {
+        "task": "mmau",
+        "partition": "pdgpu-5090",
+        "GPU_count": 8,
+        "actual_vc_called": false
+      },
+      {
+        "task": "mmar",
+        "partition": "pdgpu-5090",
+        "GPU_count": 8,
+        "actual_vc_called": false
+      }
+    ],
+    "conda": "explicit activation fixture"
+  },
+  "final_static_checks": {
+    "status": "PASS",
+    "old_source_files_unchanged": 88,
+    "sync_files_present_relative_and_git_visible": 27,
+    "pinned_runtime_sources": 120,
+    "both_prefix_cache_implementations_unchanged": true,
+    "original_MMAU_PSR_mapping_unchanged": true,
+    "same_input_conversion_protocols": {
+      "cutoff": 17,
+      "mmau": 9,
+      "mmar": 13
+    },
+    "plots_visually_reviewed_on_synthetic_data": true
+  }
+}
