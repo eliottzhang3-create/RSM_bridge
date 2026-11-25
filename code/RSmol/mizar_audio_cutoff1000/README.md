@@ -68,6 +68,13 @@ bash code/RSmol/run_mizar_audio_cutoff1000_8gpu_3090.sh \
 
 ## 提交八卡或单卡作业
 
+八卡 5090：
+
+```bash
+cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
+bash code/RSmol/run_mizar_audio_cutoff1000_8gpu_5090.sh
+```
+
 八卡 3090：
 
 ```bash
@@ -82,7 +89,8 @@ cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
 bash code/RSmol/run_mizar_audio_cutoff1000_4090.sh
 ```
 
-每条命令只调用一次 `vc submit`。八卡使用 `pdgpu-3090 / 8GPU / 64CPU / 256G / 1node`；
+每条命令只调用一次 `vc submit`。八卡 5090 使用 `pdgpu-5090 / 8GPU / 64CPU / 256G / 1node`；
+八卡 3090 使用 `pdgpu-3090 / 8GPU / 64CPU / 256G / 1node`；
 单卡使用 `pdgpu-4090 / 1GPU / 8CPU / 32G / 1node`。
 镜像仍为 `docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1`。
 没有预先生成 manifest 时，作业内会先生成再启动评测。
@@ -98,6 +106,7 @@ rank0 预计算每题 encoder＋projector 输出及完整 BF16 prefix，共 1000
 ```bash
 bash code/RSmol/mizar_audio_cutoff1000/run.sh manifest --check-args
 bash code/RSmol/run_mizar_audio_cutoff1000_8gpu_3090.sh --check-args
+bash code/RSmol/run_mizar_audio_cutoff1000_8gpu_5090.sh --check-args
 ```
 
 ## 日志、输出与恢复
@@ -120,6 +129,7 @@ tail -n 100 -F "$(ls -t log/mizar-audio-cutoff1000.*.log | head -n 1)"
 
 ```text
 /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_audio_sep_cutoff03_28_1000_bf16_v1_8gpu3090
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_audio_sep_cutoff03_28_1000_bf16_v1_8gpu5090
 /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_audio_sep_cutoff03_28_1000_bf16_v1_1gpu4090
 ```
 
@@ -157,4 +167,5 @@ bash mizar_audio_cutoff1000/run.sh plot --output-dir /absolute/path/to/output
 
 本轮验证 26/26 通过、无跳过；真实 Bash 解析/单卡与八卡资源检查通过。
 报告为 `audit_reports/mizar_audio_cutoff1000_validation.json`，保留早期测试夹具错误及修复后的复验记录。
-Git 同步文件清单为本目录 `sync_files.txt`，包含新包、两个 launcher、测试、报告和 RM 记录。
+5090 支持只调整提交层，复用已有 1000 题 manifest；指定 `--output-dir` 时保留用户路径。
+Git 同步文件清单为本目录 `sync_files.txt`，包含新包、三个 launcher、测试、报告和 RM 记录。

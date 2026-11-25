@@ -1,5 +1,6 @@
 RM.md
 audit_reports/mizar_audio_cutoff1000_validation.json
+audit_reports/mizar_audio_cutoff1000_5090_validation.json
 code/RSmol/mizar_audio_cutoff1000/README.md
 code/RSmol/mizar_audio_cutoff1000/__init__.py
 code/RSmol/mizar_audio_cutoff1000/arguments.py
@@ -19,6 +20,8 @@ code/RSmol/mizar_audio_cutoff1000/sync_files.txt
 code/RSmol/mizar_audio_cutoff1000/worker.py
 code/RSmol/run_mizar_audio_cutoff1000_4090.sh
 code/RSmol/run_mizar_audio_cutoff1000_8gpu_3090.sh
+code/RSmol/run_mizar_audio_cutoff1000_8gpu_5090.sh
 tests/fixtures/mizar_audio_cutoff1000_original_sources.json
 tests/test_mizar_audio_cutoff1000.py
 tests/validate_mizar_audio_cutoff1000.py
+tests/validate_mizar_audio_cutoff1000_5090.py

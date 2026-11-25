@@ -22,7 +22,8 @@ from mizar_audio_cutoff1000 import config
 def shell_checks():
     bash='C:/Program Files/Git/bin/bash.exe' if os.name=='nt' else 'bash'
     scripts=['code/RSmol/mizar_audio_cutoff1000/run.sh','code/RSmol/run_mizar_audio_cutoff1000_4090.sh',
-             'code/RSmol/run_mizar_audio_cutoff1000_8gpu_3090.sh']
+             'code/RSmol/run_mizar_audio_cutoff1000_8gpu_3090.sh',
+             'code/RSmol/run_mizar_audio_cutoff1000_8gpu_5090.sh']
     for script in scripts:
         run=subprocess.run([bash,'-n',script],cwd=ROOT,capture_output=True,text=True)
         if run.returncode: raise RuntimeError(run.stderr)
@@ -31,12 +32,13 @@ def shell_checks():
         fake=Path(directory)/'conda/etc/profile.d/conda.sh'; fake.parent.mkdir(parents=True)
         fake.write_text('conda() { test "$1" = activate && test "$2" = mellow_c8204d8; }\n',encoding='utf-8')
         env=dict(os.environ,RSMOL_CONDA_BASE=fake.parents[2].as_posix(),PYTHONUTF8='1')
-        for script,world in zip(scripts[1:],(1,8)):
+        for script,world,partition in zip(scripts[1:],(1,8,8),('pdgpu-4090','pdgpu-3090','pdgpu-5090')):
             argv=[bash,script,'--check-args','--output-dir',str(Path(directory)/"output's space")]
             run=subprocess.run(argv,cwd=ROOT,env=env,capture_output=True,text=True,encoding='utf-8')
             if run.returncode: raise RuntimeError(run.stderr)
             plan=json.loads(run.stdout); args=plan['vc_args']
             if args[args.index('-g')+1]!=str(world) or plan['submitted_jobs']!=1: raise ValueError('wrong shell topology')
+            if args[args.index('-p')+1] != partition: raise ValueError('wrong GPU queue')
             plans.append({'world':world,'partition':args[args.index('-p')+1],'actual_vc_called':False})
     return {'status':'PASS','syntax':scripts,'real_shell_parse_only':plans,'conda':'explicit fake activation'}
 

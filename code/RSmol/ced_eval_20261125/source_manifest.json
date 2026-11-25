@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "2c7d4485979f30f23c96196533c6de5914c47888": {
+      "archive_paths": [
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8",
+        "code/RSmol/mizar_text_7_14x3_7_mesh/__init__.py",
+        "code/RSmol/mizar_text_7_14x3_7_mesh/contract.py",
+        "code/RSmol/recursive_model_mizar_text_7_14x3_7_mesh.py",
+        "code/RSmol/mizar_official_eval/release_manifest.json"
+      ],
+      "files": {
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/audit_reference.py": "083bed1d4e6174c6cf21e46ad6b0434b4c925adb1868b5dee2daa8dd13529b96",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/check_ced_assets.py": "075b49dc02eca6d5293f1abaadce736fece46a2fc67661324ac9b45913466367",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/check_text_assets.py": "392ad1c84e6e61a6716e1934d7ec914d9442c16732680b43759c0de5f9edf642",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/contract.py": "72c672932cde2462d4c7c95aa37118f4a0680390970a1c8dbf95c321bbfb4093",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/data/audio_paths.py": "f65433f8db88a59bf1d7701ce9b0bfe85e8c00affa673b69246684ae34596685",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/data/audiotext_dataset.py": "f41bbd8edf863c906d8ef996da87b726edaedae7987fa5507416e03113b5bf8b",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/data/fixed20.py": "f4580fdaf1b75acd54bbd12dbfc72f18e2906e1dbcebd8ff8e5d1ff355ac6a5c",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/data/indexed_jsonl.py": "1fac5952ad67609cc050d9b05cfac8c9cb16f4bf520b9eabbcfb0dee3af82e8a",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/data/prepared_index.py": "9852107e00223c91bb07a4bf05347089884bbfcff9d5075cc60ef53086af57e3",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/data/sampler.py": "66be929c5f5458816c64b12bec058791a173698290ea1e7a5ef80a730aa02525",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/data/staging.py": "db7a465e90deb6be5aa0342afbb6cb56279fbea20081cd09f79c42db2fac4515",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/data/template.py": "0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/models/audio.py": "de8394e231c4ee67d6a9baaad864032e2825c717f7e5c6c838543a613619ebb4",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/models/ced.py": "968e6a4496fe95a28f5643d25f293ab0b21ae30e0a613f6d8bedc3baf746e5ab",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/models/ced_offline.py": "94a0d5ede90337b4b88b112dfaad3db0144e644458dcc1a744096c6f19f248af",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/models/decoder.py": "f9dc1d124e74133f57e21066c9a56529b518691bfc046f252434dbb976f02f47",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/models/loop_lora.py": "d5c2a9ecfe1da69be3b3359e63302c99532b725f4154755305856a7c27d90858",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/models/mellow.py": "092a119b9ee94203206cf5e43db7854d04cc27ab6736bfdb8172fd0aa50192b8",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/models/recursive_audio8_read3.py": "cadfb26039246209ad3f890756758e46a074a4ffd73d432995dce74cdef2faa8",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/models/recursive_text.py": "dbcdf3534ed66f7e218cc092240e94a9edd159dd70c47ed57d14619be2acb568",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/optim.py": "235400dd3b5181e4cb2a839f3181ef142fb4640ccd712a36308c40c98b4f88ec",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/prepare_index.py": "daf059301ff5cb2550a11e6f35cb53fe655b17b6b92cb0974da8f3da55f337e2",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/run.sh": "2c0ab1b49aa2ea8234f91eadfdd932ca06f84c0d4655b3c4c7fc8eb5e174c468",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/runtime_checks.py": "a4c67f10f4af39804aaccc30017072f1e833494f36771ce58e2d57f850dcfd90",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/stage_data.py": "c51e7d55998c6cc4d347a08ed3198b86e6497e3cc7854859cc8bbebc8f733001",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/train.py": "9efb5e19dd835043f2af4fbb8aa639f8fb3841117791791b57388f6b8a4ac684",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/utils/audio_io.py": "67f3680af4b8bb5cbc30426c54d71155d2b65f8cdd5c4fb89af08a374e63f311",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_text71437_mesh_ced48_audio8_read3_lora_r8/write_config.py": "09f1f7602cc33a92b21e614c76bd1344c12373c8a7b8d2b64a97aa55f0d2d207",
+        "code/RSmol/mizar_official_eval/release_manifest.json": "07f52ca348869cbb44ef44b0cff0c103700497091dcf7e0f492adb23c5b61dcd",
+        "code/RSmol/mizar_text_7_14x3_7_mesh/__init__.py": "9abbc929d52667d9e63ece172f6b306455aa587ebdb7efd990afffc581fa0bd8",
+        "code/RSmol/mizar_text_7_14x3_7_mesh/contract.py": "7b89da1494ee3d0f7663ddf932555b85a7821e3f8ab212feab2637e0e5facbae",
+        "code/RSmol/recursive_model_mizar_text_7_14x3_7_mesh.py": "e0b41dc6e715f6c1da5e3bc426e97b062ca20956f62f38baf03effdd24ea69df"
+      },
+      "training_code_sha256": {
+        "audio8_read3": "3c3a4619d3ab1d019fd9d3fc288c2f4ebe81d8d6c3cf707b3af64d18627e7f2d"
+      }
+    },
+    "ee6f54474139fa5b86a9189617a2d2c0b9c84492": {
+      "archive_paths": [
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small",
+        "code/RSmol/text_hrm_h2l3",
+        "code/RSmol/text_hrm_reinit3600_bp5",
+        "code/RSmol/scripts/audit_mizar_s1_raw_audio.py",
+        "code/RSmol/run_mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small_3090.sh"
+      ],
+      "files": {
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/check_ced_assets.py": "075b49dc02eca6d5293f1abaadce736fece46a2fc67661324ac9b45913466367",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/check_text_assets.py": "392ad1c84e6e61a6716e1934d7ec914d9442c16732680b43759c0de5f9edf642",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/checkpoint_state.py": "100a191d6870a34f8b2083f6831093a5f70a1444e0520e1e795ae5939d3243db",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/contract.py": "668af1d73f03e096d8d970b6249aaab22743cafa4bbbb0a83ef6e2fbef28193b",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/data/audio_paths.py": "f65433f8db88a59bf1d7701ce9b0bfe85e8c00affa673b69246684ae34596685",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/data/audiotext_dataset.py": "f41bbd8edf863c906d8ef996da87b726edaedae7987fa5507416e03113b5bf8b",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/data/fixed20.py": "f4580fdaf1b75acd54bbd12dbfc72f18e2906e1dbcebd8ff8e5d1ff355ac6a5c",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/data/indexed_jsonl.py": "1fac5952ad67609cc050d9b05cfac8c9cb16f4bf520b9eabbcfb0dee3af82e8a",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/data/prepared_index.py": "9852107e00223c91bb07a4bf05347089884bbfcff9d5075cc60ef53086af57e3",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/data/sampler.py": "66be929c5f5458816c64b12bec058791a173698290ea1e7a5ef80a730aa02525",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/data/staging.py": "db7a465e90deb6be5aa0342afbb6cb56279fbea20081cd09f79c42db2fac4515",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/data/template.py": "0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/hrm_audit.py": "a9d6090945202c1714c254978a8bbddddb4c4d1804a32e03fdaf0d225858f12f",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/models/audio.py": "de8394e231c4ee67d6a9baaad864032e2825c717f7e5c6c838543a613619ebb4",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/models/ced.py": "67c101680a14ee8391568f892cf33f1748443af4c182ba5b3270707e210d3517",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/models/ced_offline.py": "94a0d5ede90337b4b88b112dfaad3db0144e644458dcc1a744096c6f19f248af",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/models/decoder.py": "f6ca541892c76d7bd88268031e5b8b2f3163f7edd1d3eb40088a6ee50a6659eb",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/models/hrm_prefix.py": "3d61c6aa765c3f9975cf8c0d26d8550b05ba95c1c01632142912121f26f6d0d4",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/models/mellow.py": "a0cf015d07d309731bb4e8cda41068aaef15ba747a81c7982ecd9a33d58a4858",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/models/recursive_text.py": "7b6b728830519d35c56a4ee357e7629ba638c8943bea4180faae1477077210ff",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/optim.py": "7ab3c8c46f4b74f099e136460e05c593d0b8cc119b2bd93662c409cb700afab9",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/prepare_index.py": "daf059301ff5cb2550a11e6f35cb53fe655b17b6b92cb0974da8f3da55f337e2",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/run.sh": "a5943e83f7fe6ce6727872df69e91a20297cd991cf9a313b273a8950df790ccb",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/stage_data.py": "c51e7d55998c6cc4d347a08ed3198b86e6497e3cc7854859cc8bbebc8f733001",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/train.py": "2ebec88bb540307944196fbf97161b78b17cea6052d548b9dd47fc368f241017",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/utils/audio_io.py": "67f3680af4b8bb5cbc30426c54d71155d2b65f8cdd5c4fb89af08a374e63f311",
+        "code/RSmol/mellow_official_training_c8204d8_adamw_cosine/mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small/write_config.py": "a5855e90fac5e97f95d6b0ab8c12b5f50ffb696af687c757faa9ac0881313b1e",
+        "code/RSmol/run_mizar_s1_gbs128_hrm_bp5_prefixlm_ced_small_3090.sh": "c8e22ce09cbf7d34fd9426bd532f52f5fdfa551b93adf3428d2c55875ac3edb4",
+        "code/RSmol/scripts/audit_mizar_s1_raw_audio.py": "a41f7eed20d2efa23f0ac42dccd0e496efe062a7f4f6a063f879427035b79a51",
+        "code/RSmol/text_hrm_h2l3/__init__.py": "337f533caa476846e67d63c0b700bbf4ce8f729a5188ab34156555f81b43a46f",
+        "code/RSmol/text_hrm_h2l3/adam_atan2.py": "8e3cfc8aa3f72cb470b3433e4c2dc24ed8c688ef700c4ec83d20750bac43091b",
+        "code/RSmol/text_hrm_h2l3/checkpoint.py": "30cddb991642c1b3e22799ba80c655ddd9061cef4cca90d65ab1b3942d31f055",
+        "code/RSmol/text_hrm_h2l3/contract.py": "0f996eaab6352f96b203273b7b066cb635a7f601d21c9606740a65bc5856d239",
+        "code/RSmol/text_hrm_h2l3/conversion.py": "7848d18879f67d50a750d453d12e09a011822c5c84defb7cf68260c97def0dc7",
+        "code/RSmol/text_hrm_h2l3/data.py": "9c118d5ffa5c7e7fe6169b542f527daecaaca3a746a16cb8ff2a36a23fb7c72e",
+        "code/RSmol/text_hrm_h2l3/llama_compat.py": "a842a3f882794d5b5b4f5a0957a5a58b06b25c48548c9f10434727c64d7bbf42",
+        "code/RSmol/text_hrm_h2l3/model.py": "cb4644bae606fadc546d6eb31133dcc942e247b743bc9d0db1ac1cc9f0a32ef1",
+        "code/RSmol/text_hrm_h2l3/publication.py": "7c3c5cefc78becdc60f3beded3cb59cb9da717c97eed280049fc9ce7fb612827",
+        "code/RSmol/text_hrm_h2l3/train.py": "6063ac02dd971e6532ebf6e9a2554286314bba687cbc2ce0a327606429db28e6",
+        "code/RSmol/text_hrm_reinit3600_bp5/__init__.py": "97dd00d1c6e3f099cb3d86ee73112b542b25fe0925211273adaf1b4cda276caa",
+        "code/RSmol/text_hrm_reinit3600_bp5/artifact.py": "c074ec6935d43da1e9d2026bed6cfa622280c5803a7d50a47462ee9c3b4b60c9",
+        "code/RSmol/text_hrm_reinit3600_bp5/checkpoint.py": "f8bbe31f4faa4194fc972bd29bfa7bbc80e55039046ad2b512176a884921ab13",
+        "code/RSmol/text_hrm_reinit3600_bp5/contract.py": "0168d79f4dd74be9d77768935e8ab0b590791c0d00b6e88bd22ebbf432451d54",
+        "code/RSmol/text_hrm_reinit3600_bp5/gradients.py": "d308bba90afbb9ec176c0fe93e0028c6938f8ac39a161dbcf11749fe01d5957b",
+        "code/RSmol/text_hrm_reinit3600_bp5/initialization.py": "3484a29e3d4ef00f0b4d63b9354dcaf2bf0fa38904d53ec4a4aa914b35241f22",
+        "code/RSmol/text_hrm_reinit3600_bp5/train.py": "1baf3b92f0b7d6ebb1083686afb3338763005d07ccc77d9f18b6d6a0803c146c"
+      },
+      "training_code_sha256": {
+        "hrm_prefixlm": "0814180a787ab29ab439403fff5befab2b870e4bb6b6cb50b07822a677c1ca58"
+      }
+    }
+  }
+}

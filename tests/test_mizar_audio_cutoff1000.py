@@ -211,8 +211,10 @@ class Contracts(TempCase):
             arguments.parse_args(['--manifest',str(self.path/'out/m.json'),'--output-dir',str(self.path/'out')])
 
     def test_submit_one_job_correct_resources_quoting_and_worker_count(self):
-        for world, partition, cpus, memory in ((1,'pdgpu-4090','8','32G'),(8,'pdgpu-3090','64','256G')):
-            args = arguments.parse_args(['--world-size',str(world),'--output-dir',str(self.path/"output's space")])
+        for world, partition, cpus, memory in ((1,'pdgpu-4090','8','32G'),(8,'pdgpu-3090','64','256G'),
+                                               (8,'pdgpu-5090','64','256G')):
+            args = submit.parse_args(['--world-size',str(world),'--partition',partition,
+                                      '--output-dir',str(self.path/"output's space")])
             cmd = submit.command(args,'fixture123')
             for flag,value in (('-p',partition),('-c',cpus),('-m',memory),('-g',str(world)),('-n','1')):
                 self.assertEqual(cmd[cmd.index(flag)+1],value)
@@ -226,6 +228,11 @@ class Contracts(TempCase):
             self.assertEqual(run.call_count,1)
             self.assertIn(f'--nproc-per-node={world}',run.call_args.args[0])
             self.assertIn('--max-restarts=0',run.call_args.args[0])
+            worker_args = arguments.parse_args(arguments.forwarded(args))
+            self.assertEqual(worker_args.output_dir, args.output_dir)
+        default5090 = submit.parse_args(['--world-size','8','--partition','pdgpu-5090'])
+        self.assertTrue(default5090.output_dir.name.endswith('_8gpu5090'))
+        self.assertEqual(default5090.manifest, arguments.parse_args([]).manifest)
 
     def test_existing_tracked_sources_and_reference_guard_unchanged(self):
         frozen = storage.read_json(ROOT/'tests/fixtures/mizar_audio_cutoff1000_original_sources.json')

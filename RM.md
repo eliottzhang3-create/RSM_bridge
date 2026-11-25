@@ -1,3 +1,12 @@
+## 2026-11-25：1000题音频cutoff增加八卡5090入口
+
+新增code/RSmol/run_mizar_audio_cutoff1000_8gpu_5090.sh，单次vc提交pdgpu-5090/8GPU/64CPU/256G/1node。
+默认输出outputs/RSmol/mizar_audio_sep_cutoff03_28_1000_bf16_v1_8gpu5090；原3090/4090入口保留。
+提交层单独解析--partition并显式转交最终output-dir，评测/BF16/缓存/27组条件不改。
+manifest生成依赖14份源码SHA保持，无需重建已有1000题manifest。
+补充6项提交合同及三入口真实Bash/资源解析检查通过；报告audit_reports/mizar_audio_cutoff1000_5090_validation.json。
+Windows沙箱临时目录清理限制获准在沙箱外复验，未提交真实GPU作业。
+
 ## 2026-11-25：完整 Mizar 四类各250题音频访问截断，范围扩为第3～28层
 
 用户授权扩大原100题实验并扩展截止层范围。复制原音频cutoff，新增独立

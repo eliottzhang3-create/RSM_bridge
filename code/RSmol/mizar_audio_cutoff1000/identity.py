@@ -10,7 +10,8 @@ def sources():
         if storage.text_sha(config.ROOT/name) != digest:
             raise ValueError(f'reused source changed: {name}')
     paths = [*config.PACKAGE.glob('*.py'), *config.PACKAGE.glob('*.sh'), config.PACKAGE/'reference_guard.json',
-             config.ROOT/'run_mizar_audio_cutoff1000_4090.sh', config.ROOT/'run_mizar_audio_cutoff1000_8gpu_3090.sh']
+             config.ROOT/'run_mizar_audio_cutoff1000_4090.sh', config.ROOT/'run_mizar_audio_cutoff1000_8gpu_3090.sh',
+             config.ROOT/'run_mizar_audio_cutoff1000_8gpu_5090.sh']
     paths.extend(config.ROOT/name for name in guard['sources_lf_sha256'])
     return {p.relative_to(config.ROOT).as_posix(): storage.text_sha(p) for p in sorted(set(paths))}
 
