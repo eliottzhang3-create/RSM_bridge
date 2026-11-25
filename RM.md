@@ -1,3 +1,35 @@
+## 2026-11-25：完整 Mizar 四类各250题音频访问截断，范围扩为第3～28层
+
+用户授权扩大原100题实验并扩展截止层范围。复制原音频cutoff，新增独立
+code/RSmol/mizar_audio_cutoff1000/及run_mizar_audio_cutoff1000_8gpu_3090.sh、run_mizar_audio_cutoff1000_4090.sh。
+原100题包、manifest、结果及剪层搜索源码保持；41份原实验文件normalized-LF SHA逐一核对。
+
+CPU manifest固定seed1234，MMAU test-mini/MMSU/MMAR/ReasonAQA各250、合计1000。
+沿原规范化/唯一选项/唯一GT/token资格，MMSU删除null选项后连续重标并保留原slot；
+ReasonAQA仅两类test单录音MCQ。各数据集独立无放回、保存来源顺序，不强制包含或排除旧100。
+选中音频缺失/解码失败硬失败，不补抽；SoundFile和原first20/32k/mono/右补零保持。
+新manifest独立schema/源码和文件SHA，支持可选旧manifest交集审计，不修改历史manifest校验。
+默认data/mizar_audio_cutoff_balanced1000_seed1234_v1/manifest.json；可独立CPU生成，作业内也可自动ensure。
+
+完整原30层final checkpoint（encoder+已训练projector），baseline首先，再cutoff03..28共27组/27000题目决策。
+从进入1-based第L层前起，L..30层文本query>=127不能访问audio126+SEP1的key0..126。
+保留audio/SEP自己合法causal行、文本早期已吸收信息、全部层执行、原position/RoPE及序列长度。
+源权重FP32、前向BF16 autocast、音频前处理/log_softmax/正文累加FP32、TF32off。
+原compact lowercase/no question EOT/prompt256/PAD17可见/prefix383/无KV及正文sum likelihood保持；无自由生成。
+rank0预计算1000份BF16 prefix，各题encoder/projector一次并跨27组复用。
+8卡共同跑同一条件，每卡global_index%8的125题，完整合并/落盘/打印/barrier后切换；单卡每条件1000。
+总/四子集acc、baseline差值、paired变化、完整候选分数、并列排名、CSV/JSON/PNG/SVG及逐题恢复/身份检查保持。
+
+8卡pdgpu-3090/64CPU/256G/1node；单卡pdgpu-4090/8CPU/32G/1node；原镜像与mellow_c8204d8。
+默认outputs/RSmol/mizar_audio_sep_cutoff03_28_1000_bf16_v1_{8gpu3090,1gpu4090}，
+日志code/RSmol/log/mizar-audio-cutoff1000.<tag>.JOB.log。CPU生成及提交命令见新README。
+本地26/26通过、无跳过：真实30层小Llama eager/SDPA/BF16 prefix383/全部27条件/3与28边界隔离、
+sum likelihood右移/参数保持，真实BF16缓存序列化和无需重编码恢复；抽样/manifest builder/1与8卡调度/27000完整汇总为显式合成夹具。
+Python3.10语法及真实Bash+模拟conda/资源解析通过；初次缺少远程MMSU资产的测试夹具已修正，历史保留在报告。
+报告audit_reports/mizar_audio_cutoff1000_validation.json；精确同步清单在包内sync_files.txt。
+未读取远程生产资产、提交GPU作业或commit/push；远程真实数据/CUDA/3090八卡仍待执行。
+本条仅前置，以下原RM记录完整保留。
+
 ## 2026-11-24：HRM H2L3固定BP5、CED-small PrefixLM隔离音频正式训练
 
 用户明确从HRM文本最终raw权重开始音频训练，并最终指定LM max/min6e-4/3e-5、mapper8e-4/6e-5。
