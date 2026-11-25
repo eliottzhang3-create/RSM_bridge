@@ -1,3 +1,40 @@
+## 2026-11-25：完整Mizar在MMAR1000上四类逐层消融，八卡5090隔离实现
+
+按用户确认计划复制原mizar_layer_analysis_common/mizar_layer_ablation，新增独立
+code/RSmol/mizar_layer_ablation_mmar/及run_mizar_layer_ablation_mmar_8gpu_5090.sh。
+旧MMAU ablation、CKA、cutoff1000与剪层搜索的71份相关文件normalized-LF SHA保持，原输出保留。
+
+完整原始Mizar final checkpoint含encoder/已训练projector/30层LM；baseline首先，随后逐一跳过原始1-based第2..29层。
+消融h_out=h_in、每次从全层集合选一层、不累积、第1/30层保护；共29条件/29000题目决策。
+原FP32源参数、BF16 autocast、音频前处理/log_softmax/正文累加FP32、TF32off保持。
+原SoundFile/resample32k→mono→first20右补零、compact lowercase/无问题EOT/prompt256/PAD17可见/
+126audio+SEP0+prompt256=383/原position与RoPE/无KV保持；全文正文sum likelihood取最大，不自由生成。
+
+新manifest完整保留MMAR原1000唯一ID及顺序，固定category Signal43/Perception404/Semantic412/Cultural141。
+4题空选项保留原标签槽位，不重新编号；空token/分数null、不进入argmax，避免空串sum0错误胜出。
+5题GT不能唯一对应完整选项，gold_index=null、保留全1000分母并计错，不自动模糊修正。
+主分数严格选项匹配；同一likelihood预测另交原MMAR string_match，诊断分数单独保存，不进入主图/排名。
+官方函数实现保持，与远程evaluation.py函数AST核对且绑定文件SHA，不执行外部脚本。
+CPU冻结音频/文件/token/源码指纹并记录异常，缺音频/坏题/分类分母变化硬失败、不筛除补抽。
+
+单次vc提交pdgpu-5090/8GPU/64CPU/256G/1node，原镜像和mellow_c8204d8。
+每卡global_index%8负责125题，encoder/projector prefix各题一次、本卡BF16缓存跨29组复用。
+8卡共同完成一个条件，rank0完整合并落盘/打印总体四类分数/barrier后切换；durable journal逐题续跑。
+默认manifest data/mizar_mmar1000_likelihood_v1/manifest.json；输出outputs/RSmol/mizar_mmar_ablation_bf16_8gpu5090_v1。
+日志code/RSmol/log/mizar-layer-ablation-mmar.<tag>.JOB.log；生成/提交/查看日志命令见新README。
+四类主acc/baseline差值/paired变化，另子类/模态/语言统计；原始分数/总与四类并列排名/CSV/JSON。
+三组图均PNG+SVG：总体双面板、四类绝对acc、四类相对baseline百分点变化，标明43/404/412/141分母。
+
+本地19/19通过、无跳过：真实30层小Llama eager/SDPA/BF16 baseline/全部28跳层轨迹/参数不变/
+第2与29层跳过-输出替换等价、prefix383逐token LL右移和空槽不推理；125份真实BF16缓存一次编码及续跑。
+真实SoundFile stereo16k→32k/mono/first20/pad；只读真实MMAR1000标注与原matcher AST核对。
+1000题manifest builder/异常GT与空槽/来源和篡改拒绝、8rank同条件与恢复、完整29000决策/六图为显式合成夹具。
+Python3.10语法、真实Bash+模拟conda的5090资源/一次提交检查通过，合成图布局目视检查完成。
+Windows沙箱隔离Torch读取异常获准沙箱外复验，早期失败保留在报告。
+报告audit_reports/mizar_layer_ablation_mmar_validation.json；精确同步清单包内sync_files.txt。
+未读取远程生产权重/音频、commit/push或提交真实GPU作业；生产CUDA与八卡运行仍待远程验证。
+本条仅前置，以下全部原RM字节保持。
+
 ## 2026-11-25：三循环audio8/read3与HRM BP5 PrefixLM两个checkpoint的八项4090评测
 
 用户按只读调研计划授权实现，新增隔离code/RSmol/ced_eval_20261125/及run_ced_eval_20261125_4090.sh。

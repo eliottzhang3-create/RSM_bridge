@@ -1,0 +1,65 @@
+{
+  "timestamp_utc": "2026-11-25T14:40:11.831900+00:00",
+  "status": "PASS_LOCAL_CPU",
+  "production_weights_read": false,
+  "remote_GPU_run": false,
+  "jobs_submitted": false,
+  "scope": "real CPU small 30-layer Llama, BF16 prefix cache, synthetic WAV frontend; full 29000-decision flow uses explicit synthetic scores/CPU rank artifacts",
+  "previous_runs": [
+    {
+      "timestamp_utc": "2026-11-25T14:39:46.809195+00:00",
+      "status": "FAILED",
+      "production_weights_read": false,
+      "remote_GPU_run": false,
+      "jobs_submitted": false,
+      "scope": "real CPU small 30-layer Llama, BF16 prefix cache, synthetic WAV frontend; full 29000-decision flow uses explicit synthetic scores/CPU rank artifacts",
+      "python310_AST_files": 18,
+      "error": "AttributeError(\"module 'torch' has no attribute '__version__'\")",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_layer_ablation_mmar.py\", line 62, in main\n    report['versions']={name:importlib.import_module(name).__version__ for name in ('torch','transformers','numpy','matplotlib','torchaudio','soundfile')}\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: module 'torch' has no attribute '__version__'\n"
+    }
+  ],
+  "python310_AST_files": 18,
+  "versions": {
+    "torch": "2.9.0+cpu",
+    "transformers": "4.54.1",
+    "numpy": "2.5.5",
+    "matplotlib": "3.11.2",
+    "torchaudio": "2.9.0+cpu",
+    "soundfile": "0.14.0"
+  },
+  "tests": {
+    "run": 19,
+    "passed": 19,
+    "skipped": [],
+    "failures": 0,
+    "errors": 0,
+    "log": "test_check_args_imports_no_torch_or_production_assets (test_mizar_layer_ablation_mmar.Contracts.test_check_args_imports_no_torch_or_production_assets) ... ok\ntest_original_experiments_unchanged_and_new_sources_guarded (test_mizar_layer_ablation_mmar.Contracts.test_original_experiments_unchanged_and_new_sources_guarded) ... ok\ntest_single_5090_job_quoting_forwarded_args_and_exact_condition_grid (test_mizar_layer_ablation_mmar.Contracts.test_single_5090_job_quoting_forwarded_args_and_exact_condition_grid) ... ok\ntest_actual29x1000_finalizer_four_groups_CSV_ranking_and_six_figures (test_mizar_layer_ablation_mmar.FullExperiment.test_actual29x1000_finalizer_four_groups_CSV_ranking_and_six_figures) ... ok\ntest_actual1000_builder_seal_reuse_source_argument_and_tamper_checks (test_mizar_layer_ablation_mmar.MetadataAndScoring.test_actual1000_builder_seal_reuse_source_argument_and_tamper_checks) ... ok\ntest_empty_original_slot_preserved_excluded_and_not_relabelled (test_mizar_layer_ablation_mmar.MetadataAndScoring.test_empty_original_slot_preserved_excluded_and_not_relabelled) ... ok\ntest_invalid_rows_context_and_reference_function_change_fail (test_mizar_layer_ablation_mmar.MetadataAndScoring.test_invalid_rows_context_and_reference_function_change_fail) ... ok\ntest_missing_audio_unsafe_path_and_changed_category_denominators_fail (test_mizar_layer_ablation_mmar.MetadataAndScoring.test_missing_audio_unsafe_path_and_changed_category_denominators_fail) ... ok\ntest_real_local1000_metadata_and_original_official_function_AST (test_mizar_layer_ablation_mmar.MetadataAndScoring.test_real_local1000_metadata_and_original_official_function_AST) ... ok\ntest_sum_not_mean_ties_and_official_diagnostic_are_separate (test_mizar_layer_ablation_mmar.MetadataAndScoring.test_sum_not_mean_ties_and_official_diagnostic_are_separate) ... ok\ntest_unmapped_GT_stays_in_denominator_and_no_fuzzy_correction (test_mizar_layer_ablation_mmar.MetadataAndScoring.test_unmapped_GT_stays_in_denominator_and_no_fuzzy_correction) ... ok\ntest_baseline_native_all28_identity_routes_BF16_weights_unchanged (test_mizar_layer_ablation_mmar.RealLlama.test_baseline_native_all28_identity_routes_BF16_weights_unchanged) ... ok\ntest_real_cached125_prefixes_encode_once_resume_and_wrong_identity_rejected (test_mizar_layer_ablation_mmar.RealLlama.test_real_cached125_prefixes_encode_once_resume_and_wrong_identity_rejected) ... ok\ntest_real_prefix383_shifted_body_sum_matches_stepwise_and_skips_empty (test_mizar_layer_ablation_mmar.RealLlama.test_real_prefix383_shifted_body_sum_matches_stepwise_and_skips_empty) ... ok\ntest_real_soundfile_stereo_resample_first20_padding_without_torchcodec (test_mizar_layer_ablation_mmar.RealLlama.test_real_soundfile_stereo_resample_first20_padding_without_torchcodec) ... ok\ntest_actual_coordinator_prepares_once_and_launches_one_torchrun (test_mizar_layer_ablation_mmar.ResultsAndControl.test_actual_coordinator_prepares_once_and_launches_one_torchrun) ... ok\ntest_actual_synchronized_worker_baseline_boundary_layers_and_resume (test_mizar_layer_ablation_mmar.ResultsAndControl.test_actual_synchronized_worker_baseline_boundary_layers_and_resume) ... ok\ntest_all_category_denominators_weighted_overall_and_primary_vs_diagnostic (test_mizar_layer_ablation_mmar.ResultsAndControl.test_all_category_denominators_weighted_overall_and_primary_vs_diagnostic) ... ok\ntest_raw_rows_scores_trace_decision_and_journal_recovery_are_verified (test_mizar_layer_ablation_mmar.ResultsAndControl.test_raw_rows_scores_trace_decision_and_journal_recovery_are_verified) ... ok\n\n----------------------------------------------------------------------\nRan 19 tests in 114.752s\n\nOK\n"
+  },
+  "shell": {
+    "status": "PASS",
+    "syntax": [
+      "code/RSmol/mizar_layer_ablation_mmar/run.sh",
+      "code/RSmol/run_mizar_layer_ablation_mmar_8gpu_5090.sh"
+    ],
+    "partition": "pdgpu-5090",
+    "GPU_count": 8,
+    "CPU_count": 64,
+    "memory": "256G",
+    "nodes": 1,
+    "real_shell_parse_only": true,
+    "actual_vc_called": false,
+    "conda": "explicit activation fixture"
+  },
+  "final_static_checks": {
+    "status": "PASS",
+    "original_sources_unchanged": 71,
+    "sync_files_present_relative_and_git_visible": 26,
+    "runtime_LayerRouter_and_strict_loader_AST_unchanged": true,
+    "prefix_cache_source_unchanged": true,
+    "guarded_sources": 75,
+    "manifest_generator_sources": 10,
+    "plots_visually_reviewed_on_synthetic_data": true,
+    "reference_whitespace_normalized_after_tests_AST_identical": true,
+    "official_matcher_function_AST_verified": true
+  }
+}
