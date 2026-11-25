@@ -1,3 +1,51 @@
+## 2026-11-26：ReasonAQA 原5000中筛选1000合格题并逐层静音activation patching
+
+按用户确认方案新增隔离code/RSmol/mizar_reasonaqa_tracing/与run_mizar_reasonaqa_tracing_8gpu_5090.sh。
+参考Causal Tracing of Audio-Text Fusion in Large Audio Language Models arXiv2603.13768v2 §3。
+原有剪层、cutoff、CKA、MMAU/MMAR ablation及字母EOT实验120份源码normalized-LF SHA保持，63份复用依赖固定。
+
+候选池只读原reasonaqa/test_close_ended_sample5000_seed1234_v1/manifest.json，不重新采样。
+CPU prepare冻结同5000题的原ID/原行号/原始题/音频路径与stat/tokenizer/源码指纹及独立seed1234打乱序列。
+本地真实元数据重建与release tokenizer核对：AudioCaps2108/Clotho2369/yesno523，4477 MCQ显式GT标签可解析，全部单录音。
+原5000 ID列表SHA183e34c08d34b4ad0e82088da250cf5f952425208527a4953acefda7a34e74d1。
+GPU按shuffle顺序筛选clean分类正确、silence分类错误且Pclean>Pcorrupted；继续筛满1000，不保留仅clean正确但不合格题。
+每窗口min(8,还差合格数,池剩余数)，按序commit，无超过最终第1000合格题的推测前向。
+5000用尽不足1000则保存INSUFFICIENT_QUALIFYING/逐题审计，失败退出、不开始正式patch、不补池或放宽。
+最终selected/manifest.json按原test.json行号升序，保留源5000索引/shuffle位置/入选顺序/新selected_index与clean/corrupt分数。
+
+完整原Mizar final encoder/已训练projector/30物理层；FP32源权重/BF16前向/FP32frontend与log_softmax/TF32off。
+SoundFile/32k先resample再mono/first20右补零；原紧凑小写题面加空格EOT后右截断补256、可见PAD17保持。
+126audio+SEP0+prompt256=383，首答案logit382、无KV/无生成；MCQ纯a/b/c/d、yesno纯yes/no，强制单普通token。
+正确目标概率取全词表softmax，不在候选集内重新归一化；分类则候选argmax。
+
+静音在640000点波形上归零后正常通过encoder/projector，每rank/device一次编码并验证八卡一致；不直接清零音频embedding。
+Clean capture为每个block残差后的原始text[127:383]全部256位置、final norm之前的30x256x576未池化精确tensor。
+包括EOT/可见PAD/readout，保留实际dtype（BF16约8.24GiB/1000，若FP32约16.48GiB），逐题lossless cache。
+Patched每次从原静音prefix重新执行所有30层，仅目标1..30层post-block替换text，不碰audio/SEP、不累积patch。
+FP32 log_softmax后FP64 exp/概率差/RR，不加epsilon/不clip；mean逐题RR为主，不是ratio of means。
+另median/分位/按题bootstrap2000次点态CI/三来源分组/acc/目标概率与small-gap敏感性，保留负值和>1。
+每rank首个入选题检查capture/native完整logits逐值一致、layer0=corrupt、layer30=clean、cache=重新capture。
+最后层RR1是readout恢复正对照；所选clean100%/corrupt0%是条件子集，不当全5000准确率。
+
+一个vc作业内串行筛选及patch；pdgpu-5090/8GPU/64CPU/256G/1node，原镜像与mellow_c8204d8。
+每rank125入选题，prefix和full clean states本卡复用，所有卡同一layer合并/打印/barrier后切下一层，正式30000 patched决策。
+完整候选outcome与commit/逐题patch日志fsync/partial-tail恢复/身份与音频缓存SHA/输出锁；--stage select支持先选后续跑。
+默认pool data/reasonaqa/mizar_tracing_pool5000_letters_eot_v1/manifest.json；原5000manifest保持。
+默认输出outputs/RSmol/mizar_reasonaqa_tracing1000_letters_eot_bf16_8gpu5090_v1；入选manifest在selected/manifest.json。
+日志code/RSmol/log/mizar-reasonaqa-tracing.<tag>.1.log，提交打印确切log_path/output/manifest及submission report。
+输出逐层逐题RR/三来源统计/CSV/JSON/八份PNG+SVG，最终看analysis_report.json的PASS；CPU画图可独立重跑。
+执行/提交/分阶段/续跑/日志命令见新README；24份交付文件见包内sync_files.txt。
+
+本地最终19/19通过、无跳过：真实release tokenizer/原5000元数据与pool builder/只读源保证、真实SoundFile/重采样first20；
+真实30层小Llama eager/SDPA/BF16全部30个patch与独立hook、参数不变/不累积/raw末层norm之前/0和30对照；另真实576维短prefix。
+真实full-state tensor保存载入/错身份和篡改拒绝，pending candidate缓存续用不重复前向。
+八rank线程集体调度夹具验证实际select循环按序停满/不足/续跑，实际层调度125/1000题与续跑不重复。
+完整30000逐题结果、240rank日志、finalizer/audit/图表为明确合成数据；大缓存/音频字节审计在该全量夹具中显式替代。
+真实Bash两入口/conda激活夹具/单次vc参数链mock通过，Python3.10语法通过，合成图布局已目视核对。
+报告audit_reports/mizar_reasonaqa_tracing_validation.json，保留初轮18项PASS；Windows依赖沙箱不可读后获准沙箱外CPU验证。
+Torch2.9.0+cpu/Transformers4.54.1，不冒充远程生产Mizar/CUDA或真实八卡通过；未读生产权重、commit/push或提交GPU作业。
+本条仅前置，以下RM既有全部字节保留。
+
 ## 2026-11-25：三个诊断实验重做为小写字母likelihood＋题面EOT，八卡5090
 
 用户明确只改评分目标为纯小写a/b/c/d（无括号/空格/正文/答案EOS）以及原题面结尾加空格EOT再tokenize；

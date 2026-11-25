@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-11-25T16:51:48.659680+00:00",
+  "status": "PASS_LOCAL_CPU",
+  "production_weights_read": false,
+  "remote_GPU_run": false,
+  "jobs_submitted": false,
+  "scope": "real CPU 30-layer Llama eager/SDPA/BF16, exact hidden state capture/patch/cache, real release tokenizer and existing5000 metadata; audio encoder, distributed eight-rank scheduling and full30000 results explicitly synthetic",
+  "previous_runs": [
+    {
+      "timestamp_utc": "2026-11-25T16:36:41.303197+00:00",
+      "status": "PASS_LOCAL_CPU",
+      "production_weights_read": false,
+      "remote_GPU_run": false,
+      "jobs_submitted": false,
+      "scope": "real CPU 30-layer Llama eager/SDPA/BF16, exact hidden state capture/patch/cache, real release tokenizer and existing5000 metadata; audio encoder, distributed eight-rank scheduling and full30000 results explicitly synthetic",
+      "python310_AST_files": 16,
+      "versions": {
+        "torch": "2.9.0+cpu",
+        "transformers": "4.54.1",
+        "numpy": "2.5.5",
+        "matplotlib": "3.11.2",
+        "torchaudio": "2.9.0+cpu",
+        "soundfile": "0.14.0"
+      },
+      "tests": {
+        "run": 18,
+        "passed": 18,
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "log": "test_actual_local5000_membership_categories_prompt_and_release_tokenizer (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_actual_local5000_membership_categories_prompt_and_release_tokenizer) ... ok\ntest_all_paper_filters_and_probability_not_log_probability (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_all_paper_filters_and_probability_not_log_probability) ... ok\ntest_exhausted5000_is_not_padded_or_relaxed (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_exhausted5000_is_not_padded_or_relaxed) ... ok\ntest_no_gold_in_prompt_and_multitoken_rejected (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_no_gold_in_prompt_and_multitoken_rejected) ... ok\ntest_ordered_journal_tail_resume_and_sorted_selected_manifest (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_ordered_journal_tail_resume_and_sorted_selected_manifest) ... ok\ntest_scoring_preserves_full_vocabulary_probability_and_tie_order (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_scoring_preserves_full_vocabulary_probability_and_tie_order) ... ok\ntest_strict_stop_no_speculation_even_when_last_qualifying_needs_single_gpu (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_strict_stop_no_speculation_even_when_last_qualifying_needs_single_gpu) ... ok\ntest_coordinator_one_launch_select_and_all_same_resume_identity (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_coordinator_one_launch_select_and_all_same_resume_identity) ... ok\ntest_eight_rank_layer_sync_exact125_no_repeat_on_resume (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_eight_rank_layer_sync_exact125_no_repeat_on_resume) ... ok\ntest_full30000_decisions_tables_figures_and_last_layer_control (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_full30000_decisions_tables_figures_and_last_layer_control) ... ok\ntest_original120_files_and_pinned_reuse_unchanged (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_original120_files_and_pinned_reuse_unchanged) ... ok\ntest_saved_RR_is_mean_of_ratios_and_unclipped_not_ratio_of_means (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_saved_RR_is_mean_of_ratios_and_unclipped_not_ratio_of_means) ... ok\ntest_submit_single_job_resources_and_path_shell_quoting (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_submit_single_job_resources_and_path_shell_quoting) ... ok\ntest_full_production576_layout_raw_block_before_final_norm (test_mizar_reasonaqa_tracing.RealNumerics.test_full_production576_layout_raw_block_before_final_norm) ... ok\ntest_real30_BF16_eager_sdpa_capture_native_layer0_layer30_and_all_middle_patches (test_mizar_reasonaqa_tracing.RealNumerics.test_real30_BF16_eager_sdpa_capture_native_layer0_layer30_and_all_middle_patches) ... ok\ntest_real_full_state_cache_lossless_reload_wrong_identity_dtype_and_content_rejected (test_mizar_reasonaqa_tracing.RealNumerics.test_real_full_state_cache_lossless_reload_wrong_identity_dtype_and_content_rejected) ... ok\ntest_real_soundfile_first20_and_true_silent_waveform_encoder_boundary (test_mizar_reasonaqa_tracing.RealNumerics.test_real_soundfile_first20_and_true_silent_waveform_encoder_boundary) ... ok\ntest_screen_one_accept_cache_and_reuse_pending_outcome_without_repeat_forward (test_mizar_reasonaqa_tracing.RealNumerics.test_screen_one_accept_cache_and_reuse_pending_outcome_without_repeat_forward) ... ok\n\n----------------------------------------------------------------------\nRan 18 tests in 42.928s\n\nOK\n"
+      },
+      "shell": {
+        "status": "PASS",
+        "scripts": [
+          "code/RSmol/mizar_reasonaqa_tracing/run.sh",
+          "code/RSmol/run_mizar_reasonaqa_tracing_8gpu_5090.sh"
+        ],
+        "actual_shell_parse_only": true,
+        "conda": "explicit activation fixture",
+        "actual_vc_called": false
+      }
+    }
+  ],
+  "python310_AST_files": 16,
+  "versions": {
+    "torch": "2.9.0+cpu",
+    "transformers": "4.54.1",
+    "numpy": "2.5.5",
+    "matplotlib": "3.11.2",
+    "torchaudio": "2.9.0+cpu",
+    "soundfile": "0.14.0"
+  },
+  "tests": {
+    "run": 19,
+    "passed": 19,
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "log": "test_actual_local5000_membership_categories_prompt_and_release_tokenizer (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_actual_local5000_membership_categories_prompt_and_release_tokenizer) ... ok\ntest_all_paper_filters_and_probability_not_log_probability (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_all_paper_filters_and_probability_not_log_probability) ... ok\ntest_exhausted5000_is_not_padded_or_relaxed (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_exhausted5000_is_not_padded_or_relaxed) ... ok\ntest_no_gold_in_prompt_and_multitoken_rejected (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_no_gold_in_prompt_and_multitoken_rejected) ... ok\ntest_ordered_journal_tail_resume_and_sorted_selected_manifest (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_ordered_journal_tail_resume_and_sorted_selected_manifest) ... ok\ntest_scoring_preserves_full_vocabulary_probability_and_tie_order (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_scoring_preserves_full_vocabulary_probability_and_tie_order) ... ok\ntest_strict_stop_no_speculation_even_when_last_qualifying_needs_single_gpu (test_mizar_reasonaqa_tracing.MetadataAndSelection.test_strict_stop_no_speculation_even_when_last_qualifying_needs_single_gpu) ... ok\ntest_actual_selection_loop_eight_threads_order_stop_resume_and_insufficient (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_actual_selection_loop_eight_threads_order_stop_resume_and_insufficient) ... ok\ntest_coordinator_one_launch_select_and_all_same_resume_identity (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_coordinator_one_launch_select_and_all_same_resume_identity) ... ok\ntest_eight_rank_layer_sync_exact125_no_repeat_on_resume (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_eight_rank_layer_sync_exact125_no_repeat_on_resume) ... ok\ntest_full30000_decisions_tables_figures_and_last_layer_control (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_full30000_decisions_tables_figures_and_last_layer_control) ... ok\ntest_original120_files_and_pinned_reuse_unchanged (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_original120_files_and_pinned_reuse_unchanged) ... ok\ntest_saved_RR_is_mean_of_ratios_and_unclipped_not_ratio_of_means (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_saved_RR_is_mean_of_ratios_and_unclipped_not_ratio_of_means) ... ok\ntest_submit_single_job_resources_and_path_shell_quoting (test_mizar_reasonaqa_tracing.OrchestrationAndReporting.test_submit_single_job_resources_and_path_shell_quoting) ... ok\ntest_full_production576_layout_raw_block_before_final_norm (test_mizar_reasonaqa_tracing.RealNumerics.test_full_production576_layout_raw_block_before_final_norm) ... ok\ntest_real30_BF16_eager_sdpa_capture_native_layer0_layer30_and_all_middle_patches (test_mizar_reasonaqa_tracing.RealNumerics.test_real30_BF16_eager_sdpa_capture_native_layer0_layer30_and_all_middle_patches) ... ok\ntest_real_full_state_cache_lossless_reload_wrong_identity_dtype_and_content_rejected (test_mizar_reasonaqa_tracing.RealNumerics.test_real_full_state_cache_lossless_reload_wrong_identity_dtype_and_content_rejected) ... ok\ntest_real_soundfile_first20_and_true_silent_waveform_encoder_boundary (test_mizar_reasonaqa_tracing.RealNumerics.test_real_soundfile_first20_and_true_silent_waveform_encoder_boundary) ... ok\ntest_screen_one_accept_cache_and_reuse_pending_outcome_without_repeat_forward (test_mizar_reasonaqa_tracing.RealNumerics.test_screen_one_accept_cache_and_reuse_pending_outcome_without_repeat_forward) ... ok\n\n----------------------------------------------------------------------\nRan 19 tests in 92.247s\n\nOK\n"
+  },
+  "shell": {
+    "status": "PASS",
+    "scripts": [
+      "code/RSmol/mizar_reasonaqa_tracing/run.sh",
+      "code/RSmol/run_mizar_reasonaqa_tracing_8gpu_5090.sh"
+    ],
+    "actual_shell_parse_only": true,
+    "conda": "explicit activation fixture",
+    "actual_vc_called": false,
+    "actual_vc_argument_chain": "PASS with recording shell function; no cluster service contacted"
+  },
+  "source_preservation": {
+    "original_files": 120,
+    "pinned_reused_sources": 63,
+    "normalized_LF_unchanged": true,
+    "RM_previous_bytes_preserved": true
+  },
+  "visual_QA": {
+    "status": "PASS",
+    "synthetic_only": true,
+    "views": [
+      "recovery_rate.png",
+      "recovery_by_category.png",
+      "recovery_heatmap.png"
+    ]
+  },
+  "execution_environment_note": "Windows sandbox could not read pre-existing Torch dependency; CPU validation ran outside sandbox after explicit tool approval."
+}
