@@ -1,3 +1,41 @@
+## 2026-11-26：ReasonAQA静音tracing仅730题合格，按用户要求复用first500继续
+
+用户回传selection_report（本地未独立读远程）：原5000全部扫描，clean正确3921，silence_correct3190、clean_wrong1079、
+accepted730、nonpositive_probability_gap1；原required1000故INSUFFICIENT_QUALIFYING，属于按既定筛选规则停止。
+来源identity dd573f8424a5a3b692620b5f80e84e9abf79b586c5709a32058e7f908b652ff4。
+用户明确“不够1000条就用500条”，本轮新增隔离mizar_reasonaqa_tracing500及run_mizar_reasonaqa_tracing500_8gpu_5090.sh。
+原mizar_reasonaqa_tracing全部16份生产源码/guard与原顶层入口共17份normalized-LF SHA固定且不改，保留旧pool和缓存身份。
+不直接修改原TARGET/放宽旧身份，也不删除旧结果或重新筛选5000题。
+
+CPU只读验证原run_config/完整screening journal/selection_report及sealed内容、原5000pool、环境、严格完整Mizar模型资产。
+按原shuffle中acceptance_order0..499选最先合格500，再按test.json原行号排序输出独立selected/manifest.json。
+保留原来源/打乱/入选序号、候选token/题面、clean/corrupt概率和原audio/cache SHA；不按置信度或原行号先挑500。
+逐一核对原30x256x576原始文本状态和prefix缓存SHA/shape/dtype，GPU仍用原cache.load直接读取旧路径，不复制数GiB状态。
+来源目录完全只读；partial-tail也报错保留，不调用旧journal恢复器截断。旧任务合格<500则明确拒绝。
+
+模型加载/原BF16干预/评分/capture/control函数直接引用原包，FP32源参数/前20s/EOT/单字母或yesno/全词表目标概率保持。
+第1..30层post-block替换全部text127:383，audio/SEP静音状态保持，各条件独立，不跳层或累积；逐题RR不clip不加epsilon。
+每rank62/63题，同一layer精确500题汇总/打印/barrier后切下一层，共15000次patched前向，无新筛选前向。
+每卡一次静音encoder对照和首题clean重现/native/layer0/layer30/cache对照仍执行，不冒充完全零额外对照计算。
+总/三来源RR与acc/概率/CI/small-gap敏感性、CSV/JSON和8份PNG+SVG；新coordinator把rank error/traceback/phase并入analysis_report。
+新身份引用原identity及三份原结果文件SHA，源码/模型/环境/来源数据与缓存不符拒绝续跑。
+
+默认来源outputs/RSmol/mizar_reasonaqa_tracing1000_letters_eot_bf16_8gpu5090_v1；
+默认新输出outputs/RSmol/mizar_reasonaqa_tracing500_letters_eot_bf16_8gpu5090_v1，manifest在selected/manifest.json。
+CPU可执行bash mizar_reasonaqa_tracing500/run.sh manifest，提交bash run_mizar_reasonaqa_tracing500_8gpu_5090.sh，作业内自动导入也支持。
+单次vc pdgpu-5090/8GPU/64CPU/256G/1node/原镜像/mellow_c8204d8，原Miniconda路径与RSMOL_CONDA_BASE覆盖保持。
+日志code/RSmol/log/mizar-reasonaqa-tracing500.<tag>.1.log，提交打印确切路径，新analysis_report PASS才表示正式完成。
+新包README/sync_files含执行/自定义来源和输出/续跑/重画图命令；旧1000任务无需重提。
+
+本地13项通过无跳过（主12+新增审计1），报告audit_reports/mizar_reasonaqa_tracing500_validation.json。
+模拟原5000/730有序筛选结果的真实导入/CPU出版/原目录全文件字节保持/first500/不足与partial拒绝、源码固定通过。
+实际500题x30层worker调度/62与63分片/续跑不重复/15000结果finalizer与8图为明确合成模型夹具。
+真实BF16全状态保存载入保持；原真实30层小Llama eager/SDPA/BF16、576维、独立patch/控制和SoundFile测试复验通过。
+新增最终audit实际检查500份原来源引用、八rank完成记录和错误63题覆盖拒绝（大缓存/音频字节为明确夹具）。
+真实Bash两入口/conda激活夹具/5090单次提交参数解析、Python3.10语法通过，合成图布局已目视验证。
+未修改旧生产源码、远程提交作业、commit/push或读取真实730题生产缓存/模型；生产CUDA与实际缓存重现待远程执行。
+本条仅前置，以下RM既有全部字节完整保留。
+
 ## 2026-11-26：ReasonAQA 原5000中筛选1000合格题并逐层静音activation patching
 
 按用户确认方案新增隔离code/RSmol/mizar_reasonaqa_tracing/与run_mizar_reasonaqa_tracing_8gpu_5090.sh。
