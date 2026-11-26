@@ -1,3 +1,60 @@
+## 2026-11-26：MMAU/MMAR完整1000题静音tracing，所有合格题及三类/四层级分析
+
+用户确认计划后新增隔离code/RSmol/mizar_benchmark_tracing/，共用干预核心、两个独立任务和输出。
+顶层run_mizar_mmau_tracing_8gpu_5090.sh、run_mizar_mmar_tracing_8gpu_5090.sh，各单次vc提交。
+原ReasonAQA tracing/500、cutoff/剪层/CKA/MMAU/MMAR ablation与letters实验138份已有文件normalized-LF SHA保持，158份复用依赖固定。
+本地代码经GitHub同步；生产权重/数据/输出仍在远程，无自动commit/push或GPU提交。
+
+两个任务各自完整1000题、seed1234打乱、每卡125题；每题均运行clean与silence，不因clean错误而跳过silence。
+筛选clean字母正确、silence字母错误且目标Pclean>Pcorrupted，保留所有合格题N，无500/1000入选配额、不补抽/分组配额。
+完整1000题总体/分组clean与silence正确率、入选数/比例及clean_wrong/silence_correct/nonpositive_gap/unmapped_gold独立报告。
+选中manifest按原数据行号排序，保留ID/原slot/分类/shuffle位置/全部候选分数和概率/audio和cache指纹。
+N=0正常完成筛选，NO_QUALIFYING退出0、输出完整基线/空manifest/解释性空图，不做patch；分组n=0指标null/图例标注。
+
+MMAU沿用用户27子类映射perception331/semantic230/reasoning439；MMAR Signal43/Perception404/Semantic412/Cultural141。
+MMAU原重复正文和GT槽位保持；MMAR原2..6等实际选项数及空槽保持，不连续重标，空选项null且不参与argmax。
+MMAR原5题GT无法唯一映射，完整1000分母计错，target概率null、按unmapped_gold排除RR。
+真实release tokenizer核对各实际纯小写候选字母为单普通token，完整词表FP32 log_softmax后FP64 exp，不在候选内重归一化。
+readout的log_softmax在CPU计算，沿ReasonAQA tracing实现；派生exp最多8FP64 ULP，预测/logprob等严格，原保存数值不重写。
+
+完整原Mizar final encoder+已训练projector+30独立LM，FP32源参数/BF16前向/FP32 frontend/TF32off/math SDPA或eager。
+SoundFile/resample32k→mono/first20右补零；compact lowercase+空格EOT后prompt256/可见PAD17，126audio+SEP0+256text=383，首logit382。
+静音640000零波形正常通过encoder/projector，每rank编码一次并校验8卡一致，不直接清零音频embedding。
+clean临时capture30个raw post-block文本状态，位于residual后/final norm前；仅合格题缓存精确30x256x576与两份prefix，保留实际dtype。
+各题audio encoder/projector一次并跨30个patch复用；每层从原静音prefix重启，仅目标层text127:383全256位置替换，audio/SEP保持。
+每卡按selected_index%8分配动态N题，同一layer全部N合并/打印/barrier后换层，共30N patched决策。
+空分片仍参加通信；N<8时空分片rank读取共享入选probe做同样controls，不伪造其patch行。
+原capture/native、layer0=corrupt、layer30=clean、cache=重新capture完整logits/raw状态bitwise对照保持。
+逐题RR用FP64概率差比，不加epsilon/clip；总体逐题mean及median/分位/2000次点态bootstrap CI、各组RR/acc/P、小gap敏感性保持。
+最后层是readout正对照；所选clean100%/silence0%为条件子集，不当完整1000分数。
+
+CPU prepare优先只读旧letters_eot1000 manifest；缺失则只读旧body manifest转换；两者均缺失则调用旧builder只把返回数据写新路径。
+不调用旧ensure在旧目录发布文件，不静默忽略存在但不匹配的旧manifest。
+新输入data/mizar_{mmau,mmar}1000_tracing_inputs_v1/manifest.json；CPUprepare不做模型前向。
+GPU任务自动ensure输入、完整筛选、动态N缓存/逐题恢复/最终审计与作图；支持--stage select后同目录默认命令续跑。
+原子缓存、每题fsync journal/partial tail恢复、完整1000覆盖、输出锁及模型/源码/数据/环境身份保持。
+源冻结保留逐行原记录SHA；rank错误error/traceback/phase收集到analysis_report，减少只看到torchrun汇总。
+
+pdgpu-5090/8GPU/64CPU/256G/1node，原镜像与mellow_c8204d8/原Miniconda和RSMOL_CONDA_BASE覆盖。
+默认输出outputs/RSmol/mizar_{mmau,mmar}_tracing_all_eligible_letters_eot_bf16_8gpu5090_v1。
+日志code/RSmol/log/mizar-tracing-{mmau,mmar}.<tag>.1.log；提交打印log_path/input/selected manifest/output/submission报告。
+输出screening_summary.csv/完整1000逐题clean与silence/selection_report/selected manifest/30层逐题RR和统计/总与分组CSV及JSON。
+四类图各PNG+SVG：总体RR、三/四组RR与patched acc、目标概率、分组热图；热图组内按原序号并输出heatmap_row_map题ID对照。
+正文README/sync_files列CPU准备、两个提交、预览、仅筛选、续跑、自定义路径、日志和CPU重画图命令。
+26份交付文件；analysis_report.json PASS才代表正式完成，N0为NO_QUALIFYING。
+
+本地24项独立验证通过无跳过（首轮23+补充新续跑用例1；其余补充是加强/复验已有用例），报告audit_reports/mizar_benchmark_tracing_validation.json。
+真实2000题本地标注与release tokenizer核对三/四分母、MMAU27重复正文、MMAR4空槽/5未映射/最多6槽；所有候选决策与旧字母口径逐题一致。
+实际CPU input build/ensure/load与只读旧manifest/原路径不发布、两种fallback、wrong identity/字段篡改拒绝通过。
+真实30层小Llama eager/SDPA/BF16/383prefix捕获与全部30patch、不累积/权重保持，空槽/完整词表概率；另原576维/缓存/SoundFile first20回归通过。
+完整1000筛选/各组基线/任意N分片/同层8rank汇总/续跑不重做/idle probe/N0图表与审计为明确合成模型/分布式夹具。
+真实合格题BF16缓存保存读取及prefix音频/文本隔离通过；完整两数据集30层finalizer/CSV/8图与分组heatmap映射合成验证通过。
+真实Bash三个入口/conda激活夹具/两个单次5090提交参数及mock vc参数链/Python3.10/whitespace通过，图形布局目视核验。
+补充测试从仓库根python -m unittest曾因既有code包遮蔽stdlib code导致Torch导入失败，从tests目录复跑两项均通过；未改生产路径。
+Windows依赖权限沿已有工具批准在沙箱外CPU验证。QA图明确标记合成，不代表Mizar实际性能。
+未读取远程生产权重/音频/实际结果、提交GPU作业或commit/push；实际CUDA与八卡通信仍需远程运行。
+本条仅前置，以下RM原有全部字节完整保留。
+
 ## 2026-11-26：ReasonAQA500读取旧概率的严格浮点字典比较修复
 
 用户执行CPU manifest时，source.validate_history调用原validate_outcome→validate_decision报
