@@ -1,3 +1,51 @@
+## 2026-11-26：原始 Mizar baseline 与 L9–12/L14–17/L19–22 三循环 checkpoint 的四项4090评测
+
+按用户确认计划新增隔离 code/RSmol/mizar_core3_eval/ 与 run_mizar_core3_eval_4090.sh。
+四模型各 ReasonAQA5000/MMAU test-mini/MMAR/MMSU，共16项；先独立提交官方baseline，
+三个训练产物由 --checkpoint 显式传入，不猜最终路径/步数、不扫描latest。
+prepare_mizar_l9_12x3_strong_reason.sh 是训练数据准备入口，不是第四个训练模型，无需为评测重做prepare。
+
+baseline严格复用官方final release loader，默认 models/Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt，
+完整30层单遍及已训练CED/projector/LM；18文件release大小/SHA在远程CPU admission核验。
+三训练目标直接使用各自未修改模型：L9–12保留A8 anchor/已训练共享gate，456状态；
+L14–17与L19–22无额外注入，各454状态，30物理层/38次执行，全参数strict覆盖后冻结eval。
+CPU核对同run runtime/route/contract/source、动态geometry及完整中间/最终游标；
+GPU再查所有张量shape/dtype/finite/tied及全部冻结状态与官方来源逐值一致。
+不套用训练resume已完成拒绝，不创建/恢复optimizer、scheduler或训练RNG。
+实际L14–17合同为 mizar_final_l14_17x3_strong_reason_gbs128_v2_previous_training，
+其 added_injection/gate/added_parameters 字段与L19–22不同，按各路线原semantic_contract核验，不能猜字段。
+
+Reason复用原seed1234固定5000manifest及完整答案exact；MMAU/MMAR各原1000、原始生成直接交原官方scorer；
+MMSU原5000、最新紧凑全小写四槽/null保持、原mmsu_answer_text_contains_v2及官方汇总。
+FP32/eval/batch1/seed1234/无autocast/TF32off，mono32k/fixed20中心裁剪右补零/10+10/whole CED；
+原EOS后缀、prompt256、PAD17/SEP-EOS0/prefix383/首logit382，原因果可见PAD、无KV、
+逐token完整重算/argmax300/首EOS停止与raw decode保持；每题音频编码一次。
+每完整forward按30/38真实轨迹审计，三循环状态及A8每次重建，不跨题/生成forward持久化。
+
+source_manifest固定三路线全部Python/Shell及release manifest，CPU预检制作内容校验的不可变快照；
+可显式 --source-revision 从匹配Git object读取，不切分支、不放宽源码；完整import图核对实际快照路径。
+独立CPU预检每模型一次、失败四项均不申请GPU，单vc失败继续其余项并整体非零。
+全部pdgpu-4090/1GPU/8CPU/32G/1node、原镜像/mellow_c8204d8及conda覆盖，无新增GPU smoke。
+模型/任务/checkpoint输出隔离，同身份逐题持久化/剩余题续跑、坏完整行拒绝和完整覆盖后评分保持。
+新compare核对共同数据/协议/共享代码/完整分母与原始预测，比较实际逐题输入指纹，记录30/38执行。
+
+最终本地23/23 CPU回归通过，无skip。真实30层小Llama eager/SDPA三路线38次执行与独立递推、
+训练后gate/state保持、383/683首/第二答案对齐与因果性、严格状态/冻结漂移拒绝通过。
+实际加载控制流使用真实微型模型和明确生产资产/CUDA夹具，三路线strict覆盖后值保持；
+原30层native baseline、真实旧baseline prefix接口及四模型四个实际生成适配器/每题一次编码通过。
+真实SoundFile双声道16k解码/32k重采样/fixed20通过；四组5000/1000/1000/5000完整尺寸流程、
+完整答案/原MMSU scorer/原始官方预测、13题中断后补齐及损坏/输入指纹差异拒绝为明确合成夹具。
+真实Git HEAD源码读取/快照篡改拒绝、Bash入口/空格参数、16计划/4090资源/短job/预检失败不提交及vc失败继续通过。
+初轮合同手写字段误配L14–17及漏审计元字段已修正为原合同生成器/明确属性；新增CUDA夹具种子接口遗漏已修正，
+所有失败和定向复验保留validation_runs，最后完整23项复验通过；原训练/旧评测未为这些问题改动。
+本地Torch2.9 CPU/Transformers4.54.1/torchaudio2.9，未用音频native扩展仅测试进程适配，生产无适配。
+Windows沙箱临时目录/Bash signal pipe权限阻止后，获准沙箱外本地离线验收。
+未读取远程生产权重/音频，未提交真实GPU作业或commit/push，CPU结果不代表CUDA/4090显存吞吐或实际分数PASS。
+
+验收 audit_reports/mizar_core3_eval_validation.json；完整提交/单项/预览/CPU预检/恢复/日志/比较与精确Git命令见新包README。
+28份交付见sync_files.txt，194项既有依赖见reference_dependencies.txt，需随GitHub代码同步已存在。
+本次仅前置本条，以下RM既有全部字节完整保留。
+
 ## 2026-11-26：原始Mizar L19–22共享三轮，仅四层训练、无额外注入
 
 按用户确认计划，从L9–12完整复制隔离code/RSmol/mizar_l19_22x3_strong_reason/，新增run_mizar_l19_22x3_strong_reason_5090.sh。

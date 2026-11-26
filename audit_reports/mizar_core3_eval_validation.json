@@ -1,0 +1,92 @@
+{
+  "validation_runs": [
+    {
+      "status": "FAILED",
+      "tests": 22,
+      "passed": 19,
+      "skipped": [],
+      "failures": [
+        {
+          "test": "test_all_dynamic_steps_and_final_checkpoint_accepted_without_resume_gate (test_mizar_core3_eval.AdmissionTests.test_all_dynamic_steps_and_final_checkpoint_accepted_without_resume_gate)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_mizar_core3_eval.py\", line 74, in test_all_dynamic_steps_and_final_checkpoint_accepted_without_resume_gate\n    self.assertEqual(runtime.validate_checkpoint(saved,config,target),saved['contract'])\n                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_core3_eval\\runtime.py\", line 75, in validate_checkpoint\n    raise ValueError('checkpoint/runtime route or contract identity differs')\nValueError: checkpoint/runtime route or contract identity differs\n"
+        },
+        {
+          "test": "test_real_checkpoint_read_preflight_including_completed_final (test_mizar_core3_eval.AdmissionTests.test_real_checkpoint_read_preflight_including_completed_final)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_mizar_core3_eval.py\", line 105, in test_real_checkpoint_read_preflight_including_completed_final\n    result = preflight.check(args)\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_core3_eval\\preflight.py\", line 6, in check\n    runtime.read_checkpoint(args)\n    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_core3_eval\\runtime.py\", line 57, in read_checkpoint\n    validate_checkpoint(saved,config,args.eval_variant,args.expected_step)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_core3_eval\\runtime.py\", line 75, in validate_checkpoint\n    raise ValueError('checkpoint/runtime route or contract identity differs')\nValueError: checkpoint/runtime route or contract identity differs\n"
+        },
+        {
+          "test": "test_real_audio_and_all_four_actual_generation_adapters (test_mizar_core3_eval_tensors.NativeTests.test_real_audio_and_all_four_actual_generation_adapters)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_mizar_core3_eval_tensors.py\", line 164, in test_real_audio_and_all_four_actual_generation_adapters\n    else:result=benchmark.generate(loaded,dict(prompt='question?',waveform=wave))\n                ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_core3_eval\\benchmark.py\", line 179, in generate\n    \"prompt_padding_visible\": runtime_adapter.variant_spec(model_audit[\"eval_variant\"])[\"prompt_padding_visible\"],\n                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^\nKeyError: 'prompt_padding_visible'\n"
+        }
+      ],
+      "seconds": 226.33104430000822
+    },
+    {
+      "status": "PASS_LOCAL_CPU",
+      "tests": 8,
+      "passed": 8,
+      "skipped": [],
+      "failures": [],
+      "seconds": 6.515970499996911
+    },
+    {
+      "status": "FAILED",
+      "tests": 6,
+      "passed": 5,
+      "skipped": [],
+      "failures": [
+        {
+          "test": "test_actual_model_loader_control_flow_preserves_all_trained_values (test_mizar_core3_eval_tensors.NativeTests.test_actual_model_loader_control_flow_preserves_all_trained_values)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_mizar_core3_eval_tensors.py\", line 164, in test_actual_model_loader_control_flow_preserves_all_trained_values\n    loaded=runtime.load_runtime(args)\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_core3_eval\\runtime.py\", line 172, in load_runtime\n    random.seed(1234);np.random.seed(1234);torch.manual_seed(1234);torch.cuda.manual_seed_all(1234)\n                                           ~~~~~~~~~~~~~~~~~^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\.codex_audio_cutoff_deps\\torch\\_compile.py\", line 53, in inner\n    return disable_fn(*args, **kwargs)\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\.codex_audio_cutoff_deps\\torch\\_dynamo\\eval_frame.py\", line 1044, in _fn\n    return fn(*args, **kwargs)\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\.codex_audio_cutoff_deps\\torch\\random.py\", line 45, in manual_seed\n    if not torch.cuda._is_in_bad_fork():\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'types.SimpleNamespace' object has no attribute '_is_in_bad_fork'\n"
+        }
+      ],
+      "seconds": 19.675470200003474
+    },
+    {
+      "status": "PASS_LOCAL_CPU",
+      "tests": 6,
+      "passed": 6,
+      "skipped": [],
+      "failures": [],
+      "seconds": 38.04343720000179
+    },
+    {
+      "status": "PASS_LOCAL_CPU",
+      "tests": 23,
+      "passed": 23,
+      "skipped": [],
+      "failures": [],
+      "seconds": 258.6940394999983
+    }
+  ],
+  "latest": {
+    "status": "PASS_LOCAL_CPU",
+    "tests": 23,
+    "passed": 23,
+    "skipped": [],
+    "failures": [],
+    "seconds": 258.6940394999983
+  },
+  "status": "PASS_LOCAL_CPU",
+  "versions": {
+    "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+    "torch": "2.9.0+cpu",
+    "transformers": "4.54.1",
+    "torchaudio": "2.9.0+cpu"
+  },
+  "remote_checkpoint_loading": "NOT_RUN",
+  "cuda": "NOT_RUN",
+  "job_submission": "MOCK_ONLY",
+  "fixtures": "Full-size runners use explicit model/audio/parquet fixtures; native Llama and SoundFile tests are real CPU.",
+  "final_checks": {
+    "existing_files_checked": 4191,
+    "existing_changes": [],
+    "deliverable_files": 28,
+    "existing_dependencies": 194,
+    "python310_grammar": "PASS",
+    "bash_entry_syntax": "PASS",
+    "bash_wrapper_execution": "PASS",
+    "source_snapshots": "real Git and content validation; unchanged three training packages",
+    "documentation_only_after_full_suite": "package docstring/README and RM record; numerical code unchanged"
+  }
+}
