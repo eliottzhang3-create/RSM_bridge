@@ -1,6 +1,6 @@
-# New route delivery
+# In-place L19-22x4 / AudioMCQ / three epochs / 3090 delivery
 RM.md
-audit_reports/mizar_l19_22x3_strong_reason_validation.json
+audit_reports/mizar_l19_22x4_audiomcq_validation.json
 code/RSmol/mizar_l19_22x3_strong_reason/.gitignore
 code/RSmol/mizar_l19_22x3_strong_reason/LICENSE
 code/RSmol/mizar_l19_22x3_strong_reason/NOTICE
@@ -27,11 +27,11 @@ code/RSmol/mizar_l19_22x3_strong_reason/models/ced_offline.py
 code/RSmol/mizar_l19_22x3_strong_reason/optim.py
 code/RSmol/mizar_l19_22x3_strong_reason/prepare_index.py
 code/RSmol/mizar_l19_22x3_strong_reason/prepare_manifest.py
-code/RSmol/mizar_l19_22x3_strong_reason/previous_training.py
 code/RSmol/mizar_l19_22x3_strong_reason/publication.py
 code/RSmol/mizar_l19_22x3_strong_reason/release_manifest.json
 code/RSmol/mizar_l19_22x3_strong_reason/run.sh
 code/RSmol/mizar_l19_22x3_strong_reason/source_guard.json
+code/RSmol/mizar_l19_22x3_strong_reason/source_guard_x4.json
 code/RSmol/mizar_l19_22x3_strong_reason/stage_data.py
 code/RSmol/mizar_l19_22x3_strong_reason/sync_files.txt
 code/RSmol/mizar_l19_22x3_strong_reason/train.py
@@ -44,38 +44,5 @@ tests/test_mizar_l19_22x3_previous_training.py
 tests/test_mizar_l19_22x3_strong_reason.py
 tests/validate_mizar_l19_22x3_strong_reason.py
 
-# Existing data preparation dependencies, unchanged; keep synchronized
-code/RSmol/mizar_l9_12x3_strong_reason/admission.py
-code/RSmol/mizar_l9_12x3_strong_reason/assets.py
-code/RSmol/mizar_l9_12x3_strong_reason/checkpoint.py
-code/RSmol/mizar_l9_12x3_strong_reason/contract.py
-code/RSmol/mizar_l9_12x3_strong_reason/data/audio_paths.py
-code/RSmol/mizar_l9_12x3_strong_reason/data/audiotext_dataset.py
-code/RSmol/mizar_l9_12x3_strong_reason/data/fixed20.py
-code/RSmol/mizar_l9_12x3_strong_reason/data/indexed_jsonl.py
-code/RSmol/mizar_l9_12x3_strong_reason/data/prepared_index.py
-code/RSmol/mizar_l9_12x3_strong_reason/data/sampler.py
-code/RSmol/mizar_l9_12x3_strong_reason/data/staging.py
-code/RSmol/mizar_l9_12x3_strong_reason/data/template.py
-code/RSmol/mizar_l9_12x3_strong_reason/journal.py
-code/RSmol/mizar_l9_12x3_strong_reason/llama_compat.py
-code/RSmol/mizar_l9_12x3_strong_reason/manifest_io.py
-code/RSmol/mizar_l9_12x3_strong_reason/model.py
-code/RSmol/mizar_l9_12x3_strong_reason/models/ced.py
-code/RSmol/mizar_l9_12x3_strong_reason/models/ced_offline.py
-code/RSmol/mizar_l9_12x3_strong_reason/optim.py
-code/RSmol/mizar_l9_12x3_strong_reason/prepare_index.py
-code/RSmol/mizar_l9_12x3_strong_reason/prepare_manifest.py
-code/RSmol/mizar_l9_12x3_strong_reason/previous_training.py
-code/RSmol/mizar_l9_12x3_strong_reason/publication.py
-code/RSmol/mizar_l9_12x3_strong_reason/release_manifest.json
-code/RSmol/mizar_l9_12x3_strong_reason/source_guard.json
-code/RSmol/mizar_l9_12x3_strong_reason/stage_data.py
-code/RSmol/mizar_l9_12x3_strong_reason/train.py
-code/RSmol/mizar_l9_12x3_strong_reason/training_helpers.py
-code/RSmol/mizar_l9_12x3_strong_reason/utils/audio_io.py
-code/RSmol/mizar_l9_12x3_strong_reason/write_config.py
-code/RSmol/mizar_l9_12x3_strong_reason/write_failure.py
-code/RSmol/prepare_mizar_l9_12x3_strong_reason.sh
-code/RSmol/scripts/audit_mizar_s1_raw_audio.py
-code/RSmol/scripts/mizar_s1_audio_mapping_s2_hybrid.json
+# Remove tracked obsolete module through git add of this directory
+# code/RSmol/mizar_l19_22x3_strong_reason/previous_training.py

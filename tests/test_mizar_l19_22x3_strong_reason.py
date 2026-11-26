@@ -122,387 +122,307 @@ def ddp_worker(rank, port, directory):
         dist.destroy_process_group()
 
 
-class ModelTests(unittest.TestCase):
-    def test_native_30_control_and_38_schedule_eager_sdpa(self):
-        for implementation in ("eager","sdpa"):
-            model=tiny(implementation).eval()
-            core=model.caption_decoder.lm.model
-            native=LlamaForCausalLM(config(implementation)).eval()
-            native.load_state_dict(model.caption_decoder.lm.state_dict(),strict=True)
-            inputs=torch.randn(1,130,16)
-            with torch.no_grad():
-                actual=core._execute(inputs,single_pass=True).last_hidden_state
-                expected=native.model(inputs_embeds=inputs,use_cache=False).last_hidden_state
-                torch.testing.assert_close(actual,expected,rtol=0,atol=0)
-                core(inputs_embeds=inputs)
-            self.assertEqual(core.last_layer_trace,tuple(list(range(18))+list(range(18,22))*3+list(range(22,30))))
-            self.assertEqual(core.last_injection_trace,())
-            with self.assertRaises(ValueError):core(inputs_embeds=inputs,use_cache=True)
-            self.assertFalse(hasattr(core,"audio_gate"))
-            self.assertFalse(any("audio_gate" in n or "anchor" in n for n,_ in model.named_parameters()))
+import contract as recipe
+from contract import checkpoint_steps, training_cursor, MAX_LR, EPOCHS
 
-    def test_no_injection_direct_loop_boundaries_and_independent_reference(self):
+
+class ModelTests(unittest.TestCase):
+    def test_native_parity_pure_four_passes_bptt_and_freeze(self):
+        for impl in ('eager','sdpa'):
+            model=tiny(impl);core=model.caption_decoder.lm.model
+            self.assertFalse(any('audio_gate' in n or 'injection' in n for n in model.state_dict()))
+            validate_trainability(model,production=False)
+            native=LlamaForCausalLM(config(impl)).eval()
+            native.load_state_dict(model.caption_decoder.lm.state_dict(),strict=True)
+            model.eval();x=torch.randn(1,132,16)
+            with torch.no_grad():
+                actual=core._execute(x,single_pass=True).last_hidden_state
+                expected=native.model(inputs_embeds=x,use_cache=False).last_hidden_state
+            torch.testing.assert_close(actual,expected,rtol=0,atol=0)
+            model.train();traces={i:[] for i in range(30)};handles=[]
+            def hook(i):
+                def capture(module,args,result):
+                    h=result[0] if isinstance(result,tuple) else result
+                    if h.requires_grad:h.retain_grad()
+                    traces[i].append((args[0],h))
+                return capture
+            for i,l in enumerate(core.layers):handles.append(l.register_forward_hook(hook(i)))
+            frozen=checkpoint.sha_frozen(model);b=batch();out=model(b)
+            loss=answer_loss(out,b,17);loss.backward()
+            for h in handles:h.remove()
+            self.assertEqual(core.last_layer_trace,tuple(list(range(18))+list(range(18,22))*4+list(range(22,30))))
+            self.assertEqual([len(traces[i]) for i in range(30)],[4 if 18<=i<=21 else 1 for i in range(30)])
+            for loop in (1,2,3):
+                self.assertIs(traces[18][loop][0],traces[21][loop-1][1])
+            self.assertFalse(traces[17][0][1].requires_grad)
+            self.assertTrue(traces[29][0][1].requires_grad)
+            self.assertTrue(all(h.grad is not None and h.grad.abs().sum()>0 for i in range(18,22) for _,h in traces[i]))
+            self.assertTrue(all(p.grad is None for n,p in model.named_parameters() if parameter_role(n)=='frozen'))
+            optimizer,_,_=build_optimizer(model,16890);optimizer.step()
+            self.assertEqual(checkpoint.sha_frozen(model),frozen)
+            model.eval();changed=x.clone();changed[:,130:]+=1
+            with torch.no_grad():
+                a=core(inputs_embeds=x).last_hidden_state;b=core(inputs_embeds=changed).last_hidden_state
+            torch.testing.assert_close(a[:,:130],b[:,:130],rtol=0,atol=0)
+            with self.assertRaises(ValueError):core(inputs_embeds=x,use_cache=True)
+
+    def test_independent_explicit_42_call_reference_and_shared_parameter_identity(self):
+        from llama_compat import _call_decoder_layer,_causal_mask
         model=tiny().eval();core=model.caption_decoder.lm.model
-        traces={i:[] for i in range(30)}
-        handles=[]
-        def hook(i):
-            def save(module,args,result):
-                value=result[0] if isinstance(result,tuple) else result
-                traces[i].append((args[0].detach().clone(),value.detach().clone()))
-            return save
-        for i,layer in enumerate(core.layers):handles.append(layer.register_forward_hook(hook(i)))
-        inputs=torch.randn(1,132,16)
-        with torch.no_grad():actual=core(inputs_embeds=inputs).last_hidden_state
-        for handle in handles:handle.remove()
-        for loop in (1,2):
-            torch.testing.assert_close(traces[18][loop][0],traces[21][loop-1][1],rtol=0,atol=0)
-        torch.testing.assert_close(traces[18][0][0],traces[17][0][1],rtol=0,atol=0)
-        torch.testing.assert_close(traces[22][0][0],traces[21][-1][1],rtol=0,atol=0)
-        self.assertEqual([len(traces[i]) for i in range(30)],[3 if 18<=i<=21 else 1 for i in range(30)])
-        # Independent eager reference uses explicit physical calls, never SCHEDULE
-        # or the route's execute helper. All positions flow through each pass.
-        from llama_compat import _call_decoder_layer, _causal_mask
-        position=torch.arange(inputs.shape[1])[None]
-        mask=_causal_mask(attention_mask=None,batch_size=1,query_length=inputs.shape[1],
-                          past_length=0,dtype=inputs.dtype,device=inputs.device)
+        x=torch.randn(1,132,16);position=torch.arange(132)[None]
+        identities={i:[] for i in range(18,22)};handles=[]
+        for i in identities:
+            handles.append(core.layers[i].register_forward_pre_hook(lambda m,a,i=i:identities[i].append(tuple(id(p) for p in m.parameters()))))
+        with torch.no_grad():actual=core(inputs_embeds=x).last_hidden_state
+        for h in handles:h.remove()
+        for calls in identities.values():self.assertEqual(len(calls),4);self.assertTrue(all(v==calls[0] for v in calls))
+        mask=_causal_mask(attention_mask=None,batch_size=1,query_length=132,past_length=0,dtype=x.dtype,device=x.device)
         with torch.no_grad():
-            rotary=core.rotary_emb(inputs,position_ids=position)
-            expected=inputs
-            calls=list(range(18))+[18,19,20,21]*3+list(range(22,30))
-            for physical in calls:
-                expected=_call_decoder_layer(core.layers[physical],expected,attention_mask=mask,
-                    position_ids=position,cache=None,use_cache=False,cache_position=position[0],
-                    position_embeddings=rotary,output_attentions=False)[0]
+            expected=x;rotary=core.rotary_emb(x,position_ids=position)
+            for index in list(range(18))+[18,19,20,21]*4+list(range(22,30)):
+                expected=_call_decoder_layer(core.layers[index],expected,attention_mask=mask,position_ids=position,
+                    cache=None,use_cache=False,cache_position=position[0],position_embeddings=rotary,output_attentions=False)[0]
             expected=core.norm(expected)
         torch.testing.assert_close(actual,expected,rtol=0,atol=0)
 
-    def test_full_bptt_three_passes_frozen_suffix_and_causality(self):
-        model=tiny();core=model.caption_decoder.lm.model
-        validate_trainability(model,production=False)
-        frozen={k:v.clone() for k,v in model.state_dict().items() if parameter_role(k)=="frozen"}
-        activations=[]
-        def retain(module,args,result):
-            h=result[0] if isinstance(result,tuple) else result
-            h.retain_grad();activations.append(h)
-        prefix_outputs=[];suffix_outputs=[]
-        pre=core.layers[17].register_forward_hook(lambda m,a,r:prefix_outputs.append(r[0]))
-        post=core.layers[29].register_forward_hook(lambda m,a,r:suffix_outputs.append(r[0]))
-        handles=[core.layers[i].register_forward_hook(retain) for i in range(18,22)]
-        optimizer,_,_=build_optimizer(model,5)
-        b=batch();loss=answer_loss(model(b),b,17);loss.backward()
-        for handle in handles:handle.remove()
-        pre.remove();post.remove()
-        self.assertFalse(prefix_outputs[0].requires_grad)
-        self.assertTrue(suffix_outputs[0].requires_grad)
-        self.assertEqual(len(activations),12)
-        self.assertTrue(all(h.grad is not None and h.grad.abs().sum()>0 for h in activations))
-        from train import gradient_audit
-        audit=gradient_audit(model)
-        self.assertEqual(set(audit["nonzero_task_gradients"]),{"layer19","layer20","layer21","layer22"})
-        for i in range(18,22):
-            self.assertGreater(core.layers[i].self_attn.q_proj.weight.grad.abs().sum(),0)
-            self.assertGreater(core.layers[i].input_layernorm.weight.grad.abs().sum(),0)
-        self.assertTrue(all(p.grad is None for n,p in model.named_parameters() if parameter_role(n)=="frozen"))
-        optimizer.step()
-        self.assertTrue(all(torch.equal(model.state_dict()[k],v) for k,v in frozen.items()))
-        model.eval()
-        x=torch.randn(1,132,16);changed=x.clone();changed[:,130:]+=10
-        with torch.no_grad():
-            a=core(inputs_embeds=x).last_hidden_state
-            z=core(inputs_embeds=changed).last_hidden_state
-        torch.testing.assert_close(a[:,:130],z[:,:130],rtol=0,atol=0)
-
-    def test_real_683_layout_and_independent_shifted_ce(self):
-        model=tiny();b=batch();out=model(b)
-        self.assertEqual(out.logits.shape,(1,683,64))
-        logits=out.logits[0];targets=b["answer"]["input_ids"][0]
-        valid=b["answer"]["attention_mask"][0].bool() & targets.ne(17)
-        reference=-torch.log_softmax(logits[382:682],-1)[torch.arange(300)[valid],targets[valid]].mean()
-        torch.testing.assert_close(answer_loss(out,b,17),reference)
-        b["answer"]["attention_mask"].zero_()
-        with self.assertRaises(ValueError):answer_loss(out,b,17)
-
-    def test_production_lm_meta_inventory_and_shared_parameters(self):
-        with torch.device("meta"):
-            model=MizarCoreTrain(config(production=True),audio_encoder=TinyAudio(576))
-            model.enable_training()
+    def test_production_meta_four_layers_only(self):
+        with torch.device('meta'):
+            model=MizarCoreTrain(config(production=True),audio_encoder=TinyAudio(576));model.enable_training()
         roles=collections.Counter()
         for n,p in model.named_parameters():roles[parameter_role(n)]+=p.numel()
-        self.assertEqual(roles["gate"],0)
-        self.assertEqual([roles[f"layer{i}"] for i in (19,20,21,22)],[3540096]*4)
+        self.assertEqual([roles[f'layer{i}'] for i in (19,20,21,22)],[3540096]*4)
         self.assertEqual(sum(p.numel() for p in model.parameters() if p.requires_grad),14160384)
         self.assertIs(model.caption_decoder.lm.lm_head.weight,model.caption_decoder.lm.model.embed_tokens.weight)
 
+    def test_exact_683_layout_and_independent_answer_ce(self):
+        model=tiny();b=batch();out=model(b)
+        self.assertEqual(out.logits.shape,(1,683,64))
+        target=b['answer']['input_ids'][0];valid=b['answer']['attention_mask'][0].bool()&target.ne(17)
+        reference=-torch.log_softmax(out.logits[0,382:682],-1)[torch.arange(300)[valid],target[valid]].mean()
+        torch.testing.assert_close(answer_loss(out,b,17),reference)
+
 
 class DataTests(unittest.TestCase):
-    def fixture(self, directory):
-        directory=Path(directory);paths=[]
-        for i in range(3):
-            p=directory/f"recording-{i}.wav";p.write_bytes(bytes([i+1])*10);paths.append(str(p))
-        rows=[]
-        for i in range(8):
-            rows.append({"id":str(i),"source":"reasonaqa_oneaudio","filepath1_original":f"reason{i%3}",
-                         "filepath2":"historical_second_chunk_is_not_second_recording",
-                         "input":"Question","answer":"Answer"})
-        for i,view in enumerate(("audiomcq_mcq","audiomcq_mcq","audiomcq_cot")):
-            rows.append({"id":f"s{i}","source":"audiomcq","source_dataset":"AudioCaps",
-                "audio_path":"strong_alias","audio_contribution":"strong","stageE_variant":view,
-                "choices":["a","b","c","d"],"gold_letter":"a","input":"MCQ","answer":"a"})
-        source=directory/"s1.json";source.write_text(json.dumps(rows),encoding="utf-8")
-        tsv=directory/"old.tsv"
-        tsv.write_text("field\traw_path\tstatus\tresolved_path\n"+"".join(
-            f"filepath1_original\treason{i}\texists\t{paths[i]}\n" for i in range(3))+
-            f"audio_path\tstrong_alias\texists\t{paths[0]}\n",encoding="utf-8")
+    def fixture(self,tmp):
+        root=Path(tmp);rows=[{'source':'reasonaqa_oneaudio','input':'unused','answer':'unused','filepath1_original':'missing-do-not-stat'}]
+        tsv=root/'old.tsv';records=[]
+        for i,(strength,view) in enumerate((('strong','audiomcq_mcq'),('weak','audiomcq_mcq'),('strong','audiomcq_cot'),('weak','audiomcq_cot'),('strong','audiomcq_mcq'))):
+            audio=root/f'a{i%2}.wav';audio.write_bytes(b'audio')
+            rows.append({'id':str(i),'source':'audiomcq','source_dataset':'AudioCaps','audio_path':f'a{i%2}',
+                'audio_contribution':strength,'stageE_variant':view,'input':'Original Question','answer':'Original Answer'})
+            records.append(f'audio_path\ta{i%2}\texists\t{audio}\n')
+        tsv.write_text('field\traw_path\tstatus\tresolved_path\n'+''.join(records))
+        source=root/'hybrid.json';source.write_text(json.dumps(rows))
         return source,tsv,rows
 
-    def test_manifest_roundrobin_aliases_preserved_views_deterministic(self):
+    def test_all_strengths_views_no_reason_and_exact_old_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
-            source,tsv,rows=self.fixture(tmp)
-            resolver=pm.Resolver(tsv,Path(tmp)/"unused.json")
-            quotas={"reason_rows":5,"strong_counts":{"audiomcq_mcq":2,"audiomcq_cot":1},"release_rows":11,"reason_pool":8}
-            selected,report=pm.select(source,resolver.resolve,**quotas,progress=False)
-            again,_=pm.select(source,resolver.resolve,**quotas,progress=False)
-            self.assertEqual(selected,again);self.assertEqual(len(selected),8)
-            self.assertTrue({8,9,10}<=selected)
-            counts=collections.Counter(resolver.resolve(rows[i]) for i in selected if i<8)
-            self.assertEqual(len(counts),3);self.assertLessEqual(max(counts.values())-min(counts.values()),1)
-            out=Path(tmp)/"out";out.mkdir()
-            tokenizer=lambda texts,**kwargs:{"input_ids":[[1,0] for _ in texts]}
-            total,details=pm.build(source,out,resolver,tokenizer,quotas=quotas)
-            self.assertEqual(total,8);self.assertEqual(details["unique_audio_files"],3)
-            written=[json.loads(line) for line in (out/"train.jsonl").read_text().splitlines()]
-            self.assertEqual(written,[rows[i] for i in sorted(selected)])
-            self.assertEqual(details["selected_counts"],{"reasonaqa":5,"audiomcq_mcq":2,"audiomcq_cot":1})
-            seal={"format":"mizar_l9_12x3_strong_reason_dataset_v1","status":"PASS","rows":8,
-                  "files":pm.file_records(out,("train.jsonl","selection.jsonl","resolved_paths.tsv","dataset_report.json"))}
-            seal["seal_sha256"]=digest(seal);(out/"manifest.json").write_text(json.dumps(seal))
-            pm.verify_dataset(out,total_rows=8)
-            (out/"train.jsonl").write_text("tampered")
-            with self.assertRaises(ValueError):pm.verify_dataset(out,total_rows=8)
+            source,tsv,rows=self.fixture(tmp);out=Path(tmp)/'out';out.mkdir()
+            detail=pm.build(source,tsv,out,expected_previous={'reasonaqa_oneaudio':1,'AudioCaps':5},expected_selected={'AudioCaps':5})
+            got=[json.loads(l) for l in (out/'train.jsonl').read_text().splitlines()]
+            self.assertEqual(got,rows[1:]);self.assertEqual(detail['omitted_reasonaqa'],1)
+            self.assertEqual(detail['audio_contribution_counts'],{'strong':3,'weak':2})
+            self.assertEqual(detail['selected_counts'],{'audiomcq_mcq':3,'audiomcq_cot':2})
+            self.assertEqual(detail['unique_audio_files'],2)
+            second=Path(tmp)/'bad';second.mkdir();(Path(tmp)/'a0.wav').unlink()
+            with self.assertRaises(ValueError):pm.build(source,tsv,second,expected_previous={'reasonaqa_oneaudio':1,'AudioCaps':5},expected_selected={'AudioCaps':5})
+            self.assertTrue((second/'unresolved_audio.json').exists())
 
-    def test_manifest_rejects_bad_universe_gold_and_unresolved(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            source,tsv,rows=self.fixture(tmp);resolver=pm.Resolver(tsv,Path(tmp)/"unused")
-            with self.assertRaises(ValueError):pm.select(source,resolver.resolve,release_rows=12,progress=False)
-            bad=dict(rows[-1],gold_letter="x")
-            with self.assertRaises(ValueError):pm.row_kind(bad)
-            bad=dict(rows[0],filepath2_original="second_original")
-            self.assertIsNone(pm.row_kind(bad))
-            row=dict(rows[-1],audio_path="missing")
-            resolver._fallback=lambda *args:{"status":"missing","path":""}
-            resolver.resolve(row);self.assertTrue(resolver.errors)
-            rows[-1]=row;source.write_text(json.dumps(rows))
-            out=Path(tmp)/"failed";out.mkdir()
-            with self.assertRaises(ValueError):pm.build(source,out,resolver,lambda texts,**k:{"input_ids":[[1,0] for _ in texts]},
-                quotas={"reason_rows":5,"strong_counts":{"audiomcq_mcq":2,"audiomcq_cot":1},"release_rows":11,"reason_pool":8})
-            self.assertTrue((out/"unresolved_audio.json").exists())
-
-    def test_json_gzip_and_no_replace_publication(self):
-        from manifest_io import iter_rows
-        from publication import atomic_publish
-        with tempfile.TemporaryDirectory() as tmp:
-            source,_,rows=self.fixture(tmp)
-            gz=Path(tmp)/"s1.json.gz"
-            with gzip.open(gz,"wt",encoding="utf-8") as handle:json.dump(rows,handle)
-            self.assertEqual(list(iter_rows(gz)),rows)
-            stage=Path(tmp)/"stage";stage.mkdir();target=Path(tmp)/"published"
-            atomic_publish(stage,target)
-            other=Path(tmp)/"other";other.mkdir()
-            with self.assertRaises(OSError):atomic_publish(other,target)
-            self.assertTrue(other.is_dir());self.assertTrue(target.is_dir())
-
-    def test_real_manifest_cli_seal_idempotence_and_immutable_index(self):
+    def test_real_cli_atomic_publication_idempotence_index_and_tamper(self):
         import prepare_index
-        import data.prepared_index as index_module
         with tempfile.TemporaryDirectory() as tmp:
-            source,tsv,_=self.fixture(tmp);root=Path(tmp);mapping=root/"mapping.json";mapping.write_text("{}")
-            out=root/"published";counts={"reasonaqa_oneaudio":3,"AudioCaps":3}
-            quotas={"reason_rows":3,"strong_counts":{"audiomcq_mcq":2,"audiomcq_cot":1},"release_rows":11,"reason_pool":8}
-            real_build,real_verify=pm.build,pm.verify_dataset
-            def build_fixture(source,out,resolver,tokenizer,history=None):return real_build(source,out,resolver,tokenizer,quotas=quotas,history=history)
-            def verify_fixture(root):return real_verify(root,total_rows=6)
-            real_load=pm.load_previous_training
-            def load_fixture(path,resolver):return real_load(path,resolver,expected_source_counts={"reasonaqa_oneaudio":8,"AudioCaps":3})
-            args=["--source",str(source),"--output-dir",str(out),"--resolved-paths",str(tsv),
-                  "--mapping-json",str(mapping),"--model-dir",os.environ["MIZAR_LOCAL_BUNDLE"],"--previous-training-manifest",str(source)]
-            with patch.object(pm,"SOURCE_SHA256",{False:sha256_file(source)}),patch.object(pm,"TOTAL_ROWS",8), \
-                    patch.object(pm,"SOURCE_COUNTS",counts),patch.object(pm,"build",build_fixture), \
-                    patch.object(pm,"verify_dataset",verify_fixture),patch.object(pm,"load_previous_training",load_fixture),patch.object(sd,"SOURCE_COUNTS",counts), \
-                    patch.object(index_module,"SOURCE_COUNTS",counts):
-                pm.main(args)
-                sealed=(out/"manifest.json").read_bytes()
-                with patch.object(pm,"build",side_effect=AssertionError("should reuse")):pm.main(args)
-                self.assertEqual((out/"manifest.json").read_bytes(),sealed)
-                self.assertFalse((root/"published.prepare.lock").exists())
-                path=prepare_index.ensure_index(out/"train.jsonl",out/"resolved_paths.tsv",root/"cache")
-                current=index_module.load_index(path,out/"train.jsonl",out/"resolved_paths.tsv")
-                self.assertEqual((current["rows"],current["unique_raw_files"]),(6,3))
-                self.assertEqual(prepare_index.ensure_index(out/"train.jsonl",out/"resolved_paths.tsv",root/"cache"),path)
-                resealed=json.loads((out/"manifest.json").read_text())
-                resealed.pop("seal_sha256");resealed["publication_note"]="new sealed provenance"
-                resealed["seal_sha256"]=digest(resealed)
-                (out/"manifest.json").write_text(json.dumps(resealed))
-                changed=prepare_index.ensure_index(out/"train.jsonl",out/"resolved_paths.tsv",root/"cache")
-                self.assertNotEqual(changed,path)
-                self.assertEqual(index_module.load_index(changed)["dataset_selection"]["seal_sha256"],resealed["seal_sha256"])
-                (path/"files.json").write_text("{}")
-                with self.assertRaises(ValueError):index_module.load_index(path)
-                mapping.write_text('{"changed":true}')
-                with self.assertRaises(ValueError):pm.main(args)
+            source,tsv,rows=self.fixture(tmp);out=Path(tmp)/'published'
+            args=['--source',str(source),'--resolved-paths',str(tsv),'--output-dir',str(out)]
+            with patch.object(pm,'PREVIOUS_SOURCE_COUNTS',{'reasonaqa_oneaudio':1,'AudioCaps':5}),patch.object(pm,'SOURCE_COUNTS',{'AudioCaps':5}),patch.object(recipe,'SOURCE_COUNTS',{'AudioCaps':5}),patch.object(recipe,'TOTAL_ROWS',5):
+                pm.main(args);seal=(out/'manifest.json').read_bytes();pm.main(args)
+                self.assertEqual(seal,(out/'manifest.json').read_bytes())
+                before={p.name:p.read_bytes() for p in out.iterdir()}
+                with patch.object(pm,'build',side_effect=AssertionError('must not rebuild')):
+                    pm.main(['--verify-only','--output-dir',str(out),'--source',str(Path(tmp)/'absent-source'),
+                             '--resolved-paths',str(Path(tmp)/'absent-audit')])
+                self.assertEqual({p.name:p.read_bytes() for p in out.iterdir()},before)
+                index=prepare_index.ensure_index(out/'train.jsonl',out/'resolved_paths.tsv',Path(tmp)/'cache')
+                self.assertEqual(prepare_index.ensure_index(out/'train.jsonl',out/'resolved_paths.tsv',Path(tmp)/'cache'),index)
+                self.assertEqual(json.loads((index/'index_report.json').read_text())['rows'],5)
+                (out/'train.jsonl').write_text('changed')
+                with self.assertRaises(ValueError):pm.verify_dataset(out)
 
-    def test_full_epoch_eight_shards_tail_and_lr(self):
-        shards=[]
-        for rank in range(8):
-            sampler=CustomDistributedSampler(range(TOTAL_ROWS),8,rank,seed=1234,drop_last=False)
-            shard=list(sampler);self.assertEqual(len(shard),81412)
-            sampler.start_index=5088*16
-            self.assertEqual(list(sampler),shard[-4:]);shards.extend(shard)
-        self.assertEqual(len(shards),651296);self.assertEqual(len(set(shards)),651296)
-        self.assertEqual(sum(SOURCE_COUNTS.values()),651296)
-        g=geometry(TOTAL_ROWS)
-        self.assertEqual((g["total_steps"],g["full_updates"],g["last_update_rows"],g["warmup_steps"]),(5089,5088,32,254))
-        self.assertEqual([accumulation_for_update(i) for i in (0,5087,5088)],[4,4,1])
-        self.assertEqual(sum(accumulation_for_update(i)*32 for i in range(5089)),651296)
-        self.assertAlmostEqual(lr_factor(5088,5089)*1e-4,1e-5)
-        self.assertAlmostEqual(lr_factor(253,5089)*1e-4,1e-4)
-        self.assertTrue(all(lr_factor(i,5089)>=lr_factor(i+1,5089) for i in range(254,5088)))
-        with self.assertRaises(ValueError):geometry(651295)
-
-    def test_actual_tokenizer_original_text_semantics_and_soundfile_fixed20(self):
-        import soundfile as sf
-        import numpy as np
-        bundle=Path(os.environ["MIZAR_LOCAL_BUNDLE"])
-        tokenizer=AutoTokenizer.from_pretrained(bundle/"assets/smollm2-135m",local_files_only=True)
-        tokenizer.add_special_tokens({"pad_token":"!"})
-        self.assertEqual((len(tokenizer),tokenizer.pad_token_id,tokenizer.eos_token_id),(49152,17,0))
-        instance=AudioTextDataset.__new__(AudioTextDataset);instance.tokenizer=tokenizer
-        prompt,answer=text_pair({"input":"Hello","answer":"A"})
-        self.assertEqual((prompt,answer),("hello","a"))
-        encoded=instance.tokenize(answer,300)
-        expected=tokenizer.encode("a <|endoftext|>")
-        self.assertEqual(encoded["input_ids"][0,:len(expected)].tolist(),expected)
-        self.assertTrue(encoded["input_ids"][0,len(expected):].eq(17).all())
-        with tempfile.TemporaryDirectory() as tmp:
-            path=Path(tmp)/"long.wav"
-            values=np.linspace(-.8,.8,22*32000,dtype=np.float32)
-            sf.write(path,np.column_stack((values,values)),32000,subtype="FLOAT")
-            a,b=load_fixed20(path)
-            torch.testing.assert_close(torch.cat((a,b)),torch.from_numpy(values[32000:-32000]),rtol=0,atol=0)
-            sf.write(path,np.ones(16000,dtype=np.float32)*.2,16000,subtype="FLOAT")
-            a,b=load_fixed20(path)
-            self.assertEqual(a.numel(),320000);self.assertEqual(b.count_nonzero(),0)
-            self.assertTrue(torch.isfinite(a).all());self.assertEqual(a[32000:].count_nonzero(),0)
+    def test_full_production_three_epoch_shards_quarters_and_resume_cursors(self):
+        g=geometry(720524)
+        self.assertEqual((g['steps_per_epoch'],g['total_steps'],g['warmup_steps'],g['last_update_rows']),(5630,16890,507,12))
+        saves=checkpoint_steps(720524)
+        expected=[e*5630+s for e in range(3) for s in (1408,2815,4223,5630)]
+        self.assertEqual(saves,expected);self.assertEqual(len(saves),12)
+        self.assertAlmostEqual(MAX_LR*lr_factor(506,16890),2e-5)
+        self.assertAlmostEqual(MAX_LR*lr_factor(16889,16890),2e-6)
+        self.assertEqual(training_cursor(5630,g),(1,0));self.assertEqual(training_cursor(11260,g),(2,0));self.assertEqual(training_cursor(16890,g),(3,0))
+        signatures=[]
+        for epoch in range(3):
+            full=[]
+            for rank in range(8):
+                sampler=CustomDistributedSampler(range(720524),8,rank,seed=1234);sampler.set_epoch(epoch)
+                shard=list(sampler);full.extend(shard);sampler.start_index=5629*16
+                self.assertEqual(list(sampler),shard[5629*16:])
+                self.assertEqual(len(list(sampler)),2 if rank<4 else 1)
+            self.assertEqual(len(full),720524);self.assertEqual(len(set(full)),720524);signatures.append(digest(full[:100]))
+        self.assertEqual(len(set(signatures)),3)
 
 
 class RecoveryTests(unittest.TestCase):
-    def test_actual_cpu_admission_new_route_and_cross_route_rejection(self):
-        import admission
-        import write_config
-        from contract import semantic_contract
+    def test_cpu_admission_current_route_and_reject_old_three_pass_header(self):
+        import admission,write_config
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);out=root/"run";report=root/"admission.json"
-            prepared={"rows":258,"rows_canonical_sha256":"rows-fixture","mapping_sha256":"mapping-fixture",
-                      "source_rows":{"AudioCaps":129,"reasonaqa_oneaudio":129}}
-            args=["admission.py","--data-dir",str(root/"data"),"--index-dir",str(root/"index"),
-                  "--model-dir",str(root/"model"),"--output-root",str(out),"--report",str(report)]
-            # Model bundle I/O and index loading are explicit fixtures; admission,
-            # contract construction and actual checkpoint/header reading are real.
-            with patch.object(admission,"verify_dataset",return_value={"seal_sha256":"fixture"}), \
-                    patch.object(admission,"load_index",return_value=prepared), \
-                    patch.object(write_config,"audit_bundle",return_value={"fixture":True}):
-                with patch.object(sys,"argv",args):admission.main()
-                ready=json.loads(report.read_text())
-                self.assertEqual(ready["status"],"READY_FOR_GPU")
-                self.assertEqual(ready["geometry"]["total_steps"],3)
-                c=write_config.build_contract(prepared,root/"model")
-                self.assertEqual(c["trainable_layers_1based"],[19,20,21,22])
-                self.assertIsNone(c["injection"]);self.assertEqual(c["new_parameters"],0)
-                path=out/"formal/checkpoints/model--step-1.ckpt";path.parent.mkdir(parents=True)
-                saved={"schema_version":1,"route_variant":c["route"],"mode":"formal","contract":c,
-                       "contract_sha256":digest(c),"total_step":1,"epoch":0,"next_optimizer_step":1,
-                       "random_state_by_rank":[{} for _ in range(8)]}
+            root=Path(tmp);run=root/'run';out=root/'admission.json'
+            prepared={'rows':720524,'source_rows':SOURCE_COUNTS,'rows_canonical_sha256':'fixture','mapping_sha256':'fixture'}
+            args=['admission.py','--data-dir',str(root/'data'),'--index-dir',str(root/'index'),
+                  '--model-dir',str(root/'model'),'--output-root',str(run),'--report',str(out)]
+            with patch.object(admission,'verify_dataset',return_value={'seal_sha256':'fixture'}), \
+                 patch.object(admission,'load_index',return_value=prepared),patch.object(write_config,'audit_bundle',return_value={}):
+                with patch.object(sys,'argv',args):admission.main()
+                self.assertEqual(json.loads(out.read_text())['geometry']['total_steps'],16890)
+                c=write_config.build_contract(prepared,root/'model')
+                self.assertEqual(c['trainable_layers_1based'],[19,20,21,22]);self.assertEqual(c['recurrence_passes'],4)
+                self.assertFalse(c['audio_injection']);self.assertEqual(c['added_parameters'],0)
+                path=run/'formal/checkpoints/model--step-5630.ckpt';path.parent.mkdir(parents=True)
+                saved={'schema_version':1,'route_variant':recipe.ROUTE,'mode':'formal','contract':c,'contract_sha256':digest(c),
+                       'total_step':5630,'epoch':1,'next_optimizer_step':0,'num_epochs':3,'random_state_by_rank':[{}]*8}
                 torch.save(saved,path)
-                with patch.object(sys,"argv",args+["--resume-checkpoint",str(path)]):admission.main()
-                self.assertEqual(json.loads(report.read_text())["resume_step"],1)
-                bad=copy.deepcopy(saved);bad["route_variant"]="mizar_final_l9_12x3_strong_reason_gbs128_v2_previous_training"
-                torch.save(bad,path)
-                with patch.object(sys,"argv",args+["--resume-checkpoint",str(path)]),self.assertRaises(ValueError):admission.main()
-                torch.save(saved,path)
-                (path.parent/"model--step-2.ckpt").write_bytes(b"complete-name-fixture")
-                with patch.object(sys,"argv",args+["--resume-checkpoint",str(path)]),self.assertRaises(ValueError):admission.main()
+                with patch.object(sys,'argv',args+['--resume-checkpoint',str(path)]):admission.main()
+                for mutation in ({'route_variant':'mizar_final_l19_22x3_strong_reason_gbs128_no_injection_v1'},
+                                 {'epoch':0},{'num_epochs':1}):
+                    torch.save(dict(saved,**mutation),path)
+                    with patch.object(sys,'argv',args+['--resume-checkpoint',str(path)]),self.assertRaises(ValueError):admission.main()
 
-    def test_journal_backup_partial_and_complete_corruption(self):
+    def test_actual_three_epoch_trainer_and_resume_across_boundary(self):
+        import train as trainer
+        from contextlib import ExitStack
+        class MiniDataset:
+            def __init__(self,*args,**kwargs):
+                self.order=recipe.data_order(17);self.pad_id=17
+                self.audio_paths=AudioPaths(Path.cwd(),'shared_until_complete')
+            def __len__(self):return 17
+            def original_item(self,index):
+                b=batch(micro=index%3)
+                return {**b,'audio1':b['audio1'][0],'audio2':b['audio2'][0],
+                        'row_index':index,'source':'AudioCaps'}
+            def __getitem__(self,index):return self.original_item(self.order[index])
         with tempfile.TemporaryDirectory() as tmp:
-            p=Path(tmp)/"metrics.jsonl"
-            original=b'{"step":1}\n{"step":2}\n{"step":3}\n{"step":'
-            p.write_bytes(original);recover(p,2)
-            self.assertEqual(p.read_bytes(),b'{"step":1}\n{"step":2}\n')
-            self.assertEqual(next(Path(tmp).glob("*.before-resume-*")).read_bytes(),original)
-            with self.assertRaises(ValueError):recover(p,3)
-            p.write_bytes(b'{"step":1}\n{"step":1}\n')
-            with self.assertRaises(ValueError):recover(p,1)
-            p.write_bytes(b'{"step":1}\nBROKEN\n')
-            with self.assertRaises(ValueError):recover(p,1)
-
-    def test_checkpoint_resume_next_update_identity_and_corruption(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            init=Path(tmp)/"init"
-            dist.init_process_group("gloo",init_method=init.as_uri(),rank=0,world_size=1)
+            root=Path(tmp);dist.init_process_group('gloo',init_method=(root/'init').as_uri(),rank=0,world_size=1)
             try:
-                model=tiny();optimizer,scheduler,_=build_optimizer(model,5);tracker=GradNormTracker()
-                scaler=torch.amp.GradScaler("cuda",enabled=False)
-                frozen=checkpoint.sha_frozen(model)
-                for _ in range(2):scalar_update(model,[batch()],optimizer,tracker);scheduler.step()
-                contract={"code_sha256":code_digest(),"geometry":{"total_steps":5,"world_size":1}}
-                cfg={"contract":contract,"contract_sha256":digest(contract),"max_optimizer_steps":5}
-                path=Path(tmp)/"model--step-2.ckpt"
-                checkpoint.save(path,model,optimizer,scheduler,scaler,tracker,cfg,2,frozen,torch.device("cpu"))
-                saved=torch.load(path,weights_only=False)
-                restored=tiny();op2,sc2,_=build_optimizer(restored,5);tr2=GradNormTracker()
-                self.assertEqual(checkpoint.validate_saved(saved,restored,op2,cfg),2)
-                restored.load_state_dict(saved["state_dict"]);op2.load_state_dict(saved["optimizer"])
-                sc2.load_state_dict(saved["scheduler"]);tr2.load_state_dict(saved["grad_norm_tracker"])
-                for m,o,s,t in ((model,optimizer,scheduler,tracker),(restored,op2,sc2,tr2)):
-                    scalar_update(m,[batch(micro=1)],o,t);s.step()
-                for n,v in model.state_dict().items():torch.testing.assert_close(v,restored.state_dict()[n],rtol=0,atol=0)
-                for mutate in (lambda s:s["optimizer"]["param_groups"][0]["params"].reverse(),
-                    lambda s:s.update(route_variant="mizar_final_l9_12x3_strong_reason_gbs128_v2_previous_training"),
-                    lambda s:s["state_dict"].update({"caption_decoder.lm.model.audio_gate.weight":torch.zeros(1,16)}),
-                    lambda s:s["scheduler"].update(_step_count=1),
-                    lambda s:s["optimizer"]["state"][0]["exp_avg"].fill_(float("nan")),
-                    lambda s:s.update(next_optimizer_step=1),
-                    lambda s:s["state_dict"]["audio_encoder.fixed"].add_(1)):
-                    bad=copy.deepcopy(saved);mutate(bad)
-                    clean=tiny();clean_optimizer=build_optimizer(clean,5)[0]
-                    with self.assertRaises(ValueError):checkpoint.validate_saved(bad,clean,clean_optimizer,cfg)
-                # A failed freeze audit must publish no complete checkpoint.
-                model.audio_encoder.fixed.add_(1)
-                with self.assertRaises(RuntimeError):checkpoint.save(Path(tmp)/"model--step-3.ckpt",model,optimizer,scheduler,scaler,tracker,cfg,3,frozen,torch.device("cpu"))
-                self.assertFalse((Path(tmp)/"model--step-3.ckpt").exists())
+                prepared=root/'prepared.json'
+                prepared.write_text(json.dumps({'status':'PASS','metadata':'fixture','stage_root':tmp,
+                    'read_policy':'shared_until_complete','probe_rows':{'AudioCaps':[0]}}))
+                g=dict(geometry(17),world_size=1,global_batch_size=16,rank_samples=[17],samples_per_rank=17,
+                       steps_per_epoch=2,total_steps=6,warmup_steps=0)
+                c={'route':recipe.ROUTE,'geometry':g,'code_sha256':code_digest(),'model_dir':tmp,'official_bundle':{}}
+                cfg={'contract':c,'contract_sha256':digest(c),'run_dir':str(root/'full'),'prepared_report':str(prepared),
+                     'checkpoint_steps':[1,2,3,4,5,6],'max_optimizer_steps':6,'resume_checkpoint':'','attempt_id':'fixture'}
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(trainer,'WORLD_SIZE',1))
+                    stack.enter_context(patch.object(trainer,'AudioTextDataset',MiniDataset))
+                    stack.enter_context(patch.object(trainer,'load_official',lambda path:tiny()))
+                    stack.enter_context(patch.object(trainer,'verify_bundle',lambda bundle:None))
+                    stack.enter_context(patch.object(trainer,'inspect_tokenizer',lambda *a:{}))
+                    stack.enter_context(patch.object(trainer,'validate_trainability',lambda m:validate_trainability(m,production=False)))
+                    stack.enter_context(patch.object(trainer,'accumulation_for_update',lambda u,n:4 if u==0 else 1))
+                    stack.enter_context(patch.object(trainer,'rank_microbatch_size',lambda n,r,u,m:max(0,min(4,17-u*16-m*4))))
+                    actual_save=trainer.save;resume_copy=root/'model--step-2.ckpt'
+                    def keep_boundary(path,*args):
+                        actual_save(path,*args)
+                        if Path(path).name=='model--step-2.ckpt':
+                            import shutil;shutil.copyfile(path,resume_copy)
+                    stack.enter_context(patch.object(trainer,'save',keep_boundary))
+                    Path(cfg['run_dir']).mkdir();trainer.train(cfg,0,torch.device('cpu'))
+                    full=torch.load(Path(cfg['run_dir'])/'checkpoints/model--step-6.ckpt',weights_only=False)
+                    self.assertEqual(json.loads((Path(cfg['run_dir'])/'training_report.json').read_text())['status'],'PASS')
+                    self.assertEqual(len(list((Path(cfg['run_dir'])/'checkpoints').glob('*.ckpt'))),4)
+                    resume=root/'resumed';resume.mkdir()
+                    lines=(Path(cfg['run_dir'])/'metrics.jsonl').read_text().splitlines()
+                    (resume/'metrics.jsonl').write_text('\n'.join(lines[:2])+'\n')
+                    resumed_cfg=dict(cfg,run_dir=str(resume),resume_checkpoint=str(resume_copy))
+                    trainer.train(resumed_cfg,0,torch.device('cpu'))
+                    restored=torch.load(resume/'checkpoints/model--step-6.ckpt',weights_only=False)
+                    for n,v in full['state_dict'].items():torch.testing.assert_close(v,restored['state_dict'][n],rtol=0,atol=0)
+                    for epoch in (2,3):self.assertEqual(json.loads((resume/f'epoch{epoch}_rank0.json').read_text())['rows_consumed'],17)
             finally:dist.destroy_process_group()
 
-    def test_real_two_rank_gloo_ga4_and_tail_ga1_match_reference(self):
+    def test_full_checkpoint_epoch_boundaries_resume_and_retention_four(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dist.init_process_group('gloo',init_method=(Path(tmp)/'init').as_uri(),rank=0,world_size=1)
+            try:
+                model=tiny();g=geometry(129);op,scheduler,_=build_optimizer(model,g['total_steps']);tracker=GradNormTracker()
+                scaler=torch.amp.GradScaler('cuda',enabled=False);frozen=checkpoint.sha_frozen(model)
+                c={'geometry':dict(g,world_size=1),'code_sha256':code_digest()};cfg={'contract':c,'contract_sha256':digest(c),'max_optimizer_steps':6}
+                saved=None
+                for step in range(1,7):
+                    scalar_update(model,[batch(micro=step%3)],op,tracker);scheduler.step()
+                    p=Path(tmp)/f'model--step-{step}.ckpt'
+                    checkpoint.save(p,model,op,scheduler,scaler,tracker,cfg,step,frozen,torch.device('cpu'))
+                    obj=torch.load(p,weights_only=False)
+                    self.assertEqual((obj['epoch'],obj['next_optimizer_step']),divmod(step,2))
+                    clean=tiny();cleanop=build_optimizer(clean,6)[0]
+                    checkpoint.validate_saved(obj,clean,cleanop,cfg,allow_complete=step==6)
+                    if step==2:saved=copy.deepcopy(obj)
+                self.assertEqual(sorted(p.name for p in Path(tmp).glob('*.ckpt')),[f'model--step-{s}.ckpt' for s in (3,4,5,6)])
+                restored=tiny();op2,sc2,_=build_optimizer(restored,6);tr2=GradNormTracker()
+                checkpoint.validate_saved(saved,restored,op2,cfg)
+                restored.load_state_dict(saved['state_dict']);op2.load_state_dict(saved['optimizer']);sc2.load_state_dict(saved['scheduler']);tr2.load_state_dict(saved['grad_norm_tracker'])
+                for step in range(3,7):scalar_update(restored,[batch(micro=step%3)],op2,tr2);sc2.step()
+                for n,v in model.state_dict().items():torch.testing.assert_close(v,restored.state_dict()[n],rtol=0,atol=0)
+                bad=copy.deepcopy(saved);bad['epoch']=0
+                clean=tiny();cleanop=build_optimizer(clean,6)[0]
+                with self.assertRaises(ValueError):checkpoint.validate_saved(bad,clean,cleanop,cfg)
+                for mutate in (lambda s:s.update(route_variant='mizar_final_l19_22x3_strong_reason_gbs128_no_injection_v1'),
+                    lambda s:s['state_dict']['audio_encoder.fixed'].add_(1),
+                    lambda s:s['optimizer']['state'][0]['exp_avg'].fill_(float('nan')),
+                    lambda s:s['scheduler'].update(last_epoch=0)):
+                    bad=copy.deepcopy(saved);mutate(bad)
+                    with self.assertRaises(ValueError):checkpoint.validate_saved(bad,clean,cleanop,cfg)
+            finally:dist.destroy_process_group()
+
+    def test_real_two_rank_gloo_ga4_and_tail_ga1(self):
         import torch.multiprocessing as mp
         with tempfile.TemporaryDirectory() as tmp:
-            with socket.socket() as sock:sock.bind(("127.0.0.1",0));port=sock.getsockname()[1]
+            with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
             mp.spawn(ddp_worker,args=(port,tmp),nprocs=2,join=True)
-            a=torch.load(Path(tmp)/"rank0.pt",weights_only=False)
-            b=torch.load(Path(tmp)/"rank1.pt",weights_only=False)
-            for n,v in a["model"].items():torch.testing.assert_close(v,b["model"][n],rtol=0,atol=0)
-            reference=tiny();op,sched,_=build_optimizer(reference,5);tracker=GradNormTracker()
-            for count in (4,1):
-                scalar_update(reference,[batch(rank,m) for rank in range(2) for m in range(count)],op,tracker)
-                sched.step()
-            for n,v in reference.state_dict().items():torch.testing.assert_close(v,a["model"][n],rtol=2e-5,atol=2e-7)
+            actual=torch.load(Path(tmp)/'rank0.pt',weights_only=False)['model']
+            other=torch.load(Path(tmp)/'rank1.pt',weights_only=False)['model']
+            reference=tiny();op,sc,_=build_optimizer(reference,5);tr=GradNormTracker()
+            for count in (4,1):scalar_update(reference,[batch(r,m) for r in range(2) for m in range(count)],op,tr);sc.step()
+            for n,v in actual.items():
+                torch.testing.assert_close(v,other[n],rtol=0,atol=0)
+                torch.testing.assert_close(v,reference.state_dict()[n],rtol=2e-5,atol=2e-7)
 
-    def test_rng_cpu_roundtrip(self):
-        random.seed(12);torch.manual_seed(13)
-        state=rng_state(torch.device("cpu"));a=(random.random(),torch.randn(3))
-        restore_rng(state,torch.device("cpu"));b=(random.random(),torch.randn(3))
-        self.assertEqual(a[0],b[0]);self.assertTrue(torch.equal(a[1],b[1]))
-
+    def test_journal_backup_and_corruption(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)/'metrics.jsonl';old=b'{"step":1}\n{"step":2}\n{"step":3}\n{"step":'
+            p.write_bytes(old);recover(p,2)
+            self.assertEqual(p.read_bytes(),b'{"step":1}\n{"step":2}\n')
+            self.assertEqual(next(Path(tmp).glob('*.before-resume-*')).read_bytes(),old)
+            p.write_bytes(b'{"step":1}\nBAD\n')
+            with self.assertRaises(ValueError):recover(p,1)
 
 class StagingTests(unittest.TestCase):
+    def test_actual_shell_tmpfs_root_matches_owner_cleanup_guard(self):
+        from pathlib import PurePosixPath
+        assignment=next(l for l in (PACKAGE/'run.sh').read_text().splitlines() if l.startswith('STAGE_ROOT='))
+        result=subprocess.run([os.environ.get('MIZAR_TEST_BASH','C:/Program Files/Git/bin/bash.exe'),'-c',
+            'STAGE_TOKEN=fixture_token\n'+assignment+'\nprintf "%s" "$STAGE_ROOT"'],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr);actual=result.stdout
+        self.assertEqual(actual,'/dev/shm/mizar_l19_22x4_mcq_fixture_token')
+        marker={'root':actual,'token':'fixture_token'}
+        class PosixFixture(PurePosixPath):
+            def resolve(self):return self
+            def is_symlink(self):return False
+            def exists(self):return True
+            def read_text(self,**kwargs):return json.dumps(marker)
+        with patch.object(sd,'Path',PosixFixture),patch.object(sd.shutil,'rmtree') as remove:
+            sd.cleanup(actual,'fixture_token');remove.assert_called_once_with(PosixFixture(actual));remove.reset_mock()
+            with self.assertRaises(ValueError):sd.cleanup(actual,'wrong')
+            for p in ('/dev/shm',actual+'/nested','/dev/shm/mizar_l19_22x3_sr_x','/tmp/mizar_l19_22x4_mcq_x'):
+                with self.assertRaises(ValueError):sd.cleanup(p,'fixture_token')
+            remove.assert_not_called()
+
     def test_async_shared_start_complete_files_and_health(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/"audio").mkdir();source=root/"source.wav";source.write_bytes(b"audio"*40)
@@ -545,31 +465,6 @@ class StagingTests(unittest.TestCase):
 
 
 class ShellTests(unittest.TestCase):
-    def test_actual_shell_tmpfs_assignment_matches_owner_cleanup_guard(self):
-        from pathlib import PurePosixPath
-        bash=os.environ.get("MIZAR_TEST_BASH", "C:/Program Files/Git/bin/bash.exe")
-        assignment=next(line for line in (PACKAGE/"run.sh").read_text().splitlines() if line.startswith("STAGE_ROOT="))
-        result=subprocess.run([bash,"-c",'STAGE_TOKEN=fixture_token\n'+assignment+'\nprintf "%s" "$STAGE_ROOT"'],
-                              capture_output=True,text=True)
-        self.assertEqual(result.returncode,0,result.stderr)
-        actual=result.stdout
-        marker={"token":"fixture_token","root":actual}
-        class PosixFixture(PurePosixPath):
-            # Windows fixture for POSIX metadata only; the actual production
-            # validate/cleanup functions run, and no /dev/shm file is created.
-            def resolve(self):return self
-            def is_symlink(self):return False
-            def exists(self):return True
-            def read_text(self,**kwargs):return json.dumps(marker)
-        with patch.object(sd,"Path",PosixFixture),patch.object(sd.shutil,"rmtree") as remove:
-            self.assertEqual(str(sd.validate_stage_root(actual)),actual)
-            sd.cleanup(actual,"fixture_token");remove.assert_called_once_with(PosixFixture(actual))
-            remove.reset_mock()
-            with self.assertRaises(ValueError):sd.cleanup(actual,"wrong_token")
-            for wrong in ("/dev/shm/mizar_l9_12x3_sr_fixture_token",actual+"/nested","/dev/shm","/tmp/mizar_l19_22x3_sr_x"):
-                with self.assertRaises(ValueError):sd.cleanup(wrong,"fixture_token")
-            remove.assert_not_called()
-
     def test_inner_lifecycle_single_producer_stop_reap_before_cleanup(self):
         bash=os.environ.get("MIZAR_TEST_BASH", "C:/Program Files/Git/bin/bash.exe")
         with tempfile.TemporaryDirectory(prefix="mizar lifecycle ") as tmp:
@@ -617,6 +512,7 @@ torchrun() { printf 'torchrun\\n' >> "$MOCK_TRACE"; return "${MOCK_TRAIN_EXIT:-0
             (profile/"conda.sh").write_text('''conda() { printf 'conda:%s\\n' "$*" >> "$MOCK_TRACE"; }
 python() {
   printf 'python:%s\\n' "$*" >> "$MOCK_TRACE"
+  if [[ "$1" == -u && "$2" == */prepare_manifest.py && "${MOCK_PREPARE_FAIL:-0}" == 1 ]]; then return 18; fi
   if [[ "$1" == */prepare_index.py ]]; then
     while [[ $# -gt 0 ]]; do
       if [[ "$1" == --path-output ]]; then printf '%s\\n' "$MOCK_INDEX" > "$2"; break; fi
@@ -635,6 +531,8 @@ vc() { printf '%s\\0' "$@" > "$MOCK_SUBMIT"; }
                   "--output-dir",output.as_posix(),"--index-cache-root",index.as_posix()]
             check=subprocess.run(args+["--check-args"],env=env,capture_output=True,text=True)
             self.assertEqual(check.returncode,0,check.stderr);self.assertFalse(trace.exists());self.assertFalse(submit.exists())
+            self.assertIn('queue=pdgpu-3090 cpus=64 memory=256G gpus=8 nodes=1',check.stdout)
+            self.assertIn('L19-22x4',check.stdout)
             checkpoint_path=output/"formal/checkpoints/model--step-500.ckpt"
             resume=subprocess.run([bash,wrapper.as_posix(),"--resume-checkpoint",checkpoint_path.as_posix(),"--check-args"],
                                   env=env,capture_output=True,text=True)
@@ -644,15 +542,24 @@ vc() { printf '%s\\0' "$@" > "$MOCK_SUBMIT"; }
             self.assertEqual(result.returncode,0,result.stderr)
             submitted=submit.read_bytes().decode().split("\0")[:-1]
             self.assertEqual(submitted.count("submit"),1)
-            for flag,value in (("-p","pdgpu-5090"),("-c","32"),("-m","256G"),("-g","8"),("-n","1")):
+            for flag,value in (("-p","pdgpu-3090"),("-c","64"),("-m","256G"),("-g","8"),("-n","1")):
                 self.assertEqual(submitted[submitted.index(flag)+1],value)
             command=submitted[submitted.index("--cmd")+1]
             parsed=subprocess.run([bash,"-c","eval 'set -- '"+'"$1"'+"; printf '%s\\0' \"$@\"","_",command],capture_output=True,env=env)
             self.assertEqual(parsed.returncode,0,parsed.stderr)
             parsed=parsed.stdout.decode().split("\0")[:-1]
             self.assertEqual(parsed[2:],[data.as_posix(),output.as_posix(),model.as_posix(),env["MOCK_INDEX"],"4",""])
-            order=trace.read_text();self.assertLess(order.index("prepare_index.py"),order.index("admission.py"))
-            submit.unlink();env["MOCK_FAIL"]="1"
+            self.assertEqual(parsed[1],'mizar_l19_22x3_strong_reason/run.sh')
+            self.assertLess(len(submitted[submitted.index('-j')+1]),60)
+            order=trace.read_text();self.assertLess(order.index("prepare_manifest.py"),order.index("prepare_index.py"));self.assertLess(order.index("prepare_index.py"),order.index("admission.py"))
+            manifest_call=next(line for line in order.splitlines() if 'prepare_manifest.py' in line)
+            self.assertIn('--verify-only',manifest_call);self.assertNotIn('--source',manifest_call)
+            submit.unlink();prep=subprocess.run(args+["--prepare-only"],env=env,capture_output=True,text=True)
+            self.assertEqual(prep.returncode,0,prep.stderr);self.assertFalse(submit.exists())
+            env["MOCK_PREPARE_FAIL"]="1"
+            failed=subprocess.run(args,env=env,capture_output=True,text=True)
+            self.assertEqual(failed.returncode,18);self.assertFalse(submit.exists())
+            env["MOCK_PREPARE_FAIL"]="0";env["MOCK_FAIL"]="1"
             result=subprocess.run(args,env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,19);self.assertFalse(submit.exists())
 

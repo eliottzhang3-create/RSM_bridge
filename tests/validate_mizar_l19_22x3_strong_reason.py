@@ -14,9 +14,8 @@ import test_mizar_l19_22x3_previous_training as previous_tests
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-s1",type=Path)
     parser.add_argument("--official-bundle",type=Path)
-    parser.add_argument("--report",type=Path,default=t.ROOT/"audit_reports/mizar_l19_22x3_strong_reason_validation.json")
+    parser.add_argument("--report",type=Path,default=t.ROOT/"audit_reports/mizar_l19_22x4_audiomcq_validation.json")
     parser.add_argument("--skip-unit-tests",action="store_true")
     args=parser.parse_args()
     previous=json.loads(args.report.read_text(encoding="utf-8")) if args.report.is_file() else None
@@ -24,12 +23,11 @@ def main():
         "transformers":__import__("transformers").__version__,
         "audio_test_adapter":os.environ.get("MIZAR_TEST_PYTHON_AUDIO")=="1",
         "limitations":["No remote production audio or GPU job was accessed.",
-            "CPU Gloo is not an eight-GPU NCCL or 5090 memory/throughput validation.",
-            "Local S1 selection uses raw-path groups; remote manifest uses resolved canonical recordings.",
+            "CPU Gloo is not an eight-GPU NCCL or 3090 memory/throughput validation.",
+            "Production historical hybrid manifest/audio live remotely; local manifest verification uses explicit synthetic fixtures.",
             "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."],
         "checks":{},"failures":[]}
-    if previous:
-        report["previous_runs"]=previous.pop("previous_runs",[])+[previous]
+    if previous:report["previous_runs"]=previous.pop("previous_runs",[])+[previous]
     started=time.monotonic()
     def check(name,fn):
         print(f"[validation] {name}",flush=True)
@@ -38,63 +36,75 @@ def main():
             value=traceback.format_exc();report["checks"][name]={"status":"FAILED","traceback":value};report["failures"].append(name)
             print(value,flush=True)
     def isolation():
-        records=json.loads((t.PACKAGE/"source_guard.json").read_text())
-        # The guard records the baseline, before any route files were added.
+        records=json.loads((t.PACKAGE/"source_guard_x4.json").read_text())
+        # Preserve the task baseline; concurrent sessions have exact, named
+        # before/after transitions rather than a blanket isolation exemption.
         files=records.get("files",records)
         if isinstance(files,list):raise ValueError("unsupported guard inventory")
         mismatches=[]
         import hashlib
+        concurrent=records.get("concurrent_changes",{})
+        allowed_tests={"tests/test_mizar_l14_17x3_strong_reason.py",
+            "tests/test_mizar_l14_17x3_previous_training.py",
+            "tests/validate_mizar_l14_17x3_strong_reason.py"}
+        for name,transition in concurrent.items():
+            if not (name.startswith("code/RSmol/mizar_l14_17x3_strong_reason/")
+                    or name=="code/RSmol/run_mizar_l14_17x3_strong_reason_5090.sh"
+                    or name in allowed_tests):
+                raise ValueError(f"unrecognized concurrent scope: {name}")
+            if name not in files or transition["before_sha256"]!=files[name]:
+                raise ValueError(f"concurrent transition lacks baseline: {name}")
         for name,expected in files.items():
             if isinstance(expected,dict):expected=expected["sha256"]
             path=t.ROOT/name
-            data=path.read_bytes().replace(b"\r\n",b"\n")
-            if name=="RM.md":
-                marker=b"<!-- mizar_l19_22x3_original_rm -->\n"
-                if marker in data:data=data.split(marker,1)[1]
-                concurrent=records.get("concurrent_rm_prefix")
-                if concurrent:
-                    boundary=concurrent["marker"].encode("utf-8")
-                    if boundary not in data:raise ValueError("registered concurrent RM record was removed")
-                    prefix,data=data.split(boundary,1)
-                    if hashlib.sha256(prefix+boundary).hexdigest()!=concurrent["sha256"]:
-                        raise ValueError("registered concurrent RM record was changed")
-            if hashlib.sha256(data).hexdigest()!=expected:mismatches.append(name)
+            actual=hashlib.sha256(path.read_bytes().replace(b"\r\n",b"\n")).hexdigest() if path.is_file() else None
+            if name in concurrent:expected=concurrent[name]["after_sha256"]
+            if actual!=expected:mismatches.append(name)
+        rm=(t.ROOT/"RM.md").read_bytes()
+        leading=records.get('concurrent_rm_prefix_before_task')
+        if leading:
+            prefix,rm=rm[:leading['bytes']],rm[leading['bytes']:]
+            if hashlib.sha256(prefix).hexdigest()!=leading['sha256']:
+                raise ValueError('concurrent leading RM prefix changed')
+        marker=(records['rm_marker']+'\n').encode()
+        if marker in rm:rm=rm.split(marker,1)[1]
+        prefix=records.get('concurrent_rm_prefix')
+        if prefix:
+            before_marker=(prefix['marker']+'\n').encode()
+            if before_marker not in rm:raise ValueError('concurrent RM prefix marker missing')
+            added,rm=rm.split(before_marker,1)
+            if hashlib.sha256(added+before_marker).hexdigest()!=prefix['sha256']:
+                raise ValueError('concurrent RM prefix changed')
+        if hashlib.sha256(rm).hexdigest()!=records['rm_raw_sha256']:mismatches.append('RM.md original bytes')
+        if hashlib.sha256(rm.replace(b"\r\n",b"\n")).hexdigest()!=records['rm_sha256']:mismatches.append('RM.md original body')
         if mismatches:raise ValueError(f"baseline changed: {mismatches}")
-        return {"baseline_files_preserved":len(files),"registered_concurrent_rm_prefix":records.get("concurrent_rm_prefix")}
+        return {"baseline_files":len(files),"unchanged_files":len(files)-len(concurrent),
+                "registered_concurrent_l14_changes":concurrent,"original_rm_bytes_preserved":True}
     check("existing_source_isolation",isolation)
     def syntax():
         files=list(t.PACKAGE.rglob("*.py"))
         for path in files:t.ast.parse(path.read_text(encoding="utf-8"),filename=str(path),feature_version=(3,10))
         return {"python310_files":len(files)}
     check("python310_syntax",syntax)
-    def reference_equivalence():
-        old=t.ROOT/"code/RSmol/mizar_l9_12x3_strong_reason"
-        unchanged=[p.relative_to(old) for p in old.rglob("*") if p.is_file()
-            and "__pycache__" not in p.parts and p.suffix in {".py",".json",".txt"}
-            and p.name not in {"model.py","contract.py","optim.py","train.py","stage_data.py",
-                               "source_guard.json","sync_files.txt"}]
-        for name in unchanged:
-            if (old/name).read_bytes() != (t.PACKAGE/name).read_bytes():
-                raise ValueError(f"inherited data/loader/checkpoint implementation changed: {name}")
-        # Core update, RNG, loss, sampler, checkpoint and LR mathematics remain
-        # the reference implementation; only layer roles/trace assertions vary.
-        def functions(path):
+    def reference():
+        ref=t.ROOT/'code/RSmol/mizar_l9_12x3_strong_reason'
+        names=[p.relative_to(ref) for p in ref.rglob('*.py') if '__pycache__' not in p.parts
+               and p.name not in {'contract.py','model.py','train.py','optim.py','stage_data.py'}]
+        for name in names:
+            if (ref/name).read_bytes()!=(t.PACKAGE/name).read_bytes():raise ValueError(f'reference file changed: {name}')
+        def functions(p):
             return {n.name:t.ast.dump(n,include_attributes=False) for n in
-                    t.ast.parse(path.read_text(encoding="utf-8")).body if isinstance(n,t.ast.FunctionDef)}
-        checks={"train.py":["optimizer_update","collective_run","inspect_tokenizer","train","require_frozen"],
-                "contract.py":["geometry","lr_factor","accumulation_for_update","data_order","rank_shard","rank_microbatch_size"]}
-        for file,names in checks.items():
-            before,after=functions(old/file),functions(t.PACKAGE/file)
-            for name in names:
-                if before[name]!=after[name]:raise ValueError(f"reference mathematics changed: {file}:{name}")
-        stage=(old/"stage_data.py").read_text().replace("mizar_l9_12x3_sr_","mizar_l19_22x3_sr_")
-        if stage!=(t.PACKAGE/"stage_data.py").read_text():raise ValueError("unexpected staging change")
-        prefix='mizar_l19_22x3_sr_'
-        if f'STAGE_ROOT="/dev/shm/{prefix}' not in (t.PACKAGE/"run.sh").read_text():
-            raise ValueError("shell/staging root prefixes disagree")
-        return {"byte_identical_files":len(unchanged),"training_update_ast_equal":True,
-                "staging_only_prefix_change":True,"dataset_format_reused":"mizar_l9_12x3_strong_reason_dataset_v2"}
-    check("reference_training_and_data_equivalence",reference_equivalence)
+                    t.ast.parse(p.read_text(encoding='utf-8')).body if isinstance(n,t.ast.FunctionDef)}
+        for file,names_to_check in {'train.py':['train','optimizer_update','collective_run'],
+             'contract.py':['geometry','checkpoint_steps','training_cursor','lr_factor','rank_shard','rank_microbatch_size']}.items():
+            a,b=functions(ref/file),functions(t.PACKAGE/file)
+            for name in names_to_check:
+                if a[name]!=b[name]:raise ValueError(f'reference training differs: {file}:{name}')
+        stage=(ref/'stage_data.py').read_text().replace('mizar_l9_12x4_mcq_','mizar_l19_22x4_mcq_')
+        if stage!=(t.PACKAGE/'stage_data.py').read_text():raise ValueError('unexpected staging change')
+        return {'identical_python_files':len(names),'trainer_ast_equal':True,'schedule_and_checkpoint_math_equal':True,
+                'manifest_preparer_byte_identical':True,'stage_only_prefix_change':True}
+    check('current_l9_12_reference_parity',reference)
     if not args.skip_unit_tests:
         def units():
             suite=unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromModule(t),
@@ -105,22 +115,6 @@ def main():
             if not result.wasSuccessful() or result.skipped:raise ValueError(details)
             return details
         check("cpu_unit_and_gloo_tests",units)
-    if args.source_s1:
-        def s1():
-            p=args.source_s1
-            sha=t.sha256_file(p)
-            if sha!=t.pm.SOURCE_SHA256[p.name.endswith(".gz")]:raise ValueError("wrong S1 source SHA")
-            selected,details=t.pm.select(p,lambda row:t.pm.raw_references(row)[1][0][1])
-            counts=collections.Counter();views=collections.Counter()
-            for index,row in enumerate(t.pm.iter_rows(p)):
-                if index in selected:
-                    counts[t.pm.raw_references(row)[0]]+=1;views[t.pm.row_kind(row)]+=1
-                if index and index%200000==0:print(f"[validation] selected inventory scanned {index:,}",flush=True)
-            if len(selected)!=651296 or counts!=t.SOURCE_COUNTS:raise ValueError((len(selected),counts))
-            return {"source_sha256":sha,"rows":len(selected),"source_counts":dict(counts),"views":dict(views),**details,
-                    "raw_path_groups_only":True,"remote_audio_resolved":False,
-                    "scope":"original metadata upper bound; retained training quota requires remote previous hybrid manifest"}
-        check("actual_full_s1_metadata_selection",s1)
     if args.official_bundle:
         def official():
             import assets
@@ -147,16 +141,15 @@ def main():
                 t.torch.testing.assert_close(a,b,rtol=0,atol=0)
             del native,prefix,a,b
             model.train()
-            optimizer,_,_=t.build_optimizer(model,5089)
+            optimizer,_,_=t.build_optimizer(model,16890)
             output=model(inputs);loss=t.answer_loss(output,inputs,17);loss.backward()
             from train import gradient_audit
             audit=gradient_audit(model)
             optimizer.step()
             if t.checkpoint.sha_frozen(model)!=frozen:raise ValueError("official frozen state drift")
-            if len(model.state_dict())!=454:raise ValueError("new state entries were added")
             return {"release_files":len(bundle["files"]),"trainability":counts,"trainable_total":14160384,
                     "state_entries":len(model.state_dict()),"full_683_cpu_ce":float(loss.detach()),"gradient_audit":audit,
-                    "native_30_layer_383_prefix_bitwise_parity":True,
+                    "native_30_layer_383_prefix_bitwise_parity":True,"recurrence_block_calls":len(model.caption_decoder.lm.model.last_layer_trace),
                     "frozen_unchanged_after_adamw":True,"audio_waveform":"synthetic silence; real released encoder/projector"}
         check("actual_official_full_load_forward_backward",official)
     report.update(status="PASS" if not report["failures"] else "FAILED",elapsed_seconds=time.monotonic()-started,

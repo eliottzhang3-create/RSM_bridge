@@ -1,4 +1,4 @@
-"""Official 30 physical layers; L14-17 shared three times, no added injection."""
+"""Official 30 physical layers; shared L14-17 executes four times, no injection."""
 from __future__ import annotations
 from contextlib import nullcontext
 import json
@@ -9,7 +9,7 @@ from transformers import LlamaConfig
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer, LlamaForCausalLM, LlamaPreTrainedModel, LlamaRMSNorm, LlamaRotaryEmbedding)
-from contract import (AUDIO_TOKENS, CORE_LAYERS, SCHEDULE, parameter_role)
+from contract import AUDIO_TOKENS, CORE_LAYERS, SCHEDULE, parameter_role
 from llama_compat import _assert_supported_llama_api, _call_decoder_layer, _causal_mask
 
 
@@ -25,7 +25,6 @@ class RecurrentModel(LlamaPreTrainedModel):
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
         self.last_layer_trace = ()
-        self.last_injection_trace = ()
         self.post_init()
 
     def _execute(self, inputs_embeds, *, single_pass=False, position_ids=None):
@@ -44,7 +43,7 @@ class RecurrentModel(LlamaPreTrainedModel):
         mask = _causal_mask(attention_mask=None, batch_size=batch, query_length=length,
                             past_length=0, dtype=hidden.dtype, device=hidden.device)
         rotary = self.rotary_emb(hidden, position_ids=position_ids)
-        self.last_layer_trace, self.last_injection_trace = (), ()
+        self.last_layer_trace = ()
         for logical, physical in enumerate(range(30) if single_pass else SCHEDULE):
             # Prefix is entirely frozen. Suffix MUST retain the input-gradient
             # graph even though none of its own parameters are trainable.
@@ -104,7 +103,7 @@ class CaptionDecoder(nn.Module):
 
 
 class MizarCoreTrain(nn.Module):
-    """All 454 official state keys are preserved, with no additional parameters."""
+    """Retains all 454 original state keys; no added trainable module."""
     def __init__(self, config, ced_dir=None, *, audio_encoder=None):
         super().__init__()
         self.audio_encoder = AudioEncoder(ced_dir) if audio_encoder is None else audio_encoder
@@ -174,7 +173,7 @@ def validate_trainability(model, *, production=True):
         if counts != {"frozen":145139456,**{f"layer{i}":3540096 for i in (14,15,16,17)}}:
             raise ValueError(f"production parameter inventory differs: {counts}")
         if len(list(model.state_dict())) != 454:
-            raise ValueError("expected exactly the original454 state entries")
+            raise ValueError("expected exactly original454 state entries")
     return counts
 
 

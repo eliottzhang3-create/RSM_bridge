@@ -2,7 +2,7 @@
 import argparse
 import json
 from pathlib import Path
-from contract import ROUTE, digest, write_json
+from contract import ROUTE, EPOCHS, training_cursor, digest, write_json
 from data.prepared_index import load_index
 from prepare_manifest import verify_dataset
 from write_config import build_contract
@@ -31,7 +31,8 @@ def main():
                 or saved.get("mode")!="formal" or saved.get("contract")!=contract
                 or saved.get("contract_sha256")!=digest(contract)
                 or type(step) is not int or not 1<=step<contract["geometry"]["total_steps"]
-                or (saved.get("epoch"),saved.get("next_optimizer_step"))!=(0,step)
+                or (saved.get("epoch"),saved.get("next_optimizer_step"))!=training_cursor(step,contract["geometry"])
+                or saved.get("num_epochs")!=EPOCHS
                 or len(saved.get("random_state_by_rank",[]))!=8):
             raise ValueError("resume header/route/source/data/environment/recipe/cursor mismatch")
         later=[p for p in a.resume_checkpoint.parent.glob("model--step-*.ckpt") if int(p.stem.rsplit("-",1)[1])>step]

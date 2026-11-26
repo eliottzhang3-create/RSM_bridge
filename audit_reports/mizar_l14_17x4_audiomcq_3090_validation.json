@@ -1,0 +1,287 @@
+{
+  "status": "PASS",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "torch": "2.15.0+cpu",
+  "transformers": "4.54.1",
+  "audio_test_adapter": true,
+  "limitations": [
+    "No remote production audio or GPU job was accessed.",
+    "CPU Gloo is not an eight-GPU NCCL or 3090 memory/throughput validation.",
+    "Production historical hybrid manifest/audio live remotely; local manifest verification uses explicit synthetic fixtures.",
+    "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+  ],
+  "checks": {
+    "existing_source_isolation": {
+      "status": "PASS",
+      "details": {
+        "baseline_files": 4179,
+        "unchanged_files": 4174,
+        "explicit_concurrent_files_preserved": 5
+      }
+    },
+    "python310_syntax": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 28
+      }
+    },
+    "cpu_unit_and_gloo_tests": {
+      "status": "PASS",
+      "details": {
+        "tests_run": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": []
+      }
+    },
+    "actual_official_full_load_forward_backward": {
+      "status": "PASS",
+      "details": {
+        "release_files": 18,
+        "trainability": {
+          "frozen": 145139456,
+          "layer14": 3540096,
+          "layer15": 3540096,
+          "layer16": 3540096,
+          "layer17": 3540096
+        },
+        "trainable_total": 14160384,
+        "state_entries": 454,
+        "full_683_cpu_ce": 6.709277629852295,
+        "gradient_audit": {
+          "status": "PASS",
+          "nonzero_task_gradients": {
+            "layer14": true,
+            "layer15": true,
+            "layer16": true,
+            "layer17": true
+          },
+          "frozen_gradients": false
+        },
+        "native_30_layer_383_prefix_bitwise_parity": true,
+        "recurrence_block_calls": 42,
+        "frozen_unchanged_after_adamw": true,
+        "audio_waveform": "synthetic silence; real released encoder/projector"
+      }
+    },
+    "delivery": {
+      "status": "PASS",
+      "details": {
+        "files": 45,
+        "readme_bash_blocks": 7,
+        "python310_test_files": 3,
+        "git_visible_files": 45,
+        "parameter_preview": "queue=pdgpu-3090 cpus=64 memory=256G gpus=8 nodes=1\ndata_dir=/mnt/cloudstorfs/sjtu_home/jinwei.zhang/data/Mizar/l9_12x4_audiomcq_only_v1\nmodel_dir=/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M\noutput_root=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_final_l14_17x4_audiomcq_gbs128_3epochs_3090/formal_20261127_020535914179200\nresume=\nstage_workers=4\nlog_path=/c/Xlance/GZ_bridge/Recursive_SALM/RSM_bridge/code/RSmol/log/mizar-l14-audiomcq-x4.20261127_020535914179200.JOB.log\nsource=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json\nresolved_paths=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_20261024_170403/resolved_paths.tsv\nrecipe=AudioMCQ720524 ReasonAQA0 L14-17x4 no_injection GBS128 epochs3 max_lr2e-5 min_lr2e-6 warmup3pct keep4\n",
+        "reference_byte_identical_files": [
+          ".gitignore",
+          "LICENSE",
+          "admission.py",
+          "assets.py",
+          "checkpoint.py",
+          "data/audio_paths.py",
+          "data/audiotext_dataset.py",
+          "data/fixed20.py",
+          "data/indexed_jsonl.py",
+          "data/prepared_index.py",
+          "data/sampler.py",
+          "data/staging.py",
+          "data/template.py",
+          "journal.py",
+          "licenses/Mizar-ClearBSD.txt",
+          "llama_compat.py",
+          "manifest_io.py",
+          "models/ced.py",
+          "models/ced_offline.py",
+          "prepare_index.py",
+          "prepare_manifest.py",
+          "publication.py",
+          "release_manifest.json",
+          "training_helpers.py",
+          "utils/audio_io.py",
+          "write_config.py",
+          "write_failure.py"
+        ],
+        "reference_different_files": [
+          "NOTICE",
+          "README.md",
+          "__pycache__/contract.cpython-313.pyc",
+          "contract.py",
+          "model.py",
+          "optim.py",
+          "run.sh",
+          "source_guard.json",
+          "stage_data.py",
+          "sync_files.txt",
+          "train.py"
+        ],
+        "manifest_reuse": "Actual reference preparer fixture publication and new-route read-only reuse passed; preparer bytes are identical.",
+        "remote_manifest_evidence": "User supplied: [manifest] reusing verified /mnt/cloudstorfs/sjtu_home/jinwei.zhang/data/Mizar/l9_12x4_audiomcq_only_v1; not independently read locally."
+      }
+    }
+  },
+  "failures": [],
+  "elapsed_seconds": 92.08645389998856,
+  "code_sha256": "32689552fbb55c488309b21be058e960ea07a1ac28e6f348ad75aa76e9db67c4",
+  "previous_runs": [
+    {
+      "status": "FAILED",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "torch": "2.15.0+cpu",
+      "transformers": "4.54.1",
+      "audio_test_adapter": true,
+      "limitations": [
+        "No remote production audio or GPU job was accessed.",
+        "CPU Gloo is not an eight-GPU NCCL or 3090 memory/throughput validation.",
+        "Production historical hybrid manifest/audio live remotely; local manifest verification uses explicit synthetic fixtures.",
+        "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+      ],
+      "checks": {
+        "existing_source_isolation": {
+          "status": "PASS",
+          "details": {
+            "baseline_files": 4179,
+            "unchanged_files": 4174,
+            "explicit_concurrent_files_preserved": 5
+          }
+        },
+        "python310_syntax": {
+          "status": "PASS",
+          "details": {
+            "python310_files": 28
+          }
+        },
+        "cpu_unit_and_gloo_tests": {
+          "status": "PASS",
+          "details": {
+            "tests_run": 24,
+            "failures": 0,
+            "errors": 0,
+            "skipped": []
+          }
+        },
+        "actual_official_full_load_forward_backward": {
+          "status": "PASS",
+          "details": {
+            "release_files": 18,
+            "trainability": {
+              "frozen": 145139456,
+              "layer14": 3540096,
+              "layer15": 3540096,
+              "layer16": 3540096,
+              "layer17": 3540096
+            },
+            "trainable_total": 14160384,
+            "state_entries": 454,
+            "full_683_cpu_ce": 6.709277629852295,
+            "gradient_audit": {
+              "status": "PASS",
+              "nonzero_task_gradients": {
+                "layer14": true,
+                "layer15": true,
+                "layer16": true,
+                "layer17": true
+              },
+              "frozen_gradients": false
+            },
+            "native_30_layer_383_prefix_bitwise_parity": true,
+            "recurrence_block_calls": 42,
+            "frozen_unchanged_after_adamw": true,
+            "audio_waveform": "synthetic silence; real released encoder/projector"
+          }
+        },
+        "delivery": {
+          "status": "PASS",
+          "details": {
+            "files": 45,
+            "readme_bash_blocks": 7,
+            "python310_test_files": 3,
+            "git_visible_files": 45,
+            "parameter_preview": "queue=pdgpu-3090 cpus=64 memory=256G gpus=8 nodes=1\ndata_dir=/mnt/cloudstorfs/sjtu_home/jinwei.zhang/data/Mizar/l9_12x4_audiomcq_only_v1\nmodel_dir=/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M\noutput_root=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_final_l14_17x4_audiomcq_gbs128_3epochs_3090/formal_20261127_020535914179200\nresume=\nstage_workers=4\nlog_path=/c/Xlance/GZ_bridge/Recursive_SALM/RSM_bridge/code/RSmol/log/mizar-l14-audiomcq-x4.20261127_020535914179200.JOB.log\nsource=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json\nresolved_paths=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_20261024_170403/resolved_paths.tsv\nrecipe=AudioMCQ720524 ReasonAQA0 L14-17x4 no_injection GBS128 epochs3 max_lr2e-5 min_lr2e-6 warmup3pct keep4\n",
+            "reference_byte_identical_files": [
+              ".gitignore",
+              "LICENSE",
+              "admission.py",
+              "assets.py",
+              "checkpoint.py",
+              "data/audio_paths.py",
+              "data/audiotext_dataset.py",
+              "data/fixed20.py",
+              "data/indexed_jsonl.py",
+              "data/prepared_index.py",
+              "data/sampler.py",
+              "data/staging.py",
+              "data/template.py",
+              "journal.py",
+              "licenses/Mizar-ClearBSD.txt",
+              "llama_compat.py",
+              "manifest_io.py",
+              "models/ced.py",
+              "models/ced_offline.py",
+              "prepare_index.py",
+              "prepare_manifest.py",
+              "publication.py",
+              "release_manifest.json",
+              "training_helpers.py",
+              "utils/audio_io.py",
+              "write_config.py",
+              "write_failure.py"
+            ],
+            "reference_different_files": [
+              "NOTICE",
+              "README.md",
+              "__pycache__/contract.cpython-313.pyc",
+              "contract.py",
+              "model.py",
+              "optim.py",
+              "run.sh",
+              "source_guard.json",
+              "stage_data.py",
+              "sync_files.txt",
+              "train.py"
+            ],
+            "manifest_reuse": "Actual reference preparer fixture publication and new-route read-only reuse passed; preparer bytes are identical.",
+            "remote_manifest_evidence": "User supplied: [manifest] reusing verified /mnt/cloudstorfs/sjtu_home/jinwei.zhang/data/Mizar/l9_12x4_audiomcq_only_v1; not independently read locally."
+          }
+        }
+      },
+      "failures": [
+        "existing_source_isolation"
+      ],
+      "elapsed_seconds": 92.08645389998856,
+      "code_sha256": "32689552fbb55c488309b21be058e960ea07a1ac28e6f348ad75aa76e9db67c4"
+    }
+  ],
+  "previous_runs_note": "All 24 unit/Gloo tests and the official CPU model check passed on the first run. The global source guard encountered a concurrent L19-22 deletion. That run is preserved; precise external changes were recorded and the source/syntax checks rerun without changing production code.",
+  "directed_source_guard_recheck": {
+    "status": "PASS",
+    "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+    "torch": "2.15.0+cpu",
+    "transformers": "4.54.1",
+    "audio_test_adapter": true,
+    "limitations": [
+      "No remote production audio or GPU job was accessed.",
+      "CPU Gloo is not an eight-GPU NCCL or 3090 memory/throughput validation.",
+      "Production historical hybrid manifest/audio live remotely; local manifest verification uses explicit synthetic fixtures.",
+      "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+    ],
+    "checks": {
+      "existing_source_isolation": {
+        "status": "PASS",
+        "details": {
+          "baseline_files": 4179,
+          "unchanged_files": 4174,
+          "explicit_concurrent_files_preserved": 5
+        }
+      },
+      "python310_syntax": {
+        "status": "PASS",
+        "details": {
+          "python310_files": 28
+        }
+      }
+    },
+    "failures": [],
+    "elapsed_seconds": 0.8539119000051869,
+    "code_sha256": "32689552fbb55c488309b21be058e960ea07a1ac28e6f348ad75aa76e9db67c4"
+  }
+}

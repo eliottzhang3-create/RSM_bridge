@@ -1,3 +1,85 @@
+## 2026-11-27：原L14–17入口改四轮纯循环，完整AudioMCQ三epoch，3090/64CPU
+
+用户确认计划并指定pdgpu-3090/8GPU/64CPU/256G，原地更新 run_mizar_l14_17x3_strong_reason_5090.sh 及原包，保留历史文件名。
+实际新route为 mizar_final_l14_17x4_audiomcq_gbs128_3epochs_v1；原L9–12参考实现/共享模型/已有评测不修改。
+本地Windows改代码、GitHub中转，生产权重/音频/输出在远程Linux；未自动commit/push或提交GPU作业。
+
+完整strict继承原Mizar final stage3_q4_seed20260905.ckpt的454项FP32状态，含原CED/已训练projector/30层LM；18个release文件大小/SHA继续固定。
+1-based轨迹1..13,(14..17)x4,18..30，共30物理/42次block；四轮总共四次，每轮完整hidden直接输入下一轮。
+仅14–17四层全部attention/MLP/norm训练，共14160384参数；其余145139456原参数/缓冲冻结eval，原454项无新增key。
+无额外注入/门控/LoRA/router；前13层no_grad，冻结后缀保留输入梯度，完整四轮BPTT，无KV/decoder checkpointing，原final norm只一次。
+
+对齐当前L9–12的完整历史AudioMCQ配方：720524行/epoch，ReasonAQA0，strong/weak/直接答案/CoT及原字段/顺序全部保留，不重抽样。
+用户回传manifest reusing verified /mnt/cloudstorfs/sjtu_home/jinwei.zhang/data/Mizar/l9_12x4_audiomcq_only_v1；此为用户远程日志证据，本地未独立读远程数据。
+新入口默认使用上述路径，prepare_manifest.py与当前L9–12逐字节相同，保持preparer SHA和原format/seal，存在即只读核验复用。
+实际测试用原参考preparer发布小fixture，再由L14新入口复用，全目录字节保持；CLI/index/admission均保留内容身份校验，旧混合数据拒绝。
+新CPU index绑定本路线源码及原dataset seal，独立cache；原历史hybrid/audit成功路径及缺失/空/冲突拒绝保持，Reason音频不参与。
+
+8GPU×micro4×GA4=GBS128，3epochs，每epoch5630更新=5629完整128+12尾批；尾批前4rank各2条/后4rank各1条GA1，无drop或重复补齐。
+总16890更新；max/minLR2e-5/2e-6，round全局3%warmup507，单条全局cosine最后真实更新到min，epoch不重启。
+每四分之一epoch后首个完整update保存，共12点：1408/2815/4223/5630/7038/8445/9853/11260/12668/14075/15483/16890，保留最新4份。
+AdamW betas(.9,.999)/eps1e-8/WD.01及低维bias免decay、FP32/无autocast/TF32off、GradScaler/GradNorm保持。
+原fixed20中心裁剪/右补零/mono32k/10+10在线CED/projector、683位置/PAD17/EOS0/空格EOT截断和answer-only shifted CE/原归约保持。
+每轮seed1234+epoch分片及完整覆盖检查，epoch内和边界均按真实游标恢复，完整model/optimizer moments/scheduler/scaler/tracker/8rank RNG保存恢复。
+旧L14三循环checkpoint不能完整resume到新合同；新训练从官方final和step0新状态开始，新任务中断后才按本路线原runroot恢复。
+
+保留原mellow_c8204d8/Transformers4.54.1/镜像和conda覆盖；实际vc参数pdgpu-3090/-c64/-m256G/-g8/-n1，单次formal，无额外GPU smoke。
+默认output为 outputs/RSmol/mizar_final_l14_17x4_audiomcq_gbs128_3epochs_3090/formal_<tag>/formal/；log为mizar-l14-audiomcq-x4.<tag>.<JOB>.log。
+新tmpfs /dev/shm/mizar_l14_17x4_mcq_<token>与生产路径守卫同步；共享盘立即训练/后台4workers复制/完整后8rank MIN边界切本地/先stop-reap再owner cleanup保持。
+三epoch一次staging，恢复重新stage；最终formal/checkpoints/model--step-16890.ckpt，training_report PASS/3epochs/覆盖/最终重读及producer清理才表示完成。
+
+本地24项CPU回归全部通过无skip：真实小30层Llama eager/SDPA的native单遍及独立42次对照、16次核心梯度/冻结后缀输入梯度/因果性，生产meta14160384参数。
+真实trainer三epoch17行/6updates，分别从epoch内step1/step3和边界step2恢复，最终模型及AdamW moments逐值相同；错误旧route/moment/库存/冻结state拒绝。
+真实2进程Gloo GA4/GA1与独立参考对照及空rank零任务梯度通过；720524行三轮8rank分片/尾批/507warmup/12保存点/保留4份通过。
+真实Bash参数链验证3090/64CPU/8GPU/256G/1node和既有manifest路径；prepare-only/CPU失败不提交/空格参数/单vc/producer回收清理及实际tmpfs赋值守卫通过。
+已有本地官方18文件SHA/454 strict加载、576维30层383prefix native bitwise对照、真实CED/projector合成静音683token四轮前向/反传/AdamW后冻结保持通过。
+测试Torch2.15CPU/Transformers4.54.1，torchaudio2.9未用native扩展仅测试进程显式适配；Windows沙箱依赖权限获准沙箱外离线验收。
+首次全局guard遇到并发L19–22文件删除/变化，其精确摘要单列concurrent_source_changes_x4.json；24项及完整官方CPU检查本身均通过，最终guard/语法定向复核通过，历史结果保留previous_runs。
+source_guard_x4.json保留任务开始基线，source_guard.json及旧报告保留历史；并发L19–22改动完整保留，不由本任务修改或暂存。
+报告 audit_reports/mizar_l14_17x4_audiomcq_3090_validation.json；未验证真实远程音频/CUDA/NCCL/3090显存吞吐或正式收敛。
+README/sync_files已给本地精确Git清单、直接复用manifest的正式提交与完整恢复命令；原RM全部字节保留。
+
+<!-- mizar_l14_17x4_audiomcq_original_rm -->
+## 2026-11-27：L19–22原入口改为四循环、完整AudioMCQ三轮，3090/8GPU/64CPU/256G
+
+按用户确认计划，原地修改 run_mizar_l19_22x3_strong_reason_5090.sh 及既有包，保留历史文件名。
+实际资源 pdgpu-3090/8GPU/64CPU/256G/1node，原镜像和mellow_c8204d8保持；无额外GPU smoke。
+本地Windows代码经GitHub中转，正式数据/权重/输出位于远程Linux；未自动commit/push或提交正式GPU作业。
+
+从官方Mizar final stage3_q4_seed20260905.ckpt重新初始化，18文件SHA/大小及454状态strict继承。
+1..18→(19..22)x4→23..30，总42次block；四次是总执行次数，同四层共享Parameter。
+仅19–22全部attention/MLP/norm训练，合计14160384；其余145139456冻结eval。
+无anchor/audio_gate/额外注入/新增参数；原层内残差及gate_proj保持。前18层no_grad，四轮完整BPTT，冻结后缀保留输入梯度。
+final norm仅最后一次，无KV/decoder checkpointing/跨forward状态；旧x3及其他路线checkpoint拒绝跨合同续训。
+
+训练/数据对齐当前L9–12参考入口：全部720524历史AudioMCQ，strong/weak与直接答案/CoT全部原视图，ReasonAQA=0。
+用户已回传manifest reusing verified，默认路径 /mnt/cloudstorfs/sjtu_home/jinwei.zhang/data/Mizar/l9_12x4_audiomcq_only_v1。
+已有manifest走--verify-only，核验seal/各文件SHA大小/七来源配额，不重新扫描旧hybrid、不生成或改写数据。
+prepare_manifest.py逐字节继承当前参考，preparer身份兼容；CPU index/release/admission通过后才单次vc正式提交。
+本地未独立访问远程生产manifest；远程ready信息来自用户回传，真实音频完整性由远程实际检查。
+
+8GPU×micro4×GA4=GBS128，3epochs×5630=16890updates；每轮完整5629步+12行尾批GA1，无drop或补齐重复。
+max/minLR2e-5/2e-6，round全局3%warmup507，cosine跨epoch不重置；保留原AdamW/GradScaler/GradNormTracker。
+每0.25epoch后首个完整update保存，共12点，最新4份；最终model--step-16890.ckpt。
+完整恢复模型/optimizer/scheduler/scaler/tracker/8rank RNG及epoch内游标，epoch边界正确续下一轮。
+FP32/无autocast/TF32off、mono32k/fixed20中心裁剪右补零/10+10在线CED/projector、683位置与answer-only CE保持。
+训练/optimizer更新AST及LR/分片/保存数学与当前参考保持；23份其余Python文件逐字节相同。
+新output/index/log/tmpfs均独立，mizar_final_l19_22x4_audiomcq_gbs128_3epochs_3090与/dev/shm/mizar_l19_22x4_mcq_<token>。
+先shared立即训练，后台仅stage当前AudioMCQ，完整后8rank在optimizer边界共同切本地；三epoch复用，退出先stop/reap再owner cleanup。
+
+本地21/21项CPU测试通过、无skip：真实小Llama eager/SDPA/native/独立42次递推、16次core输出梯度、冻结后缀梯度及参数保持。
+真实trainer三轮17行/6update与epoch边界完整resume最终权重一致；720524三轮八rank分片/尾批/LR/保存数学通过。
+真实两进程Gloo GA4/GA1/空rank零任务loss、完整checkpoint恢复/坏合同拒绝、manifest/index/只读复用、CPU admission通过。
+实际Bash3090/64CPU单提交/quoted args/预检失败不提交/stop-reap-cleanup与实际tmpfs守卫通过（vc/torchrun为明确模拟）。
+已有本地官方18文件SHA/454严格load、原576维30层383prefix native逐值一致、实际CED/projector合成静音683token四循环CPU前反向/AdamW后冻结保持通过。
+测试Torch2.15CPU/Transformers4.54.1，torchaudio2.9未用native扩展仅测试进程兼容适配，生产无适配；获准沙箱外本地离线验收。
+初轮功能/官方检查均通过，唯一隔离失败是另一会话并发删除L14旧previous_training.py；精确登记其before/after SHA后复验，历史报告保留previous_runs。
+source_guard_x4保护4258份既有范围外文件及RM原字节；旧source_guard与旧x3报告保留，另一会话L14工作完整保留。
+新报告 audit_reports/mizar_l19_22x4_audiomcq_validation.json，README/sync_files提供Git同步、正式提交、恢复与输出说明。
+未验证远程CUDA/NCCL/3090显存吞吐或正式收敛，CPU结果不代表GPU PASS。旧三循环评测器未注册本四循环模型。
+以下原RM全部字节完整保留。
+
+<!-- mizar_l19_22x4_original_rm -->
 ## 2026-11-27：原入口改为完整AudioMCQ / L9–12纯循环四次 / 3epochs / LR2e-5
 
 用户确认计划后在原 run_mizar_l9_12x3_strong_reason_5090.sh 和其既有包内原地修改；文件名保留，当前配方已为x4/AudioMCQ-only。

@@ -34,7 +34,7 @@ def ensure_index(manifest, resolutions, cache_root):
         temporary = Path(directory)
         report, files = prepare(manifest, load_resolutions(resolutions), temporary / "rows.jsonl", expected_counts=expected_counts)
         report["dataset_selection"] = {"seal_sha256":dataset["seal_sha256"],
-            "previous_training":dataset.get("previous_training"),"selected_counts":dataset["selected_counts"]}
+            "historical_inputs":dataset["inputs"],"selected_counts":dataset["selected_counts"]}
         write_json(temporary / "files.json", files)
         check_input_contents(inputs, input_identity(manifest, resolutions), "during CPU index preparation")
         report.update(schema_version=INDEX_SCHEMA_VERSION, status="PASS", code_sha256=code_digest(), inputs=inputs,

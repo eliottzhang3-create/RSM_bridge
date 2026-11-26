@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import torch
 import torch.distributed as dist
-from contract import ROUTE, code_digest, digest, lr_factor, parameter_role
+from contract import ROUTE, MAX_LR, EPOCHS, KEEP_CHECKPOINTS, training_cursor, code_digest, digest, lr_factor, parameter_role
 from training_helpers import rng_state, tensor_digest
 
 
@@ -33,14 +33,14 @@ def validate_saved(saved, model, optimizer, config, *, allow_complete=False):
     step = saved.get("total_step")
     if type(step) is not int or not 1 <= step <= total or (step == total and not allow_complete):
         raise ValueError("invalid or already-completed checkpoint cursor")
-    if (saved.get("epoch"), saved.get("next_optimizer_step")) != ((1,0) if step == total else (0,step)):
+    if (saved.get("epoch"), saved.get("next_optimizer_step")) != training_cursor(step,contract["geometry"]):
         raise ValueError("checkpoint epoch/update cursor contradicts its step")
-    if saved.get("num_epochs") != 1 or saved.get("scheduler",{}).get("last_epoch") != step:
+    if saved.get("num_epochs") != EPOCHS or saved.get("scheduler",{}).get("last_epoch") != step:
         raise ValueError("scheduler/epoch horizon changed")
     schedule = saved["scheduler"]
-    expected_lr = 1e-4 * lr_factor(step, total)
+    expected_lr = MAX_LR * lr_factor(step, total)
     if (schedule.get("_step_count") != step + 1
-            or schedule.get("base_lrs") != [1e-4] * len(optimizer.param_groups)
+            or schedule.get("base_lrs") != [MAX_LR] * len(optimizer.param_groups)
             or schedule.get("_last_lr") != [expected_lr] * len(optimizer.param_groups)
             or schedule.get("lr_lambdas") != [None] * len(optimizer.param_groups)):
         raise ValueError("scheduler state differs from the actual update cursor")
@@ -84,7 +84,7 @@ def validate_saved(saved, model, optimizer, config, *, allow_complete=False):
         for key in ("weight_decay","betas","eps","initial_lr"):
             if sg.get(key) != cg.get(key):
                 raise ValueError(f"optimizer configuration changed: {key}")
-        if not math.isclose(sg["lr"],1e-4*lr_factor(step,total),rel_tol=1e-12,abs_tol=0.):
+        if not math.isclose(sg["lr"],MAX_LR*lr_factor(step,total),rel_tol=1e-12,abs_tol=0.):
             raise ValueError("optimizer next LR differs from scheduler cursor")
         for key,param in zip(sg["params"],cg["params"]):
             expected_ids.append(key)
@@ -128,18 +128,18 @@ def save(path, model, optimizer, scheduler, scaler, tracker, config, step, froze
                        "state_dict":model.state_dict(),"optimizer":optimizer.state_dict(),
                        "optimizer_inventory":inventory(model,optimizer),"scheduler":scheduler.state_dict(),
                        "grad_scaler":scaler.state_dict(),"grad_norm_tracker":tracker.state_dict(),
-                       "random_state_by_rank":states,"total_step":step,"num_epochs":1,
-                       "epoch":int(step==config["max_optimizer_steps"]),
-                       "next_optimizer_step":0 if step==config["max_optimizer_steps"] else step,
+                       "random_state_by_rank":states,"total_step":step,"num_epochs":EPOCHS,
+                       "epoch":training_cursor(step,config["contract"]["geometry"])[0],
+                       "next_optimizer_step":training_cursor(step,config["contract"]["geometry"])[1],
                        "frozen_sha256":frozen_sha}
             path = Path(path)
             temporary = path.with_name(path.name+".partial")
             with temporary.open("wb") as handle:
                 torch.save(payload,handle);handle.flush();os.fsync(handle.fileno())
             os.replace(temporary,path)
-            # Keep the three most recent complete optimizer-step checkpoints.
+            # Keep the four most recent complete optimizer-step checkpoints.
             previous = sorted(path.parent.glob("model--step-*.ckpt"),key=lambda p:int(p.stem.rsplit("-",1)[1]))
-            for old in previous[:-3]:
+            for old in previous[:-KEEP_CHECKPOINTS]:
                 old.unlink()
         except Exception as exc:
             failure = f"{type(exc).__name__}: {exc}"

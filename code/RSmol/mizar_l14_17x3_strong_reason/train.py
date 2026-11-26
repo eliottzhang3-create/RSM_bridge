@@ -1,4 +1,4 @@
-"""One-epoch FP32 full-BPTT training; only shared L14-17 update, without added injection."""
+"""Three-epoch FP32 full-BPTT training; only shared L14-17 x4 updates."""
 from __future__ import annotations
 import argparse
 from contextlib import nullcontext
@@ -17,10 +17,10 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from assets import verify_bundle
 from checkpoint import save, sha_frozen, validate_saved
-from contract import (BATCH_SIZE, CORE_LAYERS, INJECTION_INDICES, PREFIX_TOKENS, ROUTE,
+from contract import (BATCH_SIZE, CORE_LAYERS, EPOCHS, MAX_LR, PREFIX_TOKENS, ROUTE,
                       RANK_UPDATE_SAMPLES, SCHEDULE, SEED, WORLD_SIZE,
                       accumulation_for_update, code_digest, digest, lr_factor,
-                      parameter_role, rank_seed, rank_microbatch_size, validate_tokenizer_contract, write_json)
+                      parameter_role, rank_seed, rank_microbatch_size, training_cursor, validate_tokenizer_contract, write_json)
 from data.audiotext_dataset import AudioTextDataset, collate_fn
 from data.sampler import CustomDistributedSampler
 from data.staging import StagingGate
@@ -50,7 +50,7 @@ def collective_run(phase, action, device):
 
 
 def gradient_audit(model):
-    nonzero = {f"layer{i + 1}":False for i in CORE_LAYERS}
+    nonzero = {f"layer{i}":False for i in (14,15,16,17)}
     for name,p in model.named_parameters():
         if not p.requires_grad:
             if p.grad is not None:
@@ -69,8 +69,8 @@ def forward_loss(ddp, inputs, ignore_index):
     output = ddp(inputs)
     model = ddp.module if hasattr(ddp,"module") else ddp
     core = model.caption_decoder.lm.model
-    if core.last_layer_trace != SCHEDULE or core.last_injection_trace != INJECTION_INDICES:
-        raise ValueError("38-call L14-17 schedule changed or an added injection was detected")
+    if core.last_layer_trace != SCHEDULE:
+        raise ValueError("42-call pure recurrence schedule changed")
     loss = answer_loss(output,inputs,ignore_index)
     if not bool(torch.isfinite(loss)):
         raise ValueError("nonfinite answer-only CE")
@@ -120,7 +120,7 @@ def optimizer_update(ddp, batches, device, optimizer, scaler, tracker, ignore_in
 
 def role_digests(model):
     result = {}
-    for role in (f"layer{i + 1}" for i in CORE_LAYERS):
+    for role in ("layer14","layer15","layer16","layer17"):
         result[role] = tensor_digest((name,p) for name,p in model.named_parameters() if parameter_role(name)==role)
     return result
 
@@ -139,8 +139,8 @@ def train(config,rank,device):
     def check_config():
         if c["route"]!=ROUTE or c["code_sha256"]!=code_digest() or config["contract_sha256"]!=digest(c):
             raise ValueError("source/recipe changed after configuration")
-        if g["world_size"]!=WORLD_SIZE or g["microbatch"]!=4 or g["gradient_accumulation_steps"]!=4 or g["epochs"]!=1:
-            raise ValueError("requires single-node8, micro4, GA4, one epoch")
+        if g["world_size"]!=WORLD_SIZE or g["microbatch"]!=4 or g["gradient_accumulation_steps"]!=4 or g["epochs"]!=EPOCHS:
+            raise ValueError("requires single-node8, micro4, GA4, three epochs")
     collective_run("config",check_config,device)
     collective_run("official_bundle",lambda:verify_bundle(c["official_bundle"]) if rank==0 else None,device)
     seed = rank_seed(rank)
@@ -172,7 +172,7 @@ def train(config,rank,device):
             tracker.load_state_dict(saved["grad_norm_tracker"])
             return cursor,saved["random_state_by_rank"][rank]
         step,resume_rng = collective_run("full_resume",restore,device)
-    if staging.info and (staging.info["epoch"],staging.info["start_batch"])!=(0,step):
+    if staging.info and (staging.info["epoch"],staging.info["start_batch"])!=training_cursor(step,g):
         raise ValueError("staging/optimizer resume cursor mismatch")
     start_step = step
     collective_run("metrics_recovery",lambda:recover_journal(run/"metrics.jsonl",step) if rank==0 else None,device)
@@ -196,10 +196,7 @@ def train(config,rank,device):
     before=role_digests(model)
     if resume_rng is not None:restore_rng(resume_rng,device)
     sampler=CustomDistributedSampler(dataset,WORLD_SIZE,rank,shuffle=True,seed=SEED,drop_last=False)
-    sampler.set_epoch(0);sampler.start_index=step*RANK_UPDATE_SAMPLES
-    loader=DataLoader(dataset,batch_size=BATCH_SIZE,sampler=sampler,drop_last=False,num_workers=0,
-                      collate_fn=collate_fn,generator=torch.Generator().manual_seed(SEED))
-    iterator=iter(loader)
+    iterator=None;current_epoch=None
     # Isolated iterator generator does not consume model RNG; retain the exact
     # resume snapshot nevertheless for any future loader implementation change.
     if resume_rng is not None:restore_rng(resume_rng,device)
@@ -218,19 +215,26 @@ def train(config,rank,device):
     metrics=(run/"metrics.jsonl").open("a",encoding="utf-8") if rank==0 else None
     try:
         for update in range(step,g["total_steps"]):
+            epoch,epoch_update=training_cursor(update,g)
+            if epoch!=current_epoch:
+                sampler.set_epoch(epoch);sampler.start_index=epoch_update*RANK_UPDATE_SAMPLES
+                loader=DataLoader(dataset,batch_size=BATCH_SIZE,sampler=sampler,drop_last=False,num_workers=0,
+                    collate_fn=collate_fn,generator=torch.Generator().manual_seed(SEED+epoch))
+                iterator=iter(loader);current_epoch=epoch
+                if rank==0:print(json.dumps({"event":"EPOCH_START","epoch":epoch+1,"next_epoch_update":epoch_update,"completed_updates":step}),flush=True)
             PHASE.update(completed_updates=step)
-            collective_run("staging_health",lambda:staging.wait_for_batch(0,update),device)
+            collective_run("staging_health",lambda:staging.wait_for_batch(epoch,epoch_update),device)
             if not dataset.audio_paths.local:
                 ready=torch.tensor(int(staging.complete),device=device)
                 dist.all_reduce(ready,op=dist.ReduceOp.MIN)
                 if ready.item():
                     dataset.audio_paths.use_local();local_switch=step
                     if rank==0:print(json.dumps({"event":"AUDIO_READ_SWITCH","completed_updates":step,"to":"local"}),flush=True)
-            micro=accumulation_for_update(update,g["rows"])
+            micro=accumulation_for_update(epoch_update,g["rows"])
             def decode_window():
                 result=[]
                 for m in range(micro):
-                    expected=rank_microbatch_size(g["rows"],rank,update,m)
+                    expected=rank_microbatch_size(g["rows"],rank,epoch_update,m)
                     batch=next(iterator) if expected else None
                     if batch is not None and len(batch["row_index"])!=expected:
                         raise ValueError("rank microbatch differs from the exact no-padding shard")
@@ -241,17 +245,17 @@ def train(config,rank,device):
             dummy=collective_run("empty_tail_context",lambda:collate_fn([dataset.original_item(0)])
                 if all(b is None for b in batches) else None,device)
             lr_used=[x["lr"] for x in optimizer.param_groups]
-            if any(not math.isclose(x,1e-4*lr_factor(step,g["total_steps"]),rel_tol=1e-12) for x in lr_used):
+            if any(not math.isclose(x,MAX_LR*lr_factor(step,g["total_steps"]),rel_tol=1e-12) for x in lr_used):
                 raise ValueError("actual optimizer LR differs from scheduler position")
             loss,norm,scale,audit=optimizer_update(ddp,batches,device,optimizer,scaler,tracker,dataset.pad_id,dummy_batch=dummy)
             if first_audit is None:
                 first_audit=audit;write_json(run/f"first_gradient_rank{rank}.json",audit)
             del batches
-            scheduler.step();step+=1;consumed+=len(rows);coverage.extend(rows)
+            scheduler.step();step+=1;consumed+=len(rows);coverage.extend((epoch,row) for row in rows)
             PHASE.update(completed_updates=step)
             reduced=loss.clone();dist.all_reduce(reduced)
             global_rows=torch.tensor(len(rows),device=device);dist.all_reduce(global_rows)
-            record={"step":step,"total_steps":g["total_steps"],"rank_mean_loss":float(reduced)/WORLD_SIZE,
+            record={"step":step,"epoch":epoch+1,"epoch_update":epoch_update+1,"epoch_fraction":(epoch_update+1)/g["steps_per_epoch"],"total_steps":g["total_steps"],"rank_mean_loss":float(reduced)/WORLD_SIZE,
                     "lr_used":lr_used,"lr_next":[x["lr"] for x in optimizer.param_groups],
                     "microbatches":micro,"effective_global_batch":int(global_rows.item()),
                     "gradient_l2_before_clip":norm,"gradient_common_scale":scale,
@@ -262,6 +266,18 @@ def train(config,rank,device):
             if metrics:
                 metrics.write(json.dumps(record)+"\n");metrics.flush()
                 if step%25==0 or step==g["total_steps"]:print(json.dumps(record),flush=True)
+            if epoch_update+1==g["steps_per_epoch"]:
+                def finish_epoch():
+                    try:next(iterator)
+                    except StopIteration:pass
+                    else:raise ValueError("unconsumed rows at epoch boundary")
+                    actual=[row for ep,row in coverage if ep==epoch]
+                    expected=[dataset.order[i] for i in sampler]
+                    if actual!=expected:raise ValueError("epoch coverage differs from exact resumed no-padding shard")
+                    write_json(run/f"epoch{epoch+1}_rank{rank}.json",{"status":"PASS","epoch":epoch+1,
+                        "rows_consumed":len(actual),"unique_rows":len(set(actual)),"resumed_start_update":sampler.start_index//RANK_UPDATE_SAMPLES,
+                        "coverage_sha256":digest(actual)})
+                collective_run("epoch_coverage",finish_epoch,device)
             if step in config["checkpoint_steps"]:
                 collective_run("frozen_and_trainability_check",lambda:require_frozen(model,initial_frozen),device)
                 PHASE["phase"]="checkpoint"
@@ -274,7 +290,9 @@ def train(config,rank,device):
             raise ValueError("unconsumed rows after the complete epoch")
         collective_run("final_staging",staging.wait_complete,device)
         collective_run("final_frozen",lambda:require_frozen(model,initial_frozen),device)
-        if consumed != max(0,g["rank_samples"][rank] - start_step*RANK_UPDATE_SAMPLES):
+        start_epoch,start_update=training_cursor(start_step,g)
+        expected_consumed=max(0,g["rank_samples"][rank]-start_update*RANK_UPDATE_SAMPLES)+(EPOCHS-start_epoch-1)*g["rank_samples"][rank]
+        if consumed != expected_consumed:
             raise ValueError("wrong number of newly consumed rows after resume")
         rank_result={"rank":rank,"optimizer_steps":step,"new_rows_consumed":consumed,
                      "new_unique_row_indices":len(set(coverage)),"coverage_sha256":digest(coverage),
@@ -286,10 +304,11 @@ def train(config,rank,device):
         # Rank-local sampler coverage is checked against the exact resumed
         # deterministic shard, not merely against a total count.
         def verify_coverage():
-            sampler.start_index=0
-            expected_rows=list(iter(sampler))
-            tail=expected_rows[-consumed:] if consumed else []
-            if coverage!=[dataset.order[i] for i in tail]:
+            expected=[]
+            for ep in range(start_epoch,EPOCHS):
+                sampler.set_epoch(ep);sampler.start_index=start_update*RANK_UPDATE_SAMPLES if ep==start_epoch else 0
+                expected.extend((ep,dataset.order[i]) for i in sampler)
+            if coverage!=expected:
                 raise ValueError("consumed rows differ from the exact deterministic no-replacement shard")
         collective_run("complete_epoch_coverage",verify_coverage,device)
         def final_report():
@@ -302,7 +321,7 @@ def train(config,rank,device):
                         raise ValueError(f"final saved model differs: {name}")
                 write_json(run/"training_report.json",{"status":"PASS","route":ROUTE,"optimizer_steps":step,
                     "contract_sha256":config["contract_sha256"],"geometry":g,"rank_checks":results,
-                    "checkpoint":str(final),"checkpoint_reload":"PASS","full_epoch_no_drop_no_repeat":True,
+                    "checkpoint":str(final),"checkpoint_reload":"PASS","epochs":EPOCHS,"full_epoch_no_drop_no_repeat":True,
                     "elapsed_seconds":time.monotonic()-started})
         collective_run("final_reload_report",final_report,device)
         if rank==0:print(f"[training] PASS: {step} updates; {run/'training_report.json'}",flush=True)

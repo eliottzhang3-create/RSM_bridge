@@ -1,4 +1,4 @@
-Official Mizar / shared L14-17 three-round core training without added injection
+Official Mizar / shared L14-17 four-round core training without added injection
 
 The model architecture is derived from Mellow, Copyright (c) 2024 Soham,
 under the MIT License retained in LICENSE.
@@ -18,8 +18,10 @@ code and weights are separate remote assets and retain their own terms.
 
 This isolated route is copied from mizar_l9_12x3_strong_reason. It strictly
 inherits the complete official final Mizar checkpoint and retains all 30
-physical text layers, executing layers 14-17 three times with shared weights.
+physical text layers, executing layers 14-17 four times with shared weights.
 Only those four layers train. No gate or other parameters are added.
 Online decoding/staging, eight-GPU microbatch-four with up to four-step
 gradient accumulation, and complete-state checkpoints retain the reference
-training semantics. Existing source identities are recorded in source_guard.json.
+training semantics of the complete-AudioMCQ three-epoch reference recipe.
+Current source identities are recorded in source_guard_x4.json;
+source_guard.json is retained as the historical three-round record.

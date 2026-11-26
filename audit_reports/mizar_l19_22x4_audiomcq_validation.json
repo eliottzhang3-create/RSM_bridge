@@ -1,0 +1,372 @@
+{
+  "status": "PASS",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "torch": "2.15.0+cpu",
+  "transformers": "4.54.1",
+  "audio_test_adapter": true,
+  "limitations": [
+    "No remote production audio or GPU job was accessed.",
+    "CPU Gloo is not an eight-GPU NCCL or 3090 memory/throughput validation.",
+    "Production historical hybrid manifest/audio live remotely; local manifest verification uses explicit synthetic fixtures.",
+    "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+  ],
+  "checks": {
+    "existing_source_isolation": {
+      "status": "PASS",
+      "details": {
+        "baseline_files": 4258,
+        "unchanged_files": 4239,
+        "registered_concurrent_l14_changes": {
+          "code/RSmol/mizar_l14_17x3_strong_reason/README.md": {
+            "before_sha256": "58e74e8d08683983cb1fe00f64578e27e7f87a4a0a95254cc5fbbf2a1da5ef9f",
+            "after_sha256": "44659f30eaa99cf7b009f7b4443f8d3ad96036d2400344bbddb0a077999d94e2"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/admission.py": {
+            "before_sha256": "7db7d0f2d37f52a16582b482d3792c990b0aa3c4ce278c751d65ddac6e998671",
+            "after_sha256": "f25e851a57ba6a3a42113ed8d569ccad9fa32a35f5413ef999a6450afcec42bd"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/checkpoint.py": {
+            "before_sha256": "aad3845c23adfc52aa8223da07334bcdabf0183d9413dbcf41f53de602ead939",
+            "after_sha256": "b903f80b213507bf4ae45e1ecc9962e64d273771f2a9d67247a961ae5c5c4117"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/contract.py": {
+            "before_sha256": "c2f1c9d9393d4682e12153509a3ddad11174ac19cd79f496367c36ef42ccf735",
+            "after_sha256": "99372f38a2df736ae40644c725835dcee77a427903cbb27700d10fb4e35002e6"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/data/prepared_index.py": {
+            "before_sha256": "1ff5185dc952f41a5bdf286bcd9476da8b43c15a06cfe20128b24430052dcc19",
+            "after_sha256": "7bbf0f584c48c4b9b587a3df21f08116c925af2745437ec428ac5bbca0a2c9a6"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/model.py": {
+            "before_sha256": "8ec7c1fbecc7a5ff0d4e09d017b3fad499f50a39a282bc9bcee645a64d127cfb",
+            "after_sha256": "08070fb24c99e8b9083af5d292fc43810f4df7a1844ba5ce3c0b122cb4ed5066"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/optim.py": {
+            "before_sha256": "9b204e5deaa4fd2a3f2c5e82a926043354a2cca1592905880bbe3e0328b84669",
+            "after_sha256": "27b27829464df0ce7fb4cea3a25ec9533e6610b364d3fc91866fec35343dd7d3"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/prepare_index.py": {
+            "before_sha256": "c7cae4b17f997b66a7e1218623aef33a8337126e29900d562bcd13255c91438f",
+            "after_sha256": "241bcf6ffb612fe1fd46c07872e3de55d39dada173a60fadd6e7ea60e4bb5758"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/prepare_manifest.py": {
+            "before_sha256": "ec30576be83b38b27ae1979db2b6a7a76aa1d582a77bdc17b9d89945d8f7566f",
+            "after_sha256": "b3ebfda70527d614b65eac5290ef4013b2a5b3f4fe35c31e52afa189e8d7b8a2"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/previous_training.py": {
+            "before_sha256": "3c734ae0db23089eaef1a8f07113880eb207d87972373232bc568893c29943b3",
+            "after_sha256": null
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/run.sh": {
+            "before_sha256": "16bd90b2ee07bf49e050006add43749621ce0c011b84c9ebe6d2b786e741df4f",
+            "after_sha256": "5e4225f270ad4dfa22de7e7b30ae623d21d0ab0f66a1518130dbf6f58af9d58a"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/stage_data.py": {
+            "before_sha256": "960a568406770726007922a4c3e1fc0c500cf22a5539247fbe185893885842ad",
+            "after_sha256": "3f036b2e4b1789acc6a4d5efa19980dd16a9846e885bda42aa8cd3ce5526b565"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/sync_files.txt": {
+            "before_sha256": "2a6bc546b728e52634da16bf1a6157ecbf76f273f04dc3536d120338bd5abed4",
+            "after_sha256": "00c1e87726ef91acc8b9aa19157e9a0075bb7166bd993b78c466fbf2b50d4ebc"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/train.py": {
+            "before_sha256": "4e3fe9735223a52f2fecc1ffd8096cf00216926e12fd64c6ed157d175943985b",
+            "after_sha256": "7001c2c88274aaaefbf93eab1f1647b410fe14ce615459e6ce60c6033b9628f4"
+          },
+          "code/RSmol/mizar_l14_17x3_strong_reason/write_config.py": {
+            "before_sha256": "2c50d5b4c67132cf755dc7457f363c0f07cb33e59ab414ddd1dc5bca70f0d527",
+            "after_sha256": "1144c358b8590edd457ff963503e16bf56781d447171bbda36581a0c85877f00"
+          },
+          "code/RSmol/run_mizar_l14_17x3_strong_reason_5090.sh": {
+            "before_sha256": "91dc7a282a31f4bb839c157fa6002b7cb80f122784ebbac84c5df39f1ce568c8",
+            "after_sha256": "0fed958b12c947342e328156972cc442e1db0872a5b12a924e61c6ffca1a5405"
+          },
+          "tests/test_mizar_l14_17x3_previous_training.py": {
+            "before_sha256": "65480f1fe85845a3fcc32b418ea15b75124e1d19f0f20e677802e8f6ab4ec2f5",
+            "after_sha256": "efec2984ac7bf338c58c526a93a59c1485aea941a6cdc4c80f7b7295685f0858"
+          },
+          "tests/test_mizar_l14_17x3_strong_reason.py": {
+            "before_sha256": "bb5db4b23eb4c634682e5d6164524bf5f418ba81c45239a5577208f0499cb3ea",
+            "after_sha256": "d4103a9188827fe584f19b5515fc751249311ddbd9f8a2cd2fa2227598d4a519"
+          },
+          "tests/validate_mizar_l14_17x3_strong_reason.py": {
+            "before_sha256": "e8bb7b36346f77fda3d4da22ded7f295acd7907cf79f9bd464505cc051237277",
+            "after_sha256": "720b01a57093c52e406bd278d519ebbce5bb5e49160cd2fd3d76cfaea76f6463"
+          }
+        },
+        "original_rm_bytes_preserved": true
+      },
+      "method": "Focused recheck of the delivered validator after recording exact concurrent L14 file and RM transitions."
+    },
+    "python310_syntax": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 28
+      }
+    },
+    "current_l9_12_reference_parity": {
+      "status": "PASS",
+      "details": {
+        "identical_python_files": 23,
+        "trainer_ast_equal": true,
+        "schedule_and_checkpoint_math_equal": true,
+        "manifest_preparer_byte_identical": true,
+        "stage_only_prefix_change": true
+      }
+    },
+    "cpu_unit_and_gloo_tests": {
+      "status": "PASS",
+      "details": {
+        "tests_run": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": [],
+        "failure_details": []
+      }
+    },
+    "actual_official_full_load_forward_backward": {
+      "status": "PASS",
+      "details": {
+        "release_files": 18,
+        "trainability": {
+          "frozen": 145139456,
+          "layer19": 3540096,
+          "layer20": 3540096,
+          "layer21": 3540096,
+          "layer22": 3540096
+        },
+        "trainable_total": 14160384,
+        "state_entries": 454,
+        "full_683_cpu_ce": 6.104919910430908,
+        "gradient_audit": {
+          "status": "PASS",
+          "nonzero_task_gradients": {
+            "layer19": true,
+            "layer20": true,
+            "layer21": true,
+            "layer22": true
+          },
+          "frozen_gradients": false
+        },
+        "native_30_layer_383_prefix_bitwise_parity": true,
+        "recurrence_block_calls": 42,
+        "frozen_unchanged_after_adamw": true,
+        "audio_waveform": "synthetic silence; real released encoder/projector"
+      }
+    },
+    "delivery_integrity": {
+      "status": "PASS",
+      "details": {
+        "python310_package_and_test_files": 31,
+        "delivery_files_exist_and_git_visible": 44,
+        "focused_git_diff_check": true,
+        "historical_source_guard_bytes_preserved": true,
+        "source_sha256_unchanged_since_full_model_and_unit_run": "792b5789129db2af26ef3462d3c2cdf3190f5f9b93d159ae33d49b54c8e5d0a9",
+        "focused_recheck_seconds": 1.0304761000006692
+      }
+    }
+  },
+  "failures": [],
+  "previous_runs": [
+    {
+      "status": "FAILED",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "torch": "2.15.0+cpu",
+      "transformers": "4.54.1",
+      "audio_test_adapter": true,
+      "limitations": [
+        "No remote production audio or GPU job was accessed.",
+        "CPU Gloo is not an eight-GPU NCCL or 3090 memory/throughput validation.",
+        "Production historical hybrid manifest/audio live remotely; local manifest verification uses explicit synthetic fixtures.",
+        "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+      ],
+      "checks": {
+        "existing_source_isolation": {
+          "status": "FAILED",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_l19_22x3_strong_reason.py\", line 34, in check\n    try:report[\"checks\"][name]={\"status\":\"PASS\",\"details\":fn()}\n                                                          ~~^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_l19_22x3_strong_reason.py\", line 48, in isolation\n    data=path.read_bytes().replace(b\"\\r\\n\",b\"\\n\")\n         ~~~~~~~~~~~~~~~^^\n  File \"C:\\Program Files\\Python313\\Lib\\pathlib\\_abc.py\", line 625, in read_bytes\n    with self.open(mode='rb') as f:\n         ~~~~~~~~~^^^^^^^^^^^\n  File \"C:\\Program Files\\Python313\\Lib\\pathlib\\_local.py\", line 537, in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: 'C:\\\\Xlance\\\\GZ_bridge\\\\Recursive_SALM\\\\RSM_bridge\\\\code\\\\RSmol\\\\mizar_l14_17x3_strong_reason\\\\previous_training.py'\n"
+        },
+        "python310_syntax": {
+          "status": "PASS",
+          "details": {
+            "python310_files": 28
+          }
+        },
+        "current_l9_12_reference_parity": {
+          "status": "PASS",
+          "details": {
+            "identical_python_files": 23,
+            "trainer_ast_equal": true,
+            "schedule_and_checkpoint_math_equal": true,
+            "manifest_preparer_byte_identical": true,
+            "stage_only_prefix_change": true
+          }
+        },
+        "cpu_unit_and_gloo_tests": {
+          "status": "PASS",
+          "details": {
+            "tests_run": 21,
+            "failures": 0,
+            "errors": 0,
+            "skipped": [],
+            "failure_details": []
+          }
+        },
+        "actual_official_full_load_forward_backward": {
+          "status": "PASS",
+          "details": {
+            "release_files": 18,
+            "trainability": {
+              "frozen": 145139456,
+              "layer19": 3540096,
+              "layer20": 3540096,
+              "layer21": 3540096,
+              "layer22": 3540096
+            },
+            "trainable_total": 14160384,
+            "state_entries": 454,
+            "full_683_cpu_ce": 6.104919910430908,
+            "gradient_audit": {
+              "status": "PASS",
+              "nonzero_task_gradients": {
+                "layer19": true,
+                "layer20": true,
+                "layer21": true,
+                "layer22": true
+              },
+              "frozen_gradients": false
+            },
+            "native_30_layer_383_prefix_bitwise_parity": true,
+            "recurrence_block_calls": 42,
+            "frozen_unchanged_after_adamw": true,
+            "audio_waveform": "synthetic silence; real released encoder/projector"
+          }
+        }
+      },
+      "failures": [
+        "existing_source_isolation"
+      ],
+      "elapsed_seconds": 70.5278699999908,
+      "code_sha256": "792b5789129db2af26ef3462d3c2cdf3190f5f9b93d159ae33d49b54c8e5d0a9"
+    },
+    {
+      "status": "FAILED",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "torch": "2.15.0+cpu",
+      "transformers": "4.54.1",
+      "audio_test_adapter": true,
+      "limitations": [
+        "No remote production audio or GPU job was accessed.",
+        "CPU Gloo is not an eight-GPU NCCL or 3090 memory/throughput validation.",
+        "Production historical hybrid manifest/audio live remotely; local manifest verification uses explicit synthetic fixtures.",
+        "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+      ],
+      "checks": {
+        "existing_source_isolation": {
+          "status": "FAILED",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_l19_22x3_strong_reason.py\", line 34, in check\n    try:report[\"checks\"][name]={\"status\":\"PASS\",\"details\":fn()}\n                                                          ~~^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_l19_22x3_strong_reason.py\", line 75, in isolation\n    if mismatches:raise ValueError(f\"baseline changed: {mismatches}\")\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: baseline changed: ['code/RSmol/mizar_l14_17x3_strong_reason/sync_files.txt']\n"
+        },
+        "python310_syntax": {
+          "status": "PASS",
+          "details": {
+            "python310_files": 28
+          }
+        },
+        "current_l9_12_reference_parity": {
+          "status": "PASS",
+          "details": {
+            "identical_python_files": 23,
+            "trainer_ast_equal": true,
+            "schedule_and_checkpoint_math_equal": true,
+            "manifest_preparer_byte_identical": true,
+            "stage_only_prefix_change": true
+          }
+        },
+        "cpu_unit_and_gloo_tests": {
+          "status": "PASS",
+          "details": {
+            "tests_run": 21,
+            "failures": 0,
+            "errors": 0,
+            "skipped": [],
+            "failure_details": []
+          }
+        },
+        "actual_official_full_load_forward_backward": {
+          "status": "PASS",
+          "details": {
+            "release_files": 18,
+            "trainability": {
+              "frozen": 145139456,
+              "layer19": 3540096,
+              "layer20": 3540096,
+              "layer21": 3540096,
+              "layer22": 3540096
+            },
+            "trainable_total": 14160384,
+            "state_entries": 454,
+            "full_683_cpu_ce": 6.104919910430908,
+            "gradient_audit": {
+              "status": "PASS",
+              "nonzero_task_gradients": {
+                "layer19": true,
+                "layer20": true,
+                "layer21": true,
+                "layer22": true
+              },
+              "frozen_gradients": false
+            },
+            "native_30_layer_383_prefix_bitwise_parity": true,
+            "recurrence_block_calls": 42,
+            "frozen_unchanged_after_adamw": true,
+            "audio_waveform": "synthetic silence; real released encoder/projector"
+          }
+        }
+      },
+      "failures": [
+        "existing_source_isolation"
+      ],
+      "elapsed_seconds": 98.83052420000604,
+      "code_sha256": "792b5789129db2af26ef3462d3c2cdf3190f5f9b93d159ae33d49b54c8e5d0a9"
+    }
+  ],
+  "elapsed_seconds": 98.83052420000604,
+  "code_sha256": "792b5789129db2af26ef3462d3c2cdf3190f5f9b93d159ae33d49b54c8e5d0a9",
+  "verification_phases": {
+    "full_run": "Immediately preceding run: 21 unit/Gloo tests and official full model checks passed; only concurrent isolation changed.",
+    "final_recheck": "Only source isolation, Python 3.10 syntax and delivery integrity rerun. Full test/model results preserved with unchanged production digest.",
+    "scope": "Local offline CPU verification; no remote production asset or real vc submission."
+  },
+  "delivery": {
+    "retained_entrypoint": "code/RSmol/run_mizar_l19_22x3_strong_reason_5090.sh",
+    "resources": {
+      "queue": "pdgpu-3090",
+      "gpus": 8,
+      "cpus": 64,
+      "memory": "256G",
+      "nodes": 1
+    },
+    "default_existing_manifest_dir": "/mnt/cloudstorfs/sjtu_home/jinwei.zhang/data/Mizar/l9_12x4_audiomcq_only_v1",
+    "manifest_readiness_evidence": "User-provided remote reusing verified log; not independently accessed locally.",
+    "initialization": "Original official final checkpoint; fresh optimizer/scheduler/RNG/cursors.",
+    "layers_1based": [
+      19,
+      20,
+      21,
+      22
+    ],
+    "total_passes": 4,
+    "extra_audio_injection": false,
+    "rows_per_epoch": 720524,
+    "epochs": 3,
+    "optimizer_updates": 16890,
+    "global_batch_size": 128,
+    "max_lr": 2e-05,
+    "min_lr": 2e-06,
+    "warmup_updates": 507,
+    "git_commit_push_or_real_gpu_submission_performed": false,
+    "unit_test_sources_sha256": {
+      "tests/test_mizar_l19_22x3_strong_reason.py": "a0cc728a6c38581adc02f297b3a6214eb74a3050be49b7101933e355c770dfa8",
+      "tests/test_mizar_l19_22x3_previous_training.py": "d818840ad824acc556592d872f515452ee2cec0247b06b10b33785ff45f310da"
+    }
+  }
+}

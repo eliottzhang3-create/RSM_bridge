@@ -1,0 +1,30 @@
+{
+  "note": "Changes appeared concurrently outside the L14-17 task. No L19-22 source was written by this task; exact observed before/after values are recorded, not silently excluded.",
+  "files": {
+    "code/RSmol/mizar_l19_22x3_strong_reason/README.md": {
+      "baseline_sha256": "ea2d105df01194efe96991c44819b9784dddddbe9e355875aff366ead61f0f83",
+      "current_sha256": "80ba1fa7b136d2c55b053d7699059942c9d88387a5b738c961029e24fbcf5310",
+      "status": "modified_externally"
+    },
+    "code/RSmol/mizar_l19_22x3_strong_reason/previous_training.py": {
+      "baseline_sha256": "3c734ae0db23089eaef1a8f07113880eb207d87972373232bc568893c29943b3",
+      "current_sha256": null,
+      "status": "deleted_externally"
+    },
+    "tests/test_mizar_l19_22x3_previous_training.py": {
+      "baseline_sha256": "4e77760ae133abbc1d6d7e1f23d2c342206b7f7e3618634f71ef9ef20d321c45",
+      "current_sha256": "d818840ad824acc556592d872f515452ee2cec0247b06b10b33785ff45f310da",
+      "status": "modified_externally"
+    },
+    "tests/test_mizar_l19_22x3_strong_reason.py": {
+      "baseline_sha256": "0a2f5d5f4eb85bcee6cd3b94423b9a725c58f6c8981756ff414764fe256bf816",
+      "current_sha256": "a0cc728a6c38581adc02f297b3a6214eb74a3050be49b7101933e355c770dfa8",
+      "status": "modified_externally"
+    },
+    "tests/validate_mizar_l19_22x3_strong_reason.py": {
+      "baseline_sha256": "44919a747924c1f5019e9811d5ae67ceb86e6be4a6564c1d9c582f7a4d004956",
+      "current_sha256": "3d8b906769edc2700c56c4d5640d08c23428366351b15a51a6589ba44f1d5475",
+      "status": "modified_externally"
+    }
+  }
+}

@@ -24,7 +24,7 @@ if [[ -z "$RESUME" && -d "$RUN_DIR" && -n "$(find "$RUN_DIR" -mindepth 1 -maxdep
 fi
 mkdir -p "$RUN_DIR"
 STAGE_TOKEN="${SLURM_JOB_ID:-$$}_$(date +%Y%m%d_%H%M%S%N)"
-STAGE_ROOT="/dev/shm/mizar_l19_22x3_sr_${STAGE_TOKEN}"
+STAGE_ROOT="/dev/shm/mizar_l19_22x4_mcq_${STAGE_TOKEN}"
 STAGE_PID=""
 RUN_PHASE="staging_start"
 cleanup() {
@@ -75,7 +75,7 @@ import json,sys
 r=json.load(open(sys.argv[1],encoding='utf-8'))
 c=json.load(open(sys.argv[2],encoding='utf-8'))
 g=c['contract']['geometry']
-if r.get('status')!='PASS' or r.get('optimizer_steps')!=g['total_steps'] or not r.get('full_epoch_no_drop_no_repeat') or r.get('geometry')!=g:
-    raise SystemExit('training report did not confirm the sealed complete epoch')
-print(f"PASS: {g['total_steps']} real updates; {g['rows']} rows; complete epoch; frozen original weights preserved; report="+sys.argv[1])
+if r.get('status')!='PASS' or r.get('optimizer_steps')!=g['total_steps'] or r.get('epochs')!=3 or not r.get('full_epoch_no_drop_no_repeat') or r.get('geometry')!=g:
+    raise SystemExit('training report did not confirm all three sealed epochs')
+print(f"PASS: {g['total_steps']} updates; {g['rows']} rows per epoch; 3 complete epochs; frozen weights preserved; report="+sys.argv[1])
 PY

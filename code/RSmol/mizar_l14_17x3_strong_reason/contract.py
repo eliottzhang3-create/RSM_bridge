@@ -1,22 +1,24 @@
-"""Immutable recipe for official Mizar, shared L14-17 x3 without added injection, matched strong/ReasonAQA."""
+"""Official Mizar L14-17 x4; complete previously trained AudioMCQ, three epochs."""
 from __future__ import annotations
 import hashlib,json,math,os,random,time
 from pathlib import Path
-ROUTE = "mizar_final_l14_17x3_strong_reason_gbs128_v2_previous_training"
-WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, EPOCHS, SEED = 8,4,4,1,1234
+ROUTE = "mizar_final_l14_17x4_audiomcq_gbs128_3epochs_v1"
+WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, EPOCHS, SEED = 8,4,4,3,1234
+MAX_LR, MIN_LR, WARMUP_RATIO, KEEP_CHECKPOINTS = 2e-5,2e-6,.03,4
 RANK_UPDATE_SAMPLES = BATCH_SIZE * ACCUMULATION_STEPS
 GLOBAL_BATCH_SIZE = WORLD_SIZE * RANK_UPDATE_SAMPLES
 PROMPT_TOKENS, ANSWER_TOKENS, AUDIO_TOKENS = 256,300,126
 PREFIX_TOKENS = 383
 PAD_TOKEN, SEPARATOR_TOKEN_ID, EOS_TOKEN_ID = "!",0,0
-TOTAL_ROWS, REASON_ROWS = 651296,325648
-STRONG_COUNTS = {"audiomcq_mcq":257892,"audiomcq_cot":67756}
-SOURCE_COUNTS = {"reasonaqa_oneaudio":325648,"AudioCaps":62988,"Clotho":2525,"MusicCaps":1731,"CompA-R":61031,"LP-MusicCaps-MTT":9981,"SpeechCraft":156496,"TACOS":30896}
-SCHEDULE = tuple(list(range(13)) + list(range(13,17))*3 + list(range(17,30)))
+SOURCE_COUNTS = {"AudioCaps":113844,"Clotho":4798,"MusicCaps":3221,"CompA-R":249161,"LP-MusicCaps-MTT":19632,"SpeechCraft":287727,"TACOS":42141}
+TOTAL_ROWS = sum(SOURCE_COUNTS.values())
+PREVIOUS_SOURCE_COUNTS = {"reasonaqa_oneaudio":756968,**SOURCE_COUNTS}
+DEFAULT_SOURCE = "/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json"
+DEFAULT_RESOLUTIONS = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_20261024_170403/resolved_paths.tsv"
+SCHEDULE = tuple(list(range(13)) + list(range(13,17))*4 + list(range(17,30)))
 CORE_LAYERS = tuple(range(13,17))
-INJECTION_INDICES = ()
 DEFAULT_MODEL_DIR = "/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M"
-DEFAULT_DATA_DIR = "/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/l9_12x3_strong_reason_v1"
+DEFAULT_DATA_DIR = "/mnt/cloudstorfs/sjtu_home/jinwei.zhang/data/Mizar/l9_12x4_audiomcq_only_v1"
 CED_ASSET_FILES = ("config.json","configuration_ced.py","modeling_ced.py","feature_extraction_ced.py","preprocessor_config.json","model.safetensors")
 CED_EXPECTED_CONFIG = {"embed_dim":384,"depth":12,"num_heads":6,"n_mels":64,"patch_size":16,"patch_stride":16,"target_length":1012,"n_fft":512,"win_size":512,"hop_size":160,"center":True,"f_min":0,"f_max":8000,"pooling":"mean","pad_last":True,"outputdim":527}
 
@@ -273,19 +275,11 @@ def raw_references(row):
 
 
 def validate_data_counts(rows, sources, views=None):
-    if (type(rows) is not int or rows <= 0 or not isinstance(sources,dict)
-            or any(k not in SOURCE_COUNTS or type(v) is not int or not 0 <= v <= SOURCE_COUNTS[k] for k,v in sources.items())
-            or sum(sources.values()) != rows):
-        raise ValueError("invalid retained dataset source counts")
-    strong = rows - sources.get("reasonaqa_oneaudio",0)
-    if strong <= 0 or sources.get("reasonaqa_oneaudio") != strong:
-        raise ValueError("ReasonAQA rows must equal retained strongAC views")
-    if views is not None and (set(views) != {"reasonaqa",*STRONG_COUNTS}
-            or any(type(v) is not int or v < 0 for v in views.values())
-            or views["reasonaqa"] != strong or sum(views[k] for k in STRONG_COUNTS) != strong
-            or any(views[k] > STRONG_COUNTS[k] for k in STRONG_COUNTS)):
-        raise ValueError("retained direct/CoT/ReasonAQA view counts disagree")
-    return strong
+    if type(rows) is not int or rows != TOTAL_ROWS or sources != SOURCE_COUNTS:
+        raise ValueError("requires all 720524 historical AudioMCQ rows and zero ReasonAQA")
+    if views is not None and (sum(views.values()) != rows or any(type(v) is not int or v<0 for v in views.values())):
+        raise ValueError("AudioMCQ view inventory disagrees with row count")
+    return rows
 
 
 def rank_shard(rows, rank, world_size=WORLD_SIZE):
@@ -299,16 +293,17 @@ def rank_microbatch_size(rows, rank, update, micro):
 
 
 def geometry(rows):
-    if type(rows) is not int or rows < 2 or rows % 2:
-        raise ValueError("balanced strongAC/ReasonAQA requires a positive even row count")
-    total = math.ceil(rows / GLOBAL_BATCH_SIZE)
+    if type(rows) is not int or rows < 1:
+        raise ValueError("requires a positive row count")
+    steps = math.ceil(rows / GLOBAL_BATCH_SIZE)
+    total = steps * EPOCHS
     return {"rows": rows, "world_size": WORLD_SIZE, "microbatch": BATCH_SIZE,
             "gradient_accumulation_steps": ACCUMULATION_STEPS,
             "global_batch_size": GLOBAL_BATCH_SIZE, "epochs": EPOCHS,
             "rank_samples_per_optimizer_step": RANK_UPDATE_SAMPLES,
             "samples_per_rank": rows // WORLD_SIZE,
-            "rank_samples":[rank_shard(rows,r)[1] for r in range(WORLD_SIZE)], "steps_per_epoch": total,
-            "total_steps": total, "warmup_steps": round(total * .05),
+            "rank_samples":[rank_shard(rows,r)[1] for r in range(WORLD_SIZE)], "steps_per_epoch": steps,
+            "total_steps": total, "warmup_steps": round(total * WARMUP_RATIO),
             "full_updates": rows // GLOBAL_BATCH_SIZE,
             "last_update_rows": rows % GLOBAL_BATCH_SIZE or GLOBAL_BATCH_SIZE,
             "dropped_rows_per_epoch": 0, "duplicated_rows_per_epoch": 0}
@@ -323,7 +318,7 @@ def accumulation_for_update(update, rows=TOTAL_ROWS):
 
 def lr_factor(step, total_steps):
     """LR of the NEXT real update, indexed from zero; final update reaches min."""
-    warmup = min(round(total_steps * .05), total_steps - 1)
+    warmup = min(round(total_steps * WARMUP_RATIO), total_steps - 1)
     if warmup and step < warmup:
         return max(.1, (step + 1) / warmup)
     progress = min(1., max(0., (step - warmup + 1) / max(1, total_steps - warmup)))
@@ -336,6 +331,17 @@ def parameter_role(name):
         if name.startswith(prefix + f"layers.{layer}."):
             return f"layer{layer + 1}"
     return "frozen"
+
+
+def checkpoint_steps(rows):
+    steps = geometry(rows)["steps_per_epoch"]
+    return sorted({epoch*steps+math.ceil(q*steps/4) for epoch in range(EPOCHS) for q in range(1,5)})
+
+
+def training_cursor(step, g):
+    if type(step) is not int or not 0 <= step <= g["total_steps"]:
+        raise ValueError("invalid global optimizer cursor")
+    return divmod(step,g["steps_per_epoch"])
 
 
 def sha256_file(path):
@@ -353,14 +359,15 @@ def semantic_contract(prepared, model_dir, bundle):
             "dataset_selection":prepared.get("dataset_selection",{"policy":"legacy_full_original_quota"}),
             "model_dir": str(model_dir), "official_bundle": bundle,
             "physical_layers": 30, "schedule": list(SCHEDULE), "trainable_layers_1based": [14,15,16,17],
-            "added_injection": None, "gate": None, "added_parameters": 0,
+            "recurrence_passes":4,"audio_injection":False,"added_parameters":0,
             "prefix": [126,1,256], "answer_tokens": 300, "attention_mask": None,
             "audio_policy": "mono_resample_center_crop_right_pad_fixed20_split10",
             "audio_read_policy": "shared_until_complete_collective_optimizer_boundary_switch",
             "forward_dtype": "float32", "autocast": False, "tf32": False,
-            "mapper_frozen_eval": True, "seed": SEED, "epochs": 1,
-            "adamw": {"max_lr": 1e-4, "min_lr": 1e-5, "betas": [.9,.999], "eps": 1e-8,
+            "mapper_frozen_eval": True, "seed": SEED, "epochs": EPOCHS,
+            "adamw": {"max_lr": MAX_LR, "min_lr": MIN_LR, "betas": [.9,.999], "eps": 1e-8,
                        "weight_decay": .01, "no_decay_bias_ndim_le1": True},
-            "scheduler": "5pct_round_warmup_then_cosine_final_real_update_at_min",
+            "scheduler": "3pct_round_global_warmup_then_cosine_final_real_update_at_min",
+            "checkpoint_steps":checkpoint_steps(prepared["rows"]),"keep_checkpoints":KEEP_CHECKPOINTS,
             "loss": "rank_local_microbatch_valid_answer_token_mean_then_actual_GA_then_active_rank_mean; empty_tail_rank_zero_loss_collective_only",
             "full_bptt": True, "use_cache": False, "gradient_checkpointing": False}
