@@ -3,6 +3,7 @@ import contextlib
 import copy
 import io
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -17,7 +18,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'code/RSmol'));sys.path.insert(0,str(ROOT/'tests'))
 from mizar_layer_pair_search import storage
 from mizar_reasonaqa_tracing import cache, config as original_config, identity as original_identity
-from mizar_reasonaqa_tracing500 import arguments,audit,config,evaluate,identity,manifest,results,runtime,source,submit,worker
+from mizar_reasonaqa_tracing500 import arguments,audit,config,evaluate,identity,manifest,results,runtime,source,submit,worker,validation
 from test_mizar_reasonaqa_tracing import EXPECTED,record,outcome,scores
 
 
@@ -26,7 +27,7 @@ class TempCase(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory(dir=os.environ.get('RSMOL_TEST_TMP'))
         self.addCleanup(self.tmp.cleanup);self.path=Path(self.tmp.name)
 
-    def fixture(self,accepted_count=730):
+    def fixture(self,accepted_count=730,rounded=False):
         directory=self.path/'original';directory.mkdir()
         audio=self.path/'fixture.wav';audio.write_bytes(b'EXPLICIT_SYNTHETIC_AUDIO')
         audio_sha=storage.file_sha(audio)
@@ -44,6 +45,11 @@ class TempCase(unittest.TestCase):
         for pos,index in enumerate(order):
             r=rows[index];value=outcome(r,pos in accepted_positions);value.pop('sha256')
             value['identity_sha256']=expected['identity_sha256'];value['audio_audit']['audio_source_sha256']=audio_sha
+            if rounded:
+                value['clean']=shifted_decision(r,value['clean'])
+                if value['corrupted'] is not None:
+                    value['corrupted']=shifted_decision(r,value['corrupted'])
+                    value['probability_gap']=value['clean']['target_probability']-value['corrupted']['target_probability']
             if value['accepted']:
                 cache_dir=directory/'cache'/f'source_{index:04d}';cache_dir.mkdir(parents=True)
                 path=cache_dir/'tensors.pt';path.write_bytes(b'EXPLICIT_SYNTHETIC_CACHE_NOT_TENSORS')
@@ -69,7 +75,7 @@ class TempCase(unittest.TestCase):
 
 class SourceImport(TempCase):
     def test_real_import_first500_of730_original5000_order_and_source_readonly(self):
-        args,pool,expected,history=self.fixture()
+        args,pool,expected,history=self.fixture(rounded=True)
         before={p.relative_to(args.source_output_dir).as_posix():storage.file_sha(p) for p in args.source_output_dir.rglob('*') if p.is_file()}
         with patch.object(original_identity,'verify',return_value=pool) as verify:
             context=source.load(args.source_output_dir,full=True,verify_caches=True)
@@ -119,6 +125,101 @@ class SourceImport(TempCase):
             if key not in ('schema','target_rows','stop','selected_order'):
                 self.assertEqual(config.PROTOCOL[key],value,key)
         self.assertEqual(config.TARGET,500);self.assertEqual(original_config.TARGET,1000)
+
+
+def shifted_decision(r,value,ulps=1):
+    result=copy.deepcopy(value)
+    for i,p in enumerate(result['candidate_probabilities']):
+        if p in (0.0,1.0):continue
+        for _ in range(ulps):p=math.nextafter(p,math.inf)
+        result['candidate_probabilities'][i]=p
+    result['target_probability']=result['candidate_probabilities'][r['gold_index']]
+    return result
+
+
+class PortableValidation(TempCase):
+    def test_reproduces_original_exact_dict_error_accepts_only_exp_ULPs_preserves_saved_bytes(self):
+        from mizar_reasonaqa_tracing import runtime as old_runtime
+        r=record();saved=shifted_decision(r,scores(r,True,.6))
+        before=storage.object_sha(saved)
+        with self.assertRaisesRegex(ValueError,'saved prediction/probability'):old_runtime.validate_decision(r,saved)
+        self.assertGreater(validation.validate_decision(r,saved),0)
+        self.assertEqual(storage.object_sha(saved),before)
+        for ulps in (1,4,8):validation.validate_decision(r,shifted_decision(r,scores(r,True,.6),ulps))
+        with self.assertRaisesRegex(ValueError,'beyond 8 FP64 ULPs'):
+            validation.validate_decision(r,shifted_decision(r,scores(r,True,.6),32))
+
+    def test_classification_logprobs_target_consistency_and_tiny_probability_errors_stay_strict(self):
+        r=record();saved=scores(r,True,.6)
+        for key,wrong in [('prediction_index',0),('prediction_label','a'),('correct',False),('tie',True),('target_logprob',-10.)]:
+            bad=copy.deepcopy(saved);bad[key]=wrong
+            with self.assertRaises(ValueError):validation.validate_decision(r,bad)
+        bad=copy.deepcopy(saved);bad['target_probability']=math.nextafter(bad['target_probability'],math.inf)
+        with self.assertRaisesRegex(ValueError,'own saved gold'):validation.validate_decision(r,bad)
+        tiny=runtime.decision(r,[-1000.,-120.,-140.,-150.])
+        self.assertEqual(tiny['candidate_probabilities'][0],0)
+        validation.validate_decision(r,tiny)
+        validation.validate_decision(r,shifted_decision(r,tiny))
+        bad=copy.deepcopy(tiny);bad['candidate_probabilities'][0]=math.ulp(0.)
+        with self.assertRaises(ValueError):validation.validate_decision(r,bad)
+        bad=copy.deepcopy(tiny);bad['candidate_probabilities'][1]+=1e-16;bad['target_probability']=bad['candidate_probabilities'][1]
+        with self.assertRaises(ValueError):validation.validate_decision(r,bad)
+        # Different FP32 logprobs must not be excused as exp rounding.
+        different=copy.deepcopy(saved);different['candidate_logprobs'][0]=math.nextafter(different['candidate_logprobs'][0],math.inf)
+        with self.assertRaisesRegex(ValueError,'candidate_logprobs'):validation.assert_same_decision(r,different,saved)
+
+    def test_history_import_accepts_cross_node_rounding_and_keeps_original_membership(self):
+        r=record();o=outcome(r);o.pop('sha256')
+        o['clean']=shifted_decision(r,o['clean']);o['corrupted']=shifted_decision(r,o['corrupted'])
+        o['probability_gap']=o['clean']['target_probability']-o['corrupted']['target_probability']
+        o.update(shuffle_position=0,acceptance_order=0);o=storage.seal(o)
+        before=storage.object_sha(o)
+        self.assertEqual(source.validate_history([o],{'records':[r],'shuffle_order':[0]},EXPECTED),1)
+        self.assertEqual(storage.object_sha(o),before)
+        bad=copy.deepcopy(o);bad.pop('sha256');bad['accepted']=False;bad=storage.seal(bad)
+        with self.assertRaises(ValueError):source.validate_history([bad],{'records':[r],'shuffle_order':[0]},EXPECTED)
+
+    def test_last_layer_probability_rounding_keeps_actual_RR_and_exact_readout_requirement(self):
+        frozen=frozen_fixture();r=frozen['records'][0]
+        r['screening']['clean']=shifted_decision(r,r['screening']['clean'],4)
+        r['screening']['probability_gap']=r['screening']['clean']['target_probability']-r['screening']['corrupted']['target_probability']
+        patched=scores(r,True,.6)
+        value=results.make_row(r,EXPECTED,frozen,30,patched)
+        results.validate(storage.seal(value),r,EXPECTED,frozen,30)
+        self.assertNotEqual(value['RR'],1.0,'must retain the computed RR, not clamp the control to1')
+        self.assertAlmostEqual(value['RR'],1.0,places=13)
+        bad=results.make_row(r,EXPECTED,frozen,30,scores(r,True,.61))
+        with self.assertRaises(ValueError):results.validate(storage.seal(bad),r,EXPECTED,frozen,30)
+
+    def test_controls_tolerate_exp_rounding_but_keep_full_vocab_logits_and_raw_states_exact(self):
+        import torch
+        r=record();clean=torch.linspace(-2,2,41);corrupt=torch.linspace(2,-2,41)
+        states=torch.ones(30,256,16,dtype=torch.bfloat16)
+        cp=torch.zeros(1,383,16,dtype=torch.bfloat16);sp=cp.clone()
+        saved_clean=shifted_decision(r,runtime.from_logits(r,clean))
+        saved_corrupt=shifted_decision(r,runtime.from_logits(r,corrupt))
+        sequence=[(clean,states),(clean,None),(corrupt,None),(corrupt,None),(clean,None)]
+        with patch.object(runtime,'forward',side_effect=sequence):
+            check=runtime.controls({},cp,sp,states,r,saved_clean,saved_corrupt)
+        self.assertEqual(check['status'],'PASS');self.assertTrue(check['saved_logprobs_exact'])
+        self.assertGreater(check['saved_probability_max_abs_error'],0)
+        bad=clean.clone();bad[40]+=1e-3
+        with patch.object(runtime,'forward',side_effect=sequence[:-1]+[(bad,None)]):
+            with self.assertRaisesRegex(ValueError,'full vocabulary logits'):runtime.controls({},cp,sp,states,r,saved_clean,saved_corrupt)
+        changed=states.clone();changed[1,1,1]=0
+        with patch.object(runtime,'forward',side_effect=[(clean,changed),*sequence[1:]]):
+            with self.assertRaisesRegex(ValueError,'cached clean states'):runtime.controls({},cp,sp,states,r,saved_clean,saved_corrupt)
+
+    def test_real30_layer_BF16_controls_with_saved_probability_last_bit_difference(self):
+        from test_mizar_reasonaqa_tracing import RealNumerics
+        helper=RealNumerics();torch,loaded,cp,sp=helper.model('sdpa')
+        with torch.inference_mode(),torch.autocast('cpu',dtype=torch.bfloat16):
+            clean,states=runtime.forward(loaded,cp,capture=True);corrupt,_=runtime.forward(loaded,sp)
+            r=record();saved_clean=shifted_decision(r,runtime.from_logits(r,clean))
+            saved_corrupt=shifted_decision(r,runtime.from_logits(r,corrupt))
+            check=runtime.controls(loaded,cp,sp,states,r,saved_clean,saved_corrupt)
+        self.assertEqual(check['status'],'PASS');self.assertEqual(check['state_shape'],[30,256,16])
+        self.assertTrue(check['layer30_equals_clean_logits_bitwise']);self.assertTrue(check['saved_logprobs_exact'])
 
 
 def frozen_fixture():
@@ -226,7 +327,8 @@ class Scheduling(TempCase):
     def test_old_model_capture_functions_and_real_BF16_cache_are_reused_exactly(self):
         import torch
         from mizar_reasonaqa_tracing import runtime as old
-        self.assertIs(runtime.forward,old.forward);self.assertIs(runtime.controls,old.controls);self.assertIs(runtime.load,old.load)
+        self.assertIs(runtime.forward,old.forward);self.assertIs(runtime.load,old.load)
+        self.assertIsNot(runtime.controls,old.controls,'stored probability validation is intentionally portable')
         r=record();cp=torch.randn(1,383,576,dtype=torch.bfloat16);sp=cp.clone();sp[:,:126]=0
         states=torch.randn(30,256,576,dtype=torch.bfloat16)
         meta=cache.save(self.path,r,EXPECTED,cp,sp,states,{'audio_source_sha256':'fixture'},{'precision':'fixture'})

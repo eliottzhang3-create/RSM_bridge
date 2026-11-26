@@ -26,6 +26,20 @@
 不能仅把原TARGET从1000改成500，否则旧pool/model/source身份及缓存会不一致。
 此续跑只支持已完成且保存了原sealed selection_report的筛选；少于500合格题会明确失败。
 
+### 读取旧概率的末位校验修复
+
+原校验将保存的整份decision字典与当前CPU用`math.exp(logprob)`复算的字典直接判相等，
+因此即使预测和logprob完全相同，仅FP64派生概率相差1ULP也会报
+`saved prediction/probability disagrees with candidate logprobs`。
+500题包的`validation.py`只对`candidate_probabilities`与`target_probability`允许最多8个FP64 ULP，
+不使用固定绝对epsilon；0和1仍要求完全相同。类型、标签、argmax/tie/正确性、logprob、目标与其候选概率的内部对应保持严格。
+超过容差时错误会显示具体题ID、字段、保存值/复算值、十六进制float和误差，便于区分真实不一致。
+
+只校验，不重写或归一化旧概率、不改变筛选成员、clean/corrupted基准值、gap或缓存SHA。
+同类校验同时用于GPU缓存重现与第30层；完整词表logits、raw hidden states仍逐值相等。
+第30层按实际概率计算RR并保留其末位偏差，不强制写成1。
+本次用户报错发生在新500题manifest写入前，更新整个500题包后可重执行下面原命令；无需重建原5000题pool或重跑筛选。
+
 ## 远程执行
 
 本地通过GitHub同步新增包、顶层入口；原包和既有依赖保持原版本。

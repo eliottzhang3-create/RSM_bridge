@@ -36,8 +36,10 @@ def validate(value, record, expected, frozen, layer):
     recomputed = storage.seal(make_row(record, expected, frozen, layer, value['patched']))
     if value != recomputed or not 1 <= layer <= 30:
         raise ValueError('patch result identity/probability/RR/route mismatch')
-    if layer == 30 and (value['RR'] != 1.0 or value['patched'] != record['screening']['clean']):
-        raise ValueError('last-layer positive control failed')
+    if layer == 30:
+        # Exact logits/logprobs are the positive control; derived FP64 exp may
+        # differ in its final ULP across nodes. Keep the actual RR unclipped.
+        runtime.assert_same_decision(record,value['patched'],record['screening']['clean'])
     return value
 
 

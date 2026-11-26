@@ -5,8 +5,8 @@ from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from mizar_layer_pair_search import storage
-from mizar_reasonaqa_tracing import config as old_config, identity as old_identity, selection as old_selection
-from . import config
+from mizar_reasonaqa_tracing import config as old_config, identity as old_identity
+from . import config, validation
 
 
 def original_arguments(expected):
@@ -34,7 +34,7 @@ def validate_history(history, pool, expected):
         if pos >= len(pool['shuffle_order']):
             raise ValueError('source journal exceeds fixed5000')
         r = pool['records'][pool['shuffle_order'][pos]]
-        old_selection.validate_outcome(value, r, expected)
+        validation.validate_outcome(value, r, expected)
         if (value['shuffle_position'] != pos or value['acceptance_order'] != (accepted if value['accepted'] else None)
                 or accepted >= old_config.TARGET):
             raise ValueError('source screening order/acceptance sequence changed')

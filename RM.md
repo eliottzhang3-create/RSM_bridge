@@ -1,3 +1,33 @@
+## 2026-11-26：ReasonAQA500读取旧概率的严格浮点字典比较修复
+
+用户执行CPU manifest时，source.validate_history调用原validate_outcome→validate_decision报
+saved prediction/probability disagrees with candidate logprobs，尚未进入模型推理或写新500题manifest。
+代码定位为原saved dict与当前math.exp(logprob)复算dict要求完全相等，exp派生概率1个FP64 ULP差异即可误报。
+本地明确复现1ULP错误并验证修复；未收到原始失败decision，故不声称已独立测得该远程样本的具体误差。
+
+仅改隔离mizar_reasonaqa_tracing500，新增validation.py；原1000题包与顶层入口17份SHA继续保持。
+对candidate_probabilities/target_probability仅允许8个FP64 ULP以内，0/1端点仍完全相同，不用固定absolute epsilon。
+候选logprobs/target_logprob、预测标签/索引/argmax/tie/正确性/字段类型仍严格；目标概率必须等于其自身保存的GT候选概率。
+source导入继续验证seal、原数据/模型/环境、shuffle/acceptance顺序、原3项资格/gap/缓存SHA；不调用旧严格浮点dict检查。
+保留原保存概率，不重算或改写源文件；first500成员、clean/corrupt基准与原gap不变。
+超过容差报具体题ID/字段/保存与复算decimal和hex/abs误差及允许值，真实预测/logprob不一致仍拒绝。
+
+同类校验同时用于500题runtime.controls与逐题结果；核心load/forward/from_logits等仍直接引用原实现，BF16/题面/音频/patch无改。
+full-vocabulary logits与raw clean states对照仍逐值相等；candidate logprobs仍要求与原保存值完全一致。
+第30层按其实际概率计算并保存RR，允许exp末位造成接近1的偏差，不把RR强制设1、不增加epsilon或clip。
+源码身份包含新validator；默认报错发生于新500题输出claim前，更新整个500题包后重跑原CPU manifest/提交命令即可。
+旧5000题pool、730份筛选缓存不重建、不重跑；未放宽原模型/源码身份或样本资格。
+README与sync_files已补新模块和修复说明。
+
+本地完整19/19通过无跳过：1/4/8 ULP通过与32ULP拒绝、tiny probability/零端点/错误预测/logprob/目标内部对应拒绝；
+原5000/730合成来源带ULP偏移的实际first500导入与原目录全文件保持，15000调度/续跑/汇总/八图回归通过。
+真实30层Llama BF16/SDPA原始状态和logits对照加保存概率1ULP偏移通过，修改完整logits/raw states仍拒绝；原eager/SDPA/576维回归保持。
+第30层RR末位偏差实际保留、不同目标概率仍拒绝；原1000源码17份保护/新98份身份、Python3.10和真实Bash入口解析通过。
+初次4个stdlib测试body无断言失败，但Windows沙箱临时目录清理报错，获准沙箱外完整复验，记录见validation report。
+报告audit_reports/mizar_reasonaqa_tracing500_validation.json保留先前验证；测试产生的4份SVG时间戳/随机ID变动已还原为任务开始版本。
+未读取远程原始失败decision/生产缓存或权重、提交GPU作业、commit/push；生产重试仍待用户远程执行。
+本条仅前置，以下RM原有全部字节完整保留。
+
 ## 2026-11-26：ReasonAQA静音tracing仅730题合格，按用户要求复用first500继续
 
 用户回传selection_report（本地未独立读远程）：原5000全部扫描，clean正确3921，silence_correct3190、clean_wrong1079、

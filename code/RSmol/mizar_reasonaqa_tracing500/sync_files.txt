@@ -15,6 +15,7 @@ code/RSmol/mizar_reasonaqa_tracing500/selection.py
 code/RSmol/mizar_reasonaqa_tracing500/source.py
 code/RSmol/mizar_reasonaqa_tracing500/submit.py
 code/RSmol/mizar_reasonaqa_tracing500/worker.py
+code/RSmol/mizar_reasonaqa_tracing500/validation.py
 code/RSmol/mizar_reasonaqa_tracing500/sync_files.txt
 code/RSmol/run_mizar_reasonaqa_tracing500_8gpu_5090.sh
 tests/test_mizar_reasonaqa_tracing500.py
