@@ -1,0 +1,227 @@
+{
+  "status": "PASS",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "torch": "2.15.0+cpu",
+  "transformers": "4.54.1",
+  "audio_test_adapter": true,
+  "limitations": [
+    "No remote production audio or GPU job was accessed.",
+    "CPU Gloo is not an eight-GPU NCCL or 5090 memory/throughput validation.",
+    "Local S1 selection uses raw-path groups; remote manifest uses resolved canonical recordings.",
+    "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+  ],
+  "checks": {
+    "existing_source_isolation": {
+      "status": "PASS",
+      "details": {
+        "baseline_files_preserved": 4116,
+        "registered_concurrent_rm_prefix": {
+          "marker": "<!-- mizar_l14_17x3_original_rm -->\n",
+          "sha256": "11a55f2d7402660c92aed1ba8cf2048e5491a67a5885c1f13ab2cd66316384ae",
+          "route": "mizar_l14_17x3_strong_reason",
+          "policy": "Preserve this exact concurrently prepended record and the original RM body."
+        }
+      }
+    },
+    "python310_syntax": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 29
+      }
+    },
+    "reference_training_and_data_equivalence": {
+      "status": "PASS",
+      "details": {
+        "byte_identical_files": 26,
+        "training_update_ast_equal": true,
+        "staging_only_prefix_change": true,
+        "dataset_format_reused": "mizar_l9_12x3_strong_reason_dataset_v2"
+      }
+    },
+    "cpu_unit_and_gloo_tests": {
+      "status": "PASS",
+      "details": {
+        "tests_run": 28,
+        "failures": 0,
+        "errors": 0,
+        "skipped": [],
+        "failure_details": []
+      }
+    },
+    "actual_official_full_load_forward_backward": {
+      "status": "PASS",
+      "details": {
+        "release_files": 18,
+        "trainability": {
+          "frozen": 145139456,
+          "layer19": 3540096,
+          "layer20": 3540096,
+          "layer21": 3540096,
+          "layer22": 3540096
+        },
+        "trainable_total": 14160384,
+        "state_entries": 454,
+        "full_683_cpu_ce": 6.1296515464782715,
+        "gradient_audit": {
+          "status": "PASS",
+          "nonzero_task_gradients": {
+            "layer19": true,
+            "layer20": true,
+            "layer21": true,
+            "layer22": true
+          },
+          "frozen_gradients": false
+        },
+        "native_30_layer_383_prefix_bitwise_parity": true,
+        "frozen_unchanged_after_adamw": true,
+        "audio_waveform": "synthetic silence; real released encoder/projector"
+      }
+    },
+    "final_delivery_checks": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 32,
+        "bash_files": 2,
+        "readme_bash_blocks": 4,
+        "delivery_files": 44,
+        "unchanged_data_dependencies": 34,
+        "git_visible": true,
+        "new_file_whitespace": true,
+        "parameter_preview": "queue=pdgpu-5090 cpus=32 memory=256G gpus=8 nodes=1\ndata_dir=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/l9_12x3_strong_reason_v1\nmodel_dir=/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M\noutput_root=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_final_l19_22x3_strong_reason_gbs128_5090/formal_20261126_191249248587100\nresume=\nstage_workers=4\nlog_path=/c/Xlance/GZ_bridge/Recursive_SALM/RSM_bridge/code/RSmol/log/mizar-core19.20261126_191249248587100.JOB.log\n",
+        "original_rm_body_and_concurrent_record_preserved": true
+      }
+    }
+  },
+  "failures": [],
+  "previous_runs": [
+    {
+      "status": "FAILED",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "torch": "2.15.0+cpu",
+      "transformers": "4.54.1",
+      "audio_test_adapter": true,
+      "limitations": [
+        "No remote production audio or GPU job was accessed.",
+        "CPU Gloo is not an eight-GPU NCCL or 5090 memory/throughput validation.",
+        "Local S1 selection uses raw-path groups; remote manifest uses resolved canonical recordings.",
+        "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+      ],
+      "checks": {
+        "existing_source_isolation": {
+          "status": "PASS",
+          "details": {
+            "unchanged_files": 4116
+          }
+        },
+        "python310_syntax": {
+          "status": "PASS",
+          "details": {
+            "python310_files": 29
+          }
+        },
+        "reference_training_and_data_equivalence": {
+          "status": "PASS",
+          "details": {
+            "byte_identical_files": 26,
+            "training_update_ast_equal": true,
+            "staging_only_prefix_change": true,
+            "dataset_format_reused": "mizar_l9_12x3_strong_reason_dataset_v2"
+          }
+        },
+        "cpu_unit_and_gloo_tests": {
+          "status": "FAILED",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_l19_22x3_strong_reason.py\", line 33, in check\n    try:report[\"checks\"][name]={\"status\":\"PASS\",\"details\":fn()}\n                                                          ~~^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_l19_22x3_strong_reason.py\", line 93, in units\n    if not result.wasSuccessful() or result.skipped:raise ValueError(details)\n                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: {'tests_run': 26, 'failures': 1, 'errors': 0, 'skipped': []}\n"
+        }
+      },
+      "failures": [
+        "cpu_unit_and_gloo_tests"
+      ],
+      "elapsed_seconds": 73.1706103999968,
+      "code_sha256": "a815ff0de31d99b1467ac4cc8dbc2bad6f6c417c08f373314c57f008a50c878a"
+    },
+    {
+      "status": "FAILED",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "torch": "2.15.0+cpu",
+      "transformers": "4.54.1",
+      "audio_test_adapter": true,
+      "limitations": [
+        "No remote production audio or GPU job was accessed.",
+        "CPU Gloo is not an eight-GPU NCCL or 5090 memory/throughput validation.",
+        "Local S1 selection uses raw-path groups; remote manifest uses resolved canonical recordings.",
+        "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+      ],
+      "checks": {
+        "existing_source_isolation": {
+          "status": "FAILED",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_l19_22x3_strong_reason.py\", line 36, in check\n    try:report[\"checks\"][name]={\"status\":\"PASS\",\"details\":fn()}\n                                                          ~~^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_l19_22x3_strong_reason.py\", line 55, in isolation\n    if mismatches:raise ValueError(f\"baseline changed: {mismatches}\")\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: baseline changed: ['RM.md']\n"
+        },
+        "python310_syntax": {
+          "status": "PASS",
+          "details": {
+            "python310_files": 29
+          }
+        },
+        "reference_training_and_data_equivalence": {
+          "status": "PASS",
+          "details": {
+            "byte_identical_files": 26,
+            "training_update_ast_equal": true,
+            "staging_only_prefix_change": true,
+            "dataset_format_reused": "mizar_l9_12x3_strong_reason_dataset_v2"
+          }
+        },
+        "cpu_unit_and_gloo_tests": {
+          "status": "PASS",
+          "details": {
+            "tests_run": 26,
+            "failures": 0,
+            "errors": 0,
+            "skipped": [],
+            "failure_details": []
+          }
+        },
+        "actual_official_full_load_forward_backward": {
+          "status": "PASS",
+          "details": {
+            "release_files": 18,
+            "trainability": {
+              "frozen": 145139456,
+              "layer19": 3540096,
+              "layer20": 3540096,
+              "layer21": 3540096,
+              "layer22": 3540096
+            },
+            "trainable_total": 14160384,
+            "state_entries": 454,
+            "full_683_cpu_ce": 6.1296515464782715,
+            "gradient_audit": {
+              "status": "PASS",
+              "nonzero_task_gradients": {
+                "layer19": true,
+                "layer20": true,
+                "layer21": true,
+                "layer22": true
+              },
+              "frozen_gradients": false
+            },
+            "native_30_layer_383_prefix_bitwise_parity": true,
+            "frozen_unchanged_after_adamw": true,
+            "audio_waveform": "synthetic silence; real released encoder/projector"
+          }
+        }
+      },
+      "failures": [
+        "existing_source_isolation"
+      ],
+      "elapsed_seconds": 94.11855079999805,
+      "code_sha256": "a815ff0de31d99b1467ac4cc8dbc2bad6f6c417c08f373314c57f008a50c878a"
+    }
+  ],
+  "elapsed_seconds": 98.51424549999501,
+  "code_sha256": "a815ff0de31d99b1467ac4cc8dbc2bad6f6c417c08f373314c57f008a50c878a",
+  "previous_run_notes": [
+    "First unit run: new test accidentally matched the standard Transformer MLP gate_proj when checking for an extra audio_gate; corrected assertion, production code unchanged.",
+    "Second run: all 26 then-existing CPU tests and full official model check passed; baseline guard detected another chat prepending the L14-17 RM record. Registered its exact prefix SHA, preserved original body and reran final checks."
+  ]
+}

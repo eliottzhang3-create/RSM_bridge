@@ -1,0 +1,25 @@
+Official Mizar / shared L14-17 three-round core training without added injection
+
+The model architecture is derived from Mellow, Copyright (c) 2024 Soham,
+under the MIT License retained in LICENSE.
+
+The Stage 1 text templates, text construction/tokenization semantics,
+distributed sampler, optimizer/scheduler and adaptive gradient clipping
+are derived from kaiyangli-ml/Mizar_159M. The fixed20 online audio policy
+is adapted from its pipeline/build_ced_cache.py.
+
+Mizar: Copyright (c) 2026 NEC Laboratories America, Inc.
+All rights reserved. The Clear BSD License is retained in
+licenses/Mizar-ClearBSD.txt.
+
+The CEDFrequencyMerger and CEDTemporalMapper definitions and initialization
+are retained from Mizar runtime/stage1/models/ced.py. The CED encoder model
+code and weights are separate remote assets and retain their own terms.
+
+This isolated route is copied from mizar_l9_12x3_strong_reason. It strictly
+inherits the complete official final Mizar checkpoint and retains all 30
+physical text layers, executing layers 14-17 three times with shared weights.
+Only those four layers train. No gate or other parameters are added.
+Online decoding/staging, eight-GPU microbatch-four with up to four-step
+gradient accumulation, and complete-state checkpoints retain the reference
+training semantics. Existing source identities are recorded in source_guard.json.

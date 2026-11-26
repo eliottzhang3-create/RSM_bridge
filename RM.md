@@ -1,3 +1,84 @@
+## 2026-11-26：原始Mizar L19–22共享三轮，仅四层训练、无额外注入
+
+按用户确认计划，从L9–12完整复制隔离code/RSmol/mizar_l19_22x3_strong_reason/，新增run_mizar_l19_22x3_strong_reason_5090.sh。
+本地Windows改代码、GitHub中转，正式权重/音频/输出仍在远程Linux；未代为commit/push、连接远程资产或提交GPU作业。
+任务开始4116份既有Python/Shell/JSON/Markdown的normalized-LF基线保持；RM原文完整保留。
+工作期间另一会话前置L14–17记录，已在source_guard登记其精确前缀SHA并完整保留，未修改该路线。
+
+完整严格继承官方Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt的454状态及已训练CED/projector/全部30层LM，18个release文件SHA/大小校验保持。
+原始1-based轨迹1..18,(19..22)x3,23..30，共30物理层/38次block；同一组四层参数共享三轮，完整683位置。
+仅19–22全部attention/MLP/层内norm可训练，每层3540096，合计14160384；其余145139456冻结eval，embedding/head保持绑定。
+移除A8/anchor、共享audio_gate及循环间额外残差，不新增模型参数，state_dict恰为原454项。
+前18层no_grad；三轮完整BPTT不detach；冻结后缀23–30、最终norm/head保留输入梯度，final norm仅第30层后一次。
+无跨forward隐藏状态、KV或decoder gradient checkpointing；正常Transformer层内残差保留。
+
+默认复用原data/Mizar/l9_12x3_strong_reason_v1封存数据与旧训练成员修复，数据格式/成员/顺序/原音频路径/CoT不改，不重抽题。
+旧未使用才过滤、旧使用复用audit路径且失效拒绝；保留strong视图N配ReasonAQA N，总2N，实际N仍由远程prepare确认。
+独立CPU index绑定本路线源码与原dataset seal；26份数据/加载/检查点等文件逐字节继承，完整train/optimizer_update与LR/分片数学AST保持。
+原8GPU×micro4×GA4=最大GBS128、1epoch、ceil(2N/128)更新，动态尾批/空rank、无drop/补齐重复保持。
+原AdamW max/min1e-4/1e-5、betas(.9,.999)/eps1e-8/WD.01与低维免decay、round5%warmup/cosine最后真实更新到min、GradScaler/GradNorm保持。
+FP32/无autocast/TF32off；fixed20中心截20s/右补零/mono32k/10+10在线CED，126+1+256+300=683、PAD17/EOS0、原EOT截断和answer-only shifted CE保持。
+每卡micro有效token mean→实际GA mean→活跃rank mean，空rank零任务损失仅通信；原seed及精确恢复分片保持。
+
+pdgpu-5090/8GPU/32CPU/256G/1node，原镜像/mellow_c8204d8/Transformers4.54.1和conda覆盖，直接单次formal，无额外GPU smoke。
+独立output/log/index/tmpfs及route身份；/dev/shm/mizar_l19_22x3_sr_<token>与真实路径守卫一致，先stop/reap producer再owner/token清理。
+共享盘立即训练、后台4workers复制、完整文件/字节校验后optimizer边界8rank MIN共同切本地；恢复重新staging。
+每500及真实最后步完整保存、保留3份；同本路线同源码/资产/数据/环境/配方在原run root完整恢复，旧L9–12及其他路线拒绝。
+完整模型/具名AdamW moments/scheduler/scaler/tracker/8rank RNG/数据游标、日志备份回退、最终checkpoint重读及PASS完成判定保持。
+
+最终本地28/28 CPU回归通过、无skip：真实小30层Llama eager/SDPA的native单遍、独立38次纯循环、三轮直接衔接、12次core输出任务梯度与冻结后缀输入梯度/因果性。
+真实两进程Gloo GA4/尾GA1及空rank零任务梯度对照、完整AdamW恢复下一更新逐值一致、错旧route/额外gate库存/nonfinite/frozen漂移拒绝通过。
+真实fixture manifest CLI/历史成员与等量/任意尾批/封存index幂等及篡改拒绝、实际CPU admission/旧路线拒绝、Bash单次提交/空格参数/生命周期与真实tmpfs赋值及owner清理守卫通过。
+已有本地官方18文件SHA/454严格继承、原576维30层383prefix native逐值一致、真实CED/projector+683token静音CPU前反向/AdamW后冻结状态不变通过。
+首轮一项新增断言误匹配标准MLP gate_proj已修正；次轮26项及官方模型通过，RM并发前置触发守卫，登记精确并发记录后最终完整28项及官方复验通过。
+报告保留previous_runs及原因；生产代码未因这些测试/并发问题改变。Windows沙箱依赖/Bash权限获准沙箱外离线验收。
+32份Python3.10语法、2Shell/4README Bash块、44份交付/34项既有准备依赖的Git可见性及新增文件whitespace通过。
+测试Torch2.15 CPU/Transformers4.54.1，torchaudio2.9未用native扩展仅测试进程明确适配；生产代码无适配。
+未验证远程真实音频齐备、CUDA/NCCL/5090显存吞吐或收敛，不将CPU结果写为GPU PASS。
+报告audit_reports/mizar_l19_22x3_strong_reason_validation.json；完整Git同步、数据复用、正式提交/恢复和输出说明见新包README.md/sync_files.txt。
+GitHub同步后，远程仓库根执行bash code/RSmol/run_mizar_l19_22x3_strong_reason_5090.sh；若原数据未成功prepare，先执行原prepare_mizar_l9_12x3_strong_reason.sh。
+以下原RM全部字节完整保留。
+
+<!-- mizar_l19_22x3_original_rm -->
+## 2026-11-26：原始Mizar L14–17共享三轮，仅四层训练、无额外注入
+
+按用户确认方案复制隔离 code/RSmol/mizar_l14_17x3_strong_reason/，新增 run_mizar_l14_17x3_strong_reason_5090.sh。
+原L9–12训练/准备/测试/报告及本任务开始3950份tracked Python/Shell/JSON/RM的normalized-LF SHA保持；RM仅前置本条，原全部字节保留。
+本地Windows改代码、GitHub中转，生产权重/音频/输出仍在远程Linux；未代为commit/push或提交GPU作业。
+
+完整严格继承原Mizar final stage3_q4_seed20260905.ckpt的454项状态及已训练CED/projector/全部30层LM；18个release文件SHA/大小固定。
+原始1-based层轨迹1..13,(14..17)x3,18..30，共30物理/38次block执行；四层共享一份参数、完整683位置与三轮BPTT。
+只训练14–17全部attention/MLP/norm，每层3540096、合计14160384参数；其余145139456冻结eval。
+彻底移除原A8捕获/共享audio_gate/两次音频残差注入，不新增模块或参数，state_dict恰为原454项。
+前13层no_grad；冻结后缀18–30及最终norm/head保留输入梯度；三轮不detach、无KV/decoder checkpointing，final norm只在30层后一次。
+
+数据准备及数据/音频/loss/optimizer更新循环逐字节或AST保持；默认只读复用原l9_12x3_strong_reason_v1目录及v2 sealed manifest。
+旧训练未使用才过滤/已使用复用旧audit路径/失效拒绝规则保持；实际strong视图N配ReasonAQA N，总2N，不能把218引用当QA行数相减。
+新CPU index绑定本路线源码和原dataset seal，独立cache；未访问远程旧hybrid/音频，不猜实际N。
+8GPU×micro4×GA4=最大GBS128，完整1epoch、ceil(2N/128)真实更新，任意尾批/空rank、无drop或重复保持。
+原1e-4/1e-5、round5%warmup/cosine最后更新到min、AdamW(.9,.999)/eps1e-8/WD.01与低维免decay、GradScaler/GradNorm保持。
+FP32/无autocast/TF32off；fixed20中心截取/右补零/mono32k/10+10在线CED；126+1+256+300=683，PAD17/EOS0、原EOT截断及answer-only shifted CE保持。
+每卡micro有效token mean→实际GA mean→活跃rank mean；空rank零任务损失只参加通信，原固定seed和分片保持。
+
+pdgpu-5090/8GPU/32CPU/256G/1node、原镜像/mellow_c8204d8/Transformers4.54.1与conda覆盖保持。
+单次vc formal，无额外GPU smoke；CPU seal/index/release/resume校验失败不提交。
+独立output/log/index/tmpfs身份；/dev/shm/mizar_l14_17x3_sr_<token>与真实路径守卫同时更新，先stop/reap producer后按owner/token清理。
+共享盘立即训练/后台4workers复制/optimizer边界8rank MIN共同切本地保持；恢复重建staging。
+每500步及真实最后一步完整保存、保留3份；同本路线源码/模型/数据/环境/配方在原run-root完整resume，旧L9–12及其他路线拒绝。
+模型/具名optimizer moments/scheduler/scaler/tracker/8rank RNG/游标、metrics备份恢复和最终checkpoint重读及PASS完成检查保持。
+
+最终本地29/29 CPU回归通过、无skip：真实30层小Llama eager/SDPA的native单遍及独立38次纯循环对照，三轮全位置直接衔接、12次核心梯度及冻结后缀输入梯度/因果性。
+真实2进程Gloo GA4/尾GA1与空rank零任务梯度对照、完整AdamW恢复下一步逐值一致、错旧route/库存/非有限/冻结state拒绝通过。
+真实fixture manifest CLI/历史成员过滤/动态等量/任意尾批覆盖与恢复、seal/index篡改拒绝、Bash单次提交/空格参数/生命周期、实际tmpfs赋值与生产清理守卫通过。
+已有本地完整官方18文件SHA/454继承、576维原30层383prefix native逐值一致、真实CED/projector+683token静音前向/反传/AdamW后冻结状态保持通过。
+初轮新增POSIX测试夹具read_text漏接encoding参数，一项ERROR；修正夹具后完整29项及官方检查复验通过，历史失败保留previous_runs，生产代码不因此变动。
+Torch2.15 CPU/Transformers4.54.1，已有torchaudio2.9未用native扩展仅测试进程适配；Windows沙箱依赖权限获准沙箱外离线验收。
+报告audit_reports/mizar_l14_17x3_strong_reason_validation.json；实际生产音频/CUDA/NCCL/5090显存吞吐/收敛仍待远程，不将CPU结果写为GPU PASS。
+代码、精确Git同步清单、数据复用、正式提交/完整恢复及输出位置见新包README.md和sync_files.txt。
+GitHub同步后远程仓库根执行 bash code/RSmol/run_mizar_l14_17x3_strong_reason_5090.sh。
+以下原RM全部字节完整保留。
+
+<!-- mizar_l14_17x3_original_rm -->
 ## 2026-11-26：L9–12训练manifest的218个未解析引用，按旧训练使用证据过滤并动态配额
 
 远程CPU prepare报218个不同音频引用未解析，不是218条训练行：202 AudioCaps候选文件缺失、15 MusicCaps旧S2记录不可用、1 Clotho basename歧义。

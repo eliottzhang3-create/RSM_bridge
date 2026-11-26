@@ -1,0 +1,191 @@
+{
+  "status": "PASS",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "torch": "2.15.0+cpu",
+  "transformers": "4.54.1",
+  "audio_test_adapter": true,
+  "limitations": [
+    "No remote production audio or GPU job was accessed.",
+    "CPU Gloo is not an eight-GPU NCCL or 5090 memory/throughput validation.",
+    "Local S1 selection uses raw-path groups; remote manifest uses resolved canonical recordings.",
+    "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+  ],
+  "checks": {
+    "existing_source_isolation": {
+      "status": "PASS",
+      "details": {
+        "unchanged_files": 3950
+      }
+    },
+    "python310_syntax": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 29
+      }
+    },
+    "cpu_unit_and_gloo_tests": {
+      "status": "PASS",
+      "details": {
+        "tests_run": 29,
+        "failures": 0,
+        "errors": 0,
+        "skipped": []
+      }
+    },
+    "actual_official_full_load_forward_backward": {
+      "status": "PASS",
+      "details": {
+        "release_files": 18,
+        "trainability": {
+          "frozen": 145139456,
+          "layer14": 3540096,
+          "layer15": 3540096,
+          "layer16": 3540096,
+          "layer17": 3540096
+        },
+        "trainable_total": 14160384,
+        "state_entries": 454,
+        "full_683_cpu_ce": 6.474128723144531,
+        "gradient_audit": {
+          "status": "PASS",
+          "nonzero_task_gradients": {
+            "layer14": true,
+            "layer15": true,
+            "layer16": true,
+            "layer17": true
+          },
+          "frozen_gradients": false
+        },
+        "native_30_layer_383_prefix_bitwise_parity": true,
+        "frozen_unchanged_after_adamw": true,
+        "audio_waveform": "synthetic silence; real released encoder/projector"
+      }
+    },
+    "delivery": {
+      "status": "PASS",
+      "details": {
+        "delivery_files": 44,
+        "python310_test_files": 3,
+        "bash_entrypoints": 2,
+        "readme_bash_blocks": 6,
+        "git_visible_files": 44,
+        "new_file_whitespace": "PASS",
+        "parent_byte_identical_files": [
+          ".gitignore",
+          "LICENSE",
+          "admission.py",
+          "assets.py",
+          "checkpoint.py",
+          "data/audio_paths.py",
+          "data/audiotext_dataset.py",
+          "data/fixed20.py",
+          "data/indexed_jsonl.py",
+          "data/prepared_index.py",
+          "data/sampler.py",
+          "data/staging.py",
+          "data/template.py",
+          "journal.py",
+          "licenses/Mizar-ClearBSD.txt",
+          "llama_compat.py",
+          "manifest_io.py",
+          "models/ced.py",
+          "models/ced_offline.py",
+          "prepare_index.py",
+          "prepare_manifest.py",
+          "previous_training.py",
+          "publication.py",
+          "release_manifest.json",
+          "training_helpers.py",
+          "utils/audio_io.py",
+          "write_config.py",
+          "write_failure.py"
+        ],
+        "parent_different_files": [
+          "NOTICE",
+          "README.md",
+          "contract.py",
+          "model.py",
+          "optim.py",
+          "run.sh",
+          "source_guard.json",
+          "stage_data.py",
+          "sync_files.txt",
+          "train.py"
+        ],
+        "parameter_preview": "queue=pdgpu-5090 cpus=32 memory=256G gpus=8 nodes=1\ndata_dir=/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/l9_12x3_strong_reason_v1\nmodel_dir=/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M\noutput_root=/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_final_l14_17x3_strong_reason_gbs128_5090/formal_20261126_190333780728100\nresume=\nstage_workers=4\nlog_path=/c/Xlance/GZ_bridge/Recursive_SALM/RSM_bridge/code/RSmol/log/mizar-l14-core.20261126_190333780728100.JOB.log\n",
+        "commit_push_or_gpu_submission": false
+      }
+    }
+  },
+  "failures": [],
+  "elapsed_seconds": 102.25484680000227,
+  "code_sha256": "9b808a8ba62b48527e3bae930600d9940310b2deb10a48fa923c6d7f994d7568",
+  "previous_runs": [
+    {
+      "status": "FAILED",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "torch": "2.15.0+cpu",
+      "transformers": "4.54.1",
+      "audio_test_adapter": true,
+      "limitations": [
+        "No remote production audio or GPU job was accessed.",
+        "CPU Gloo is not an eight-GPU NCCL or 5090 memory/throughput validation.",
+        "Local S1 selection uses raw-path groups; remote manifest uses resolved canonical recordings.",
+        "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+      ],
+      "checks": {
+        "existing_source_isolation": {
+          "status": "PASS",
+          "details": {
+            "unchanged_files": 3950
+          }
+        },
+        "python310_syntax": {
+          "status": "PASS",
+          "details": {
+            "python310_files": 29
+          }
+        },
+        "cpu_unit_and_gloo_tests": {
+          "status": "FAILED",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_l14_17x3_strong_reason.py\", line 33, in check\n    try:report[\"checks\"][name]={\"status\":\"PASS\",\"details\":fn()}\n                                                          ~~^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\validate_mizar_l14_17x3_strong_reason.py\", line 66, in units\n    if not result.wasSuccessful() or result.skipped:raise ValueError(details)\n                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: {'tests_run': 29, 'failures': 0, 'errors': 1, 'skipped': []}\n"
+        },
+        "actual_official_full_load_forward_backward": {
+          "status": "PASS",
+          "details": {
+            "release_files": 18,
+            "trainability": {
+              "frozen": 145139456,
+              "layer14": 3540096,
+              "layer15": 3540096,
+              "layer16": 3540096,
+              "layer17": 3540096
+            },
+            "trainable_total": 14160384,
+            "state_entries": 454,
+            "full_683_cpu_ce": 6.474128723144531,
+            "gradient_audit": {
+              "status": "PASS",
+              "nonzero_task_gradients": {
+                "layer14": true,
+                "layer15": true,
+                "layer16": true,
+                "layer17": true
+              },
+              "frozen_gradients": false
+            },
+            "native_30_layer_383_prefix_bitwise_parity": true,
+            "frozen_unchanged_after_adamw": true,
+            "audio_waveform": "synthetic silence; real released encoder/projector"
+          }
+        }
+      },
+      "failures": [
+        "cpu_unit_and_gloo_tests"
+      ],
+      "elapsed_seconds": 102.79324189999897,
+      "code_sha256": "9b808a8ba62b48527e3bae930600d9940310b2deb10a48fa923c6d7f994d7568"
+    }
+  ],
+  "previous_runs_note": "The first run had one new POSIX test-fixture read_text signature error; it was corrected and the complete 29-test suite and official CPU check passed. Production code was unchanged between runs."
+}
