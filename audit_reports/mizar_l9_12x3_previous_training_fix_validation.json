@@ -1,0 +1,67 @@
+{
+  "status": "PASS",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "torch": "2.15.0+cpu",
+  "transformers": "4.54.1",
+  "audio_test_adapter": true,
+  "limitations": [
+    "No remote production audio or GPU job was accessed.",
+    "CPU Gloo is not an eight-GPU NCCL or 5090 memory/throughput validation.",
+    "Local S1 selection uses raw-path groups; remote manifest uses resolved canonical recordings.",
+    "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real.",
+    "The actual retained production quota and whether each of the 218 references was previously used require the remote hybrid manifest; only synthetic history fixtures were used locally."
+  ],
+  "checks": {
+    "existing_source_isolation": {
+      "status": "PASS",
+      "details": {
+        "unchanged_files": 4231
+      }
+    },
+    "python310_syntax": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 29
+      }
+    },
+    "cpu_unit_and_gloo_tests": {
+      "status": "PASS",
+      "details": {
+        "tests_run": 26,
+        "failures": 0,
+        "errors": 0,
+        "skipped": []
+      }
+    },
+    "sealed_dataset_cache_identity_supplement": {
+      "status": "PASS",
+      "details": {
+        "test": "DataTests.test_real_manifest_cli_seal_idempotence_and_immutable_index",
+        "tests_run": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": [],
+        "different_dataset_seal_rebuilds_index": true,
+        "note": "Focused repeat after adding dataset seal to the index cache key; other production code unchanged."
+      }
+    }
+  },
+  "failures": [],
+  "elapsed_seconds": 48.53865070000029,
+  "code_sha256": "1130ded16cf376fef88491616152c56b0146162ecf181ebdaf9ccc7fae1fe793",
+  "suite_code_sha256_before_cache_seal_key": "5440e76918b97d37534028da63ccb82d2aa5c5dec44e261ff6b5406571f0a53f",
+  "remote_failure_evidence": {
+    "unique_references": 218,
+    "audiocaps_v2_csv_key_file_missing": 202,
+    "s2_mapping_advisor_missing_or_unusable": 15,
+    "clotho_basename_ambiguous": 1,
+    "source": "User-provided remote diagnostic summary; actual audio files were not accessed locally."
+  },
+  "policy": "Only exclude strongAC rows proven unused by previous hybrid training. Reuse its audited paths for used audio; newly missing used audio remains fatal. ReasonAQA quota equals retained strongAC views.",
+  "original_full_model_validation": {
+    "report": "audit_reports/mizar_l9_12x3_strong_reason_validation.json",
+    "report_sha256": "23f2558293e0ec4a678910deb1b59856d1fb4b6511954e2391ec60d6ad89e3c3",
+    "model_loader_changed_in_this_fix": false,
+    "model_architecture_changed_in_this_fix": false
+  }
+}

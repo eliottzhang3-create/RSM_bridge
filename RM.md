@@ -1,3 +1,31 @@
+## 2026-11-26：L9–12训练manifest的218个未解析引用，按旧训练使用证据过滤并动态配额
+
+远程CPU prepare报218个不同音频引用未解析，不是218条训练行：202 AudioCaps候选文件缺失、15 MusicCaps旧S2记录不可用、1 Clotho basename歧义。
+preparing rule日志是正常初始化；此次尚未提交GPU。不能根据这些摘要声称所有文件物理不存在或旧训练全部未用过。
+用户确认条件：旧完整AudioMCQ训练也没用过的直接过滤，用过的按以前路径；保持ReasonAQA与实际strongAC视图等量。
+参考完整训练入口确实使用 s1_stage1_hybrid_filtered.json（1477492行）及原hybrid audit TSV，而初版从1477976原S1取全部strong，遗漏历史筛选成员核对。
+
+新增隔离 previous_training.py，CPU读取旧hybrid并核对参考配方各源计数；强制所有旧使用引用有exists audit，记录原manifest SHA及原始完整strong行多重集合SHA。
+原始S1仍固定release SHA/1477976总量/756968 Reason候选/原strong视图上限；只保留旧训练使用的完整原strong行，原字段/直接答案/CoT保持。
+仅证明旧训练未使用的行可过滤；相同引用旧训练用过而strong行变化/缺失则拒绝，避免把历史输入不一致伪装为可过滤。
+旧用过音频必须复用旧audit成功路径；路径现在失效/空文件仍报错，不猜文件、换音频或静默删除。原有audit脚本/JSON映射及所有其它训练路线不修改。
+新增 excluded_strong_rows.jsonl 保留逐行原索引/ID/视图/原行SHA/raw引用/旧未使用证据与原audit记录；报告直接/CoT过滤数与唯一引用数。
+manifest schema v2绑定原始及旧训练来源、动态source/view配额、五文件SHA；旧失败building目录保留，不需清理即可重跑。
+设保留strong视图N，Reason无放回采N，总2N；保留seed1234/canonical原录音轮转尽量多样，实际N须远程读取旧manifest得出，不凭218直接相减。
+CPU日志 PREVIOUS_TRAINING_COUNTS/RETAINED_DATASET_COUNTS 输出精确配额；index/训练合同/checkpoint总步数/warmup/保存最后一步均按sealed真实行数派生。
+去除固定325648/651296/5089在当前生产配额与完成判定中的限制；这些数保留为原始元数据上界与旧版回归参照。
+8GPU×micro4×GA4=最大GBS128、1epoch、max1e-4/min1e-5及模型架构保持；尾批支持每卡1..4条及空rank，无sampler padding/drop。
+空rank只用零损失上下文参加相同DDP通信，不计样本消费/任务梯度；真实非空rank的micro loss均值→实际GA均值，完整batch行为不变。
+balanced连续分片/精确恢复覆盖所有真实行；最后LR到min。index key新增dataset seal，防同正文/不同历史筛选证据复用缓存。
+路由身份v2_previous_training，旧配方不跨版本resume；本次CPU失败尚无新GPU训练，可直接重新生成manifest后新目录训练。
+
+本地最终26项CPU回归全部通过无skip：原20项+旧成员过滤/等量、旧路径复用及失效拒绝、坏history/audit/变化行拒绝、动态配额/任意尾批覆盖与恢复、真实两进程Gloo空rank零任务梯度对照。
+最终cache seal key补充后定向复跑实际CLI/manifest发布/幂等/index篡改拒绝与不同seal重建，1项通过，是已有用例加强而非新增独立用例。
+第一次新增history测试揭示CoT为0时Counter与缺key字典比较问题，已按两种视图显式归零修复后最终26项通过。
+当前报告 audit_reports/mizar_l9_12x3_previous_training_fix_validation.json；初版完整官方模型验证报告保留，模型/loader本次未改。
+测试Torch2.15 CPU/Transformers4.54.1，沿用明确音频测试适配；未访问远程旧manifest/音频，实际保留数与218引用旧成员身份由远程新版prepare确认。
+README/sync_files/执行及提交命令已更新；不自动commit/push或提交GPU。以下原RM全部字节保留。
+
 ## 2026-11-26：原始 Mizar L9–12共享三轮 + 零初始化音频门控，strongAC/ReasonAQA，GBS128
 
 用户确认后实现隔离 code/RSmol/mizar_l9_12x3_strong_reason/，新增 prepare_mizar_l9_12x3_strong_reason.sh 与 run_mizar_l9_12x3_strong_reason_5090.sh。

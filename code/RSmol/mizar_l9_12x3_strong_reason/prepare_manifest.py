@@ -22,6 +22,7 @@ from contract import (DEFAULT_DATA_DIR, DEFAULT_MODEL_DIR, REASON_ROWS, SEED,
                       raw_references, sha256_file, write_json)
 from manifest_io import iter_rows
 from publication import atomic_publish
+from previous_training import DEFAULT_PREVIOUS_MANIFEST, load_previous_training
 
 RELEASE_ROWS = 1477976
 REASON_POOL = 756968
@@ -55,12 +56,15 @@ def row_kind(row):
 
 
 def select(source, identify, *, reason_rows=REASON_ROWS, strong_counts=None,
-           release_rows=RELEASE_ROWS, reason_pool=REASON_POOL, progress=True):
+           release_rows=RELEASE_ROWS, reason_pool=REASON_POOL, progress=True, history=None):
     """Maximize recording coverage, then round-robin unused QA within recordings."""
     expected = STRONG_COUNTS if strong_counts is None else strong_counts
     groups = collections.defaultdict(list)
     counts = collections.Counter()
     selected = set()
+    seen_strong, retained_strong = collections.Counter(), collections.Counter()
+    if history is not None:
+        reason_rows = history.strong_total
     seen = 0
     for index, row in enumerate(iter_rows(Path(source))):
         seen += 1
@@ -72,7 +76,13 @@ def select(source, identify, *, reason_rows=REASON_ROWS, strong_counts=None,
             if kind == "reasonaqa":
                 groups[identify(row)].append(index)
             else:
-                selected.add(index)
+                key = digest(row)
+                seen_strong[key] += 1
+                if history is None or seen_strong[key] <= history.strong_records[key]:
+                    selected.add(index)
+                    retained_strong[kind] += 1
+                elif any(ref in history.references for ref in raw_references(row)[1]):
+                    raise ValueError("previous training used this audio but its strongAC row changed/is absent; refusing to silently filter previously used audio")
         if progress and seen % 100000 == 0:
             print(f"[manifest] scanned {seen:,}; ReasonAQA recordings={len(groups):,}", flush=True)
     if seen != release_rows or counts["reasonaqa"] != reason_pool:
@@ -81,6 +91,8 @@ def select(source, identify, *, reason_rows=REASON_ROWS, strong_counts=None,
         raise ValueError(f"strongAC view counts differ: {dict(counts)}; required={expected}")
     if counts["reasonaqa"] < reason_rows:
         raise ValueError("insufficient single-recording ReasonAQA rows")
+    if history is not None and retained_strong != history.strong_counts:
+        raise ValueError("previous strongAC rows are not an unchanged subset of original S1")
     rng = random.Random(SEED)
     for key in sorted(groups):
         rng.shuffle(groups[key])
@@ -106,6 +118,10 @@ def select(source, identify, *, reason_rows=REASON_ROWS, strong_counts=None,
                       "seed": SEED, "reason_recording_groups": len(groups),
                       "selected_reason_recordings": len(chosen), "sampling_rounds": rounds,
                       "reason_rows_per_recording_histogram": dict(sorted(collections.Counter(chosen.values()).items())),
+                      "retained_strong_counts":dict(retained_strong),
+                      "excluded_strong_counts":{k:counts[k]-retained_strong[k] for k in expected},
+                      "reason_sample_rows":reason_rows,
+                      "previous_training":history.describe() if history is not None else None,
                       "sampling_policy": "sorted canonical recording groups; private seed1234; shuffled QA per group; reshuffled active groups each round; no replacement"}
 
 
@@ -117,11 +133,14 @@ class Resolver:
         self.rules = None
         self.checked = set()
         self.methods = collections.Counter()
+        self.audit_records = {}
+        self.required_previous_references = set()
         with self.tsv.open(encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle, delimiter="\t")
             if not {"field", "raw_path", "status", "resolved_path"} <= set(reader.fieldnames or []):
                 raise ValueError("invalid existing raw-audio audit TSV")
             for record in reader:
+                self.audit_records[(record["field"],record["raw_path"])] = record
                 if record["status"] == "exists":
                     key, path = (record["field"], record["raw_path"]), record["resolved_path"]
                     if key in self.resolutions and self.resolutions[key] != path:
@@ -149,6 +168,8 @@ class Resolver:
             return self.resolutions[key]
         path = self.resolutions.get(key)
         try:
+            if key in self.required_previous_references and (not path or not Path(path).is_file()):
+                raise ValueError(f"previous training used this audio; its original audited path is now missing: {path!r}; restore it rather than filtering or remapping")
             if not path or not Path(path).is_file():
                 result = self._fallback(*key)
                 if result["status"] != "exists":
@@ -174,15 +195,26 @@ def file_records(root, names):
     return {name: {"bytes": (root / name).stat().st_size, "sha256": sha256_file(root / name)} for name in names}
 
 
-def verify_dataset(root, *, total_rows=TOTAL_ROWS):
+def verify_dataset(root, *, total_rows=None):
     root = Path(root)
     report = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     seal = report.pop("seal_sha256")
-    if seal != digest(report) or report.get("status") != "PASS" or report.get("rows") != total_rows:
+    if seal != digest(report) or report.get("status") != "PASS" or (total_rows is not None and report.get("rows") != total_rows):
         raise ValueError("wrong or corrupted dataset manifest")
-    if report.get("format") != "mizar_l9_12x3_strong_reason_dataset_v1":
+    modern = report.get("format") == "mizar_l9_12x3_strong_reason_dataset_v2"
+    if not modern and report.get("format") != "mizar_l9_12x3_strong_reason_dataset_v1":
         raise ValueError("wrong dataset format")
-    if set(report["files"]) != {"train.jsonl", "selection.jsonl", "resolved_paths.tsv", "dataset_report.json"}:
+    if modern:
+        from contract import validate_data_counts
+        validate_data_counts(report["rows"],report["source_counts"],report["selected_counts"])
+        history = report.get("previous_training",{})
+        if history.get("strong_views") != report["rows"]//2 or not history.get("sha256"):
+            raise ValueError("dataset lacks previous training membership evidence")
+    elif total_rows is None and report.get("rows") != TOTAL_ROWS:
+        raise ValueError("legacy dataset must retain its original fixed quota")
+    expected_files = {"train.jsonl", "selection.jsonl", "resolved_paths.tsv", "dataset_report.json"}
+    if modern:expected_files.add("excluded_strong_rows.jsonl")
+    if set(report["files"]) != expected_files:
         raise ValueError("incomplete dataset file inventory")
     for name, expected in report["files"].items():
         path = root / name
@@ -219,20 +251,32 @@ class TokenAudit:
         self.pending.clear()
 
 
-def build(source, output, resolver, tokenizer, *, quotas=None):
+def build(source, output, resolver, tokenizer, *, quotas=None, history=None):
     """Small explicit quotas are an in-process fixture API, never a CLI override."""
     q = quotas or {"reason_rows": REASON_ROWS, "strong_counts": STRONG_COUNTS,
                    "release_rows": RELEASE_ROWS, "reason_pool": REASON_POOL}
-    selected, selection = select(source, resolver.resolve, **q)
-    expected_rows = q["reason_rows"] + sum(q["strong_counts"].values())
-    counts, kinds, subtypes = collections.Counter(), collections.Counter(), collections.Counter()
+    selected, selection = select(source, resolver.resolve, **q, history=history)
+    expected_views = {k:history.strong_counts[k] for k in STRONG_COUNTS} if history is not None else q["strong_counts"]
+    reason_rows = history.strong_total if history is not None else q["reason_rows"]
+    expected_rows = reason_rows + sum(expected_views.values())
+    counts, kinds, subtypes = collections.Counter(), collections.Counter({k:0 for k in STRONG_COUNTS}), collections.Counter()
+    excluded_refs = set()
     used_refs, audio_sets = {}, collections.defaultdict(set)
     token_audit = TokenAudit(tokenizer)
     with (output / "train.jsonl").open("w", encoding="utf-8", newline="\n") as train, \
-            (output / "selection.jsonl").open("w", encoding="utf-8", newline="\n") as provenance:
+            (output / "selection.jsonl").open("w", encoding="utf-8", newline="\n") as provenance, \
+            (output / "excluded_strong_rows.jsonl").open("w", encoding="utf-8", newline="\n") as excluded:
         selected_index = 0
         for source_index, row in enumerate(iter_rows(Path(source))):
             if source_index not in selected:
+                if history is not None and row_kind(row) in STRONG_COUNTS:
+                    ref = raw_references(row)[1][0]
+                    excluded_refs.add(ref)
+                    excluded.write(json.dumps({"source_row_index":source_index,"id":row.get("id"),
+                        "view":row_kind(row),"source_record_sha256":digest(row),
+                        "raw_reference":ref,"previous_reference_was_used":ref in history.references,
+                        "previous_audit":resolver.audit_records.get(ref),
+                        "reason":"not_used_by_previous_hybrid_training"},ensure_ascii=False)+"\n")
                 continue
             kind = row_kind(row)
             source_name, refs = raw_references(row)
@@ -256,7 +300,7 @@ def build(source, output, resolver, tokenizer, *, quotas=None):
     if resolver.errors:
         write_json(output / "unresolved_audio.json", list(resolver.errors.values()))
         raise ValueError(f"{len(resolver.errors)} unresolved/empty audio references; fixed quotas preserved, no GPU submission; see {output / 'unresolved_audio.json'}")
-    if kinds != {"reasonaqa": q["reason_rows"], **q["strong_counts"]}:
+    if kinds != {"reasonaqa": reason_rows, **expected_views}:
         raise ValueError("selection changed between the two source passes")
     paths = set(used_refs.values())
     with (output / "resolved_paths.tsv").open("w", encoding="utf-8", newline="") as handle:
@@ -272,6 +316,7 @@ def build(source, output, resolver, tokenizer, *, quotas=None):
                "reason_subtypes": dict(subtypes), "unique_audio_files": len(paths),
                "unique_audio_bytes": sum(resolver.stats[p]["bytes"] for p in paths),
                "reason_strong_shared_recordings": len(audio_sets["reasonaqa"] & strong_audio),
+               "excluded_unique_audio_references":len(excluded_refs),
                "audio_fallback_methods": dict(resolver.methods), "tokenization": dict(token_audit.counts),
                "audio_diversity_scope": "canonical resolved file paths, not an acoustic near-duplicate claim",
                "audio_decoded": False, "audio_copied": False, "model_forward": False}
@@ -286,6 +331,7 @@ def main(argv=None):
     parser.add_argument("--resolved-paths", type=Path, default=Path("/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_20261024_170403/resolved_paths.tsv"))
     parser.add_argument("--mapping-json", type=Path, default=Path(__file__).resolve().parents[1] / "scripts/mizar_s1_audio_mapping_s2_hybrid.json")
     parser.add_argument("--model-dir", type=Path, default=Path(DEFAULT_MODEL_DIR))
+    parser.add_argument("--previous-training-manifest",type=Path,default=Path(DEFAULT_PREVIOUS_MANIFEST))
     parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args(argv)
     output = args.output_dir.resolve()
@@ -301,6 +347,8 @@ def main(argv=None):
               "tokenizer": file_records(tokenizer_dir, TOKENIZER_FILES), "seed": SEED,
               "preparer_sha256": sha256_file(Path(__file__)),
               "resolver_sha256": sha256_file(Path(__file__).resolve().parents[1] / "scripts/audit_mizar_s1_raw_audio.py")}
+    inputs["previous_training_manifest_sha256"] = sha256_file(args.previous_training_manifest)
+    inputs["previous_training_reader_sha256"] = sha256_file(Path(__file__).with_name("previous_training.py"))
     if output.exists():
         report = verify_dataset(output)
         if report["inputs"] != inputs:
@@ -318,14 +366,24 @@ def main(argv=None):
         if len(tokenizer) != 49152 or tokenizer.pad_token_id != 17 or tokenizer.eos_token_id != 0:
             raise ValueError("tokenizer must retain vocabulary49152/PAD17/EOS0")
         resolver = Resolver(args.resolved_paths, args.mapping_json)
-        rows, details = build(source, stage, resolver, tokenizer)
+        history = load_previous_training(args.previous_training_manifest,resolver)
+        print(json.dumps({"event":"PREVIOUS_TRAINING_COUNTS","strong_views":history.strong_total,
+                          "reason_sample_rows":history.strong_total,"total_rows":2*history.strong_total,
+                          "strong_counts":dict(history.strong_counts)},ensure_ascii=False),flush=True)
+        rows, details = build(source, stage, resolver, tokenizer, history=history)
+        print(json.dumps({"event":"RETAINED_DATASET_COUNTS","selected_counts":details["selected_counts"],
+                          "source_counts":details["source_counts"],"excluded_strong_counts":details["excluded_strong_counts"],
+                          "excluded_unique_audio_references":details["excluded_unique_audio_references"]},ensure_ascii=False),flush=True)
         if sha256_file(source) != source_sha or sha256_file(args.resolved_paths) != inputs["old_audit_sha256"] or sha256_file(args.mapping_json) != inputs["mapping_json_sha256"]:
             raise ValueError("source or mappings changed during preparation")
-        if details["source_counts"] != SOURCE_COUNTS or rows != TOTAL_ROWS:
-            raise ValueError("final dataset inventory differs from the fixed contract")
-        report = {"format": "mizar_l9_12x3_strong_reason_dataset_v1", "status": "PASS", "rows": rows,
+        if sha256_file(args.previous_training_manifest) != inputs["previous_training_manifest_sha256"]:
+            raise ValueError("previous training manifest changed during preparation")
+        from contract import validate_data_counts
+        validate_data_counts(rows,details["source_counts"],details["selected_counts"])
+        report = {"format": "mizar_l9_12x3_strong_reason_dataset_v2", "status": "PASS", "rows": rows,
                   "inputs": inputs, "source_path": str(source), "selected_counts": details["selected_counts"],
-                  "files": file_records(stage, ("train.jsonl", "selection.jsonl", "resolved_paths.tsv", "dataset_report.json"))}
+                  "source_counts":details["source_counts"],"previous_training":history.describe(),
+                  "files": file_records(stage, ("train.jsonl", "selection.jsonl", "resolved_paths.tsv", "dataset_report.json", "excluded_strong_rows.jsonl"))}
         report["seal_sha256"] = digest(report)
         write_json(stage / "manifest.json", report)
         verify_dataset(stage)

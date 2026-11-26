@@ -2,7 +2,7 @@
 from __future__ import annotations
 import hashlib,json,math,os,random,time
 from pathlib import Path
-ROUTE = "mizar_final_l9_12x3_strong_reason_gbs128_v1"
+ROUTE = "mizar_final_l9_12x3_strong_reason_gbs128_v2_previous_training"
 WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, EPOCHS, SEED = 8,4,4,1,1234
 RANK_UPDATE_SAMPLES = BATCH_SIZE * ACCUMULATION_STEPS
 GLOBAL_BATCH_SIZE = WORLD_SIZE * RANK_UPDATE_SAMPLES
@@ -272,15 +272,42 @@ def raw_references(row):
     return source, refs
 
 
+def validate_data_counts(rows, sources, views=None):
+    if (type(rows) is not int or rows <= 0 or not isinstance(sources,dict)
+            or any(k not in SOURCE_COUNTS or type(v) is not int or not 0 <= v <= SOURCE_COUNTS[k] for k,v in sources.items())
+            or sum(sources.values()) != rows):
+        raise ValueError("invalid retained dataset source counts")
+    strong = rows - sources.get("reasonaqa_oneaudio",0)
+    if strong <= 0 or sources.get("reasonaqa_oneaudio") != strong:
+        raise ValueError("ReasonAQA rows must equal retained strongAC views")
+    if views is not None and (set(views) != {"reasonaqa",*STRONG_COUNTS}
+            or any(type(v) is not int or v < 0 for v in views.values())
+            or views["reasonaqa"] != strong or sum(views[k] for k in STRONG_COUNTS) != strong
+            or any(views[k] > STRONG_COUNTS[k] for k in STRONG_COUNTS)):
+        raise ValueError("retained direct/CoT/ReasonAQA view counts disagree")
+    return strong
+
+
+def rank_shard(rows, rank, world_size=WORLD_SIZE):
+    base, extra = divmod(rows,world_size)
+    return rank*base+min(rank,extra), base+int(rank<extra)
+
+
+def rank_microbatch_size(rows, rank, update, micro):
+    count = rank_shard(rows,rank)[1]
+    return max(0,min(BATCH_SIZE,count-update*RANK_UPDATE_SAMPLES-micro*BATCH_SIZE))
+
+
 def geometry(rows):
-    if rows < WORLD_SIZE * BATCH_SIZE or rows % (WORLD_SIZE * BATCH_SIZE):
-        raise ValueError("rows must divide into complete eight-rank microbatches")
+    if type(rows) is not int or rows < 2 or rows % 2:
+        raise ValueError("balanced strongAC/ReasonAQA requires a positive even row count")
     total = math.ceil(rows / GLOBAL_BATCH_SIZE)
     return {"rows": rows, "world_size": WORLD_SIZE, "microbatch": BATCH_SIZE,
             "gradient_accumulation_steps": ACCUMULATION_STEPS,
             "global_batch_size": GLOBAL_BATCH_SIZE, "epochs": EPOCHS,
             "rank_samples_per_optimizer_step": RANK_UPDATE_SAMPLES,
-            "samples_per_rank": rows // WORLD_SIZE, "steps_per_epoch": total,
+            "samples_per_rank": rows // WORLD_SIZE,
+            "rank_samples":[rank_shard(rows,r)[1] for r in range(WORLD_SIZE)], "steps_per_epoch": total,
             "total_steps": total, "warmup_steps": round(total * .05),
             "full_updates": rows // GLOBAL_BATCH_SIZE,
             "last_update_rows": rows % GLOBAL_BATCH_SIZE or GLOBAL_BATCH_SIZE,
@@ -288,10 +315,10 @@ def geometry(rows):
 
 
 def accumulation_for_update(update, rows=TOTAL_ROWS):
-    remaining = rows // WORLD_SIZE - update * RANK_UPDATE_SAMPLES
+    remaining = rows - update * GLOBAL_BATCH_SIZE
     if remaining <= 0:
         raise ValueError("update is outside the one-epoch schedule")
-    return min(ACCUMULATION_STEPS, remaining // BATCH_SIZE)
+    return min(ACCUMULATION_STEPS, math.ceil(remaining/(WORLD_SIZE*BATCH_SIZE)))
 
 
 def lr_factor(step, total_steps):
@@ -325,6 +352,7 @@ def semantic_contract(prepared, model_dir, bundle):
     return {"route": ROUTE, "code_sha256": code_digest(), "geometry": geometry(prepared["rows"]),
             "rows_canonical_sha256": prepared["rows_canonical_sha256"],
             "mapping_sha256": prepared["mapping_sha256"], "source_rows": prepared["source_rows"],
+            "dataset_selection":prepared.get("dataset_selection",{"policy":"legacy_full_original_quota"}),
             "model_dir": str(model_dir), "official_bundle": bundle,
             "physical_layers": 30, "schedule": list(SCHEDULE), "trainable_layers_1based": [9,10,11,12],
             "gate": {"shared": True, "shape": [1,576], "zero_weight_bias": True,
@@ -338,5 +366,5 @@ def semantic_contract(prepared, model_dir, bundle):
             "adamw": {"max_lr": 1e-4, "min_lr": 1e-5, "betas": [.9,.999], "eps": 1e-8,
                        "weight_decay": .01, "no_decay_bias_ndim_le1": True},
             "scheduler": "5pct_round_warmup_then_cosine_final_real_update_at_min",
-            "loss": "rank_local_microbatch_valid_answer_token_mean_then_actual_GA_then_DDP_mean",
+            "loss": "rank_local_microbatch_valid_answer_token_mean_then_actual_GA_then_active_rank_mean; empty_tail_rank_zero_loss_collective_only",
             "full_bptt": True, "use_cache": False, "gradient_checkpointing": False}

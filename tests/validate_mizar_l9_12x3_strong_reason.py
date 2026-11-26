@@ -9,6 +9,7 @@ import time
 import traceback
 import unittest
 import test_mizar_l9_12x3_strong_reason as t
+import test_mizar_l9_12x3_previous_training as previous_tests
 
 
 def main():
@@ -58,7 +59,8 @@ def main():
     check("python310_syntax",syntax)
     if not args.skip_unit_tests:
         def units():
-            suite=unittest.defaultTestLoader.loadTestsFromModule(t)
+            suite=unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromModule(t),
+                                     unittest.defaultTestLoader.loadTestsFromModule(previous_tests)])
             result=unittest.TextTestRunner(verbosity=2).run(suite)
             details={"tests_run":result.testsRun,"failures":len(result.failures),"errors":len(result.errors),"skipped":result.skipped}
             if not result.wasSuccessful() or result.skipped:raise ValueError(details)
@@ -77,7 +79,8 @@ def main():
                 if index and index%200000==0:print(f"[validation] selected inventory scanned {index:,}",flush=True)
             if len(selected)!=651296 or counts!=t.SOURCE_COUNTS:raise ValueError((len(selected),counts))
             return {"source_sha256":sha,"rows":len(selected),"source_counts":dict(counts),"views":dict(views),**details,
-                    "raw_path_groups_only":True,"remote_audio_resolved":False}
+                    "raw_path_groups_only":True,"remote_audio_resolved":False,
+                    "scope":"original metadata upper bound; retained training quota requires remote previous hybrid manifest"}
         check("actual_full_s1_metadata_selection",s1)
     if args.official_bundle:
         def official():

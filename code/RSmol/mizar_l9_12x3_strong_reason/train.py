@@ -20,7 +20,7 @@ from checkpoint import save, sha_frozen, validate_saved
 from contract import (BATCH_SIZE, CORE_LAYERS, INJECTION_INDICES, PREFIX_TOKENS, ROUTE,
                       RANK_UPDATE_SAMPLES, SCHEDULE, SEED, WORLD_SIZE,
                       accumulation_for_update, code_digest, digest, lr_factor,
-                      parameter_role, rank_seed, validate_tokenizer_contract, write_json)
+                      parameter_role, rank_seed, rank_microbatch_size, validate_tokenizer_contract, write_json)
 from data.audiotext_dataset import AudioTextDataset, collate_fn
 from data.sampler import CustomDistributedSampler
 from data.staging import StagingGate
@@ -77,7 +77,7 @@ def forward_loss(ddp, inputs, ignore_index):
     return loss
 
 
-def optimizer_update(ddp, batches, device, optimizer, scaler, tracker, ignore_index):
+def optimizer_update(ddp, batches, device, optimizer, scaler, tracker, ignore_index, *, dummy_batch=None):
     """The actual production GA path, also usable with CPU DDP in tests."""
     losses = []
     count = len(batches)
@@ -85,11 +85,22 @@ def optimizer_update(ddp, batches, device, optimizer, scaler, tracker, ignore_in
         raise ValueError("empty optimizer window")
     model = ddp.module if hasattr(ddp,"module") else ddp
     optimizer.zero_grad(set_to_none=True)
+    fallback = next((b for b in batches if b is not None),dummy_batch)
+    if fallback is None:
+        raise ValueError("an empty tail rank requires a zero-loss collective context")
     for micro,batch in enumerate(batches):
-        inputs = move_batch(batch,device)
+        active = torch.tensor(int(batch is not None),device=device)
+        dist.all_reduce(active,op=dist.ReduceOp.SUM)
+        if not active.item():
+            raise ValueError("optimizer microbatch contains no training rows on any rank")
+        inputs = move_batch(fallback if batch is None else batch,device)
         context = ddp.no_sync() if hasattr(ddp,"no_sync") and micro+1<count else nullcontext()
         with context:
             loss = collective_run("forward",lambda:forward_loss(ddp,inputs,ignore_index),device)
+            # Empty tail ranks enter the same DDP collectives with exactly zero
+            # loss. Real losses average over active ranks; no row is padded into
+            # the sampler, counted twice, or assigned a duplicate task gradient.
+            loss = loss * (dist.get_world_size()/active.item() if batch is not None else 0.)
             losses.append(loss.detach())
             # Last optimizer window has one microbatch, not four.
             scaler.scale(loss/count).backward()
@@ -216,23 +227,33 @@ def train(config,rank,device):
                     dataset.audio_paths.use_local();local_switch=step
                     if rank==0:print(json.dumps({"event":"AUDIO_READ_SWITCH","completed_updates":step,"to":"local"}),flush=True)
             micro=accumulation_for_update(update,g["rows"])
-            batches=collective_run("decode_window",lambda:[next(iterator) for _ in range(micro)],device)
-            rows=[i for batch in batches for i in batch["row_index"]]
-            if any(len(batch["row_index"])!=BATCH_SIZE for batch in batches):
-                raise ValueError("incomplete rank microbatch; no padding or dropped rows allowed")
+            def decode_window():
+                result=[]
+                for m in range(micro):
+                    expected=rank_microbatch_size(g["rows"],rank,update,m)
+                    batch=next(iterator) if expected else None
+                    if batch is not None and len(batch["row_index"])!=expected:
+                        raise ValueError("rank microbatch differs from the exact no-padding shard")
+                    result.append(batch)
+                return result
+            batches=collective_run("decode_window",decode_window,device)
+            rows=[i for batch in batches if batch is not None for i in batch["row_index"]]
+            dummy=collective_run("empty_tail_context",lambda:collate_fn([dataset.original_item(0)])
+                if all(b is None for b in batches) else None,device)
             lr_used=[x["lr"] for x in optimizer.param_groups]
             if any(not math.isclose(x,1e-4*lr_factor(step,g["total_steps"]),rel_tol=1e-12) for x in lr_used):
                 raise ValueError("actual optimizer LR differs from scheduler position")
-            loss,norm,scale,audit=optimizer_update(ddp,batches,device,optimizer,scaler,tracker,dataset.pad_id)
+            loss,norm,scale,audit=optimizer_update(ddp,batches,device,optimizer,scaler,tracker,dataset.pad_id,dummy_batch=dummy)
             if first_audit is None:
                 first_audit=audit;write_json(run/f"first_gradient_rank{rank}.json",audit)
             del batches
             scheduler.step();step+=1;consumed+=len(rows);coverage.extend(rows)
             PHASE.update(completed_updates=step)
             reduced=loss.clone();dist.all_reduce(reduced)
+            global_rows=torch.tensor(len(rows),device=device);dist.all_reduce(global_rows)
             record={"step":step,"total_steps":g["total_steps"],"rank_mean_loss":float(reduced)/WORLD_SIZE,
                     "lr_used":lr_used,"lr_next":[x["lr"] for x in optimizer.param_groups],
-                    "microbatches":micro,"effective_global_batch":len(rows)*WORLD_SIZE,
+                    "microbatches":micro,"effective_global_batch":int(global_rows.item()),
                     "gradient_l2_before_clip":norm,"gradient_common_scale":scale,
                     "grad_scaler":scaler.get_scale(),"rank0_rows":rows,
                     "audio_read_mode":"local" if dataset.audio_paths.local else "shared",
@@ -253,7 +274,7 @@ def train(config,rank,device):
             raise ValueError("unconsumed rows after the complete epoch")
         collective_run("final_staging",staging.wait_complete,device)
         collective_run("final_frozen",lambda:require_frozen(model,initial_frozen),device)
-        if consumed != g["samples_per_rank"] - start_step*RANK_UPDATE_SAMPLES:
+        if consumed != max(0,g["rank_samples"][rank] - start_step*RANK_UPDATE_SAMPLES):
             raise ValueError("wrong number of newly consumed rows after resume")
         rank_result={"rank":rank,"optimizer_steps":step,"new_rows_consumed":consumed,
                      "new_unique_row_indices":len(set(coverage)),"coverage_sha256":digest(coverage),

@@ -3,7 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from contract import SOURCE_COUNTS, code_digest
+from contract import SOURCE_COUNTS, code_digest, validate_data_counts
 
 INDEX_SCHEMA_VERSION = 2
 INPUT_NAMES = ("manifest", "resolved_paths")
@@ -51,8 +51,10 @@ def load_index(directory, manifest=None, resolutions=None):
     if (report.get("schema_version") != INDEX_SCHEMA_VERSION or report.get("status") != "PASS"
             or report.get("code_sha256") != code_digest()):
         raise ValueError("CPU index is incomplete or belongs to different source code; rerun the submission command")
-    if report["source_rows"] != SOURCE_COUNTS or report["rows"] != sum(SOURCE_COUNTS.values()):
-        raise ValueError("CPU index row/source counts differ from the fixed manifest")
+    if report.get("dataset_selection",{}).get("previous_training"):
+        validate_data_counts(report["rows"],report["source_rows"],report["dataset_selection"]["selected_counts"])
+    elif report["source_rows"] != SOURCE_COUNTS or report["rows"] != sum(SOURCE_COUNTS.values()):
+        raise ValueError("legacy CPU index row/source counts differ from the fixed manifest")
     if manifest is not None:
         print("[cpu-index] verifying manifest/audit TSV SHA256; no raw audio scan", flush=True)
         current = input_identity(manifest, resolutions)

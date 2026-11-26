@@ -23,7 +23,7 @@ from pathlib import Path
 
 from contract import (BATCH_SIZE, EPOCHS, RANK_UPDATE_SAMPLES,
                       ROUTE, SEED, SOURCE_COUNTS, WORLD_SIZE, data_order,
-                      digest, geometry, raw_references, write_json)
+                      digest, geometry, raw_references, rank_shard, write_json)
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "scripts"))
 from manifest_io import iter_rows  # noqa: E402
@@ -47,7 +47,7 @@ def load_resolutions(path):
     return result
 
 
-def prepare(manifest, resolutions, metadata, *, strict_counts=True, row_priorities=None):
+def prepare(manifest, resolutions, metadata, *, strict_counts=True, row_priorities=None, expected_counts=None):
     """Stream all retained rows, preserving text/fields and deduplicating raw files."""
     metadata = Path(metadata)
     metadata.parent.mkdir(parents=True, exist_ok=True)
@@ -101,8 +101,9 @@ def prepare(manifest, resolutions, metadata, *, strict_counts=True, row_prioriti
                 print(f"prepared {rows:,} rows, {len(files):,} unique raw files", flush=True)
     if row_priorities is not None and len(row_priorities) != rows:
         raise ValueError("staging priority row count differs from the filtered manifest")
-    if strict_counts and dict(counts) != SOURCE_COUNTS:
-        raise ValueError(f"filtered manifest source counts changed: expected={SOURCE_COUNTS}, actual={dict(counts)}")
+    expected = SOURCE_COUNTS if expected_counts is None else expected_counts
+    if strict_counts and dict(counts) != expected:
+        raise ValueError(f"filtered manifest source counts changed: expected={expected}, actual={dict(counts)}")
     report = {"manifest": str(Path(manifest).resolve()), "metadata": str(metadata.resolve()),
               "rows": rows, "source_rows": dict(counts), "probe_rows": probes,
               "rows_canonical_sha256": row_hash.hexdigest(),
@@ -123,15 +124,14 @@ def epoch_priorities(rows, epoch=0, start_batch=0, *, permutation=None):
     if permutation is None:
         import torch
         permutation = torch.randperm(rows, generator=torch.Generator().manual_seed(SEED + epoch)).tolist()
-    per_rank = rows // WORLD_SIZE
     steps = geometry(rows)["steps_per_epoch"]
     if not 0 <= start_batch < steps or epoch < 0 or len(permutation) != rows:
         raise ValueError("invalid staging sampler/cursor")
     priorities = array("i", [steps]) * rows
     first8 = {}
     for rank in range(WORLD_SIZE):
-        offset = rank * per_rank
-        first8[str(rank)] = [order[i] for i in permutation[offset:offset + 8 * RANK_UPDATE_SAMPLES]]
+        offset,per_rank = rank_shard(rows,rank)
+        first8[str(rank)] = [order[i] for i in permutation[offset:offset + min(per_rank,8 * RANK_UPDATE_SAMPLES)]]
         for cursor in range(start_batch * RANK_UPDATE_SAMPLES, min(per_rank, steps * RANK_UPDATE_SAMPLES)):
             priorities[order[permutation[offset + cursor]]] = cursor // RANK_UPDATE_SAMPLES
     return priorities, first8

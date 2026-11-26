@@ -1,5 +1,6 @@
-# New route delivery (old RM body retained)
+# Route delivery, including historical and current validation reports
 RM.md
+audit_reports/mizar_l9_12x3_previous_training_fix_validation.json
 audit_reports/mizar_l9_12x3_strong_reason_validation.json
 code/RSmol/mizar_l9_12x3_strong_reason/.gitignore
 code/RSmol/mizar_l9_12x3_strong_reason/LICENSE
@@ -27,6 +28,7 @@ code/RSmol/mizar_l9_12x3_strong_reason/models/ced_offline.py
 code/RSmol/mizar_l9_12x3_strong_reason/optim.py
 code/RSmol/mizar_l9_12x3_strong_reason/prepare_index.py
 code/RSmol/mizar_l9_12x3_strong_reason/prepare_manifest.py
+code/RSmol/mizar_l9_12x3_strong_reason/previous_training.py
 code/RSmol/mizar_l9_12x3_strong_reason/publication.py
 code/RSmol/mizar_l9_12x3_strong_reason/release_manifest.json
 code/RSmol/mizar_l9_12x3_strong_reason/run.sh
@@ -40,6 +42,7 @@ code/RSmol/mizar_l9_12x3_strong_reason/write_config.py
 code/RSmol/mizar_l9_12x3_strong_reason/write_failure.py
 code/RSmol/prepare_mizar_l9_12x3_strong_reason.sh
 code/RSmol/run_mizar_l9_12x3_strong_reason_5090.sh
+tests/test_mizar_l9_12x3_previous_training.py
 tests/test_mizar_l9_12x3_strong_reason.py
 tests/validate_mizar_l9_12x3_strong_reason.py
 

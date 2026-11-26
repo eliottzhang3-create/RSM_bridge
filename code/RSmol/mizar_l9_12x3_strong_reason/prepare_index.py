@@ -14,9 +14,12 @@ from stage_data import load_resolutions, prepare
 
 def ensure_index(manifest, resolutions, cache_root):
     from prepare_manifest import verify_dataset
-    verify_dataset(Path(manifest).parent)
+    dataset = verify_dataset(Path(manifest).parent)
+    from contract import SOURCE_COUNTS
+    expected_counts = dataset.get("source_counts",SOURCE_COUNTS)
     inputs = input_identity(manifest, resolutions)
-    signature = digest({"inputs": input_contents(inputs), "code_sha256": code_digest()})
+    signature = digest({"inputs": input_contents(inputs), "code_sha256": code_digest(),
+                        "dataset_seal_sha256":dataset["seal_sha256"]})
     cache_root = Path(cache_root).resolve()
     cache_root.mkdir(parents=True, exist_ok=True)
     destination = cache_root / signature
@@ -29,7 +32,9 @@ def ensure_index(manifest, resolutions, cache_root):
     print("[cpu-index] preparing metadata on CPU before GPU submission; no audio decode/copy", flush=True)
     with tempfile.TemporaryDirectory(prefix=".building-", dir=cache_root) as directory:
         temporary = Path(directory)
-        report, files = prepare(manifest, load_resolutions(resolutions), temporary / "rows.jsonl")
+        report, files = prepare(manifest, load_resolutions(resolutions), temporary / "rows.jsonl", expected_counts=expected_counts)
+        report["dataset_selection"] = {"seal_sha256":dataset["seal_sha256"],
+            "previous_training":dataset.get("previous_training"),"selected_counts":dataset["selected_counts"]}
         write_json(temporary / "files.json", files)
         check_input_contents(inputs, input_identity(manifest, resolutions), "during CPU index preparation")
         report.update(schema_version=INDEX_SCHEMA_VERSION, status="PASS", code_sha256=code_digest(), inputs=inputs,

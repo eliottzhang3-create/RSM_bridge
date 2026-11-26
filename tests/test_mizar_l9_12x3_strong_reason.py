@@ -296,16 +296,18 @@ class DataTests(unittest.TestCase):
         import data.prepared_index as index_module
         with tempfile.TemporaryDirectory() as tmp:
             source,tsv,_=self.fixture(tmp);root=Path(tmp);mapping=root/"mapping.json";mapping.write_text("{}")
-            out=root/"published";counts={"reasonaqa_oneaudio":5,"AudioCaps":3}
-            quotas={"reason_rows":5,"strong_counts":{"audiomcq_mcq":2,"audiomcq_cot":1},"release_rows":11,"reason_pool":8}
+            out=root/"published";counts={"reasonaqa_oneaudio":3,"AudioCaps":3}
+            quotas={"reason_rows":3,"strong_counts":{"audiomcq_mcq":2,"audiomcq_cot":1},"release_rows":11,"reason_pool":8}
             real_build,real_verify=pm.build,pm.verify_dataset
-            def build_fixture(source,out,resolver,tokenizer):return real_build(source,out,resolver,tokenizer,quotas=quotas)
-            def verify_fixture(root):return real_verify(root,total_rows=8)
+            def build_fixture(source,out,resolver,tokenizer,history=None):return real_build(source,out,resolver,tokenizer,quotas=quotas,history=history)
+            def verify_fixture(root):return real_verify(root,total_rows=6)
+            real_load=pm.load_previous_training
+            def load_fixture(path,resolver):return real_load(path,resolver,expected_source_counts={"reasonaqa_oneaudio":8,"AudioCaps":3})
             args=["--source",str(source),"--output-dir",str(out),"--resolved-paths",str(tsv),
-                  "--mapping-json",str(mapping),"--model-dir",os.environ["MIZAR_LOCAL_BUNDLE"]]
+                  "--mapping-json",str(mapping),"--model-dir",os.environ["MIZAR_LOCAL_BUNDLE"],"--previous-training-manifest",str(source)]
             with patch.object(pm,"SOURCE_SHA256",{False:sha256_file(source)}),patch.object(pm,"TOTAL_ROWS",8), \
                     patch.object(pm,"SOURCE_COUNTS",counts),patch.object(pm,"build",build_fixture), \
-                    patch.object(pm,"verify_dataset",verify_fixture),patch.object(sd,"SOURCE_COUNTS",counts), \
+                    patch.object(pm,"verify_dataset",verify_fixture),patch.object(pm,"load_previous_training",load_fixture),patch.object(sd,"SOURCE_COUNTS",counts), \
                     patch.object(index_module,"SOURCE_COUNTS",counts):
                 pm.main(args)
                 sealed=(out/"manifest.json").read_bytes()
@@ -314,8 +316,15 @@ class DataTests(unittest.TestCase):
                 self.assertFalse((root/"published.prepare.lock").exists())
                 path=prepare_index.ensure_index(out/"train.jsonl",out/"resolved_paths.tsv",root/"cache")
                 current=index_module.load_index(path,out/"train.jsonl",out/"resolved_paths.tsv")
-                self.assertEqual((current["rows"],current["unique_raw_files"]),(8,3))
+                self.assertEqual((current["rows"],current["unique_raw_files"]),(6,3))
                 self.assertEqual(prepare_index.ensure_index(out/"train.jsonl",out/"resolved_paths.tsv",root/"cache"),path)
+                resealed=json.loads((out/"manifest.json").read_text())
+                resealed.pop("seal_sha256");resealed["publication_note"]="new sealed provenance"
+                resealed["seal_sha256"]=digest(resealed)
+                (out/"manifest.json").write_text(json.dumps(resealed))
+                changed=prepare_index.ensure_index(out/"train.jsonl",out/"resolved_paths.tsv",root/"cache")
+                self.assertNotEqual(changed,path)
+                self.assertEqual(index_module.load_index(changed)["dataset_selection"]["seal_sha256"],resealed["seal_sha256"])
                 (path/"files.json").write_text("{}")
                 with self.assertRaises(ValueError):index_module.load_index(path)
                 mapping.write_text('{"changed":true}')

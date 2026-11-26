@@ -70,10 +70,12 @@ RUN_PHASE="producer_completion"
 wait "$STAGE_PID"
 STAGE_PID=""
 RUN_PHASE="final_report"
-python - "$RUN_DIR/training_report.json" <<'PY'
+python - "$RUN_DIR/training_report.json" "$RUN_DIR/runtime.json" <<'PY'
 import json,sys
 r=json.load(open(sys.argv[1],encoding='utf-8'))
-if r.get('status')!='PASS' or r.get('optimizer_steps')!=5089 or not r.get('full_epoch_no_drop_no_repeat'):
-    raise SystemExit('training report did not confirm the complete 651296-row epoch')
-print('PASS: 5089 real updates; complete epoch; frozen original weights preserved; report='+sys.argv[1])
+c=json.load(open(sys.argv[2],encoding='utf-8'))
+g=c['contract']['geometry']
+if r.get('status')!='PASS' or r.get('optimizer_steps')!=g['total_steps'] or not r.get('full_epoch_no_drop_no_repeat') or r.get('geometry')!=g:
+    raise SystemExit('training report did not confirm the sealed complete epoch')
+print(f"PASS: {g['total_steps']} real updates; {g['rows']} rows; complete epoch; frozen original weights preserved; report="+sys.argv[1])
 PY
