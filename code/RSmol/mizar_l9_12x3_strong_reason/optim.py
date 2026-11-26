@@ -1,5 +1,5 @@
 import torch
-from contract import lr_factor, parameter_role
+from contract import MAX_LR, lr_factor, parameter_role
 
 
 def build_optimizer(model, total_steps):
@@ -13,13 +13,13 @@ def build_optimizer(model, total_steps):
         decay = 0. if p.ndim <= 1 or name.endswith(".bias") else .01
         groups.setdefault((role, decay), []).append(p)
         names.setdefault((role, decay), []).append(name)
-    if {key[0] for key in groups} != {"gate", "layer9", "layer10", "layer11", "layer12"}:
-        raise ValueError("optimizer must contain exactly four shared layers and the shared gate")
-    audit = [{"role": role, "base_lr": 1e-4, "weight_decay": wd,
+    if {key[0] for key in groups} != {"layer9", "layer10", "layer11", "layer12"}:
+        raise ValueError("optimizer must contain exactly four shared layers")
+    audit = [{"role": role, "base_lr": MAX_LR, "weight_decay": wd,
               "names": names[(role,wd)], "numel": sum(p.numel() for p in groups[(role,wd)])}
              for role,wd in sorted(groups)]
-    optimizer = torch.optim.AdamW([{"params":groups[key], "lr":1e-4, "weight_decay":key[1]}
-                                  for key in sorted(groups)], lr=1e-4, betas=(.9,.999), eps=1e-8)
+    optimizer = torch.optim.AdamW([{"params":groups[key], "lr":MAX_LR, "weight_decay":key[1]}
+                                  for key in sorted(groups)], lr=MAX_LR, betas=(.9,.999), eps=1e-8)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: lr_factor(step,total_steps))
     return optimizer, scheduler, audit
 

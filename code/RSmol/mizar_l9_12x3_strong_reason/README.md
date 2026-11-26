@@ -1,162 +1,177 @@
-# 原始 Mizar：L9–12 × 3，strongAC + ReasonAQA，GBS128
+# 原始 Mizar：L9–12 纯循环四次，完整 AudioMCQ，三轮训练
 
-本路线独立于已有训练包。本地只改代码，经 GitHub 同步；正式权重、音频、manifest 和训练输出都在远程 Linux。实现不会自动 commit、push 或提交 GPU。顶层训练命令只提交一次正式作业，没有额外 GPU smoke 作业。
+按用户要求保留入口 `run_mizar_l9_12x3_strong_reason_5090.sh` 与现有包目录名；当前配方已经是 **L9–12×4 / AudioMCQ only / 3 epochs**。本地只改代码，经 GitHub 同步；正式 manifest、音频、权重及输出在远程 Linux。不会自动 commit/push 或提交 GPU。
 
-## 1. 固定模型与训练口径
+## 模型与训练配方
 
-完整加载 `/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt`，严格继承原有 454 个状态，包括已训练的 CED、projector 和全部 30 层文本模型。18 个 release 文件逐项检查大小和 SHA256。目录中的基座权重仅用于构造模块，最终全部由官方 final checkpoint 覆盖。
-
-按原始层编号执行：`1..8 → (9..12) × 3 → 13..30`，共 38 次 block 调用，四层共用一份参数。只训练原始第 9–12 层全部参数和一个共享 `Linear(576,1)`，合计 **14,160,961** 个参数；其余原始参数 **145,139,456** 个冻结，并保持 eval。冻结后缀保留输入梯度，三轮完整 BPTT；不使用 KV cache 或 decoder gradient checkpointing。
-
-`A8` 是第 8 层 raw post-block 输出的前 126 个 audio token，位于 final norm 前。第二、第三轮进入第 9 层前，使用前一轮输出的音频潜状态 `H_audio`：
+严格完整加载 `/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt`，包括原有 CED、已训练 projector、全部30层文本基座与最终 norm。18个 release 文件逐项核验 SHA/大小，原454状态全部继承。没有新增状态或参数。
 
 ```text
-H_audio ← H_audio + tanh(Linear(H_audio)) × A8
+第1～8层 → [第9～12层] × 4 → 第13～30层 → final norm
 ```
 
-同一个门控在两处共享，weight、bias 都从 0 初始化；每个 token 得到一个标量，不向 SEP/text 位置直接加残差。每次 forward 重新计算 A8，不保留跨 batch 状态。原始 final norm 只在第 30 层后执行一次。
+四轮总共执行四次，每轮完整输出直接送入下一轮；共42次 block 调用。删除原A8注入、额外音频线性门控和tanh。原始Llama MLP的 gate_proj 是基座结构的一部分，正常保留。
 
-训练一个完整 epoch：8 GPU × microbatch4 × GA4 = **GBS128**。实际 strongAC 视图数记为 N，ReasonAQA 抽 N 条，总计 2N 行，总更新数 `ceil(2N/128)`。N 在 CPU 阶段根据旧训练实际用过的行确定，不再把 325,648/651,296/5,089 硬编码为当前配额与步数。尾批可不足4条/卡或出现空 rank；空 rank 仅用零损失上下文参加同一 DDP 通信，不重复计入样本或任务梯度。真实非空 rank 的 microbatch loss 求均值，再按实际 GA 平均，无丢弃或 sampler padding。
+只训练原第9～12层全部参数含norm，四轮共享同一份权重，共 **14,160,384** 个训练参数。其余 **145,139,456** 个原参数冻结且eval；冻结后缀保留输入梯度，四轮完整BPTT，无KV缓存、无decoder gradient checkpointing。原final norm只在第30层后执行一次。
 
-AdamW：全部可训练参数 maxLR=1e-4、minLR=1e-5，betas=(0.9,0.999)、eps=1e-8、weight decay=0.01，bias/一维参数不 decay。warmup 为实际总步数的 round(5%)，随后 cosine，最后一次真实更新达到 minLR。保留参考实现的 FP32、无 autocast、TF32 关闭、GradScaler 和 GradNormTracker。
+| 设置 | 当前值 |
+|---|---|
+| 数据 | 完整历史AudioMCQ，720,524行/epoch；ReasonAQA=0 |
+| epochs | 3 |
+| GBS | 8 GPU × micro4 × GA4 = 128 |
+| 每轮更新 | 5,630；5,629个完整128更新 + 12条尾批 |
+| 总更新 | 16,890 |
+| max_lr / min_lr | 2e-5 / 2e-6 |
+| warmup | 三轮总步数round(3%)，507步 |
+| scheduler | 全局单条warmup + cosine，最后真实更新到min，不逐epoch重启 |
+| 保存 | 每轮0.25/0.5/0.75/1.0，共12个保存点，最多保留最新4份 |
 
-音频保持参考 fixed20：SoundFile 解码、mono、32k、长音频居中截取 20 秒、短音频右补零，再分两个 10 秒片段。在线计算 CED/projector，不缓存特征。文本保持 S1 原语义与模板：音频126 + SEP1 + prompt256 + answer300 = 683；PAD17、SEP/EOS0；追加空格 EOT 后截断，不补回被截断的 EOS。因果注意力中 PAD 可见，CE 只统计有效 answer token，logit382..681 对齐 answer300。先求每卡 microbatch 有效 token 均值，再求实际 GA 均值，最后由 DDP 平均。
+每轮保存位置为第1,408、2,815、4,223、5,630个完整optimizer step，对齐四分之一轮后首个更新。全局保存步数：
 
-## 2. 先在 CPU 生成 manifest
+```text
+1408, 2815, 4223, 5630,
+7038, 8445, 9853, 11260,
+12668, 14075, 15483, 16890
+```
 
-从原始 **1,477,976** 行 S1 出发，用旧 `s1_stage1_hybrid_filtered.json` 与配套 audit TSV 核对历史训练成员身份。原始元数据上限如下；这些数量不代表远程音频都可用：
+最终保留12668/14075/15483/16890四份。checkpoint保存model、AdamW、scheduler、GradScaler、GradNormTracker及所有rank RNG，先校验冻结状态再原子发布，发布成功后才清理较早完整checkpoint。
 
-| 视图 | 行数 |
+每轮每个样本恰好训练一次；每轮按seed1234+epoch打乱分片，不drop、不padding重复。生产尾批前4卡各2条、后4卡各1条，GA=1。保留原每卡micro有效answer token均值→实际GA均值→DDP均值口径；若测试/未来尾批出现空rank，仅零损失上下文参加集合通信，不赋予重复任务梯度或消费记录。
+
+AdamW其余参数保持betas=(.9,.999)、eps=1e-8、WD=.01，bias/一维参数免decay。FP32、无autocast、TF32off，参考GradScaler/GradNormTracker保持。fixed20保持mono32k、长音频中心裁剪20s、短音频右补零，再分两个10s块。在线真实CED/projector，不缓存特征。
+
+文本保持126audio+SEP1+prompt256+answer300=683，PAD17/EOS0，追加空格EOT后截断、不补回被截断EOS，因果attention中PAD可见。answer-only shifted CE，logits382..681对齐300个answer位置；固定布局和源文本语义不变。
+
+## CPU生成新的manifest
+
+从旧完整训练实际使用的 `/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json` 中，保留所有 `source=audiomcq` 原行，去掉756,968条ReasonAQA。旧hybrid共1,477,492行；不从未过滤原始S1重新引入历史缺失音频。
+
+strong/weak、直接答案/CoT等原有视图全部纳入，原字段、答案、重复训练视图、相对顺序均保持，不重新采样、不修改标签、不补音频。
+
+| 来源 | 行数 |
 |---|---:|
-| strongAC 直接答案 `audiomcq_mcq` | 257,892 |
-| strongAC 额外 CoT `audiomcq_cot` | 67,756 |
-| ReasonAQA 单原始音频 QA，随机抽样 | 325,648 |
-| 总计 | **651,296** |
+| AudioCaps | 113,844 |
+| Clotho | 4,798 |
+| MusicCaps | 3,221 |
+| CompA-R | 249,161 |
+| LP-MusicCaps-MTT | 19,632 |
+| SpeechCraft | 287,727 |
+| TACOS | 42,141 |
+| 总计 | **720,524** |
 
-当前策略按用户确认的规则：旧训练没用过的 strongAC 行过滤；用过的完整原行和直接答案/CoT 视图保留，使用旧 audit 的原路径。如果旧训练用过、但原路径现在失效或旧 manifest/TSV 相互矛盾，则报错要求恢复，不把它伪装成“未使用”而过滤，也不换成猜测文件。原始行与旧行用全部原字段的 SHA 核对；旧 hybrid 各来源总数也必须与既有训练配方的 1,477,492 行一致。
+复用旧 `outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_20261024_170403/resolved_paths.tsv` 成功路径。旧用过的文件现在缺失/空或TSV冲突会报错，不重新猜映射、不静默过滤。ReasonAQA音频不会检查或staging。CPU准备只读JSON/TSV/stat，不复制音频、不解码、不加载模型。
 
-ReasonAQA 候选仍为原始 S1 的 756,968 行，抽样数量自动等于实际保留的 strongAC 视图总数 N。历史 `filepath2` 是处理后的第二音频块，不作为第二个原始录音。按解析后的真实原文件路径分组，seed1234 打乱每组 QA、每轮打乱仍有剩余的录音组，逐组抽一个未用 QA，直至 N 条，以最大化录音覆盖。路径别名归为一组；不声称做了声学近重复检测。
+默认新目录：
 
-默认旧训练 manifest 为 `/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json`，audit TSV 同参考训练入口。原有 resolver/mapping 作为非历史引用的严格 fallback 保留；已有历史引用只复用原路径。CPU 准备只解析、stat、tokenize，不复制、解码音频或运行模型。日志打印 `PREVIOUS_TRAINING_COUNTS`、`RETAINED_DATASET_COUNTS`，给出保留/过滤的直接答案、CoT、来源、唯一引用与最终配额。
+```text
+/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/l9_12x4_audiomcq_only_v1/
+  train.jsonl          全部原始AudioMCQ行
+  selection.jsonl      原hybrid行索引、原行SHA、视图/strength和真实音频路径
+  resolved_paths.tsv   只含AudioMCQ引用的旧成功映射
+  dataset_report.json 七来源/视图/strength计数、去掉的ReasonAQA数、文件数/字节数
+  manifest.json        输入与四文件SHA/大小、固定新配方seal
+```
 
-远程仓库根目录执行：
+流式扫描每100,000行打印已扫描/保留/排除数量，末尾验证映射每20,000个引用打印进度；结束后再次校验源输入SHA。独占准备锁、同级building目录、整体no-replace发布；同输入幂等复用，拒绝覆盖其它配方。失败保留failure/unresolved_audio诊断。旧strong+Reason manifest和旧失败目录保留。
+
+远程仓库根执行：
 
 ```bash
 cd /hpc_stor03/sjtu_home/jinwei.zhang/code/RSLAM
 git pull --ff-only
+
+# 同一个正式入口，先只生成/核验新manifest，不申请GPU
+bash code/RSmol/run_mizar_l9_12x3_strong_reason_5090.sh --prepare-only
+```
+
+也可用保留的CPU包装器：
+
+```bash
 bash code/RSmol/prepare_mizar_l9_12x3_strong_reason.sh
-```
-
-默认 source 为 `/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1.json`。若保留的是原始压缩文件，可显式指定：
-
-```bash
-bash code/RSmol/prepare_mizar_l9_12x3_strong_reason.sh \
-  --source /hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1.json.gz
-```
-
-要求原始 source SHA256：plain `de92b7efd1dd6b5fd30b3f62c31639a3bcff6766a088849658fdd6bc8520641d`；gzip `111abde09c75abfd8dc6ee66c4762d7557d0b55e62e5cbde0bcc7b485176ac91`。不自动替换已有 S1 文件。
-
-默认生成目录：
-
-```text
-/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/l9_12x3_strong_reason_v1/
-  train.jsonl          原字段/文本/答案保持，按原始 S1 行序输出
-  selection.jsonl      每行源索引、视图、原行 SHA、raw/resolved 路径
-  resolved_paths.tsv   仅本次选中数据的路径映射
-  dataset_report.json  数量、录音覆盖/交集、字节数、CoT/直接答案截断与 EOS 统计
-  excluded_strong_rows.jsonl  每个过滤视图的源索引、原行SHA、旧训练未使用证据及旧audit记录
-  manifest.json        发布状态、原始/旧训练输入身份、动态配额、五文件大小/SHA 与 seal
-```
-
-可覆盖 `--source`、`--output-dir`、`--resolved-paths`、`--mapping-json`、`--model-dir`、`--previous-training-manifest`。默认旧 TSV：`/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_20261024_170403/resolved_paths.tsv`。
-
-同命令可幂等重跑：先检查 seal/文件 SHA，只有相同 source、旧训练 manifest、mapping、preparer 和 tokenizer 才复用，拒绝覆盖不同结果。采用独占 `.prepare.lock` 和同级临时目录，成功后整体发布；失败保留 `.building-*` 内 `failure.json`、`unresolved_audio.json` 等诊断。旧失败目录无需删除；新命令重新生成最终目录。此前若已经成功发布 v1 数据，应给 `--output-dir` 指定新目录，再将其传给训练 `--data-dir`。若进程被强杀，先确认旧 preparer 已停止，再人工处理其遗留锁。
-
-仅校验已生成结果：
-
-```bash
 bash code/RSmol/prepare_mizar_l9_12x3_strong_reason.sh --verify-only
 ```
 
-## 3. 提交一次正式训练
+CPU包装器支持 `--source HISTORICAL_HYBRID`、`--resolved-paths TSV`、`--output-dir NEW_DATA_DIR`。当前source指历史hybrid，不是原始未过滤S1。生产数量固定720524，数量变化会拒绝。
+
+## 正式提交与日志
 
 ```bash
-# 仅打印参数，不激活环境、不创建 index、不提交
+# 仅打印参数与新配方，不激活环境、不读数据、不提交
 bash code/RSmol/run_mizar_l9_12x3_strong_reason_5090.sh --check-args
 
-# CPU 校验与 index 成功后，单次 vc submit
+# 自动核验/复用新manifest、准备CPU index、校验完整release，再单次vc submit
 bash code/RSmol/run_mizar_l9_12x3_strong_reason_5090.sh
 ```
 
-队列 `pdgpu-5090`，8 GPU、32 CPU、256G、单节点；镜像 `docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1`，conda 环境 `mellow_c8204d8`，Transformers4.54.1。使用原 Miniconda 路径，可通过 `RSMOL_CONDA_BASE`（或 `MELLOW_CONDA_BASE`）覆盖，不安装或升级共享环境。
+队列pdgpu-5090、8GPU、32CPU、256G、单节点；镜像 `docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1`，原conda `mellow_c8204d8`，Transformers4.54.1。保留原Miniconda路径和 `RSMOL_CONDA_BASE` / `MELLOW_CONDA_BASE` 覆盖，不修改共享环境，不额外提交GPU smoke。
 
-顶层提交前在 CPU 验证 manifest、构建或复用 SHA 固定的 mmap index、校验完整官方 release 和 resume 身份；失败不会调用 vc。提交时打印 `log_path`、admission、manifest 和输出路径。默认：
+同一作业一个后台producer，仅将此manifest去重原音频staging到 `/dev/shm/mizar_l9_12x4_mcq_<token>`。先读共享盘；全部文件/字节/源stat校验完成后八rank在optimizer边界MIN集合判定，一起切换本地。三轮复用一次staging；恢复作业重新staging。退出先stop/wait回收producer，再按root/token清理。容量/producer/心跳/复制失败终止并保留诊断。
+
+新默认训练输出与index根：
 
 ```text
-log:    code/RSmol/log/mizar-core.<tag>.1.log     # JOB 占位符由 vc 展开
-output: /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/
-        mizar_final_l9_12x3_strong_reason_gbs128_5090/formal_<tag>/formal/
-index:  .../mizar_final_l9_12x3_strong_reason_gbs128_5090/index_cache/<signature>/
+/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/
+  mizar_final_l9_12x4_audiomcq_gbs128_3epochs_5090/
+    formal_<tag>/formal/
+    index_cache/<signature>/
 ```
 
-计算节点上只有一个后台 producer，把本次选中数据的去重原音频复制到本作业的 `/dev/shm/mizar_l9_12x3_sr_<token>`。训练先读共享盘；每个文件原子复制并检查大小/源 stat，所有目标文件和总文件数/字节数验证完成后，八个 rank 在 optimizer 边界做 MIN 集合判定，再一起切换本地路径。copy 失败、producer 死亡、心跳异常或容量不足会终止作业。退出先停止并 wait 回收 producer，再按 root/token 所有权清理。恢复时重新 staging。
+日志：`code/RSmol/log/mizar-audiomcq-x4.<tag>.<JOB>.log`（JOB由vc展开）。提交打印log_path、manifest、admission和输出目录。查看最新正式日志：
 
-自定义路径示例：
+```bash
+log_file=$(ls -t code/RSmol/log/mizar-audiomcq-x4.*.log | head -n 1)
+tail -n 100 -f "$log_file"
+```
+
+`formal/metrics.jsonl`逐步记录epoch/epoch_update/epoch_fraction、loss、lr_used/lr_next、尾批实际大小和读盘状态。各epoch/rank覆盖检查、冻结/梯度审计、staging进度均落盘。最终 `training_report.json` 要求PASS、epochs3、16890steps、完整三轮覆盖和最终checkpoint重读一致。最终文件 `formal/checkpoints/model--step-16890.ckpt`。
+
+自定义输出示例：
 
 ```bash
 bash code/RSmol/run_mizar_l9_12x3_strong_reason_5090.sh \
-  --data-dir /hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/l9_12x3_strong_reason_v1 \
-  --model-dir /hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M \
-  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/my_l9_12x3_run \
-  --stage-workers 4
+  --output-dir /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audiomcq_x4_3ep_v1
 ```
 
-`--output-dir` 始终指**外层 run root**，内部会创建 `formal/`；另支持 `--index-cache-root`。新训练要求空输出目录。完成标志为 `formal/training_report.json` 的 `status=PASS`、`optimizer_steps` 等于 runtime 的实际 `geometry.total_steps`，并通过完整 epoch 校验；成功退出还要求 producer 完成并执行清理。
+`--output-dir`始终是外层run root，内建formal/。另支持 `--data-dir`、`--source`、`--resolved-paths`、`--model-dir`、`--index-cache-root`、`--stage-workers`。manifest CPU失败不会提交vc。
 
-输出包括 `runtime.json`、`config_audit.json`、`trainable_params.txt`、`metrics.jsonl`、staging 报告、每卡首次任务梯度/完成记录，以及完整状态 checkpoint。每 500 步和实际最后一步保存，保留最近三份。最终 checkpoint 为 `formal/checkpoints/model--step-<total_steps>.ckpt`。训练内校验角色任务梯度非零、冻结参数/缓冲不漂移、完整分片消费，并重读最终 checkpoint。错误写入 `failure_rankN.json` 和 FAILED training_report；也保留 shell 阶段与 staging 诊断。
+## 完整恢复
 
-## 4. 完整断点恢复
+新实验从官方Mizar初始化。旧三轮门控/混合Reason实验的checkpoint不兼容新模型、数据、LR或训练身份；拒绝跨配方恢复。
 
-只接受本路线相同模型、数据、源码、环境版本与训练配方的**完整状态**。恢复 model、AdamW moments、scheduler、GradScaler、GradNormTracker 和每卡 RNG；不接受权重式续训。使用最新完整 checkpoint；完成整个 epoch 的 checkpoint 不能再续训。此次筛选策略与源码身份更新，旧 v1 数据/运行不允许跨配方恢复；应使用重新生成的 manifest 和新训练目录。
+当前配方恢复必须使用原run root及最新完整checkpoint，恢复所有优化器/调度/GradScaler/GradNormTracker和每卡RNG。epoch边界正确从下一epoch第0步开始，epoch内从本轮已消费位置继续；LR不重置。支持原目录日志较新行/partial tail备份回退，完整坏行拒绝。源码/数据/环境身份必须相同。
 
 ```bash
 bash code/RSmol/run_mizar_l9_12x3_strong_reason_5090.sh \
-  --resume-checkpoint /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/my_l9_12x3_run/formal/checkpoints/model--step-500.ckpt
+  --resume-checkpoint /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/audiomcq_x4_3ep_v1/formal/checkpoints/model--step-5630.ckpt
 ```
 
-未传 `--output-dir` 时，从 checkpoint 自动推导原外层 run root。显式传入时也必须是原 root。晚于恢复点的完整日志先原样备份为 `metrics.jsonl.before-resume-*`，再截回 checkpoint；不完整尾行一并保留在备份中。缺失或损坏的完整历史行会拒绝恢复。只重新消费尚未训练的确定性分片，最后一次更新仍按实际 GA 计算。
+省略output-dir时从checkpoint推导原外层root。已完成16890步checkpoint拒绝续训。
 
-## 5. 本地验证与同步
+## 本地验证和Git同步
 
-当前修复报告：仓库根 `audit_reports/mizar_l9_12x3_previous_training_fix_validation.json`；初版完整模型验证保留在 `audit_reports/mizar_l9_12x3_strong_reason_validation.json`，其中 651,296 行是原始元数据上界。测试入口在 `tests/validate_mizar_l9_12x3_strong_reason.py`，含历史成员与任意尾批回归。测试应从 `tests/` 执行，避免仓库已有 `code/` 包遮蔽 Python stdlib。
+当前报告 `audit_reports/mizar_l9_12x4_audiomcq_validation.json`。历史两份报告保留作为旧配方记录。测试仍使用现有tests文件名。
 
-已验证真实小型 30 层 Llama eager/SDPA、原始30层单遍一致性、38次共享调用、逐 token 公式/位置、因果性、完整反传和冻结保持；真实2进程 CPU Gloo 的 GA4/GA1、AdamW 下一步恢复一致性；manifest 发布/幂等/index/篡改拒绝、staging 时序/失败清理，以及带空格路径的真实 Bash 模拟提交。正式入口生命周期夹具模拟了 vc/torchrun 和 Git Bash 缺少的 flock。
+验证内容包括：真实小型30层Llama eager/SDPA native单遍一致、42次调用/四轮输入直接衔接、四轮BPTT/因果性/冻结保持；生产meta训练参数14160384；manifest CLI/原路径/强弱及CoT全部保留/零Reason/幂等seal和index；720524行三轮八分片覆盖及尾批；507warmup/12保存点/保留4份；真实完整小模型三轮训练及epoch边界恢复最终bitwise一致；真实2进程CPU Gloo GA4/GA1更新对照；Bash prepare-only/失败不提交/带空格参数链/producer先stop-reap后cleanup。
 
-初版对本地完整 S1 元数据实际抽样：651,296 行原始上界，ReasonAQA 覆盖全部 53,673 个原路径组；当前训练的 N 仍需远程旧 hybrid 核对。初版对已有官方完整18文件执行 SHA 校验、严格454状态继承、真实 CED/projector + 683 token 前向/反传/AdamW 更新，冻结状态保持。此次模型结构和权重加载不改。音频为合成静音，不代表真实训练指标。
+另使用已有官方完整18文件验证454状态严格加载、实际CED/projector、原576维30层native对照、683token四轮前向/反传/AdamW后冻结状态保持。音频为明确的合成静音，不代表性能或收敛。
 
-用户实际报错为 202 个 AudioCaps 文件候选缺失、15 个 MusicCaps 旧 S2 记录不可用、1 个 Clotho basename 歧义。修复不会猜测这些引用对应的音频：逐行检查旧训练是否使用，未使用才过滤；已使用则复用旧 audit 路径，失效即报错。新增测试证明此边界、ReasonAQA 等量、任意尾批/恢复覆盖及真实 Gloo 空 rank 零任务梯度。不能把 218 个引用直接当作 218 条 QA 相减，直接答案和 CoT 的具体影响数以新报告为准。
+本地Torch2.15 CPU/Transformers4.54.1；已有torchaudio2.9未用native扩展ABI不匹配，仅测试进程显式禁用此扩展，Python音频变换/模型仍实际执行，生产代码无适配。Git Bash无flock，生命周期夹具模拟flock/vc/torchrun。正式远程hybrid/音频未在本地生成；精确720524生产manifest由远程CPU命令生成。CUDA/NCCL、5090显存吞吐和正式收敛待远程确认。
 
-本地环境为 Torch2.15 CPU、Transformers4.54.1；已有 torchaudio2.9 原生扩展 ABI 不匹配，测试进程显式禁用了未用的原生扩展，实际 SoundFile 与 PyTorch 音频变换正常运行；生产代码没有此适配。未验证远程真实音频齐备、CUDA/NCCL、5090 显存/吞吐或正式收敛，这些由远程 CPU manifest 和正式作业检查给出。
-
-通用验证命令（在已有兼容测试环境中）：
+测试从tests/执行，避免仓库code包遮蔽stdlib：
 
 ```bash
 cd tests
-MIZAR_LOCAL_BUNDLE=/path/to/Mizar159M python validate_mizar_l9_12x3_strong_reason.py \
-  --source-s1 /path/to/original/s1.json.gz --official-bundle /path/to/Mizar159M
+python validate_mizar_l9_12x3_strong_reason.py --official-bundle /path/to/Mizar159M
 ```
 
-`sync_files.txt` 列出交付文件与两项原有映射依赖；旧文件 normalized-LF SHA 由 `source_guard.json` 固定，RM 只前置新记录并保留原全部字节。
-
-本地 PowerShell 提交命令（尚未替用户执行）：
+本地PowerShell提交（未自动执行）：
 
 ```powershell
-Set-Location C:\Xlance\GZ_bridge\Recursive_SALM\RSM_bridge
-git add RM.md code/RSmol/mizar_l9_12x3_strong_reason code/RSmol/prepare_mizar_l9_12x3_strong_reason.sh code/RSmol/run_mizar_l9_12x3_strong_reason_5090.sh tests/test_mizar_l9_12x3_strong_reason.py tests/test_mizar_l9_12x3_previous_training.py tests/validate_mizar_l9_12x3_strong_reason.py audit_reports/mizar_l9_12x3_previous_training_fix_validation.json
+git add RM.md code/RSmol/run_mizar_l9_12x3_strong_reason_5090.sh code/RSmol/mizar_l9_12x3_strong_reason tests/test_mizar_l9_12x3_strong_reason.py tests/test_mizar_l9_12x3_previous_training.py tests/validate_mizar_l9_12x3_strong_reason.py audit_reports/mizar_l9_12x4_audiomcq_validation.json
 git diff --cached --check
 git diff --cached --stat
-git commit -m "Align strongAC selection with previous training and balance ReasonAQA"
+git commit -m "Train full AudioMCQ with four shared Mizar loops for three epochs"
 git push origin HEAD
 ```
 
-复用来源：参考 GBS256/recursive5-10-5 CED-small 路线的数据、fixed20、staging、mmap index 和参考 loss/GradNormTracker；官方输入模型路线的 CED wrapper、离线 config、Llama 调用兼容层；原始 raw-audio audit 的 resolver 与流式读取。新路线内修改，已有路线文件不改；保留 LICENSE、NOTICE 和依赖许可。
+`sync_files.txt`列全部交付文件。修改局限于现有指定入口/包及其测试与文档；其它训练路线、原音频映射实现/规则保持。保留原LICENSE/NOTICE及依赖许可。RM只前置新记录，原全部字节保持。

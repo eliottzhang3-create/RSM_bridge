@@ -1,4 +1,4 @@
-"""Official 30 physical layers; L9-12 shared three times, two gated A8 reads."""
+"""Official 30 physical layers; shared L9-12 executes four times, no injection."""
 from __future__ import annotations
 from contextlib import nullcontext
 import json
@@ -9,7 +9,7 @@ from transformers import LlamaConfig
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer, LlamaForCausalLM, LlamaPreTrainedModel, LlamaRMSNorm, LlamaRotaryEmbedding)
-from contract import (AUDIO_TOKENS, CORE_LAYERS, INJECTION_INDICES, SCHEDULE, parameter_role)
+from contract import AUDIO_TOKENS, CORE_LAYERS, SCHEDULE, parameter_role
 from llama_compat import _assert_supported_llama_api, _call_decoder_layer, _causal_mask
 
 
@@ -25,24 +25,11 @@ class RecurrentModel(LlamaPreTrainedModel):
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
         self.last_layer_trace = ()
-        self.last_injection_trace = ()
         self.post_init()
-
-    def enable_gate(self):
-        if hasattr(self, "audio_gate"):
-            raise ValueError("gate already exists; refusing to reset trained weights")
-        weight = self.embed_tokens.weight
-        with torch.random.fork_rng(devices=[]):
-            gate = nn.Linear(self.config.hidden_size, 1, device="cpu", dtype=weight.dtype)
-            nn.init.zeros_(gate.weight)
-            nn.init.zeros_(gate.bias)
-        self.audio_gate = gate.to(weight.device)
 
     def _execute(self, inputs_embeds, *, single_pass=False, position_ids=None):
         if self.gradient_checkpointing:
             raise ValueError("decoder gradient checkpointing is disabled for repeated physical layers")
-        if not hasattr(self, "audio_gate"):
-            raise ValueError("strict-load official weights before registering the gate")
         if inputs_embeds.ndim != 3 or inputs_embeds.shape[1] < AUDIO_TOKENS:
             raise ValueError("requires a full audio/text sequence")
         if single_pass and (self.training or torch.is_grad_enabled()):
@@ -56,14 +43,8 @@ class RecurrentModel(LlamaPreTrainedModel):
         mask = _causal_mask(attention_mask=None, batch_size=batch, query_length=length,
                             past_length=0, dtype=hidden.dtype, device=hidden.device)
         rotary = self.rotary_emb(hidden, position_ids=position_ids)
-        self.last_layer_trace, self.last_injection_trace = (), ()
-        anchor = None
+        self.last_layer_trace = ()
         for logical, physical in enumerate(range(30) if single_pass else SCHEDULE):
-            if not single_pass and logical in INJECTION_INDICES:
-                before = hidden[:, :AUDIO_TOKENS]
-                delta = torch.tanh(self.audio_gate(before)) * anchor
-                hidden = torch.cat((before + delta, hidden[:, AUDIO_TOKENS:]), dim=1)
-                self.last_injection_trace += (logical,)
             # Prefix is entirely frozen. Suffix MUST retain the input-gradient
             # graph even though none of its own parameters are trainable.
             context = torch.no_grad() if logical < 8 else nullcontext()
@@ -73,8 +54,6 @@ class RecurrentModel(LlamaPreTrainedModel):
                     cache_position=position_ids[0], position_embeddings=rotary,
                     output_attentions=False)[0]
             self.last_layer_trace += (physical,)
-            if logical == 7:
-                anchor = hidden[:, :AUDIO_TOKENS].detach().clone()
         # The one original final norm is applied AFTER layer 30, never per loop.
         return BaseModelOutputWithPast(last_hidden_state=self.norm(hidden), past_key_values=None)
 
@@ -124,14 +103,13 @@ class CaptionDecoder(nn.Module):
 
 
 class MizarCoreTrain(nn.Module):
-    """Namespaces retain all 454 original state keys; only gate adds two keys."""
+    """Retains all 454 original state keys; no added trainable module."""
     def __init__(self, config, ced_dir=None, *, audio_encoder=None):
         super().__init__()
         self.audio_encoder = AudioEncoder(ced_dir) if audio_encoder is None else audio_encoder
         self.caption_decoder = CaptionDecoder(config)
 
     def enable_training(self):
-        self.caption_decoder.lm.model.enable_gate()
         self.requires_grad_(False)
         for name, p in self.named_parameters():
             p.requires_grad_(parameter_role(name) != "frozen")
@@ -145,8 +123,6 @@ class MizarCoreTrain(nn.Module):
             core.training = True
             for index in CORE_LAYERS:
                 core.layers[index].train(True)
-            if hasattr(core, "audio_gate"):
-                core.audio_gate.train(True)
         return self
 
     def generate_prefix_inference(self, inputs):
@@ -183,7 +159,7 @@ def validate_trainability(model, *, production=True):
         if p.requires_grad != (role != "frozen") or p.dtype != torch.float32:
             raise ValueError(f"incorrect trainability/dtype: {name}")
         counts[role] = counts.get(role, 0) + p.numel()
-    if set(counts) != {"frozen", "gate", "layer9", "layer10", "layer11", "layer12"}:
+    if set(counts) != {"frozen", "layer9", "layer10", "layer11", "layer12"}:
         raise ValueError(f"unexpected parameter roles: {counts}")
     lm = model.caption_decoder.lm
     if lm.get_input_embeddings().weight is not lm.get_output_embeddings().weight:
@@ -194,10 +170,10 @@ def validate_trainability(model, *, production=True):
     if any(m.training for m in model.audio_encoder.modules()):
         raise ValueError("frozen encoder/projector must remain eval")
     if production:
-        if counts != {"frozen":145139456,"gate":577,**{f"layer{i}":3540096 for i in (9,10,11,12)}}:
+        if counts != {"frozen":145139456,**{f"layer{i}":3540096 for i in (9,10,11,12)}}:
             raise ValueError(f"production parameter inventory differs: {counts}")
-        if len(list(model.state_dict())) != 456:
-            raise ValueError("expected original454 + gate2 state entries")
+        if len(list(model.state_dict())) != 454:
+            raise ValueError("expected exactly original454 state entries")
     return counts
 
 

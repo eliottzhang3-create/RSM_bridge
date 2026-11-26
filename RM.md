@@ -1,3 +1,47 @@
+## 2026-11-27：原入口改为完整AudioMCQ / L9–12纯循环四次 / 3epochs / LR2e-5
+
+用户确认计划后在原 run_mizar_l9_12x3_strong_reason_5090.sh 和其既有包内原地修改；文件名保留，当前配方已为x4/AudioMCQ-only。
+本地代码经GitHub中转，正式音频/旧hybrid/权重/输出在远程Linux；未自动commit/push或提交GPU作业。
+
+新CPU manifest从原完整训练 s1_stage1_hybrid_filtered.json 的1477492原行中保留全部720524 AudioMCQ，删除756968 ReasonAQA。
+AudioCaps113844、Clotho4798、MusicCaps3221、CompA-R249161、LP-MusicCaps-MTT19632、SpeechCraft287727、TACOS42141。
+strong/weak、直接答案/CoT等全部历史视图/原字段/答案/顺序保持，不抽样、不只限strong，不从未过滤S1引回历史缺失引用。
+复用原hybrid audit TSV exists成功路径，旧已用文件现缺失/空或映射冲突即失败，Reason音频不stat/staging；不改共享映射脚本或规则。
+默认新数据 data/Mizar/l9_12x4_audiomcq_only_v1，train/selection/resolved TSV/dataset_report/manifest seal；绑定旧hybrid/TSV大小内容身份与preparer。
+CPU不解码/复制/前向模型，每10万行打印扫描/保留/排除数，末尾映射每2万引用打印，失败保留building诊断，成功原子no-replace发布、同身份幂等复用。
+旧strong+Reason数据与训练输出不覆盖。生产720524行manifest因远程原数据仅由用户远程运行CPU命令生成，本地只实际生成/验证明确小fixture。
+入口新增--prepare-only先生成/核验新manifest不申请GPU；普通入口自动ensure manifest→CPU index→release/admission→单次vc。--check-args仍纯打印。
+
+完整官方Mizar final原454状态继承CED/已训练projector/30层文本基座：1..8→(9..12)x4→13..30，42次block，四轮总共四次。
+每轮完整输出直接为下一轮输入，删除A8捕获/残差注入/额外Linear/tanh/两条gate状态；原Llama MLP gate_proj保留。
+仅共享9..12四层全部含norm参数训练，14160384参数；原冻结145139456参数及buffer/eval保持，冻结后缀保留输入梯度，完整四轮BPTT。
+无KV/decoder checkpointing/跨forward隐状态，final norm仅最后一次。完整454状态无新增key，strict官方loader继续验证finite/FP32/tied。
+
+8GPU×micro4×GA4=GBS128，3epochs，每轮5630步=5629完整128更新+12条尾批，尾批前4rank各2条/后4rank各1条GA1，无drop/padding重复。
+总16890步，全局一条scheduler，maxLR2e-5/min2e-6、round总步数3%warmup507，epoch不重启，最后真实update到min。
+保留原AdamW betas/eps/WD与一维bias免decay、FP32/无autocast/TF32off、GradScaler/GradNormTracker、fixed20/在线CED/projector/683位置/原文本与answer-only loss口径。
+epoch每轮seed1234+epoch随机分片，按真实epoch内游标恢复；每轮边界先检查精确分片覆盖，再发布完整checkpoint；最终核验三轮所有(epochs,row)覆盖。
+每0.25epoch后首个完整optimizer step保存：第一轮1408/2815/4223/5630，第二轮7038/8445/9853/11260，第三轮12668/14075/15483/16890。
+共12保存点、最多最新4份；最终保留12668/14075/15483/16890，最终model--step-16890.ckpt。
+完整checkpoint保存model/optimizer/scheduler/scaler/tracker/每卡RNG和下一个epoch/epoch内step；epoch边界恢复从下轮0步开始，LR不重置。
+新route/model/data/recipe身份拒绝旧三轮门控checkpoint续训；保持原runroot/最新完整点/日志备份回退/源码环境数据身份检查。
+
+pdgpu-5090/8GPU/32CPU/256G/1node、原镜像/conda/覆盖变量不变；无额外GPU smoke。
+一次后台producer仅复制当前AudioMCQ去重原文件，先shared后complete八rank MIN边界切换本地，三轮复用本地；恢复重新stage。
+新tmpfs前缀 /dev/shm/mizar_l9_12x4_mcq_<token>，先stop/reap再owner cleanup保持。
+新输出 outputs/RSmol/mizar_final_l9_12x4_audiomcq_gbs128_3epochs_5090/formal_<tag>/formal；log/mizar-audiomcq-x4.<tag>.<JOB>.log。
+metrics新增epoch/epoch_update/epoch_fraction，epochN_rankR覆盖JSON，最终PASS要求3epochs/16890updates/完整覆盖与最终重读一致。
+
+本地17项最终回归通过无skip：真实30层小Llama eager/SDPA native一致、42次调用/完整输出直传/四轮BPTT/冻结/因果；生产meta14160384参数。
+实际小fixture CPU manifest CLI/全强弱及CoT/Reason0/原路径/幂等seal/index及tamper拒绝；720524三轮八rank分片/尾批/不同shuffle/quarter保存与507warmup。
+实际trainer.train三轮完整小模型17行/6updates与epoch1边界恢复，最终权重bitwise相同；完整checkpoint游标与最多保留4份通过。
+真实2进程CPU Gloo的GA4/GA1与独立参考更新一致；真实Bash prepare-only/CPU失败不提交/空格参数链/单vc和stop-reap-cleanup通过（flock/vc/torchrun明确模拟）。
+已有官方18文件实际SHA/454严格load、原576维30层383prefix native bitwise对照、实际CED/projector合成静音683token四轮前向/反传/AdamW后冻结保持通过。
+审计 audit_reports/mizar_l9_12x4_audiomcq_validation.json；旧报告保留历史配方。测试Torch2.15CPU/Transformers4.54.1，显式仅测试torchaudio未用native扩展适配沿用。
+初轮两处测试夹具问题（误将Llama gate_proj判为新增gate、optimizer/model实例不配对）修复后最终回归通过，无生产参数因此改动。
+未验证远程生产hybrid音频齐备、CUDA/NCCL/5090显存吞吐或正式收敛。README/sync_files/提交/恢复命令更新。
+以下原RM全部字节完整保留。
+
 ## 2026-11-26：原始 Mizar baseline 与 L9–12/L14–17/L19–22 三循环 checkpoint 的四项4090评测
 
 按用户确认计划新增隔离 code/RSmol/mizar_core3_eval/ 与 run_mizar_core3_eval_4090.sh。

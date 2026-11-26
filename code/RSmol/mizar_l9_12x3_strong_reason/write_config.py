@@ -6,7 +6,7 @@ from pathlib import Path
 import platform
 import time
 from assets import audit_bundle
-from contract import ROUTE, semantic_contract, digest, write_json
+from contract import ROUTE, checkpoint_steps, semantic_contract, digest, write_json
 
 
 def build_contract(prepared, model_dir):
@@ -33,7 +33,7 @@ def main():
     config = {"route":ROUTE,"mode":"formal","contract":contract,"contract_sha256":digest(contract),
               "prepared_report":str(a.prepared.resolve()),"run_dir":str(a.run_dir.resolve()),
               "resume_checkpoint":str(a.resume_checkpoint.resolve()) if a.resume_checkpoint else "",
-              "max_optimizer_steps":total,"checkpoint_steps":list(range(500,total,500))+[total],
+              "max_optimizer_steps":total,"checkpoint_steps":checkpoint_steps(prepared["rows"]),
               "attempt_id":str(time.time_ns())}
     write_json(a.output, config)
     print(json.dumps({"event":"CONFIG_READY","geometry":contract["geometry"],"config":str(a.output)}),flush=True)

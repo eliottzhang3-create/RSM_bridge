@@ -1,0 +1,132 @@
+{
+  "status": "PASS",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "torch": "2.15.0+cpu",
+  "transformers": "4.54.1",
+  "audio_test_adapter": true,
+  "limitations": [
+    "No remote production audio or GPU job was accessed.",
+    "CPU Gloo is not an eight-GPU NCCL or 5090 memory/throughput validation.",
+    "Production historical hybrid manifest/audio live remotely; local manifest verification uses explicit synthetic fixtures.",
+    "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+  ],
+  "checks": {
+    "existing_source_isolation": {
+      "status": "PASS",
+      "details": {
+        "unchanged_files": 4231
+      }
+    },
+    "python310_syntax": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 28
+      }
+    },
+    "cpu_unit_and_gloo_tests": {
+      "status": "PASS",
+      "details": {
+        "tests_run": 17,
+        "failures": 0,
+        "errors": 0,
+        "skipped": []
+      }
+    },
+    "actual_official_full_load_forward_backward": {
+      "status": "PASS",
+      "details": {
+        "release_files": 18,
+        "trainability": {
+          "frozen": 145139456,
+          "layer9": 3540096,
+          "layer10": 3540096,
+          "layer11": 3540096,
+          "layer12": 3540096
+        },
+        "trainable_total": 14160384,
+        "state_entries": 454,
+        "full_683_cpu_ce": 5.97205114364624,
+        "gradient_audit": {
+          "status": "PASS",
+          "nonzero_task_gradients": {
+            "layer9": true,
+            "layer10": true,
+            "layer11": true,
+            "layer12": true
+          },
+          "frozen_gradients": false
+        },
+        "native_30_layer_383_prefix_bitwise_parity": true,
+        "recurrence_block_calls": 42,
+        "frozen_unchanged_after_adamw": true,
+        "audio_waveform": "synthetic silence; real released encoder/projector"
+      }
+    }
+  },
+  "failures": [],
+  "elapsed_seconds": 136.24031910000485,
+  "code_sha256": "dffc5bbbe645ac01c3f7aaf41d174a200803c4abd796b6bdfeb3d155246f1ac1",
+  "launcher_sha256_normalized_lf": "d41cd293c563b652f2ebfdb0c877ae2814d84262f60c844f722465c631c814da",
+  "recipe": {
+    "geometry": {
+      "rows": 720524,
+      "world_size": 8,
+      "microbatch": 4,
+      "gradient_accumulation_steps": 4,
+      "global_batch_size": 128,
+      "epochs": 3,
+      "rank_samples_per_optimizer_step": 16,
+      "samples_per_rank": 90065,
+      "rank_samples": [
+        90066,
+        90066,
+        90066,
+        90066,
+        90065,
+        90065,
+        90065,
+        90065
+      ],
+      "steps_per_epoch": 5630,
+      "total_steps": 16890,
+      "warmup_steps": 507,
+      "full_updates": 5629,
+      "last_update_rows": 12,
+      "dropped_rows_per_epoch": 0,
+      "duplicated_rows_per_epoch": 0
+    },
+    "checkpoint_steps": [
+      1408,
+      2815,
+      4223,
+      5630,
+      7038,
+      8445,
+      9853,
+      11260,
+      12668,
+      14075,
+      15483,
+      16890
+    ],
+    "source_counts": {
+      "AudioCaps": 113844,
+      "Clotho": 4798,
+      "MusicCaps": 3221,
+      "CompA-R": 249161,
+      "LP-MusicCaps-MTT": 19632,
+      "SpeechCraft": 287727,
+      "TACOS": 42141
+    },
+    "max_lr": 2e-05,
+    "min_lr": 2e-06,
+    "keep_checkpoints": 4,
+    "passes": 4,
+    "injection": false,
+    "historical_production_manifest_generated_locally": false
+  },
+  "initial_test_fixture_repairs": [
+    "Absence check narrowed to audio_gate; original Llama gate_proj remains required.",
+    "Corruption test uses optimizer and model from the same fixture instance."
+  ]
+}
