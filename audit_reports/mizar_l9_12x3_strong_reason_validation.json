@@ -1,0 +1,113 @@
+{
+  "status": "PASS",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "torch": "2.15.0+cpu",
+  "transformers": "4.54.1",
+  "audio_test_adapter": true,
+  "limitations": [
+    "No remote production audio or GPU job was accessed.",
+    "CPU Gloo is not an eight-GPU NCCL or 5090 memory/throughput validation.",
+    "Local S1 selection uses raw-path groups; remote manifest uses resolved canonical recordings.",
+    "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+  ],
+  "checks": {
+    "existing_source_isolation": {
+      "status": "PASS",
+      "details": {
+        "unchanged_files": 4231
+      }
+    },
+    "python310_syntax": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 28
+      }
+    },
+    "cpu_unit_and_gloo_tests": {
+      "status": "PASS",
+      "details": {
+        "tests_run": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": []
+      }
+    },
+    "actual_full_s1_metadata_selection": {
+      "status": "PASS",
+      "details": {
+        "source_sha256": "111abde09c75abfd8dc6ee66c4762d7557d0b55e62e5cbde0bcc7b485176ac91",
+        "rows": 651296,
+        "source_counts": {
+          "reasonaqa_oneaudio": 325648,
+          "SpeechCraft": 156496,
+          "AudioCaps": 62988,
+          "CompA-R": 61031,
+          "TACOS": 30896,
+          "LP-MusicCaps-MTT": 9981,
+          "MusicCaps": 1731,
+          "Clotho": 2525
+        },
+        "views": {
+          "reasonaqa": 325648,
+          "audiomcq_cot": 67756,
+          "audiomcq_mcq": 257892
+        },
+        "source_rows": 1477976,
+        "candidate_counts": {
+          "reasonaqa": 756968,
+          "audiomcq_cot": 67756,
+          "audiomcq_mcq": 257892
+        },
+        "seed": 1234,
+        "reason_recording_groups": 53673,
+        "selected_reason_recordings": 53673,
+        "sampling_rounds": 7,
+        "reason_rows_per_recording_histogram": {
+          "1": 190,
+          "3": 1,
+          "4": 160,
+          "5": 351,
+          "6": 47737,
+          "7": 5234
+        },
+        "sampling_policy": "sorted canonical recording groups; private seed1234; shuffled QA per group; reshuffled active groups each round; no replacement",
+        "raw_path_groups_only": true,
+        "remote_audio_resolved": false
+      }
+    },
+    "actual_official_full_load_forward_backward": {
+      "status": "PASS",
+      "details": {
+        "release_files": 18,
+        "trainability": {
+          "frozen": 145139456,
+          "layer9": 3540096,
+          "layer10": 3540096,
+          "layer11": 3540096,
+          "layer12": 3540096,
+          "gate": 577
+        },
+        "trainable_total": 14160961,
+        "state_entries": 456,
+        "full_683_cpu_ce": 5.803969860076904,
+        "gradient_audit": {
+          "status": "PASS",
+          "nonzero_task_gradients": {
+            "gate": true,
+            "layer9": true,
+            "layer10": true,
+            "layer11": true,
+            "layer12": true
+          },
+          "frozen_gradients": false
+        },
+        "native_30_layer_383_prefix_bitwise_parity": true,
+        "frozen_unchanged_after_adamw": true,
+        "audio_waveform": "synthetic silence; real released encoder/projector"
+      }
+    }
+  },
+  "failures": [],
+  "elapsed_seconds": 160.7719084000055,
+  "code_sha256": "b8f61a49fda39b63b33b6810401e2d17410d258567e1c6c7b76b8f87664882ad"
+}

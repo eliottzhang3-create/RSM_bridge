@@ -1,3 +1,49 @@
+## 2026-11-26：原始 Mizar L9–12共享三轮 + 零初始化音频门控，strongAC/ReasonAQA，GBS128
+
+用户确认后实现隔离 code/RSmol/mizar_l9_12x3_strong_reason/，新增 prepare_mizar_l9_12x3_strong_reason.sh 与 run_mizar_l9_12x3_strong_reason_5090.sh。
+本地改代码、GitHub中转，正式数据/权重/输出在远程Linux；未自动commit/push、连接远程音频或提交GPU作业。
+原有4231份代码/测试/RM基线normalized-LF SHA校验保持；RM仅前置本记录，原全部字节保持。
+
+完整严格继承 models/Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt 的454状态，包括已训练CED/projector/全部30层文本基座。
+18个官方release文件SHA/大小固定，454源状态加载完才新增门控，不混用旧recursive checkpoint或随机projector。
+原始1..8、(9..12)x3、13..30，共38次block；四层共享参数和两次共享Linear(576,1)，weight/bias全0初始化。
+A8为第8层raw post-block音频前126位置；第2/3轮前 H_audio += tanh(Linear(H_audio))*A8，条件取前一轮音频输出，注入下一轮输入。
+SEP/text不直接加残差，final norm仅第30层后一次；无跨forward状态、无KV/decoder checkpointing，三轮完整BPTT。
+仅四层全部参数含norm和577门控参数可训练，总14,160,961；其余145,139,456原参数冻结且eval，冻结后缀保留输入梯度。
+
+CPU manifest从原始S1 1,477,976行开始，强制原始release SHA，拒绝旧filtered S1。
+strongAC直接答案257,892 + 额外CoT 67,756 =325,648；ReasonAQA单原始音频候选756,968，固定无放回抽325,648，总651,296。
+Reason按canonical resolved原录音分组，seed1234打乱组内QA并逐轮打乱活跃录音组、每组每轮一个QA，尽量覆盖不同录音。
+历史filepath2只是处理后第二chunk；只有显式第二原录音才算多音频。保留完整原字段/答案/两个strong视图。
+复用原hybrid audit TSV与原audit脚本/S2 hybrid mapping fallback；任一候选原音频缺失/空/歧义或配额不符即停止，不丢行、不补weak。
+train.jsonl、selection.jsonl溯源、resolved_paths.tsv、dataset_report.json与SHA seal；tokenizer实际审计直接答案/CoT截断及EOS。
+独占准备锁、同级临时目录、no-replace整体发布、相同输入幂等复用；失败保存unresolved_audio/failure诊断。
+
+一完整epoch，8GPU x micro4 x GA4=GBS128；5088个128更新+最后32条/每卡4条GA1，共5089次更新，无drop/补齐重复。
+AdamW全训练参数max1e-4/min1e-5，原betas/eps/WD及bias/一维免decay，warmup254，cosine最后真实更新到min。
+保留FP32/无autocast/TF32off、GradScaler/GradNormTracker；原fixed20中心截20s/右补零/mono32k，在线CED/projector。
+126audio+SEP1+prompt256+answer300=683，PAD17/EOS0、空格EOT后截断、不补回EOS、PAD可见因果注意力、answer-only shifted CE。
+每卡micro有效token mean→实际GA mean→DDP mean，尾批独立缩放。
+
+提交前CPU seal/index/完整release/resume身份校验，失败不提交；正式单次vc，pdgpu-5090/8GPU/32CPU/256G/1node，原镜像及mellow_c8204d8。
+原conda路径与RSMOL_CONDA_BASE/MELLOW_CONDA_BASE覆盖，要求Transformers4.54.1，不改共享环境，无独立GPU smoke。
+单后台producer仅复制本manifest去重原音频到 /dev/shm/mizar_l9_12x3_sr_<token>；先读共享盘，完整文件/字节校验后八rank在optimizer边界MIN集合切换本地。
+检查producer/心跳/错误/容量；退出先stop/wait回收producer再按root/token清理。恢复重新staging。
+每500步及5089完整保存，保留3份；full resume严格同源码/数据/模型/环境/recipe/命名optimizer moments/游标/RNG/scaler/tracker。
+恢复保持原外层run root，拒绝比所选更新的完整checkpoint；日志较新行/partial tail原样备份后回退，损坏完整行拒绝。
+逐角色任务梯度/冻结state、真实source probes、确定性完整分片消费、final checkpoint重读与PASS训练报告；rank/shell/staging失败诊断保留。
+
+本地20项最终测试通过、无skip：真实小30层Llama eager/SDPA、单遍native一致、38次调用、注入数学/位置/共享、因果性、完整BPTT/冻结保持。
+实际2进程CPU Gloo的GA4/GA1与独立单进程平均梯度更新对照通过，完整checkpoint恢复下一步bitwise一致，坏moment/optimizer/scheduler/frozen state拒绝。
+实际小fixture manifest CLI原子发布/幂等/immutable index与seal篡改拒绝；shared-first完整切换/失败检查、真实Bash参数及成功/训练失败/配置失败stop-reap-cleanup时序通过。
+本地完整原始S1实际抽样核验651296精确各源配额；以raw路径分组覆盖全部53,673录音组，远程仍须canonical resolved路径重分组，不声称声学去重。
+本地已有官方完整18文件SHA/454继承和原576维30层383prefix native bitwise对照通过；真实CED/projector+683token静音fixture前向/反传/AdamW后所有冻结状态不变。
+审计 audit_reports/mizar_l9_12x3_strong_reason_validation.json；代码/执行/提交/恢复/输出位置见包内README与sync_files.txt。
+测试Torch2.15 CPU/Transformers4.54.1；本地torchaudio2.9 native扩展ABI不匹配，仅测试进程禁用未用native扩展，SoundFile和PyTorch音频变换真实，生产代码无适配。
+Git Bash无flock，生命周期夹具显式模拟flock/vc/torchrun；未验证远程音频齐备、CUDA/NCCL/5090显存吞吐和实际收敛。
+以下原RM全部字节完整保留。
+
+<!-- mizar_l9_12x3_strong_reason_original_rm -->
 ## 2026-11-26：MMAU/MMAR完整1000题静音tracing，所有合格题及三类/四层级分析
 
 用户确认计划后新增隔离code/RSmol/mizar_benchmark_tracing/，共用干预核心、两个独立任务和输出。
