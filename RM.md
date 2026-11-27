@@ -1,3 +1,33 @@
+## 2026-11-27：三个指定AudioMCQ四循环最终checkpoint的九项4090评测
+
+按用户最新范围新增隔离 mizar_core4_eval/ 与 run_mizar_core4_eval_4090.sh，三个模型各 MMAU1000/MMAR1000/MMSU5000，共9项；不做ReasonAQA、不重跑官方baseline。
+targets.json固定用户指定三个完整路径：L9–12 run formal_20261127_014210339558630（5090训练），L14–17 run formal_20261127_021300367682028、L19–22 run formal_20261127_021312627006100（3090训练），均formal/checkpoints/model--step-16890.ckpt。
+别名l9_12x4/l14_17x4/l19_22x4；自动绑定同run formal/runtime.json，不扫描latest。all提交9项，单别名提交3项，单benchmark可续评。
+
+原训练源目录仍保留x3_strong_reason历史文件名，当前合同为AudioMCQ-only/四循环/720524行/3epochs/16890步；最终游标(3,0)允许model-only评测，不创建/恢复optimizer/scheduler/训练RNG。
+30物理层/42次执行、四轮完整hidden直传、原final norm仅一次；454状态无新增gate/anchor/injection/参数。
+source_manifest固定Git 9575eafd0901c481fbd934cc90514f8b2554eaa3中三路线全部Python/Shell/release文件SHA及训练code_digest；只从匹配Git object建立独立内容校验快照，核对完整实际import路径。
+GPU严格官方release构建CED/projector/LM后strict覆盖已训练完整状态，核验shape/dtype/finite/tied及冻结tensor逐值和digest，随后全模型eval/frozen，每次完整LM forward核验原生42次轨迹。
+
+MMAU/MMAR原1000、固定选项原题面、小写、raw生成原样交原官方scorer；MMSU5000使用当前紧凑小写四槽/null保留及mmsu_answer_text_contains_v2/原官方汇总。
+FP32/batch1/seed1234/无autocast/TF32off、mono32k/fixed20中心裁剪右补零/10+10合回whole CED、每题仅一次音频编码保持。
+原EOS后缀/prompt256/PAD17/SEP-EOS0/prefix383/首logit382、原因果PAD可见/attention_mask=None、无KV/逐token完整重算/argmax300/首EOS停/raw decode保持。
+资源统一原pdgpu-4090/1GPU/8CPU/32G/1node、原镜像/mellow_c8204d8；无额外GPU smoke。CPU每模型预检一次，失败该模型三项不提交，其他模型继续；单vc失败继续后续并整体非零。
+独立run/eval/mizar_core4_audiomcq_eval_20261127_v1/<task>/model--step-16890；身份/源码/数据/scorer固定，逐题输入指纹、续评和完整分母后评分。新benchmark入口拒绝坏完整raw/progress行及冲突事件，仅恢复未写完末行；旧评测不修改。
+只读compare支持新三模型和已有official_mizar baseline，共有协议/数据/共享代码/逐题实际输入严格一致，分别记录42/30执行；不为旧三循环checkpoint冒用新身份。
+
+最终本地20/20项CPU回归通过、无skip：真实小30层Llama eager/SDPA三路线42次执行/独立递推/无carry/final norm、训练683与推理383及第二答案对齐/因果性，训练值重载/冻结漂移/坏库存及合同拒绝。
+实际loader控制流用明确微型模型/官方资产/CUDA夹具；真实SoundFile双声道16k解码/32k重采样/fixed20及三个实际生成适配器每题一次编码通过。
+三组1000/1000/5000完整runner用明确合成模型/音频/parquet夹具，原始预测/实际MMSU官方scorer/完整分母、13题中断续评/坏行/比较基线30次及重复预测拒绝通过。
+真实Git object/快照篡改拒绝、真实Bash入口和空格参数、九任务绑定/4090资源/CPU失败不提交/vc失败继续通过；vc仅模拟。
+Torch2.9CPU/Transformers4.54.1/torchaudio2.9CPU；Windows沙箱依赖/signal-pipe权限受限后获准沙箱外离线验收，未用native扩展仅测试进程适配。初增负例误写异常类型，仅修正测试，全部验证历史保留。
+Python3.10语法/Bash入口与README代码块/Git可同步性/whitespace通过；4218个既有tracked源码文件摘要保持，RM原622102字节保留。
+报告audit_reports/mizar_core4_eval_validation.json；README/sync_files/reference_dependencies提供本地Git同步和远程all/分模型/单项/CPU预检/比较命令。
+本地Windows只改核心代码、GitHub中转，生产权重/数据在远程Linux；未自动commit/push或实际提交GPU，未验证远程checkpoint/音频/CUDA/4090显存速度及正式分数。
+
+以下原RM全部字节完整保留。
+
+<!-- mizar_core4_eval_original_rm -->
 ## 2026-11-27：原L14–17入口改四轮纯循环，完整AudioMCQ三epoch，3090/64CPU
 
 用户确认计划并指定pdgpu-3090/8GPU/64CPU/256G，原地更新 run_mizar_l14_17x3_strong_reason_5090.sh 及原包，保留历史文件名。

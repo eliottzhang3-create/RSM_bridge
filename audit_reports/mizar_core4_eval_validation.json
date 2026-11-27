@@ -1,0 +1,120 @@
+{
+  "validation_runs": [
+    {
+      "status": "PASS_LOCAL_CPU",
+      "tests": 19,
+      "passed": 19,
+      "skipped": [],
+      "failures": [],
+      "seconds": 61.73917369999981
+    },
+    {
+      "status": "FAILED",
+      "tests": 20,
+      "passed": 19,
+      "skipped": [],
+      "failures": [
+        {
+          "test": "test_bad_complete_rows_progress_and_changed_identity_cannot_resume (test_mizar_core4_eval_workflow.BenchmarkWorkflowTests.test_bad_complete_rows_progress_and_changed_identity_cannot_resume)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_mizar_core4_eval_workflow.py\", line 204, in test_bad_complete_rows_progress_and_changed_identity_cannot_resume\n    with self.assertRaises(RuntimeError):benchmark.claim_output(args,{**passed['run_identity'],'checkpoint':'different'})\n                                         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_core4_eval\\benchmark.py\", line 64, in claim_output\n    lock_storage.claim_output(args.output_dir, dict(identity))\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_s1_ced_reasonaqa5000_eval\\storage.py\", line 81, in claim_output\n    raise ValueError('ReasonAQA checkpoint/data/audio/code/protocol identity changed; use a new output directory')\nValueError: ReasonAQA checkpoint/data/audio/code/protocol identity changed; use a new output directory\n"
+        }
+      ],
+      "seconds": 55.29639920000045
+    },
+    {
+      "status": "PASS_LOCAL_CPU",
+      "tests": 20,
+      "passed": 20,
+      "skipped": [],
+      "failures": [],
+      "seconds": 72.2321701999972
+    }
+  ],
+  "latest": {
+    "status": "PASS_LOCAL_CPU",
+    "tests": 20,
+    "passed": 20,
+    "skipped": [],
+    "failures": [],
+    "seconds": 72.2321701999972
+  },
+  "status": "PASS_LOCAL_CPU",
+  "versions": {
+    "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+    "torch": "2.9.0+cpu",
+    "transformers": "4.54.1",
+    "torchaudio": "2.9.0+cpu"
+  },
+  "remote_checkpoint_loading": "NOT_RUN",
+  "cuda": "NOT_RUN",
+  "job_submission": "MOCK_ONLY",
+  "fixtures": "Full-size runners use explicit model/audio/parquet fixtures; native Llama and SoundFile tests are real CPU.",
+  "packaging": {
+    "status": "PASS",
+    "sync_files": 27,
+    "reference_dependencies": 208,
+    "python310_grammar": [
+      "code/RSmol/mizar_core4_eval/arguments.py",
+      "code/RSmol/mizar_core4_eval/benchmark.py",
+      "code/RSmol/mizar_core4_eval/compare.py",
+      "code/RSmol/mizar_core4_eval/comparison_policy.py",
+      "code/RSmol/mizar_core4_eval/mmsu.py",
+      "code/RSmol/mizar_core4_eval/mmsu_runtime.py",
+      "code/RSmol/mizar_core4_eval/preflight.py",
+      "code/RSmol/mizar_core4_eval/registry.py",
+      "code/RSmol/mizar_core4_eval/runtime.py",
+      "code/RSmol/mizar_core4_eval/sources.py",
+      "code/RSmol/mizar_core4_eval/submit.py",
+      "code/RSmol/mizar_core4_eval/__init__.py",
+      "tests/test_mizar_core4_eval.py",
+      "tests/test_mizar_core4_eval_tensors.py",
+      "tests/test_mizar_core4_eval_workflow.py",
+      "tests/validate_mizar_core4_eval.py"
+    ],
+    "whitespace": "PASS",
+    "git_visibility": "PASS",
+    "original_tracked_files_checked": 4218,
+    "original_tracked_files_changed": [],
+    "original_rm_bytes_preserved": 622102,
+    "bash_readme_blocks": 6,
+    "bash_entry_syntax": "PASS (both wrappers; explicit offline escalation after sandbox signal-pipe denial)",
+    "obsolete_legacy_reference_names_omitted": [
+      "code/RSmol/mizar_l14_17x3_strong_reason/previous_training.py",
+      "code/RSmol/mizar_l19_22x3_strong_reason/previous_training.py",
+      "code/RSmol/mizar_l9_12x3_strong_reason/previous_training.py"
+    ]
+  },
+  "environment_notes": [
+    "First sandbox run could not read existing torchaudio; offline CPU validation reran with approval outside sandbox.",
+    "Unused torchaudio native extension disabled only in test-process import; production unchanged.",
+    "One added negative test initially expected RuntimeError instead of the shared storage ValueError; only test assertion corrected. Full run history retained."
+  ],
+  "final_source_preservation": {
+    "status": "PASS",
+    "sync_files": 27,
+    "reference_dependencies": 208,
+    "python310_grammar": [
+      "code/RSmol/mizar_core4_eval/arguments.py",
+      "code/RSmol/mizar_core4_eval/benchmark.py",
+      "code/RSmol/mizar_core4_eval/compare.py",
+      "code/RSmol/mizar_core4_eval/comparison_policy.py",
+      "code/RSmol/mizar_core4_eval/mmsu.py",
+      "code/RSmol/mizar_core4_eval/mmsu_runtime.py",
+      "code/RSmol/mizar_core4_eval/preflight.py",
+      "code/RSmol/mizar_core4_eval/registry.py",
+      "code/RSmol/mizar_core4_eval/runtime.py",
+      "code/RSmol/mizar_core4_eval/sources.py",
+      "code/RSmol/mizar_core4_eval/submit.py",
+      "code/RSmol/mizar_core4_eval/__init__.py",
+      "tests/test_mizar_core4_eval.py",
+      "tests/test_mizar_core4_eval_tensors.py",
+      "tests/test_mizar_core4_eval_workflow.py",
+      "tests/validate_mizar_core4_eval.py"
+    ],
+    "whitespace": "PASS",
+    "git_visibility": "PASS",
+    "original_tracked_files_checked": 4218,
+    "original_tracked_files_changed": [],
+    "original_rm_bytes_preserved": 622102
+  }
+}

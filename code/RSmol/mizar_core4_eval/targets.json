@@ -1,0 +1,5 @@
+{
+  "l9_12x4": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_final_l9_12x4_audiomcq_gbs128_3epochs_5090/formal_20261127_014210339558630/formal/checkpoints/model--step-16890.ckpt",
+  "l14_17x4": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_final_l14_17x4_audiomcq_gbs128_3epochs_3090/formal_20261127_021300367682028/formal/checkpoints/model--step-16890.ckpt",
+  "l19_22x4": "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_final_l19_22x4_audiomcq_gbs128_3epochs_3090/formal_20261127_021312627006100/formal/checkpoints/model--step-16890.ckpt"
+}
