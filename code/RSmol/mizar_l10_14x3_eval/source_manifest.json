@@ -1,0 +1,38 @@
+{
+  "l10_14x3_a9gate_bias3_l15": {
+    "revision": "816b48e269c4e51235e8617892868eaa24a6cae9",
+    "code_sha256": "fbe992cbb1a9bd1583f0ba6e38291946fe6dfebf82b8148be1f69bd7d1b2ce95",
+    "files": {
+      "admission.py": "f25e851a57ba6a3a42113ed8d569ccad9fa32a35f5413ef999a6450afcec42bd",
+      "assets.py": "92470953ae072b6594d6f0d67492febc8ed59aa489b6a412145eb50c56abe3b2",
+      "checkpoint.py": "b234341fa5318ba91473318d651701f1e6f549ab2edc3417ba9bebfe06fe277f",
+      "contract.py": "35016a3062e020444a9dbb20dfd3718aa2377baf5c14ef1080ff7e4eb554ca44",
+      "data/audio_paths.py": "f65433f8db88a59bf1d7701ce9b0bfe85e8c00affa673b69246684ae34596685",
+      "data/audiotext_dataset.py": "f41bbd8edf863c906d8ef996da87b726edaedae7987fa5507416e03113b5bf8b",
+      "data/fixed20.py": "f4580fdaf1b75acd54bbd12dbfc72f18e2906e1dbcebd8ff8e5d1ff355ac6a5c",
+      "data/indexed_jsonl.py": "1fac5952ad67609cc050d9b05cfac8c9cb16f4bf520b9eabbcfb0dee3af82e8a",
+      "data/prepared_index.py": "7bbf0f584c48c4b9b587a3df21f08116c925af2745437ec428ac5bbca0a2c9a6",
+      "data/sampler.py": "f936e6e9528d8422edc99bae30d27b1f22fcc595dd3c14761a8d943be838e946",
+      "data/staging.py": "db7a465e90deb6be5aa0342afbb6cb56279fbea20081cd09f79c42db2fac4515",
+      "data/template.py": "0c6b6de6740c1f693ddbb07361d710a664c5d95cc5d6cd286c940836a7277af2",
+      "journal.py": "6ea824052749ef57024368cab1caaacc072d449f5da72c8c8c693640f7ddeaad",
+      "llama_compat.py": "d340f660f8969da55a0939616894080b36d94c26629c69924246eef69ec763df",
+      "manifest_io.py": "986ebb52fa7dc5b44929bb0691d74ff6e69885e61a0ecb1573ce450d4524d0f1",
+      "model.py": "327bae3bfb055b64b928e44a93d4f3eaab42aa1288ab4e66fb40662769902b5e",
+      "models/ced.py": "37ba1b38ad27301535f793ea8e1fd8b947fee2fc512d53ed8467681949b57e2d",
+      "models/ced_offline.py": "94a0d5ede90337b4b88b112dfaad3db0144e644458dcc1a744096c6f19f248af",
+      "optim.py": "b91c770e176d897c85bcc476a9e77230aeb0d9361efbc9bd455773c5e717c871",
+      "prepare_index.py": "241bcf6ffb612fe1fd46c07872e3de55d39dada173a60fadd6e7ea60e4bb5758",
+      "prepare_manifest.py": "257a5e3d50eb7e8769d6f51452a4bd7a24a809726da432db29cb75d755feab0e",
+      "publication.py": "d95091c79da95d9b3d1f3b337ac10adfe7dbb51643d426601934dd3fa0202cc2",
+      "release_manifest.json": "07f52ca348869cbb44ef44b0cff0c103700497091dcf7e0f492adb23c5b61dcd",
+      "run.sh": "07bee53bc256dea432d80b279f58fc348591e35dbe933561ce094e240530cf8f",
+      "stage_data.py": "e9969b17b9f643667ebb994818bdc48151dc388fecd72ee2671d523e5f7eedb3",
+      "train.py": "e5cefc8c69abf3418b1315d8beb0c80602963d0b792874c073fe6e6fd4d031f7",
+      "training_helpers.py": "9b1e5dc01c3f83a18cf2c21e806dfddb14cf58745f484c77176626986fc8bac7",
+      "utils/audio_io.py": "67f3680af4b8bb5cbc30426c54d71155d2b65f8cdd5c4fb89af08a374e63f311",
+      "write_config.py": "1144c358b8590edd457ff963503e16bf56781d447171bbda36581a0c85877f00",
+      "write_failure.py": "b89c615de9108a507da0833e99499aa8b435cc181254d4e78ba46c43f1bf50ef"
+    }
+  }
+}

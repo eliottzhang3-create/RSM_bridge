@@ -1,0 +1,70 @@
+{
+  "validation_runs": [
+    {
+      "status": "FAILED",
+      "tests": 16,
+      "passed": 14,
+      "skipped": [],
+      "failures": [
+        {
+          "test": "test_dynamic_strong_counts_final_and_intermediate_cursors_model_only (test_mizar_l10_14x3_eval.AdmissionTests.test_dynamic_strong_counts_final_and_intermediate_cursors_model_only)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_mizar_l10_14x3_eval.py\", line 60, in test_dynamic_strong_counts_final_and_intermediate_cursors_model_only\n    self.assertEqual(runtime.validate_checkpoint(saved,config,registry.TARGET),saved['contract'])\n                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_l10_14x3_eval\\runtime.py\", line 82, in validate_checkpoint\n    registered.validate_data_counts(prepared['rows'],prepared.get('source_rows'),selection['selected_counts'])\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\log\\mizar_l10_14x3_eval_sources\\fbe992cbb1a9bd1583f0ba6e38291946fe6dfebf82b8148be1f69bd7d1b2ce95\\mizar_l9_12x3_strong_reason\\contract.py\", line 290, in validate_data_counts\n    raise ValueError(\"strongAC direct/CoT inventory disagrees with row count\")\nValueError: strongAC direct/CoT inventory disagrees with row count\n"
+        },
+        {
+          "test": "test_real_checkpoint_read_cpu_preflight_and_changed_runtime_refused (test_mizar_l10_14x3_eval.AdmissionTests.test_real_checkpoint_read_cpu_preflight_and_changed_runtime_refused)",
+          "traceback": "Traceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_mizar_l10_14x3_eval.py\", line 86, in test_real_checkpoint_read_cpu_preflight_and_changed_runtime_refused\n    result=preflight.check(a)\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_l10_14x3_eval\\preflight.py\", line 6, in check\n    runtime.read_checkpoint(args)\n    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_l10_14x3_eval\\runtime.py\", line 51, in read_checkpoint\n    validate_checkpoint(saved,config,args.eval_variant,args.expected_step,\n    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        sources.load_contract(args.eval_variant,args.sources_cache,args.source_revision))\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\mizar_l10_14x3_eval\\runtime.py\", line 82, in validate_checkpoint\n    registered.validate_data_counts(prepared['rows'],prepared.get('source_rows'),selection['selected_counts'])\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\code\\RSmol\\log\\mizar_l10_14x3_eval_sources\\fbe992cbb1a9bd1583f0ba6e38291946fe6dfebf82b8148be1f69bd7d1b2ce95\\mizar_l9_12x3_strong_reason\\contract.py\", line 290, in validate_data_counts\n    raise ValueError(\"strongAC direct/CoT inventory disagrees with row count\")\nValueError: strongAC direct/CoT inventory disagrees with row count\n"
+        }
+      ],
+      "seconds": 23.026644600002328
+    },
+    {
+      "status": "PASS_LOCAL_CPU",
+      "tests": 16,
+      "passed": 16,
+      "skipped": [],
+      "failures": [],
+      "seconds": 17.160581300006015
+    }
+  ],
+  "latest": {
+    "status": "PASS_LOCAL_CPU",
+    "tests": 16,
+    "passed": 16,
+    "skipped": [],
+    "failures": [],
+    "seconds": 17.160581300006015
+  },
+  "status": "PASS_LOCAL_CPU",
+  "versions": {
+    "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+    "torch": "2.9.0+cpu",
+    "transformers": "4.54.1",
+    "torchaudio": "2.9.0+cpu"
+  },
+  "remote_checkpoint_loading": "NOT_RUN",
+  "cuda": "NOT_RUN",
+  "job_submission": "MOCK_ONLY",
+  "fixtures": "Full-size runners use explicit model/audio/parquet fixtures; native Llama and SoundFile tests are real CPU.",
+  "shell_syntax": {
+    "status": "PASS",
+    "wrappers": 2,
+    "readme_blocks": 2
+  },
+  "environment_notes": [
+    "Sandbox denied reading existing torchaudio; explicit approval used for offline CPU validation.",
+    "Git Bash signal-pipe creation denied by sandbox; explicit offline approval used for syntax checks.",
+    "Unused torchaudio native extension disabled only in test-process import; production environment unchanged.",
+    "Initial synthetic selected_counts exceeded native CoT bound; corrected only fixture counts and reran all16 tests. Failures retained in validation_runs."
+  ],
+  "packaging": {
+    "status": "PASS",
+    "sync_files": 24,
+    "reference_dependencies": 41,
+    "python310": "PASS",
+    "whitespace": "PASS",
+    "git_visibility": "PASS",
+    "old_tracked_files_checked": 4267,
+    "old_tracked_files_changed": [],
+    "original_rm_bytes_preserved": 638479
+  }
+}

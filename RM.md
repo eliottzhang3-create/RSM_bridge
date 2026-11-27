@@ -1,3 +1,38 @@
+## 2026-11-27：L10–14×3/A9 gate/三个bias/L15指定step2542的AU、AR两项评测
+
+按用户批准计划新增隔离 code/RSmol/mizar_l10_14x3_eval/ 与 run_mizar_l10_14x3_eval_4090.sh，只做MMAU test-mini1000和MMAR1000，不提交ReasonAQA/MMSU或baseline。
+target.json固定 /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_final_l10_14x3_strong_a9gate_bias3_l15_gbs128_5090/formal_20261127_171041273199107/formal/checkpoints/model--step-2542.ckpt，自动同run formal/runtime.json。
+CPU核对step2542/原route/完整合同SHA/源码SHA/strong各源与直接答案CoT视图/8×4×4/1epoch及原游标。N与total动态从合同计算，不将原始strong上界当实测配额，不预设2542为最终步。
+仅恢复模型，不创建/恢复optimizer/scheduler/训练RNG，合法中间与已完成游标均可评测，不重新prepare生产训练数据。
+
+历史训练目录仍叫mizar_l9_12x3_strong_reason，实际route为mizar_final_l10_14x3_a9_gate_bias3_l15_strong_gbs128_v1。
+source_manifest固定Git816b48e269c4e51235e8617892868eaa24a6cae9中30份Python/Shell/release文件SHA及code_digest fbe992cbb1a9bd1583f0ba6e38291946fe6dfebf82b8148be1f69bd7d1b2ce95；从匹配Git object建立独立内容快照并核对transitive import路径。
+GPU按原loader完整继承官方454状态→仅一次注册gate2/bias矩阵1→strict覆盖457项训练状态，覆盖后不再次enable_training/enable_adapters，训练后的L10–15/gate/三bias完整保留。
+严格检查names/shape/dtype/finite/tied embedding和冻结tensor逐值/digest；随后全模型FP32/eval/frozen。
+原L1..9→(L10..14)x3→L15→L16..30，共40次block，A9取L9 raw audio126；后两轮A9+tanh(Linear(previous_audio))*previous_audio，先重构后全token加对应bias，非音频正常carry。
+每个完整解码forward重新构建A9，审计40层轨迹/共享gate两次/三轮bias入口/final norm一次，无跨题状态。
+
+复用原AU/AR完整1000题/固定原选项顺序/小写题面，raw生成原样交原官方scorer，不添加仅字母指令或候选likelihood。
+保持FP32/batch1/seed1234/无autocast/TF32off、SoundFile/mono32k/fixed20中心裁20s右补零/10+10合回whole CED/每题音频编码一次。
+原空格EOS后缀/prompt256/PAD17/SEP-EOS0/prefix383/首logit382，原因果PAD可见/attention_mask=None，无KV/逐token完整重算/argmax300/首EOS停止/raw decode。
+资源原pdgpu-4090/1GPU/8CPU/32G/1node、原镜像/mellow_c8204d8，训练队列5090不影响评测4090，无额外GPU smoke。
+每次调用CPU admission一次，失败不vc；all提交两项且单vc失败继续另一项并整体非零。--check-args仅打印，--preflight-only仅CPU。
+默认同run eval/mizar_l10_14x3_a9gate_bias3_l15_eval_20261127_v1/{mmau,mmar}/model--step-2542；独立log/mizar_l10_14x3_eval/日志与submission报告。
+固定checkpoint/runtime/源码/数据/scorer/协议身份、实际逐题prompt和音频指纹，相同命令只补剩余题，坏完整行/冲突progress拒绝，未写完末行恢复，完整1000/无skip才评分。
+MMAU/MMAR续评/重评分保留原模型加载核验；evaluation_report PASS与完整官方分母才表示评测完成，SUBMITTED不代表GPU PASS。
+
+本地最终16/16 CPU测试通过无skip：真实小30层Llama eager/SDPA非零gate/bias独立公式及40执行/两gate/三bias/final norm、无carry；训练683/推理383首和第二答案logits/argmax/因果性通过。
+真实模型严格重载/冻结漂移/坏状态拒绝、实际loader零适配初始化后覆盖非零已训练适配参数通过（官方资产和CUDA为明确CPU夹具）。
+真实SoundFile16k双声道→mono32k/fixed20与AU/AR一次音频编码、真实Git object快照/篡改拒绝、真实Bash入口/空格参数/两项4090资源通过，vc仅模拟。
+AU/AR完整各1000真实runner用明确模型/音频/parquet夹具，raw原样官方预测/1000分母、13题中断后987补齐/坏完整行/冲突进度及CPU失败不提交通过。
+初轮夹具CoT计数超过原上界被正确拒绝，仅修正夹具计数，生产合同未放宽；最终全部重跑，失败历史保留。
+Torch2.9CPU/Transformers4.54.1/torchaudio2.9CPU；沙箱依赖/Bash signal pipe受限后明确获准沙箱外离线验收，未用native扩展兼容仅测试进程。
+Python3.10/Bash入口与README命令/Git可见性/whitespace/既有tracked文件SHA及原RM字节保持核验；报告audit_reports/mizar_l10_14x3_eval_validation.json，README/sync_files/reference_dependencies给同步和两条提交命令。
+本地Windows改代码、GitHub中转；未自动commit/push或远程提交GPU，未验证生产checkpoint/音频/CUDA/4090显存速度或正式分数。
+
+以下原RM全部字节保留。
+
+<!-- mizar_l10_14x3_eval_original_rm -->
 ## 2026-11-27：原入口改L10–14×3/A9门控重构/三bias/训练L15，strongAC单轮分组LR
 
 用户确认公式 A9+tanh(Linear(previous_audio))*previous_audio，门控两处共享，偏置为3个向量（非4个），并授权实现。
