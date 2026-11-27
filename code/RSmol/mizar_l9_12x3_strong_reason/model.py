@@ -1,4 +1,4 @@
-"""Official 30 physical layers; shared L9-12 executes four times, no injection."""
+"""L10-14 x3 with A9+g(previous_audio)*previous_audio, three biases, train L15."""
 from __future__ import annotations
 from contextlib import nullcontext
 import json
@@ -9,7 +9,7 @@ from transformers import LlamaConfig
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer, LlamaForCausalLM, LlamaPreTrainedModel, LlamaRMSNorm, LlamaRotaryEmbedding)
-from contract import AUDIO_TOKENS, CORE_LAYERS, SCHEDULE, parameter_role
+from contract import AUDIO_TOKENS, TRAINABLE_LAYERS, LOOP_ENTRIES, SCHEDULE, TRAINABLE_ROLES, parameter_role
 from llama_compat import _assert_supported_llama_api, _call_decoder_layer, _causal_mask
 
 
@@ -25,7 +25,18 @@ class RecurrentModel(LlamaPreTrainedModel):
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
         self.last_layer_trace = ()
+        self.last_loop_trace = ()
         self.post_init()
+
+    def enable_adapters(self):
+        if hasattr(self,"audio_gate") or hasattr(self,"loop_bias"):
+            raise ValueError("adapters already exist; refusing to reset trained state")
+        reference=self.embed_tokens.weight
+        with torch.random.fork_rng(devices=[]):
+            gate=nn.Linear(self.config.hidden_size,1,device="cpu",dtype=reference.dtype)
+            nn.init.zeros_(gate.weight);nn.init.zeros_(gate.bias)
+        self.audio_gate=gate.to(reference.device)
+        self.loop_bias=nn.Parameter(torch.zeros(3,self.config.hidden_size,device=reference.device,dtype=reference.dtype))
 
     def _execute(self, inputs_embeds, *, single_pass=False, position_ids=None):
         if self.gradient_checkpointing:
@@ -34,6 +45,8 @@ class RecurrentModel(LlamaPreTrainedModel):
             raise ValueError("requires a full audio/text sequence")
         if single_pass and (self.training or torch.is_grad_enabled()):
             raise ValueError("native single-pass comparison is eval/no_grad only")
+        if not single_pass and not hasattr(self,"audio_gate"):
+            raise ValueError("strict-load official weights before enabling adapters")
         hidden = inputs_embeds
         batch, length = hidden.shape[:2]
         if position_ids is None:
@@ -44,16 +57,28 @@ class RecurrentModel(LlamaPreTrainedModel):
                             past_length=0, dtype=hidden.dtype, device=hidden.device)
         rotary = self.rotary_emb(hidden, position_ids=position_ids)
         self.last_layer_trace = ()
+        self.last_loop_trace = ()
+        anchor=None
         for logical, physical in enumerate(range(30) if single_pass else SCHEDULE):
+            if not single_pass and logical in LOOP_ENTRIES:
+                loop=LOOP_ENTRIES.index(logical)
+                if loop:
+                    previous_audio=hidden[:,:AUDIO_TOKENS]
+                    audio=anchor+torch.tanh(self.audio_gate(previous_audio))*previous_audio
+                    hidden=torch.cat((audio,hidden[:,AUDIO_TOKENS:]),dim=1)
+                # Outside prefix no_grad: all three bias rows must receive task gradients.
+                hidden=hidden+self.loop_bias[loop].view(1,1,-1)
+                self.last_loop_trace += (loop,)
             # Prefix is entirely frozen. Suffix MUST retain the input-gradient
             # graph even though none of its own parameters are trainable.
-            context = torch.no_grad() if logical < 8 else nullcontext()
+            context = torch.no_grad() if logical < 9 else nullcontext()
             with context:
                 hidden = _call_decoder_layer(self.layers[physical], hidden, attention_mask=mask,
                     position_ids=position_ids, cache=None, use_cache=False,
                     cache_position=position_ids[0], position_embeddings=rotary,
                     output_attentions=False)[0]
             self.last_layer_trace += (physical,)
+            if logical==8:anchor=hidden[:,:AUDIO_TOKENS].detach().clone()
         # The one original final norm is applied AFTER layer 30, never per loop.
         return BaseModelOutputWithPast(last_hidden_state=self.norm(hidden), past_key_values=None)
 
@@ -103,13 +128,14 @@ class CaptionDecoder(nn.Module):
 
 
 class MizarCoreTrain(nn.Module):
-    """Retains all 454 original state keys; no added trainable module."""
+    """Strictly inherits original454, then adds gate2 and bias[3,576]1 state."""
     def __init__(self, config, ced_dir=None, *, audio_encoder=None):
         super().__init__()
         self.audio_encoder = AudioEncoder(ced_dir) if audio_encoder is None else audio_encoder
         self.caption_decoder = CaptionDecoder(config)
 
     def enable_training(self):
+        self.caption_decoder.lm.model.enable_adapters()
         self.requires_grad_(False)
         for name, p in self.named_parameters():
             p.requires_grad_(parameter_role(name) != "frozen")
@@ -121,8 +147,9 @@ class MizarCoreTrain(nn.Module):
             self.training = self.caption_decoder.training = self.caption_decoder.lm.training = True
             core = self.caption_decoder.lm.model
             core.training = True
-            for index in CORE_LAYERS:
+            for index in TRAINABLE_LAYERS:
                 core.layers[index].train(True)
+            if hasattr(core,"audio_gate"):core.audio_gate.train(True)
         return self
 
     def generate_prefix_inference(self, inputs):
@@ -159,21 +186,21 @@ def validate_trainability(model, *, production=True):
         if p.requires_grad != (role != "frozen") or p.dtype != torch.float32:
             raise ValueError(f"incorrect trainability/dtype: {name}")
         counts[role] = counts.get(role, 0) + p.numel()
-    if set(counts) != {"frozen", "layer9", "layer10", "layer11", "layer12"}:
+    if set(counts) != {"frozen",*TRAINABLE_ROLES}:
         raise ValueError(f"unexpected parameter roles: {counts}")
     lm = model.caption_decoder.lm
     if lm.get_input_embeddings().weight is not lm.get_output_embeddings().weight:
         raise ValueError("embedding/head tied Parameter identity lost")
     for i, layer in enumerate(lm.model.layers):
-        if layer.training != (model.training and i in CORE_LAYERS):
+        if layer.training != (model.training and i in TRAINABLE_LAYERS):
             raise ValueError(f"layer mode changed: {i}")
     if any(m.training for m in model.audio_encoder.modules()):
         raise ValueError("frozen encoder/projector must remain eval")
     if production:
-        if counts != {"frozen":145139456,**{f"layer{i}":3540096 for i in (9,10,11,12)}}:
+        if counts != {"frozen":138059264,"loop_bias":1728,"audio_gate":577,**{f"layer{i}":3540096 for i in range(10,16)}}:
             raise ValueError(f"production parameter inventory differs: {counts}")
-        if len(list(model.state_dict())) != 454:
-            raise ValueError("expected exactly original454 state entries")
+        if len(list(model.state_dict())) != 457:
+            raise ValueError("expected original454 + gate2 + loop_bias1 state entries")
     return counts
 
 

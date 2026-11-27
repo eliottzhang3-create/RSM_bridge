@@ -15,7 +15,7 @@ import test_mizar_l9_12x3_previous_training as previous_tests
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--official-bundle",type=Path)
-    parser.add_argument("--report",type=Path,default=t.ROOT/"audit_reports/mizar_l9_12x4_audiomcq_validation.json")
+    parser.add_argument("--report",type=Path,default=t.ROOT/"audit_reports/mizar_l10_14x3_strong_gate_bias_validation.json")
     parser.add_argument("--skip-unit-tests",action="store_true")
     args=parser.parse_args()
     report={"status":"RUNNING","python":sys.version,"torch":t.torch.__version__,
@@ -83,7 +83,8 @@ def main():
                     "input":dataset.tokenize("what can be heard?",256),"answer":dataset.tokenize("a",300)}
             model.eval()
             native=t.LlamaForCausalLM(t.copy.deepcopy(model.caption_decoder.lm.config)).eval()
-            native.load_state_dict(model.caption_decoder.lm.state_dict(),strict=True)
+            native.load_state_dict({k:v for k,v in model.caption_decoder.lm.state_dict().items()
+                if 'audio_gate' not in k and 'loop_bias' not in k},strict=True)
             with t.torch.no_grad():
                 prefix,_=model.generate_prefix_inference(inputs)
                 a=model.caption_decoder.lm.model._execute(prefix,single_pass=True).last_hidden_state
@@ -91,15 +92,16 @@ def main():
                 t.torch.testing.assert_close(a,b,rtol=0,atol=0)
             del native,prefix,a,b
             model.train()
-            optimizer,_,_=t.build_optimizer(model,16890)
+            optimizer,_,_=t.build_optimizer(model,2600)
             output=model(inputs);loss=t.answer_loss(output,inputs,17);loss.backward()
             from train import gradient_audit
             audit=gradient_audit(model)
             optimizer.step()
             if t.checkpoint.sha_frozen(model)!=frozen:raise ValueError("official frozen state drift")
-            return {"release_files":len(bundle["files"]),"trainability":counts,"trainable_total":14160384,
+            return {"release_files":len(bundle["files"]),"trainability":counts,"trainable_total":21242881,
                     "state_entries":len(model.state_dict()),"full_683_cpu_ce":float(loss.detach()),"gradient_audit":audit,
                     "native_30_layer_383_prefix_bitwise_parity":True,"recurrence_block_calls":len(model.caption_decoder.lm.model.last_layer_trace),
+                    "all_three_bias_rows_have_task_gradient":all(bool(row.ne(0).any()) for row in model.caption_decoder.lm.model.loop_bias.grad),
                     "frozen_unchanged_after_adamw":True,"audio_waveform":"synthetic silence; real released encoder/projector"}
         check("actual_official_full_load_forward_backward",official)
     report.update(status="PASS" if not report["failures"] else "FAILED",elapsed_seconds=time.monotonic()-started,

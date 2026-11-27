@@ -1,6 +1,6 @@
-# Current complete AudioMCQ / L9-12x4 / three-epoch delivery
+# Current L10-14x3 / A9 gate / bias3 / train L15 / strongAC one-epoch delivery
 RM.md
-audit_reports/mizar_l9_12x4_audiomcq_validation.json
+audit_reports/mizar_l10_14x3_strong_gate_bias_validation.json
 code/RSmol/mizar_l9_12x3_strong_reason/.gitignore
 code/RSmol/mizar_l9_12x3_strong_reason/LICENSE
 code/RSmol/mizar_l9_12x3_strong_reason/NOTICE

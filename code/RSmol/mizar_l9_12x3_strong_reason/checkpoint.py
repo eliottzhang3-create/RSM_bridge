@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import torch
 import torch.distributed as dist
-from contract import ROUTE, MAX_LR, EPOCHS, KEEP_CHECKPOINTS, training_cursor, code_digest, digest, lr_factor, parameter_role
+from contract import ROUTE, GROUP_LRS, EPOCHS, KEEP_CHECKPOINTS, training_cursor, code_digest, digest, group_lr, parameter_role
 from training_helpers import rng_state, tensor_digest
 
 
@@ -38,10 +38,10 @@ def validate_saved(saved, model, optimizer, config, *, allow_complete=False):
     if saved.get("num_epochs") != EPOCHS or saved.get("scheduler",{}).get("last_epoch") != step:
         raise ValueError("scheduler/epoch horizon changed")
     schedule = saved["scheduler"]
-    expected_lr = MAX_LR * lr_factor(step, total)
+    expected_lrs = [group_lr(g["lr_group"],step,total) for g in optimizer.param_groups]
     if (schedule.get("_step_count") != step + 1
-            or schedule.get("base_lrs") != [MAX_LR] * len(optimizer.param_groups)
-            or schedule.get("_last_lr") != [expected_lr] * len(optimizer.param_groups)
+            or schedule.get("base_lrs") != [GROUP_LRS[g["lr_group"]][0] for g in optimizer.param_groups]
+            or schedule.get("_last_lr") != expected_lrs
             or schedule.get("lr_lambdas") != [None] * len(optimizer.param_groups)):
         raise ValueError("scheduler state differs from the actual update cursor")
     states = saved.get("random_state_by_rank")
@@ -81,10 +81,10 @@ def validate_saved(saved, model, optimizer, config, *, allow_complete=False):
             raise ValueError("optimizer parameter count mismatch")
         if sg["params"] != ig["params"]:
             raise ValueError("optimizer parameter ID order changed")
-        for key in ("weight_decay","betas","eps","initial_lr"):
+        for key in ("weight_decay","betas","eps","initial_lr","min_lr","lr_group","role"):
             if sg.get(key) != cg.get(key):
                 raise ValueError(f"optimizer configuration changed: {key}")
-        if not math.isclose(sg["lr"],MAX_LR*lr_factor(step,total),rel_tol=1e-12,abs_tol=0.):
+        if not math.isclose(sg["lr"],group_lr(cg["lr_group"],step,total),rel_tol=1e-12,abs_tol=0.):
             raise ValueError("optimizer next LR differs from scheduler cursor")
         for key,param in zip(sg["params"],cg["params"]):
             expected_ids.append(key)

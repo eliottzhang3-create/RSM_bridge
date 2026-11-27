@@ -1,0 +1,124 @@
+{
+  "status": "PASS",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "torch": "2.15.0+cpu",
+  "transformers": "4.54.1",
+  "audio_test_adapter": true,
+  "limitations": [
+    "No remote production audio or GPU job was accessed.",
+    "CPU Gloo is not an eight-GPU NCCL or 5090 memory/throughput validation.",
+    "Production historical hybrid manifest/audio live remotely; local manifest verification uses explicit synthetic fixtures.",
+    "Local torchaudio2.9 unused native extension disabled for Torch2.15 CPU compatibility; Python audio transforms are real."
+  ],
+  "checks": {
+    "existing_source_isolation": {
+      "status": "PASS",
+      "details": {
+        "unchanged_files": 4231
+      }
+    },
+    "python310_syntax": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 28
+      }
+    },
+    "cpu_unit_and_gloo_tests": {
+      "status": "PASS",
+      "details": {
+        "tests_run": 23,
+        "failures": 0,
+        "errors": 0,
+        "skipped": []
+      }
+    },
+    "actual_official_full_load_forward_backward": {
+      "status": "PASS",
+      "details": {
+        "release_files": 18,
+        "trainability": {
+          "frozen": 138059264,
+          "loop_bias": 1728,
+          "layer10": 3540096,
+          "layer11": 3540096,
+          "layer12": 3540096,
+          "layer13": 3540096,
+          "layer14": 3540096,
+          "layer15": 3540096,
+          "audio_gate": 577
+        },
+        "trainable_total": 21242881,
+        "state_entries": 457,
+        "full_683_cpu_ce": 6.114330291748047,
+        "gradient_audit": {
+          "status": "PASS",
+          "nonzero_task_gradients": {
+            "audio_gate": true,
+            "loop_bias": true,
+            "layer10": true,
+            "layer11": true,
+            "layer12": true,
+            "layer13": true,
+            "layer14": true,
+            "layer15": true
+          },
+          "frozen_gradients": false
+        },
+        "native_30_layer_383_prefix_bitwise_parity": true,
+        "recurrence_block_calls": 40,
+        "all_three_bias_rows_have_task_gradient": true,
+        "frozen_unchanged_after_adamw": true,
+        "audio_waveform": "synthetic silence; real released encoder/projector"
+      }
+    }
+  },
+  "failures": [],
+  "elapsed_seconds": 151.9487833999956,
+  "code_sha256": "fbe992cbb1a9bd1583f0ba6e38291946fe6dfebf82b8148be1f69bd7d1b2ce95",
+  "launcher_sha256_normalized_lf": "4d44cc62bf32c15f884f1923571096d674e1405aac03457d7612532e988237e2",
+  "recipe": {
+    "route": "mizar_final_l10_14x3_a9_gate_bias3_l15_strong_gbs128_v1",
+    "epochs": 1,
+    "global_batch_size": 128,
+    "warmup_updates": 100,
+    "group_lrs": {
+      "adapters": [
+        5e-05,
+        5e-06
+      ],
+      "core": [
+        1.5e-05,
+        1.5e-06
+      ],
+      "layer15": [
+        5e-06,
+        1e-06
+      ]
+    },
+    "keep_checkpoints": 4,
+    "save_epoch_fraction": 0.25,
+    "recurrent_layers_1based": [
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "recurrence_passes": 3,
+    "nonrecurrent_trainable_layer": 15,
+    "formula": "A9 + tanh(Linear(previous_audio))*previous_audio, then add current bias to all tokens",
+    "gate_shared": true,
+    "gate_zero_weight_bias": true,
+    "loop_bias_shape": [
+      3,
+      576
+    ],
+    "trainable_parameters": 21242881,
+    "frozen_original_parameters": 138059264,
+    "data": "historical strongAC direct+CoT only, weak0 ReasonAQA0",
+    "original_unfiltered_strong_upper_bound": 325648,
+    "production_rows": "measured remotely from historical hybrid",
+    "production_manifest_generated_locally": false
+  },
+  "initial_validation_interruption": "First exploratory suite ran while grouped-LR logging was added; exact source-identity check correctly rejected final reload. Final fixed-source suite reran without that interruption."
+}

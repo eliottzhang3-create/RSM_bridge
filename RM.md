@@ -1,3 +1,55 @@
+## 2026-11-27：原入口改L10–14×3/A9门控重构/三bias/训练L15，strongAC单轮分组LR
+
+用户确认公式 A9+tanh(Linear(previous_audio))*previous_audio，门控两处共享，偏置为3个向量（非4个），并授权实现。
+在原code/RSmol/run_mizar_l9_12x3_strong_reason_5090.sh及其现有包中修改，保留历史文件名；其它路线/评测/共享映射代码不改。
+本地Windows改代码经GitHub同步；生产历史hybrid/音频/新manifest/输出在远程Linux。未自动commit/push或提交GPU作业。
+
+完整官方Mizar final stage3_q4_seed20260905.ckpt原454状态继承CED/已训练projector/30层文本基座；18文件SHA/大小固定。
+strict继承后才注册一个Linear(576,1)及loop_bias[3,576]，门控weight/bias与三个独立向量全零，新增2305参数/3状态，最终457状态。
+原始1..9→(10..14)x3→15→16..30→final norm，40次block；第10..14五层共享三轮，L15单次且训练。
+A9是L9原raw post-block前126音频token，位于b1前；prefix1..9冻结no_grad，bias与gate加入在prefix no_grad以外。
+第一轮X1=H9+b1；后两轮先audio=A9+tanh(Linear(Yprev_audio))*Yprev_audio，other=Yprev_other，然后全部token加当前br。
+gate条件取未加本轮偏置的上一轮音频输出；b1/b2/b3覆盖audio/SEP/prompt/answer/PAD，先重构后加bias。
+零gate初始第二/三轮音频从A9+br开始，文本正常继承前一轮再加br；无直接额外SEP/text注入、无跨forward状态。
+原final norm仅L30后一次；无KV/decoder checkpointing，三轮完整BPTT，冻结L16..30保留输入梯度。
+只训练L10..14共17700480、L15共3540096、gate577+bias1728，总21242881；原冻结138059264参数与buffer/eval保持。
+
+分组max/min：gate+三个bias=5e-5/5e-6；共享五层=1.5e-5/1.5e-6；L15=5e-6/1e-6。
+前100个实际optimizer update warmup、第100步到各组max，后续各组独立cosine到最后真实update各自min，L15比0.2其余0.1分别处理。
+保留参考warmup0.1max下限（生产total>100）；小型fixture才截为total-1。不再使用百分比warmup。
+AdamW betas/eps/WD与原bias一维免decay保持，loop_bias虽存二维但作为bias免decay；optimizer/state/scheduler恢复逐组验证role/lr_group/min_lr/initial_lr/实际LR。
+metrics增加lr_used_by_group/lr_next_by_group，config audit保留每个参数组名称/数目/两端LR。
+
+CPU新manifest从旧实际训练 s1_stage1_hybrid_filtered.json（1477492行/各源旧计数校验）只保留audio_contribution=strong的AudioMCQ原行。
+直接答案/额外CoT均保留原字段/答案/顺序，排除全部weak和756968 ReasonAQA，不抽样，不从原未过滤S1补回历史缺失引用。
+实际strongN远程测量，原始S1上界325648不作为配额；各源/视图上界与仅strong/零weak/零Reason写入sealed manifest并校验。
+仅选中strong音频stat/映射/staging，weak/Reason文件不检查；沿用旧hybrid audit成功原路径，现缺失/空/冲突报错不静默丢行或换文件。
+默认data/Mizar/l10_14x3_strong_a9gate_bias3_v1，train/selection/resolved TSV/dataset_report/manifest四文件SHA seal与输入身份。
+报告精确各源/直接答案CoT/strong数、排除weak/Reason数、唯一音频/字节数；每10万行及末尾映射每2万打印进度，原子no-replace/同身份幂等/失败诊断保持。
+生产数据在远程，本地只实际生成验证合成小fixture；不能声称本地已生成生产manifest或已知过滤后N。
+
+1epoch、8GPU×micro4×GA4=GBS128，总ceil(N/128)，真实尾批/空rank不丢行不padding重复，实际GA缩放与active-rank mean保持。
+每0.25epoch后的首个完整update保存，最多最新4完整checkpoint；model/optimizer/scheduler/scaler/tracker/8rank RNG/样本游标完整恢复。
+新route/model/data/LR身份拒绝旧x4/旧gate实验checkpoint跨配方resume；新目录不覆盖旧manifest/输出。
+FP32/无autocast/TF32off、GradScaler/GradNormTracker、mono32k/fixed20中心裁20s右补零/在线CED、683token/原EOS-PAD/answer-only loss保持。
+原队列pdgpu-5090/8GPU/32CPU/256G/单节点、镜像/conda/覆盖变量不变，无额外GPU smoke。
+原入口--prepare-only生成/核验新manifest，普通命令ensure→CPU index→release/admission→单次vc，--check-args纯打印新配方及三组LR。
+单producer stage选中strong去重原音频到/dev/shm/mizar_l10_14x3_strong_<token>，shared-first→完整文件/字节校验→八rank optimizer边界MIN切换。
+退出先stop/wait再owner cleanup、失败阶段/rank/staging诊断保持，恢复重新staging。
+新输出outputs/RSmol/mizar_final_l10_14x3_strong_a9gate_bias3_l15_gbs128_5090/formal_<tag>/formal；log/mizar-strong-l10-14x3.<tag>.<JOB>.log。
+
+本地最终23项CPU回归全部通过无skip：真实小30层Llama eager/SDPA native30层对照、40调用/共享门控两次/三个bias顺序、零gate重启与文本carry、非零gate独立公式。
+真实三轮BPTT、所有bias行/gate/L10..15与冻结后缀输入梯度、冻结state AdamW更新后不变、因果性；生产meta21242881参数通过。
+实际strong-only manifest CLI/原路径/强弱Reason排除/错误历史-view-gold-缺映射拒绝/幂等seal与index；任意N分片与尾批/quarter点通过。
+optimizer真实逐步LR核对100warmup/三组不同终点/L15比例0.2，checkpoint组身份与坏矩/冻结state/游标拒绝、最多保留4份通过。
+真实trainer一epoch81行/6updates及中途完整恢复最终权重bitwise一致；DDP使用明确小模型/单进程夹具，正式训练同一更新路径。
+另真实两进程CPU Gloo GA4/GA1以及空rank零任务梯度与独立参考更新一致；真实Bash prepare-only/CPU失败不提交/空格参数/资源/producer stop-reap-cleanup（flock/vc/torchrun模拟）通过。
+已有完整官方18文件实际SHA/454继承→457状态，576维native30层383prefix bitwise对照、实际CED/projector静音fixture683token40调用/CE/反传、所有bias行任务梯度、AdamW冻结保持通过。
+审计audit_reports/mizar_l10_14x3_strong_gate_bias_validation.json，原配方报告保留历史含义；README/sync_files/执行/提交/恢复/日志命令更新。
+首轮探索测试因验证期间新增分组LR日志使源码SHA前后不一致，final reload正确拒绝；固定源码后最终全套重跑通过，未绕过身份校验。
+测试Torch2.15CPU/Transformers4.54.1；既有torchaudio未用native扩展适配仅测试进程，生产不改环境。未验证远程音频齐备/CUDA/NCCL/5090显存吞吐或正式收敛。
+以下原RM全部字节完整保留。
+
 ## 2026-11-27：完整Mizar连续三层窗口消融6～25，MMAU/MMAR各1000题，八卡3090
 
 用户确认窗口步长1、起点6..25共20组，随后授权实现并指定8卡3090。

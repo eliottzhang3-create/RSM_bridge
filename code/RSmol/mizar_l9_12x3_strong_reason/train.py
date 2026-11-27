@@ -1,4 +1,4 @@
-"""Three-epoch FP32 full-BPTT training; only shared L9-12 x4 updates."""
+"""StrongAC one-epoch training: L10-14 x3, A9 gate, bias3, and nonrecurrent L15."""
 from __future__ import annotations
 import argparse
 from contextlib import nullcontext
@@ -17,9 +17,9 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from assets import verify_bundle
 from checkpoint import save, sha_frozen, validate_saved
-from contract import (BATCH_SIZE, CORE_LAYERS, EPOCHS, MAX_LR, PREFIX_TOKENS, ROUTE,
+from contract import (BATCH_SIZE, CORE_LAYERS, EPOCHS, TRAINABLE_ROLES, PREFIX_TOKENS, ROUTE,
                       RANK_UPDATE_SAMPLES, SCHEDULE, SEED, WORLD_SIZE,
-                      accumulation_for_update, code_digest, digest, lr_factor,
+                      accumulation_for_update, code_digest, digest, group_lr,
                       parameter_role, rank_seed, rank_microbatch_size, training_cursor, validate_tokenizer_contract, write_json)
 from data.audiotext_dataset import AudioTextDataset, collate_fn
 from data.sampler import CustomDistributedSampler
@@ -50,7 +50,7 @@ def collective_run(phase, action, device):
 
 
 def gradient_audit(model):
-    nonzero = {f"layer{i}":False for i in (9,10,11,12)}
+    nonzero = {role:False for role in TRAINABLE_ROLES}
     for name,p in model.named_parameters():
         if not p.requires_grad:
             if p.grad is not None:
@@ -60,6 +60,8 @@ def gradient_audit(model):
             raise ValueError(f"missing/nonfinite task gradient: {name}")
         if bool(p.grad.ne(0).any()):
             nonzero[parameter_role(name)] = True
+        if parameter_role(name)=="loop_bias" and not all(bool(row.ne(0).any()) for row in p.grad):
+            raise ValueError("one of the three loop bias vectors has no task gradient")
     if not all(nonzero.values()):
         raise ValueError(f"missing role task gradient before clip/weight decay: {nonzero}")
     return {"status":"PASS","nonzero_task_gradients":nonzero,"frozen_gradients":False}
@@ -69,8 +71,8 @@ def forward_loss(ddp, inputs, ignore_index):
     output = ddp(inputs)
     model = ddp.module if hasattr(ddp,"module") else ddp
     core = model.caption_decoder.lm.model
-    if core.last_layer_trace != SCHEDULE:
-        raise ValueError("42-call pure recurrence schedule changed")
+    if core.last_layer_trace != SCHEDULE or core.last_loop_trace!=(0,1,2):
+        raise ValueError("40-call recurrence or three loop-entry biases changed")
     loss = answer_loss(output,inputs,ignore_index)
     if not bool(torch.isfinite(loss)):
         raise ValueError("nonfinite answer-only CE")
@@ -120,7 +122,7 @@ def optimizer_update(ddp, batches, device, optimizer, scaler, tracker, ignore_in
 
 def role_digests(model):
     result = {}
-    for role in ("layer9","layer10","layer11","layer12"):
+    for role in TRAINABLE_ROLES:
         result[role] = tensor_digest((name,p) for name,p in model.named_parameters() if parameter_role(name)==role)
     return result
 
@@ -140,7 +142,7 @@ def train(config,rank,device):
         if c["route"]!=ROUTE or c["code_sha256"]!=code_digest() or config["contract_sha256"]!=digest(c):
             raise ValueError("source/recipe changed after configuration")
         if g["world_size"]!=WORLD_SIZE or g["microbatch"]!=4 or g["gradient_accumulation_steps"]!=4 or g["epochs"]!=EPOCHS:
-            raise ValueError("requires single-node8, micro4, GA4, three epochs")
+            raise ValueError("requires single-node8, micro4, GA4, one epoch")
     collective_run("config",check_config,device)
     collective_run("official_bundle",lambda:verify_bundle(c["official_bundle"]) if rank==0 else None,device)
     seed = rank_seed(rank)
@@ -245,7 +247,7 @@ def train(config,rank,device):
             dummy=collective_run("empty_tail_context",lambda:collate_fn([dataset.original_item(0)])
                 if all(b is None for b in batches) else None,device)
             lr_used=[x["lr"] for x in optimizer.param_groups]
-            if any(not math.isclose(x,MAX_LR*lr_factor(step,g["total_steps"]),rel_tol=1e-12) for x in lr_used):
+            if any(not math.isclose(group["lr"],group_lr(group["lr_group"],step,g["total_steps"]),rel_tol=1e-12) for group in optimizer.param_groups):
                 raise ValueError("actual optimizer LR differs from scheduler position")
             loss,norm,scale,audit=optimizer_update(ddp,batches,device,optimizer,scaler,tracker,dataset.pad_id,dummy_batch=dummy)
             if first_audit is None:
@@ -257,6 +259,8 @@ def train(config,rank,device):
             global_rows=torch.tensor(len(rows),device=device);dist.all_reduce(global_rows)
             record={"step":step,"epoch":epoch+1,"epoch_update":epoch_update+1,"epoch_fraction":(epoch_update+1)/g["steps_per_epoch"],"total_steps":g["total_steps"],"rank_mean_loss":float(reduced)/WORLD_SIZE,
                     "lr_used":lr_used,"lr_next":[x["lr"] for x in optimizer.param_groups],
+                    "lr_used_by_group":{group["lr_group"]:used for group,used in zip(optimizer.param_groups,lr_used)},
+                    "lr_next_by_group":{group["lr_group"]:group["lr"] for group in optimizer.param_groups},
                     "microbatches":micro,"effective_global_batch":int(global_rows.item()),
                     "gradient_l2_before_clip":norm,"gradient_common_scale":scale,
                     "grad_scaler":scaler.get_scale(),"rank0_rows":rows,

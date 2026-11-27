@@ -150,9 +150,9 @@ def select_files(files, mode):
 def validate_stage_root(path):
     path = Path(path)
     if (not path.is_absolute() or path.parent != Path("/dev/shm")
-            or not path.name.startswith("mizar_l9_12x4_mcq_") or path.is_symlink()
+            or not path.name.startswith("mizar_l10_14x3_strong_") or path.is_symlink()
             or path.resolve() != path):
-        raise ValueError("staging root must be a nonsymlink direct child /dev/shm/mizar_l9_12x4_mcq_<unique-id>")
+        raise ValueError("staging root must be a nonsymlink direct child /dev/shm/mizar_l10_14x3_strong_<unique-id>")
     return path
 
 

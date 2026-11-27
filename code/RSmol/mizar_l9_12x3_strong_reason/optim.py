@@ -1,5 +1,5 @@
 import torch
-from contract import MAX_LR, lr_factor, parameter_role
+from contract import GROUP_LRS, TRAINABLE_ROLES, lr_factor, parameter_role, rate_group
 
 
 def build_optimizer(model, total_steps):
@@ -10,17 +10,21 @@ def build_optimizer(model, total_steps):
         role = parameter_role(name)
         if role == "frozen":
             raise ValueError(f"frozen parameter entered optimizer: {name}")
-        decay = 0. if p.ndim <= 1 or name.endswith(".bias") else .01
+        decay = 0. if role=="loop_bias" or p.ndim <= 1 or name.endswith(".bias") else .01
         groups.setdefault((role, decay), []).append(p)
         names.setdefault((role, decay), []).append(name)
-    if {key[0] for key in groups} != {"layer9", "layer10", "layer11", "layer12"}:
-        raise ValueError("optimizer must contain exactly four shared layers")
-    audit = [{"role": role, "base_lr": MAX_LR, "weight_decay": wd,
+    if {key[0] for key in groups} != set(TRAINABLE_ROLES):
+        raise ValueError("optimizer must contain five shared layers, L15, three biases and the shared gate")
+    audit = [{"role": role, "lr_group":rate_group(role),"base_lr": GROUP_LRS[rate_group(role)][0],
+              "min_lr":GROUP_LRS[rate_group(role)][1],"weight_decay": wd,
               "names": names[(role,wd)], "numel": sum(p.numel() for p in groups[(role,wd)])}
              for role,wd in sorted(groups)]
-    optimizer = torch.optim.AdamW([{"params":groups[key], "lr":MAX_LR, "weight_decay":key[1]}
-                                  for key in sorted(groups)], lr=MAX_LR, betas=(.9,.999), eps=1e-8)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: lr_factor(step,total_steps))
+    optimizer = torch.optim.AdamW([{"params":groups[key],"role":key[0],"lr_group":rate_group(key[0]),
+        "lr":GROUP_LRS[rate_group(key[0])][0],"min_lr":GROUP_LRS[rate_group(key[0])][1],"weight_decay":key[1]}
+        for key in sorted(groups)], betas=(.9,.999), eps=1e-8)
+    functions=[(lambda step, ratio=group["min_lr"]/group["lr"]:lr_factor(step,total_steps,ratio))
+               for group in optimizer.param_groups]
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, functions)
     return optimizer, scheduler, audit
 
 class GradNormTracker:

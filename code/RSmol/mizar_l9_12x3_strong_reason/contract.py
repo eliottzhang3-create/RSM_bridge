@@ -1,24 +1,30 @@
-"""Official Mizar L9-12 x4; complete previously trained AudioMCQ, three epochs."""
+"""Official Mizar L10-14 x3, gated A9 reconstruction, three biases, train L15."""
 from __future__ import annotations
 import hashlib,json,math,os,random,time
 from pathlib import Path
-ROUTE = "mizar_final_l9_12x4_audiomcq_gbs128_3epochs_v1"
-WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, EPOCHS, SEED = 8,4,4,3,1234
-MAX_LR, MIN_LR, WARMUP_RATIO, KEEP_CHECKPOINTS = 2e-5,2e-6,.03,4
+ROUTE = "mizar_final_l10_14x3_a9_gate_bias3_l15_strong_gbs128_v1"
+WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, EPOCHS, SEED = 8,4,4,1,1234
+WARMUP_STEPS, KEEP_CHECKPOINTS = 100,4
+GROUP_LRS = {"adapters":(5e-5,5e-6),"core":(1.5e-5,1.5e-6),"layer15":(5e-6,1e-6)}
 RANK_UPDATE_SAMPLES = BATCH_SIZE * ACCUMULATION_STEPS
 GLOBAL_BATCH_SIZE = WORLD_SIZE * RANK_UPDATE_SAMPLES
 PROMPT_TOKENS, ANSWER_TOKENS, AUDIO_TOKENS = 256,300,126
 PREFIX_TOKENS = 383
 PAD_TOKEN, SEPARATOR_TOKEN_ID, EOS_TOKEN_ID = "!",0,0
-SOURCE_COUNTS = {"AudioCaps":113844,"Clotho":4798,"MusicCaps":3221,"CompA-R":249161,"LP-MusicCaps-MTT":19632,"SpeechCraft":287727,"TACOS":42141}
-TOTAL_ROWS = sum(SOURCE_COUNTS.values())
-PREVIOUS_SOURCE_COUNTS = {"reasonaqa_oneaudio":756968,**SOURCE_COUNTS}
+HISTORICAL_AUDIO_COUNTS = {"AudioCaps":113844,"Clotho":4798,"MusicCaps":3221,"CompA-R":249161,"LP-MusicCaps-MTT":19632,"SpeechCraft":287727,"TACOS":42141}
+SOURCE_COUNTS = {"AudioCaps":62988,"Clotho":2525,"MusicCaps":1731,"CompA-R":61031,"LP-MusicCaps-MTT":9981,"SpeechCraft":156496,"TACOS":30896}
+STRONG_VIEW_LIMITS = {"audiomcq_mcq":257892,"audiomcq_cot":67756}
+TOTAL_ROWS = sum(SOURCE_COUNTS.values())  # Original S1 upper bound, not the retained production quota.
+PREVIOUS_SOURCE_COUNTS = {"reasonaqa_oneaudio":756968,**HISTORICAL_AUDIO_COUNTS}
 DEFAULT_SOURCE = "/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s1_stage1_hybrid_filtered.json"
 DEFAULT_RESOLUTIONS = "/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_s1_audio_audit_s2_hybrid_20261024_170403/resolved_paths.tsv"
-SCHEDULE = tuple(list(range(8)) + list(range(8,12))*4 + list(range(12,30)))
-CORE_LAYERS = tuple(range(8,12))
+SCHEDULE = tuple(list(range(9)) + list(range(9,14))*3 + list(range(14,30)))
+CORE_LAYERS = tuple(range(9,14))
+TRAINABLE_LAYERS = tuple(range(9,15))
+LOOP_ENTRIES = (9,14,19)
+TRAINABLE_ROLES = ("audio_gate","loop_bias",*tuple(f"layer{i}" for i in range(10,16)))
 DEFAULT_MODEL_DIR = "/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M"
-DEFAULT_DATA_DIR = "/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/l9_12x4_audiomcq_only_v1"
+DEFAULT_DATA_DIR = "/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/l10_14x3_strong_a9gate_bias3_v1"
 CED_ASSET_FILES = ("config.json","configuration_ced.py","modeling_ced.py","feature_extraction_ced.py","preprocessor_config.json","model.safetensors")
 CED_EXPECTED_CONFIG = {"embed_dim":384,"depth":12,"num_heads":6,"n_mels":64,"patch_size":16,"patch_stride":16,"target_length":1012,"n_fft":512,"win_size":512,"hop_size":160,"center":True,"f_min":0,"f_max":8000,"pooling":"mean","pad_last":True,"outputdim":527}
 
@@ -275,10 +281,13 @@ def raw_references(row):
 
 
 def validate_data_counts(rows, sources, views=None):
-    if type(rows) is not int or rows != TOTAL_ROWS or sources != SOURCE_COUNTS:
-        raise ValueError("requires all 720524 historical AudioMCQ rows and zero ReasonAQA")
-    if views is not None and (sum(views.values()) != rows or any(type(v) is not int or v<0 for v in views.values())):
-        raise ValueError("AudioMCQ view inventory disagrees with row count")
+    if (type(rows) is not int or not 1 <= rows <= TOTAL_ROWS or not isinstance(sources,dict)
+            or sum(sources.values())!=rows
+            or any(k not in SOURCE_COUNTS or type(v) is not int or not 0 <= v <= SOURCE_COUNTS[k] for k,v in sources.items())):
+        raise ValueError("requires historical strongAC only, zero weak/ReasonAQA, within original source bounds")
+    if views is not None and (set(views)-set(STRONG_VIEW_LIMITS) or sum(views.values()) != rows
+            or any(type(v) is not int or not 0 <= v <= STRONG_VIEW_LIMITS[k] for k,v in views.items())):
+        raise ValueError("strongAC direct/CoT inventory disagrees with row count")
     return rows
 
 
@@ -303,7 +312,7 @@ def geometry(rows):
             "rank_samples_per_optimizer_step": RANK_UPDATE_SAMPLES,
             "samples_per_rank": rows // WORLD_SIZE,
             "rank_samples":[rank_shard(rows,r)[1] for r in range(WORLD_SIZE)], "steps_per_epoch": steps,
-            "total_steps": total, "warmup_steps": round(total * WARMUP_RATIO),
+            "total_steps": total, "warmup_steps": min(WARMUP_STEPS,total-1),
             "full_updates": rows // GLOBAL_BATCH_SIZE,
             "last_update_rows": rows % GLOBAL_BATCH_SIZE or GLOBAL_BATCH_SIZE,
             "dropped_rows_per_epoch": 0, "duplicated_rows_per_epoch": 0}
@@ -316,21 +325,35 @@ def accumulation_for_update(update, rows=TOTAL_ROWS):
     return min(ACCUMULATION_STEPS, math.ceil(remaining/(WORLD_SIZE*BATCH_SIZE)))
 
 
-def lr_factor(step, total_steps):
+def lr_factor(step, total_steps, min_ratio=.1):
     """LR of the NEXT real update, indexed from zero; final update reaches min."""
-    warmup = min(round(total_steps * WARMUP_RATIO), total_steps - 1)
+    warmup = min(WARMUP_STEPS, total_steps - 1)
     if warmup and step < warmup:
         return max(.1, (step + 1) / warmup)
     progress = min(1., max(0., (step - warmup + 1) / max(1, total_steps - warmup)))
-    return .1 + .45 * (1. + math.cos(math.pi * progress))
+    return min_ratio + (1.-min_ratio)*.5*(1. + math.cos(math.pi * progress))
 
 
 def parameter_role(name):
     prefix = "caption_decoder.lm.model."
-    for layer in CORE_LAYERS:
+    if name.startswith(prefix+"audio_gate."):return "audio_gate"
+    if name==prefix+"loop_bias":return "loop_bias"
+    for layer in TRAINABLE_LAYERS:
         if name.startswith(prefix + f"layers.{layer}."):
             return f"layer{layer + 1}"
     return "frozen"
+
+
+def rate_group(role):
+    if role in {"audio_gate","loop_bias"}:return "adapters"
+    if role=="layer15":return "layer15"
+    if role in {f"layer{i}" for i in range(10,15)}:return "core"
+    raise ValueError(f"no learning rate for role {role}")
+
+
+def group_lr(group, step, total_steps):
+    maximum,minimum=GROUP_LRS[group]
+    return maximum*lr_factor(step,total_steps,minimum/maximum)
 
 
 def checkpoint_steps(rows):
@@ -358,16 +381,20 @@ def semantic_contract(prepared, model_dir, bundle):
             "mapping_sha256": prepared["mapping_sha256"], "source_rows": prepared["source_rows"],
             "dataset_selection":prepared.get("dataset_selection",{"policy":"legacy_full_original_quota"}),
             "model_dir": str(model_dir), "official_bundle": bundle,
-            "physical_layers": 30, "schedule": list(SCHEDULE), "trainable_layers_1based": [9,10,11,12],
-            "recurrence_passes":4,"audio_injection":False,"added_parameters":0,
+            "physical_layers": 30, "schedule": list(SCHEDULE), "trainable_layers_1based": list(range(10,16)),
+            "recurrence_passes":3,"recurrent_layers_1based":list(range(10,15)),
+            "audio_injection":{"anchor":"raw_post_layer9_audio126","formula":"A9+tanh(Linear(previous_audio))*previous_audio",
+                "shared_gate":True,"gate_shape":[1,576],"zero_weight_bias":True,"before_loops":[2,3]},
+            "loop_bias":{"shape":[3,576],"zero_init":True,"broadcast":"all_tokens","order":"reconstruct_audio_then_add_current_bias"},
+            "added_parameters":2305,
             "prefix": [126,1,256], "answer_tokens": 300, "attention_mask": None,
             "audio_policy": "mono_resample_center_crop_right_pad_fixed20_split10",
             "audio_read_policy": "shared_until_complete_collective_optimizer_boundary_switch",
             "forward_dtype": "float32", "autocast": False, "tf32": False,
             "mapper_frozen_eval": True, "seed": SEED, "epochs": EPOCHS,
-            "adamw": {"max_lr": MAX_LR, "min_lr": MIN_LR, "betas": [.9,.999], "eps": 1e-8,
+            "adamw": {"group_lrs":{k:list(v) for k,v in GROUP_LRS.items()}, "betas": [.9,.999], "eps": 1e-8,
                        "weight_decay": .01, "no_decay_bias_ndim_le1": True},
-            "scheduler": "3pct_round_global_warmup_then_cosine_final_real_update_at_min",
+            "scheduler": "100_actual_updates_warmup_then_group_specific_cosine_final_real_update_at_min",
             "checkpoint_steps":checkpoint_steps(prepared["rows"]),"keep_checkpoints":KEEP_CHECKPOINTS,
             "loss": "rank_local_microbatch_valid_answer_token_mean_then_actual_GA_then_active_rank_mean; empty_tail_rank_zero_loss_collective_only",
             "full_bptt": True, "use_cache": False, "gradient_checkpointing": False}
