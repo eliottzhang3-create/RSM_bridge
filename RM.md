@@ -1,3 +1,49 @@
+## 2026-11-27：完整Mizar连续三层窗口消融6～25，MMAU/MMAR各1000题，八卡3090
+
+用户确认窗口步长1、起点6..25共20组，随后授权实现并指定8卡3090。
+新增隔离code/RSmol/mizar_triplet_ablation/，入口run_mizar_mmau_triplet_ablation_8gpu_3090.sh和run_mizar_mmar_triplet_ablation_8gpu_3090.sh。
+原单层消融/letters/cutoff/剪层等103份既有文件normalized-LF SHA保持，125份复用源码固定；未修改已有tracing或训练。
+本地Windows仅改源码、经GitHub同步；生产模型/音频/缓存与正式输出仍在远程Linux。
+
+每个任务完整1000题，先全30层baseline，然后依次[6,7,8],[7,8,9],...,[25,26,27]，共21组/21000题目决策，两个任务合计42000。
+每个选中完整decoder block h_out=h_in，残差增量归零；实际路由其余27个原始模块，不清零hidden本身或只清attention/MLP。
+各条件独立从完整原模块集合选择、无累计删层；前1..5和末28..30保护，原self_attn layer_idx/位置/RoPE/参数保持。
+不重训、不转换或导出剪枝权重；音频/SEP/文本token全部保留，不静音、不使用tracing筛选子集。
+
+严格原Mizar final stage3_q4_seed20260905.ckpt，原encoder/已训练projector/30独立LM；FP32源参数/BF16前向/FP32frontend和GPU log_softmax/TF32off。
+原SoundFile/32k先resample再mono/first20右补零、compact lowercase+空格EOT后prompt256/PAD17可见、prefix383/首logit382保持，无KV/生成。
+单次prefix前向读取各纯小写单字母loglikelihood、有效原slot argmax，MMAR真实选项数/空槽null/5未映射GT完整分母计错保持。
+MMAU27子类映射perception331/semantic230/reasoning439；MMAR Signal43/Perception404/Semantic412/Cultural141保持。
+完整源题单ID/原序/选项/GT/audio指纹保持，不重新抽样。
+
+CPU manifest优先只读旧letters_eot1000；不存在则只读旧body1000转换；均无则调用旧builder仅返回数据写新路径，不在旧目录发布。
+实际release tokenizer核对单普通字母token；新manifest保留每行源记录SHA和文件身份；存在但不匹配的旧manifest明确拒绝。
+新输入data/mizar_{mmau,mmar}1000_triplet_inputs_v1/manifest.json，与旧题单/正式输出分离。
+每rank固定global_index%8的125题，新独立BF16 prefix各题encoder/projector一次并跨21组复用，原子/fsync及身份检查保持。
+八卡共同完成同一条件、合并精确1000题/落盘打印/barrier后切下一窗口；逐题续跑/partial-tail恢复/输出锁/错身份拒绝。
+同作业内每卡首题对6/15/25三个窗口核对27层轨迹，与完整30层执行但三个block分别输出其输入的独立hook实现比较全词表logits逐值相同；恢复baseline保持。
+每次真实前向hooks检查原层执行顺序/无cache；最终审计模型、runtime checks、125缓存库存、8rank各21条件完整覆盖。
+
+资源pdgpu-3090/8GPU/64CPU/256G/1node，原镜像和mellow_c8204d8/原Miniconda与RSMOL_CONDA_BASE覆盖。
+两条入口各单次vc；默认输出outputs/RSmol/mizar_{mmau,mmar}_triplet06_25_letters_eot_bf16_8gpu3090_v1。
+日志code/RSmol/log/mizar-triplet-{mmau,mmar}.<tag>.1.log；提交返回确切log_path/manifest/output/submission报告。
+每组BASELINE_DONE/TRIPLET_DONE打印实际drop三层、总体/分组正确率与baseline差值/耗时。
+输出逐题字母分数/配对改变、总体与各组accuracy/baseline百分点变化、新增正确/错误/预测变化数、并列排名、CSV/JSON。
+窗口准确率及delta、三/四组曲线PNG/SVG；MMAR另四宫格absolute/delta，两任务共12图文件，横轴明确原起止层和步长1。
+高acc排名表示该三层一起删去后保留性能较好，不把窗口联合掉分当单层贡献或单层掉分之和。
+README及25份sync_files给出两个CPU manifest/两个3090提交/预览/续跑/日志/重画图命令，最终analysis_report PASS才表示完成。
+
+本地15/15通过无跳过，另最终audit加强负例定向复验1项通过；报告audit_reports/mizar_triplet_ablation_validation.json。
+真实30层小Llama eager/SDPA/BF16/383prefix全部20窗口、native baseline、原self_attn层号保持/参数不变/不累积/三窗口独立identity等价通过；另576维短prefix控制通过。
+真实release tokenizer/本地2000标注核对MMAU27重复正文及三类，MMAR4空槽/5未映射/最多6槽及四层级；null分数不进入argmax。
+真实125份BF16 prefix保存加载/每题一次编码/续用不重编码/错身份及篡改拒绝；音频encoder在缓存测试中为明确夹具，原SoundFile路径复用不改。
+实际manifest build/ensure/load/源文件只读、body和isolated fallback、篡改拒绝通过。
+完整42000决策finalizer/分组CSV/排名/paired变化/作图、8rank条件同步和续跑为明确合成模型与集体通信夹具；最终大缓存审计用明确合成内容。
+实际最终audit读1000份库存/8rank报告通过，resealed少一个窗口报告20拒绝、正确21恢复、缓存字节篡改拒绝。
+真实Bash三入口/conda激活夹具/两个3090单次vc资源和空格参数/mock vc参数链、Python3.10与whitespace通过，合成图布局目视检查。
+Windows依赖/临时目录权限沿已有工具批准沙箱外CPU验证；测试报告不冒充生产Mizar/CUDA/3090显存速度或8卡Gloo通过。
+未远程读取生产权重/音频或提交GPU作业、commit/push；以下RM既有全部字节完整保留。
+
 ## 2026-11-27：三个指定AudioMCQ四循环最终checkpoint的九项4090评测
 
 按用户最新范围新增隔离 mizar_core4_eval/ 与 run_mizar_core4_eval_4090.sh，三个模型各 MMAU1000/MMAR1000/MMSU5000，共9项；不做ReasonAQA、不重跑官方baseline。
