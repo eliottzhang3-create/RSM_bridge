@@ -1,3 +1,26 @@
+## 2026-11-28：S3完整候选池CPU审计、原音频映射与过滤manifest
+
+用户确定以s3_candidates.json原metadata训练完整可用候选池，不采样、不做Q4选择；本轮仅实现第一阶段数据准备，不实现或提交训练。
+新增独立code/RSmol/mizar_s3_data_prepare/与prepare_mizar_s3_data.sh；本地Windows改源码、GitHub中转，生产metadata/音频/过滤后数据留在远程Linux。
+固定官方S3 SHA c4b1862f58148d2728dfad10ee8346974924badca6de6b82181ffe605225cc65与289952条：256077 strongAC直接答案+33875 AVQA，原字段/题面/答案/选项/顺序/路径均保留。
+过滤后的train.json仍为原S3对象；audio_path_map.json/resolved_paths.tsv另外提供原filepath1到远程真实音频的精确映射，后续训练必须同时使用映射。
+AVQA按原整数ID连接，核对选项顺序/零基gold、Sound或Both、YouTube ID及起始秒，四个VGG目录唯一WAV才保留；不按题目相似或模糊文件名猜测。
+原标注缺ID时只允许复用完全相同S3 filepath1的已验证录音anchor，保留证据；标签/重复ID/同path录音冲突不能走回退，无法确认者明确排除、不补抽。
+AudioMCQ按历史实际hybrid的strong直接答案成员身份/选项/录音名连接旧resolved_paths.tsv成功路径，SpeechCraft另查split，不改变旧映射。
+本地参考全量检查发现43562条S3 AudioMCQ gold与S1不同；旧答案不参与录音连接、不覆盖S3，逐条证据与汇总保留差异，避免误过滤。
+每唯一音频CPU SoundFile完整分块解码、检查空文件/NaN/Inf、记录原生float32波形SHA/时长/声道/采样率/静音；坏音频明确过滤，短或全零只统计，权限/依赖故障整体失败。
+S3后续音频合同mono32k/first20右补零；不沿用S1中心裁剪，不重采样或改写音频、不构造CED特征/加载权重。
+默认data/Mizar/s3_full_filtered_v1，输出train/selection/excluded/路径映射/逐音频审计/统计及manifest SHA seal；保留+排除恰覆盖全部输入，样本不重排。
+输入/源码/decoder/音频库存身份、同输出核验复用、独占锁/同级building/fsync/no-replace发布/CloudStor兼容及失败诊断保持；无法复用时用新目录，不覆盖旧产物。
+本地最终19/19 CPU回归通过无skip，真实合成WAV/SoundFile、完整prepare/filter/verify/reuse、错误匹配/答案/冲突/损坏拒绝及Bash入口（conda/python明确接口夹具）通过；Python3.10/Bash语法通过。
+本地参考S3实际289952行结构通过，256077 AudioMCQ均与参考未过滤S1身份/选项/录音名匹配；AVQA参考31978标注，26842 ID/选项/gold一致、7033缺原ID，仅metadata证据不作为远程过滤配额。
+Windows沙箱临时目录权限失败后获准沙箱外CPU验证；新增Bash夹具Windows PATH转换修正后全套通过，前轮失败保留验收报告previous_runs。
+报告audit_reports/mizar_s3_data_prepare_validation.json；README/sync_files提供精确Git同步、CPU准备/核验和后续训练读取接口。
+远程代码同步后仓库根执行bash code/RSmol/prepare_mizar_s3_data.sh；最终S3_DATASET_PASS及manifest.json才证明过滤数据发布成功。
+未读取远程生产hybrid/TSV/WAV、未生成生产manifest、提交GPU或自动commit/push；实际保留N/生产音频齐备需服务器执行确认。
+
+以下原RM全部字节保留。
+
 ## 2026-11-27：L10–14×3/A9 gate/三个bias/L15指定step2542的AU、AR两项评测
 
 按用户批准计划新增隔离 code/RSmol/mizar_l10_14x3_eval/ 与 run_mizar_l10_14x3_eval_4090.sh，只做MMAU test-mini1000和MMAR1000，不提交ReasonAQA/MMSU或baseline。

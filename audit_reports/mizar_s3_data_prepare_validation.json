@@ -1,0 +1,109 @@
+{
+  "status": "PASS_LOCAL_CPU",
+  "tests_run": 19,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "python": "3.13.5",
+  "python310_syntax": "PASS",
+  "bash_syntax": "PASS",
+  "test_output": "test_actual_bash_wrapper_quotes_arguments_and_disables_cuda (s3_checks.S3PreparationTests.test_actual_bash_wrapper_quotes_arguments_and_disables_cuda) ... ok\ntest_busy_lock_and_wrong_input_identity_are_not_overwritten (s3_checks.S3PreparationTests.test_busy_lock_and_wrong_input_identity_are_not_overwritten) ... ok\ntest_case_sensitive_recording_join_does_not_use_similar_name (s3_checks.S3PreparationTests.test_case_sensitive_recording_join_does_not_use_similar_name) ... ok\ntest_conflicting_avqa_recording_excludes_entire_old_path (s3_checks.S3PreparationTests.test_conflicting_avqa_recording_excludes_entire_old_path) ... ok\ntest_conflicting_historical_audit_is_excluded (s3_checks.S3PreparationTests.test_conflicting_historical_audit_is_excluded) ... ok\ntest_duplicate_candidates_and_invalid_gold_fail_without_publication (s3_checks.S3PreparationTests.test_duplicate_candidates_and_invalid_gold_fail_without_publication) ... ok\ntest_failure_keeps_private_diagnostics_and_releases_lock (s3_checks.S3PreparationTests.test_failure_keeps_private_diagnostics_and_releases_lock) ... [s3-prepare] FAILED; diagnostic directory preserved: C:\\Users\\69327\\AppData\\Local\\Temp\\s3-audit-4pz01i_j\\prepared.building-3yycmiwy\nok\ntest_full_decode_finite_stereo_and_zero_policy (s3_checks.S3PreparationTests.test_full_decode_finite_stereo_and_zero_policy) ... ok\ntest_full_preparation_preserves_metadata_order_and_denominator (s3_checks.S3PreparationTests.test_full_preparation_preserves_metadata_order_and_denominator) ... ok\ntest_history_identity_not_basename_or_new_absolute_path_fallback (s3_checks.S3PreparationTests.test_history_identity_not_basename_or_new_absolute_path_fallback) ... ok\ntest_label_mismatch_not_rescued_by_shared_recording (s3_checks.S3PreparationTests.test_label_mismatch_not_rescued_by_shared_recording) ... ok\ntest_missing_and_corrupt_audio_are_recorded_and_filtered (s3_checks.S3PreparationTests.test_missing_and_corrupt_audio_are_recorded_and_filtered) ... ok\ntest_preview_cli_does_not_read_assets (s3_checks.S3PreparationTests.test_preview_cli_does_not_read_assets) ... ok\ntest_recording_start_case_ambiguity_and_traversal_are_rejected (s3_checks.S3PreparationTests.test_recording_start_case_ambiguity_and_traversal_are_rejected) ... ok\ntest_s3_gold_corrections_preserved_while_old_history_only_maps_audio (s3_checks.S3PreparationTests.test_s3_gold_corrections_preserved_while_old_history_only_maps_audio) ... ok\ntest_shared_recording_rescues_only_missing_annotation (s3_checks.S3PreparationTests.test_shared_recording_rescues_only_missing_annotation) ... ok\ntest_source_output_and_audio_tampering_rejected (s3_checks.S3PreparationTests.test_source_output_and_audio_tampering_rejected) ... ok\ntest_strict_streaming_parser_and_no_replace (s3_checks.S3PreparationTests.test_strict_streaming_parser_and_no_replace) ... ok\ntest_wrong_recording_name_and_visual_only_excluded (s3_checks.S3PreparationTests.test_wrong_recording_name_and_visual_only_excluded) ... ok\n\n----------------------------------------------------------------------\nRan 19 tests in 3.648s\n\nOK\n",
+  "production_audio_checked": false,
+  "gpu_submitted": false,
+  "source_files": {
+    "code\\RSmol\\mizar_s3_data_prepare\\__init__.py": "e531464364bf43499664a820bd0ff34f150c77779e9cf574b00223e9329694a1",
+    "code\\RSmol\\mizar_s3_data_prepare\\__main__.py": "3501b915d00063b9b16f3c817f977a21a5e47d51f540d3ecd7ef6a890c920eac",
+    "code\\RSmol\\mizar_s3_data_prepare\\audio.py": "e732098c82733cc9dbea7a32fe5deb451e5e6e906b0a75c0de103d4e8ea710c3",
+    "code\\RSmol\\mizar_s3_data_prepare\\io_utils.py": "36a8409aebe0ba3f3b5c97f4da89d45293b3a8ebba2550bf1ab05b38772b11bf",
+    "code\\RSmol\\mizar_s3_data_prepare\\mapping.py": "e330c00db4926d1161cf90e4053a5fc7bd4f77f9d55cb8a69816a4e659e68ee1",
+    "code\\RSmol\\mizar_s3_data_prepare\\prepare.py": "571c964f56d1fba03e8f5bd33308ca5c5d32974daf9c3a4d63749f416c92544c",
+    "tests\\validate_mizar_s3_data_prepare.py": "88295930c904da8076663ffc2bf97ba68c56b4044935b548716de920180c4146",
+    "tests\\test_mizar_s3_data_prepare.py": "fc523cbf779dcf622507dad2d33752f115849406ac88ea4dc5fe4170e2f1ed68",
+    "code\\RSmol\\prepare_mizar_s3_data.sh": "a9661b00858b633695346bcd2ea2a1beff376ca2adfb712067013306d81bc0ae"
+  },
+  "reference_metadata": {
+    "scope": "local reference metadata only; no production audio/TSV or filtered production count",
+    "source_sha256": "c4b1862f58148d2728dfad10ee8346974924badca6de6b82181ffe605225cc65",
+    "source_counts": {
+      "AudioCaps": 49687,
+      "Clotho": 1992,
+      "CompA-R": 48045,
+      "LP-MusicCaps-MTT": 7871,
+      "MusicCaps": 637,
+      "SpeechCraft": 123529,
+      "TACOS": 24316,
+      "AVQA": 33875
+    },
+    "avqa_annotation_rows": 31978,
+    "avqa_id_join": {
+      "id_options_gold_agree": 26842,
+      "original_id_missing": 7033
+    },
+    "audiomcq_reference_s1_join": {
+      "identity_options_recording_match": 256077
+    },
+    "audiomcq_s3_gold_differs_from_reference_s1": 43562
+  },
+  "elapsed_seconds": 36.595395800002734,
+  "previous_runs": [
+    {
+      "status": "FAILED",
+      "tests_run": 19,
+      "failures": 0,
+      "errors": 1,
+      "skipped": 0,
+      "python": "3.13.5",
+      "python310_syntax": "PASS",
+      "bash_syntax": "PASS",
+      "test_output": "test_actual_bash_wrapper_quotes_arguments_and_disables_cuda (s3_checks.S3PreparationTests.test_actual_bash_wrapper_quotes_arguments_and_disables_cuda) ... ERROR\ntest_busy_lock_and_wrong_input_identity_are_not_overwritten (s3_checks.S3PreparationTests.test_busy_lock_and_wrong_input_identity_are_not_overwritten) ... ok\ntest_case_sensitive_recording_join_does_not_use_similar_name (s3_checks.S3PreparationTests.test_case_sensitive_recording_join_does_not_use_similar_name) ... ok\ntest_conflicting_avqa_recording_excludes_entire_old_path (s3_checks.S3PreparationTests.test_conflicting_avqa_recording_excludes_entire_old_path) ... ok\ntest_conflicting_historical_audit_is_excluded (s3_checks.S3PreparationTests.test_conflicting_historical_audit_is_excluded) ... ok\ntest_duplicate_candidates_and_invalid_gold_fail_without_publication (s3_checks.S3PreparationTests.test_duplicate_candidates_and_invalid_gold_fail_without_publication) ... ok\ntest_failure_keeps_private_diagnostics_and_releases_lock (s3_checks.S3PreparationTests.test_failure_keeps_private_diagnostics_and_releases_lock) ... [s3-prepare] FAILED; diagnostic directory preserved: C:\\Users\\69327\\AppData\\Local\\Temp\\s3-audit-gxof401s\\prepared.building-z91e24n5\nok\ntest_full_decode_finite_stereo_and_zero_policy (s3_checks.S3PreparationTests.test_full_decode_finite_stereo_and_zero_policy) ... ok\ntest_full_preparation_preserves_metadata_order_and_denominator (s3_checks.S3PreparationTests.test_full_preparation_preserves_metadata_order_and_denominator) ... ok\ntest_history_identity_not_basename_or_new_absolute_path_fallback (s3_checks.S3PreparationTests.test_history_identity_not_basename_or_new_absolute_path_fallback) ... ok\ntest_label_mismatch_not_rescued_by_shared_recording (s3_checks.S3PreparationTests.test_label_mismatch_not_rescued_by_shared_recording) ... ok\ntest_missing_and_corrupt_audio_are_recorded_and_filtered (s3_checks.S3PreparationTests.test_missing_and_corrupt_audio_are_recorded_and_filtered) ... ok\ntest_preview_cli_does_not_read_assets (s3_checks.S3PreparationTests.test_preview_cli_does_not_read_assets) ... ok\ntest_recording_start_case_ambiguity_and_traversal_are_rejected (s3_checks.S3PreparationTests.test_recording_start_case_ambiguity_and_traversal_are_rejected) ... ok\ntest_s3_gold_corrections_preserved_while_old_history_only_maps_audio (s3_checks.S3PreparationTests.test_s3_gold_corrections_preserved_while_old_history_only_maps_audio) ... ok\ntest_shared_recording_rescues_only_missing_annotation (s3_checks.S3PreparationTests.test_shared_recording_rescues_only_missing_annotation) ... ok\ntest_source_output_and_audio_tampering_rejected (s3_checks.S3PreparationTests.test_source_output_and_audio_tampering_rejected) ... ok\ntest_strict_streaming_parser_and_no_replace (s3_checks.S3PreparationTests.test_strict_streaming_parser_and_no_replace) ... ok\ntest_wrong_recording_name_and_visual_only_excluded (s3_checks.S3PreparationTests.test_wrong_recording_name_and_visual_only_excluded) ... ok\n\n======================================================================\nERROR: test_actual_bash_wrapper_quotes_arguments_and_disables_cuda (s3_checks.S3PreparationTests.test_actual_bash_wrapper_quotes_arguments_and_disables_cuda)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"C:\\Xlance\\GZ_bridge\\Recursive_SALM\\RSM_bridge\\tests\\test_mizar_s3_data_prepare.py\", line 335, in test_actual_bash_wrapper_quotes_arguments_and_disables_cuda\n    subprocess.run([bash, \"-c\", 'export PATH=\"$1:$PATH\"; shift; bash \"$@\"', \"wrapper-test\",\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                    bin_dir.as_posix(), script.as_posix(), \"--check-args\", \"--output-dir\", \"with spaces\"],\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                   env=env, capture_output=True, text=True, check=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Program Files\\Python313\\Lib\\subprocess.py\", line 577, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['C:/Program Files/Git/bin/bash.exe', '-c', 'export PATH=\"$1:$PATH\"; shift; bash \"$@\"', 'wrapper-test', 'C:/Users/69327/AppData/Local/Temp/s3-audit-nqxvz03d/bin', 'C:/Xlance/GZ_bridge/Recursive_SALM/RSM_bridge/code/RSmol/prepare_mizar_s3_data.sh', '--check-args', '--output-dir', 'with spaces']' returned non-zero exit status 1.\n\n----------------------------------------------------------------------\nRan 19 tests in 4.191s\n\nFAILED (errors=1)\n",
+      "production_audio_checked": false,
+      "gpu_submitted": false,
+      "source_files": {
+        "code\\RSmol\\mizar_s3_data_prepare\\__init__.py": "e531464364bf43499664a820bd0ff34f150c77779e9cf574b00223e9329694a1",
+        "code\\RSmol\\mizar_s3_data_prepare\\__main__.py": "3501b915d00063b9b16f3c817f977a21a5e47d51f540d3ecd7ef6a890c920eac",
+        "code\\RSmol\\mizar_s3_data_prepare\\audio.py": "e732098c82733cc9dbea7a32fe5deb451e5e6e906b0a75c0de103d4e8ea710c3",
+        "code\\RSmol\\mizar_s3_data_prepare\\io_utils.py": "36a8409aebe0ba3f3b5c97f4da89d45293b3a8ebba2550bf1ab05b38772b11bf",
+        "code\\RSmol\\mizar_s3_data_prepare\\mapping.py": "e330c00db4926d1161cf90e4053a5fc7bd4f77f9d55cb8a69816a4e659e68ee1",
+        "code\\RSmol\\mizar_s3_data_prepare\\prepare.py": "571c964f56d1fba03e8f5bd33308ca5c5d32974daf9c3a4d63749f416c92544c",
+        "tests\\validate_mizar_s3_data_prepare.py": "92500a1ccb219c4afb55654d0c01812199f6aab0bc5120916930668f01343f3b",
+        "tests\\test_mizar_s3_data_prepare.py": "44b3b29d37173afd76dc9d3002e07e0a1531ebf7cb9a995326999351eadf517b"
+      },
+      "elapsed_seconds": 4.4601575000051525,
+      "reference_metadata": {
+        "scope": "local reference metadata only; no production audio/TSV or filtered production count",
+        "source_sha256": "c4b1862f58148d2728dfad10ee8346974924badca6de6b82181ffe605225cc65",
+        "source_counts": {
+          "AudioCaps": 49687,
+          "Clotho": 1992,
+          "CompA-R": 48045,
+          "LP-MusicCaps-MTT": 7871,
+          "MusicCaps": 637,
+          "SpeechCraft": 123529,
+          "TACOS": 24316,
+          "AVQA": 33875
+        },
+        "avqa_annotation_rows": 31978,
+        "avqa_id_join": {
+          "id_options_gold_agree": 26842,
+          "original_id_missing": 7033
+        },
+        "audiomcq_reference_s1_join": {
+          "identity_options_recording_match": 256077
+        },
+        "audiomcq_s3_gold_differs_from_reference_s1": 43562
+      }
+    }
+  ],
+  "rm_update": {
+    "original_bytes": 643238,
+    "original_sha256": "7a65a09897e02b4537607012b715d2a549012e5e0cdedb1553fe43ba8e60eb9c",
+    "original_bytes_preserved": true
+  },
+  "delivery_checks": {
+    "sync_file_count": 13,
+    "all_files_git_visible": true,
+    "python310_syntax": "PASS",
+    "new_file_whitespace": "PASS",
+    "preexisting_tracked_code_unchanged": true
+  }
+}
