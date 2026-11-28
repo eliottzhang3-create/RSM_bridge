@@ -35,7 +35,7 @@ OUTPUT_DIR=${OUTPUT_DIR:-/hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_
 LOG_PATH="$SCRIPT_DIR/log/mizar-s3-full-ft.${RUN_TAG}.JOB.log"
 if [[ $CHECK == 1 ]]; then
   printf 'queue=pdgpu-3090 cpus=64 memory=256G gpus=8 nodes=1\ndata_dir=%s\nmodel_dir=%s\noutput_root=%s\nresume=%s\nstage_workers=%s\nlog_path=%s\n' "$DATA_DIR" "$MODEL_DIR" "$OUTPUT_DIR" "$RESUME" "$STAGE_WORKERS" "$LOG_PATH"
-  printf 'recipe=official_final native30 full_projector_and_LM frozen_CED FP32 GBS128 epochs0.5 max_lr1e-5 min_lr1e-6 warmup3pct keep4\npool_rows=272796 consumed_rows=136398 updates=1066 tail_rows=78\n'
+  printf 'recipe=official_final native30 full_projector_and_LM frozen_CED FP32 GBS128 epochs0.5 max_lr5e-6 min_lr1e-6 warmup5pct keep4\npool_rows=272796 consumed_rows=136398 updates=1066 warmup_steps=53 tail_rows=78\n'
   exit 0
 fi
 CONDA_BASE=${RSMOL_CONDA_BASE:-${MELLOW_CONDA_BASE:-/hpc_stor03/sjtu_home/jinwei.zhang/env/miniconda3}}

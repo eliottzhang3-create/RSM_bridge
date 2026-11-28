@@ -1,3 +1,18 @@
+## 2026-11-28：S3 半轮训练 max LR 调为5e-6、warmup调为5%
+
+用户在远程gradient_norm失败后明确要求max_lr=5e-6、warm_up=5%；本轮仅修改这两项调度参数及相应提交预览/文档/测试。
+code/RSmol/mizar_s3_full_finetune/contract.py统一mapper和全LM max LR5e-6，min LR保留1e-6，warmup比例.05；1066步实际训练round(1066*.05)=53步预热。
+保留启动下限.1×max＝5e-7，第53个更新达到5e-6，随后cosine至最后真实更新1e-6；半轮136398样本/GBS128/尾批78/1066步/官方final初始化保持。
+run_mizar_s3_full_finetune_3090.sh的check-args预览同步max_lr5e-6/warmup5pct/warmup_steps53；README说明从默认新输出启动，不以旧配方checkpoint续训。
+既有source-probe容差修复、梯度有限性和1e6应急阈值/GradNormTracker不改；此次调LR和预热不能被记录为已定位或修复异常梯度的根因。
+用户贴出的第二次远程作业job-179586008996083241740在gradient_norm失败：unscale后的裁剪前norm9788966912.0，裁剪系数4.3284911276202454e-10；该批optimizer.step前退出。
+本地18/18 CPU测试无skip通过，覆盖生产尺寸53步warmup/峰值与末次LR、真实optimizer分组、实际trainer逐值恢复、两进程Gloo和Bash单次提交/预览/生命周期。
+复制父文件SHA、Python3.10/Bash语法通过；Windows沙箱依赖权限失败后获准沙箱外本地CPU验证，未重新执行不受此配置改动影响的真实官方全模型检查，历史结果保留在报告previous_runs。
+报告audit_reports/mizar_s3_full_finetune_validation.json记录本次新配方与源码身份；原RM所有字节保留。
+经GitHub同步后远程仓库根执行bash code/RSmol/run_mizar_s3_full_finetune_3090.sh；使用默认全新目录，不传resume-checkpoint，已发布过滤数据无需重新准备。
+未自动commit/push或提交GPU作业；新LR下远程梯度/收敛仍待正式作业结果。
+
+<!-- mizar_s3_lr5e6_warmup5pct_original_rm -->
 ## 2026-11-28：修复 S3 正式训练 source_probes 跨长度 FP32 容差误拒绝
 
 用户提供远程 job-179585004929361125311-jinwei-zhang-master-0 失败日志：rank0 source_probe 比较479与383/384前向的logits时触发assert_close，collective_run将错误广播八rank后退出，NCCL Destroy为后续清理。

@@ -16,8 +16,8 @@
   不增加层、循环、LoRA 或门控。训练参数表输出 `trainable_params.txt`。
   实测 mapper3,365,952 + LM134,515,008 = **137,880,960** 可训练参数；CED21,418,880 冻结。
 - FP32，关闭 autocast/TF32/KV cache/gradient checkpointing；保留既有 GradScaler 与 GradNormTracker。
-- AdamW：所有可训练参数统一 max LR `1e-5`、min `1e-6`，betas=(.9,.999)，eps=1e-8，
-  weight decay=.01，bias/ndim≤1 不衰减；32 步 warmup（3% round，启动下限 .1×max）后 cosine。
+- AdamW：所有可训练参数统一 max LR `5e-6`、min `1e-6`，betas=(.9,.999)，eps=1e-8，
+  weight decay=.01，bias/ndim≤1 不衰减；53 步 warmup（5% round，启动下限 .1×max，即5e-7）后 cosine。
   最后一个实际 update 使用 min LR。
 - `pdgpu-3090` / 8 GPU / 64 CPU / 256G / 1 node；micro4 × GA4 × 8 = GBS128。
   原镜像 `docker.v2.aispeech.com/sjtu/sjtu_wumengyue-mhl:0.0.1`，`mellow_c8204d8`，Transformers4.54.1。
@@ -66,6 +66,9 @@ PAD为既有 `!`/17，EOS/SEP为0；不新增词表项，causal PAD 可见，att
 12/49152 个近零 logits 超过旧 `atol=1e-5`，报告最大超差约1.475e-5。
 修复探针后重新提交到默认新输出目录，不传 `--resume-checkpoint`；无需重新准备过滤数据。
 训练源码身份变化会自动生成新索引，CPU 会重新核验 seal/映射/文本，不重复音频解码审计。
+
+随后按用户要求将 max LR 调为5e-6、warmup调为5%（53步）；min LR保留1e-6。
+使用默认新输出从官方 Mizar final 重新初始化；旧配方 checkpoint 不作为本配方的 resume 来源。
 
 ## 本地 Git 同步
 

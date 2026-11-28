@@ -5,7 +5,7 @@ from pathlib import Path
 ROUTE = "mizar_final_s3_full_projector_lm_halfepoch_gbs128_v1"
 WORLD_SIZE, BATCH_SIZE, ACCUMULATION_STEPS, EPOCHS, SEED = 8,4,4,1,1234
 TRAIN_FRACTION = .5
-MAX_LR, MIN_LR, WARMUP_RATIO, KEEP_CHECKPOINTS = 1e-5,1e-6,.03,4
+MAX_LR, MIN_LR, WARMUP_RATIO, KEEP_CHECKPOINTS = 5e-6,1e-6,.05,4
 RANK_UPDATE_SAMPLES = BATCH_SIZE * ACCUMULATION_STEPS
 GLOBAL_BATCH_SIZE = WORLD_SIZE * RANK_UPDATE_SAMPLES
 PROMPT_TOKENS, ANSWER_TOKENS, AUDIO_TOKENS = 256,96,126
@@ -360,7 +360,7 @@ def semantic_contract(prepared, model_dir, bundle):
             "epochs":TRAIN_FRACTION,"pool_selection":"full_pool_global_permutation_prefix_half_budget",
             "adamw":{"max_lr":MAX_LR,"min_lr":MIN_LR,"betas":[.9,.999],"eps":1e-8,
                       "weight_decay":.01,"no_decay_bias_ndim_le1":True},
-            "scheduler":"3pct_round_warmup_then_cosine_final_real_update_at_min",
+            "scheduler":"5pct_round_warmup_then_cosine_final_real_update_at_min",
             "checkpoint_steps":checkpoint_steps(prepared["rows"]),"keep_checkpoints":KEEP_CHECKPOINTS,
             "loss":"rank_local_microbatch_valid_answer_token_mean_then_actual_GA_then_active_rank_mean",
             "full_bptt":True,"use_cache":False,"gradient_checkpointing":False}

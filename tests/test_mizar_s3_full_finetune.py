@@ -123,7 +123,7 @@ class ModelTests(unittest.TestCase):
             loss.backward();self.assertTrue(all(gradient_audit(model)['all_30_layers_nonzero'].values()))
             op,_,groups=build_optimizer(model,1066)
             self.assertEqual(sum(len(g['params']) for g in op.param_groups),len({id(p) for p in model.parameters() if p.requires_grad}))
-            self.assertTrue(all(g['base_lr']==1e-5 for g in groups))
+            self.assertTrue(all(g['base_lr']==5e-6 for g in groups))
             self.assertTrue(model.caption_decoder.lm.get_input_embeddings().weight.grad.abs().sum()>0)
             before={n:p.detach().clone() for n,p in model.named_parameters() if p.requires_grad};op.step()
             self.assertEqual(checkpoint.sha_frozen(model),frozen)
@@ -199,7 +199,7 @@ class ProbeRegressionTests(unittest.TestCase):
 class DataTests(unittest.TestCase):
     def test_full_pool_half_budget_no_duplicate_resume_tail_and_lr(self):
         n=272796;g=geometry(n)
-        self.assertEqual((g['target_rows'],g['total_steps'],g['warmup_steps'],g['last_update_rows']),(136398,1066,32,78))
+        self.assertEqual((g['target_rows'],g['total_steps'],g['warmup_steps'],g['last_update_rows']),(136398,1066,53,78))
         self.assertEqual(checkpoint_steps(n),[267,533,800,1066])
         shards=[]
         for rank in range(8):
@@ -212,8 +212,10 @@ class DataTests(unittest.TestCase):
         expected=torch.randperm(n,generator=torch.Generator().manual_seed(1234)).tolist()[:136398]
         self.assertEqual(shards,expected);self.assertEqual(len(set(shards)),136398)
         self.assertEqual(recipe.accumulation_for_update(1065,n),3)
-        self.assertAlmostEqual(1e-5*lr_factor(31,1066),1e-5)
-        self.assertAlmostEqual(1e-5*lr_factor(1065,1066),1e-6)
+        self.assertEqual(recipe.WARMUP_RATIO,.05)
+        self.assertAlmostEqual(recipe.MAX_LR*lr_factor(0,1066),5e-7,places=14)
+        self.assertAlmostEqual(recipe.MAX_LR*lr_factor(52,1066),5e-6,places=14)
+        self.assertAlmostEqual(recipe.MAX_LR*lr_factor(1065,1066),1e-6,places=14)
         self.assertEqual(recipe.training_cursor(1066,g),(0,1066))
         with self.assertRaises(ValueError):recipe.validate_data_counts(136398,recipe.SOURCE_COUNTS)
 
@@ -355,7 +357,9 @@ class ShellTests(unittest.TestCase):
         wrapper=ROOT/'code/RSmol/run_mizar_s3_full_finetune_3090.sh'
         r=subprocess.run([bash,wrapper.as_posix(),'--check-args'],capture_output=True,text=True,check=True)
         self.assertIn('queue=pdgpu-3090 cpus=64 memory=256G gpus=8 nodes=1',r.stdout)
-        self.assertIn('s3_full_filtered_v1',r.stdout);self.assertIn('consumed_rows=136398 updates=1066 tail_rows=78',r.stdout)
+        self.assertIn('s3_full_filtered_v1',r.stdout)
+        self.assertIn('max_lr5e-6 min_lr1e-6 warmup5pct',r.stdout)
+        self.assertIn('consumed_rows=136398 updates=1066 warmup_steps=53 tail_rows=78',r.stdout)
         r=subprocess.run([bash,wrapper.as_posix(),'--resume-checkpoint','/old/run/formal/checkpoints/model--step-533.ckpt',
                           '--check-args'],capture_output=True,text=True,check=True)
         self.assertIn('output_root=/old/run',r.stdout)
