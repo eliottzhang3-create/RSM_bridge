@@ -29,7 +29,7 @@ from contract import geometry,code_digest,digest,parameter_role,checkpoint_steps
 from model import configure_training,validate_trainability,inherit_state
 from models.mellow import Mellow,AudioEncoder
 from models.decoder import DecoderModel
-from train import optimizer_update,source_probe,gradient_audit
+from train import optimizer_update,source_probe,gradient_audit,compare_probe_logits
 from optim import build_optimizer,GradNormTracker
 from training_helpers import answer_loss
 from data.sampler import CustomDistributedSampler
@@ -129,6 +129,72 @@ class ModelTests(unittest.TestCase):
             self.assertEqual(checkpoint.sha_frozen(model),frozen)
             for role in ('mapper','lm'):
                 self.assertTrue(any(not torch.equal(p,before[n]) for n,p in model.named_parameters() if parameter_role(n)==role))
+
+class ProbeRegressionTests(unittest.TestCase):
+    def test_reported_49152_vocab_near_zero_roundoff_passes(self):
+        # Reproduce the reported 12/49152 near-zero failures without pretending
+        # that a CPU fixture reproduces the remote CUDA kernel itself.
+        reference=torch.zeros(1,49152);reference[0,0]=10.
+        actual=reference.clone()
+        actual[0,1:13]=1.4748889952898026e-5
+        with self.assertRaises(AssertionError):
+            torch.testing.assert_close(actual,reference,rtol=1e-4,atol=1e-5)
+        report=compare_probe_logits(actual,reference,'reported_roundoff')
+        self.assertEqual(report['mismatched_elements'],0)
+        self.assertTrue(report['argmax_equal']);self.assertEqual(report['total_elements'],49152)
+        self.assertGreater(report['max_abs_error'],1e-5)
+        self.assertLess(report['max_tolerance_ratio'],1.)
+        actual[0,1]=1e-3
+        with self.assertRaisesRegex(ValueError,'reported_roundoff'):
+            compare_probe_logits(actual,reference,'reported_roundoff')
+
+    def test_small_numerical_error_still_rejects_changed_greedy_token(self):
+        a=torch.tensor([[1.00001,1.]],dtype=torch.float32)
+        b=torch.tensor([[1.,1.00001]],dtype=torch.float32)
+        torch.testing.assert_close(a,b,rtol=1e-4,atol=1e-4)
+        with self.assertRaisesRegex(ValueError,'"argmax_equal": false'):
+            compare_probe_logits(a,b,'greedy_flip')
+
+    def test_nonfinite_wrong_shape_and_non_fp32_rejected(self):
+        valid=torch.zeros(1,4)
+        for value in (float('nan'),float('inf'),float('-inf')):
+            bad=valid.clone();bad[0,1]=value
+            for a,b in ((bad,valid),(valid,bad)):
+                with self.assertRaisesRegex(ValueError,'NaN/Inf'):compare_probe_logits(a,b,'nonfinite')
+        for bad in (torch.zeros(2,4),torch.zeros(4),torch.zeros(1,0),valid.double()):
+            with self.assertRaises(ValueError):compare_probe_logits(bad,valid,'shape_dtype')
+
+    def test_actual_source_probe_length_drift_and_causal_failure(self):
+        model=tiny().eval();lm=model.caption_decoder.lm;inputs=batch()
+        original=lm.forward
+        def perturb(*args,**kwargs):
+            out=original(*args,**kwargs)
+            if kwargs['inputs_embeds'].shape[1] in (383,384):
+                logits=out.logits.clone()
+                # Deterministic perturbation of every non-winning vocabulary
+                # entry simulates cross-length FP32 roundoff only.
+                top=logits[:,-1].argmax(-1)
+                logits[:,-1] += 3e-5
+                for row,index in enumerate(top):logits[row,-1,index] -= 3e-5
+                out.logits=logits
+            return out
+        with torch.no_grad(),patch.object(lm,'forward',side_effect=perturb):
+            report=source_probe(model,inputs,17)
+        self.assertEqual(len(report['logit_comparisons']),2)
+        self.assertTrue(all(r['argmax_equal'] for r in report['logit_comparisons']))
+        self.assertEqual(report['future_answer_causality'],'PASS')
+        full_calls=0
+        def leak(*args,**kwargs):
+            nonlocal full_calls
+            out=original(*args,**kwargs)
+            if kwargs['inputs_embeds'].shape[1]==479:
+                full_calls+=1
+                if full_calls==2:
+                    out.logits=out.logits.clone();out.logits[:,0,0]+=1e-3
+            return out
+        with torch.no_grad(),patch.object(lm,'forward',side_effect=leak):
+            with self.assertRaises(AssertionError):source_probe(model,inputs,17)
+
 
 class DataTests(unittest.TestCase):
     def test_full_pool_half_budget_no_duplicate_resume_tail_and_lr(self):

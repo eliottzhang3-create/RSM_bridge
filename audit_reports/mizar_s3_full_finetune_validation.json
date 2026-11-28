@@ -21,32 +21,10 @@
     "cpu_unit_audio_resume_gloo_shell": {
       "status": "PASS",
       "details": {
-        "tests_run": 14,
+        "tests_run": 18,
         "failures": 0,
         "errors": 0,
         "skipped": 0
-      }
-    },
-    "all_local_reference_s3_text_no_truncation": {
-      "status": "PASS",
-      "details": {
-        "status": "PASS",
-        "rows": 289952,
-        "max_prompt_tokens": 128,
-        "max_answer_eos_tokens": 45,
-        "prompt_eos": false,
-        "answer_eos": true,
-        "truncations": 0,
-        "tokenizer_files": {
-          "config.json": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
-          "generation_config.json": "2056c988e990b0d13670f63f2f3b87b3b6d07edaf7a3416998ba27dab2d8a059",
-          "merges.txt": "0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510",
-          "special_tokens_map.json": "e786b595b9a23148bf1630df78d9037a048ea671e48bfd3549a1e3c233742bb3",
-          "tokenizer.json": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
-          "tokenizer_config.json": "4bb9af56a342753d39374f4016a16574cab299fe088e896f425ce3c433f61424",
-          "vocab.json": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79"
-        },
-        "scope": "all 289952 LOCAL reference candidates; not the remote filtered training dataset"
       }
     },
     "real_official_load_479_forward_backward_adamw": {
@@ -64,6 +42,44 @@
         "native30_probe": {
           "loss": 0.13380610942840576,
           "training_inference_first_two_logits": "PASS",
+          "logit_comparisons": [
+            {
+              "status": "PASS",
+              "comparison": "first_answer_479_vs_383",
+              "rtol": 0.0001,
+              "atol": 0.0001,
+              "max_abs_error": 6.67572021484375e-06,
+              "rms_error": 1.6400730373788974e-06,
+              "max_tolerance_ratio": 0.037421684712171555,
+              "mismatched_elements": 0,
+              "total_elements": 49152,
+              "argmax_equal": true,
+              "training_argmax": [
+                81
+              ],
+              "inference_argmax": [
+                81
+              ]
+            },
+            {
+              "status": "PASS",
+              "comparison": "second_answer_479_vs_384",
+              "rtol": 0.0001,
+              "atol": 0.0001,
+              "max_abs_error": 1.049041748046875e-05,
+              "rms_error": 1.904038299471722e-06,
+              "max_tolerance_ratio": 0.06889434158802032,
+              "mismatched_elements": 0,
+              "total_elements": 49152,
+              "argmax_equal": true,
+              "training_argmax": [
+                25
+              ],
+              "inference_argmax": [
+                25
+              ]
+            }
+          ],
           "first_two_argmax": "PASS",
           "future_answer_causality": "PASS",
           "prefix_tokens": 383,
@@ -149,16 +165,37 @@
         "input": "synthetic silence, actual released CED/projector/LM"
       }
     },
-    "workspace_isolation_and_delivery": {
+    "probe_fix_regression": {
       "status": "PASS",
       "details": {
-        "preexisting_tracked_baseline_files": 4686,
-        "tracked_diff_only": "RM.md prepended",
-        "RM_original_bytes_preserved": 646632,
-        "git_visible_sync_files": 52,
-        "missing_or_ignored_files": [],
-        "git_diff_check": "PASS",
-        "new_source_trailing_whitespace_check": "PASS"
+        "tests_run": 4,
+        "reported_near_zero_error_fixture": "PASS",
+        "large_error_rejected": "PASS",
+        "small_error_changed_argmax_rejected": "PASS",
+        "NaN_Inf_shape_dtype_rejected": "PASS",
+        "real_source_probe_injected_length_roundoff": "PASS",
+        "future_answer_leak_rejected": "PASS",
+        "cuda_kernel_reproduction": false
+      }
+    },
+    "fix_scope_and_source_identity": {
+      "status": "PASS",
+      "details": {
+        "changed_files": [
+          "RM.md",
+          "audit_reports/mizar_s3_full_finetune_validation.json",
+          "code/RSmol/mizar_s3_full_finetune/README.md",
+          "code/RSmol/mizar_s3_full_finetune/train.py",
+          "tests/test_mizar_s3_full_finetune.py"
+        ],
+        "production_code_changes": [
+          "code/RSmol/mizar_s3_full_finetune/train.py"
+        ],
+        "other_routes_unchanged": true,
+        "original_RM_bytes_preserved": 651270,
+        "code_sha256_matches_tested_source": true,
+        "original_CRLF_test_report_style_preserved": true,
+        "git_diff_whitespace_check": "PASS with cr-at-eol for existing CRLF files"
       }
     }
   },
@@ -170,8 +207,8 @@
     "Optional official bundle check uses real released weights/encoder/projector with synthetic silence.",
     "The existing local CPU runtime disables only the unused torchaudio binary extension; actual SoundFile and Python resampling execute."
   ],
-  "code_sha256": "169f2c4b3d56aae3eb02bcd5ba003f44994399089e9a115e492576bc812a441e",
-  "elapsed_seconds": 88.18382790000032,
+  "code_sha256": "ec4cb9b3b767516c9d42816f5b12c78b956dd2e20cab36c3bbae900ed2a62c80",
+  "elapsed_seconds": 58.508450000001176,
   "previous_runs": [
     {
       "status": "FAILED_INITIAL_TEST_FIXTURES",
@@ -184,6 +221,207 @@
       ],
       "sandbox_attempt": "Initial dependency import denied by Windows sandbox; CPU tests then ran with approved escalation.",
       "production_gpu_submitted": false
+    },
+    {
+      "status": "PASS_LOCAL_CPU",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "torch": "2.15.0+cpu",
+      "transformers": "4.54.1",
+      "audio_test_adapter": true,
+      "checks": {
+        "copied_parent_sources_unchanged": {
+          "status": "PASS",
+          "details": {
+            "unchanged_parent_files": 38
+          }
+        },
+        "python310_and_bash_syntax": {
+          "status": "PASS",
+          "details": {
+            "python310_files": 31,
+            "bash_entrypoints": 2
+          }
+        },
+        "cpu_unit_audio_resume_gloo_shell": {
+          "status": "PASS",
+          "details": {
+            "tests_run": 14,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        },
+        "all_local_reference_s3_text_no_truncation": {
+          "status": "PASS",
+          "details": {
+            "status": "PASS",
+            "rows": 289952,
+            "max_prompt_tokens": 128,
+            "max_answer_eos_tokens": 45,
+            "prompt_eos": false,
+            "answer_eos": true,
+            "truncations": 0,
+            "tokenizer_files": {
+              "config.json": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+              "generation_config.json": "2056c988e990b0d13670f63f2f3b87b3b6d07edaf7a3416998ba27dab2d8a059",
+              "merges.txt": "0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510",
+              "special_tokens_map.json": "e786b595b9a23148bf1630df78d9037a048ea671e48bfd3549a1e3c233742bb3",
+              "tokenizer.json": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+              "tokenizer_config.json": "4bb9af56a342753d39374f4016a16574cab299fe088e896f425ce3c433f61424",
+              "vocab.json": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79"
+            },
+            "scope": "all 289952 LOCAL reference candidates; not the remote filtered training dataset"
+          }
+        },
+        "real_official_load_479_forward_backward_adamw": {
+          "status": "PASS",
+          "details": {
+            "release_files": 18,
+            "state_entries": 454,
+            "parameter_counts": {
+              "frozen": 21418880,
+              "mapper": 3365952,
+              "lm": 134515008
+            },
+            "trainable_total": 137880960,
+            "fp32_479_answer_only_ce": 0.14447544515132904,
+            "native30_probe": {
+              "loss": 0.13380610942840576,
+              "training_inference_first_two_logits": "PASS",
+              "first_two_argmax": "PASS",
+              "future_answer_causality": "PASS",
+              "prefix_tokens": 383,
+              "sequence_tokens": 479,
+              "layer_trace": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29
+              ]
+            },
+            "task_gradient_audit": {
+              "status": "PASS",
+              "nonzero_task_gradients": {
+                "mapper": true,
+                "lm": true
+              },
+              "all_30_layers_nonzero": {
+                "0": true,
+                "1": true,
+                "2": true,
+                "3": true,
+                "4": true,
+                "5": true,
+                "6": true,
+                "7": true,
+                "8": true,
+                "9": true,
+                "10": true,
+                "11": true,
+                "12": true,
+                "13": true,
+                "14": true,
+                "15": true,
+                "16": true,
+                "17": true,
+                "18": true,
+                "19": true,
+                "20": true,
+                "21": true,
+                "22": true,
+                "23": true,
+                "24": true,
+                "25": true,
+                "26": true,
+                "27": true,
+                "28": true,
+                "29": true
+              },
+              "frozen_gradients": false
+            },
+            "roles_changed": {
+              "mapper": true,
+              "lm": true
+            },
+            "frozen_CED_bitwise_unchanged": true,
+            "input": "synthetic silence, actual released CED/projector/LM"
+          }
+        },
+        "workspace_isolation_and_delivery": {
+          "status": "PASS",
+          "details": {
+            "preexisting_tracked_baseline_files": 4686,
+            "tracked_diff_only": "RM.md prepended",
+            "RM_original_bytes_preserved": 646632,
+            "git_visible_sync_files": 52,
+            "missing_or_ignored_files": [],
+            "git_diff_check": "PASS",
+            "new_source_trailing_whitespace_check": "PASS"
+          }
+        }
+      },
+      "failures": [],
+      "limitations": [
+        "No remote production audio or GPU job was accessed or submitted.",
+        "CPU Gloo uses two real processes; it does not validate eight-GPU NCCL or 3090 memory/throughput.",
+        "Sealed dataset/index tests use explicit synthetic audio/metadata; 272796 retained rows come from user-supplied remote PASS.",
+        "Optional official bundle check uses real released weights/encoder/projector with synthetic silence.",
+        "The existing local CPU runtime disables only the unused torchaudio binary extension; actual SoundFile and Python resampling execute."
+      ],
+      "code_sha256": "169f2c4b3d56aae3eb02bcd5ba003f44994399089e9a115e492576bc812a441e",
+      "elapsed_seconds": 88.18382790000032
     }
-  ]
+  ],
+  "remote_incident": {
+    "evidence": "user-supplied remote traceback; not a locally reproduced CUDA run",
+    "job": "job-179585004929361125311-jinwei-zhang-master-0",
+    "phase": "source_probes before first optimizer update",
+    "reported_mismatches": 12,
+    "comparison_elements": 49152,
+    "reported_greatest_absolute_difference_among_mismatches": 1.4748889952898026e-05,
+    "old_tolerance": {
+      "rtol": 0.0001,
+      "atol": 1e-05
+    },
+    "new_tolerance": {
+      "rtol": 0.0001,
+      "atol": 0.0001
+    },
+    "diagnosis": "cross-length FP32 comparison was too strict near zero; compatible with CUDA rounding, exact kernel cause not measured locally",
+    "preserved_checks": [
+      "finite FP32 logits",
+      "exact greedy argmax",
+      "same-length bitwise future-answer causality",
+      "native30 execution"
+    ],
+    "restart": "fresh default output root, no resume checkpoint, reuse published filtered S3 dataset",
+    "cuda_rerun_verified": false,
+    "reference": "https://docs.pytorch.org/docs/2.11/notes/numerical_accuracy.html#batched-computations-or-slice-computations"
+  }
 }

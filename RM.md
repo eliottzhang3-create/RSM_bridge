@@ -1,3 +1,19 @@
+## 2026-11-28：修复 S3 正式训练 source_probes 跨长度 FP32 容差误拒绝
+
+用户提供远程 job-179585004929361125311-jinwei-zhang-master-0 失败日志：rank0 source_probe 比较479与383/384前向的logits时触发assert_close，collective_run将错误广播八rank后退出，NCCL Destroy为后续清理。
+12/49152个值超出原rtol1e-4/atol1e-5，报出的不匹配元素最大绝对差1.4748889952898026e-5；这是首次optimizer更新前的预检失败，staging复制进度不代表已训练。
+判断为跨序列长度FP32数值比较的近零绝对容差过严；不同形状GEMM/SDPA舍入是合理解释，未在本地测量远程CUDA具体kernel，不能冒充GPU复现。
+仅修改隔离mizar_s3_full_finetune/train.py探针：相对容差仍1e-4，绝对容差改1e-4；显式拒绝非有限/非FP32/不一致shape/超差，argmax仍要求完全一致。
+同长度未来答案因果隔离仍逐值相同，native30/权重/数据映射/半轮预算/训练loss/LR/精度/optimizer/staging均保持。
+新compare_probe_logits输出最大绝对误差/RMS/容差比/超差数及两侧argmax；每来源即时SOURCE_PROBE_PASS，同入config_audit.json，失败日志含比较位置与数值诊断。
+新增4项故障回归：49152词表中12个约1.475e-5误差旧阈值拒绝而新阈值允许；更大误差仍拒绝；allclose范围内argmax翻转仍拒绝；NaN/Inf/shape/dtype拒绝与真实小Llama探针注入长度误差/未来泄漏覆盖。
+本地18/18 CPU测试无skip通过，含eager/SDPA、实际trainer逐值恢复、真实双进程Gloo GA4/GA3与Bash生命周期；真实官方454状态加载、CED/projector/LM479前向反向/AdamW和冻结CED逐值保持再次通过。
+Python3.10/Bash语法与复制父文件SHA核验通过；Windows沙箱再次阻止读取已有CPU依赖，获准沙箱外本地验证。报告audit_reports/mizar_s3_full_finetune_validation.json保留原验收历史并记录用户远程故障证据。
+README说明重新提交：经GitHub同步后远程仓库根运行bash code/RSmol/run_mizar_s3_full_finetune_3090.sh，使用默认新输出，不传resume-checkpoint、不复用失败非空output。
+已发布s3_full_filtered_v1不重建，源码身份更新会自动生成新CPU index并核验seal/映射/文本，无需重做原音频解码审计；该作业内tmpfs原字节复制会重新进行。
+未自动commit/push或提交远程作业，修复后的八卡CUDA/NCCL与生产音频结果仍待用户重跑确认。
+
+<!-- mizar_s3_probe_tolerance_fix_original_rm -->
 ## 2026-11-28：完整 Mizar 在过滤后 S3 池上训练 projector＋全 LM，半轮低 LR 隔离实现
 
 用户提供远程真实 S3_DATASET_PASS：s3_full_filtered_v1 保留272796、排除17156；按此已完成数据准备继续实现训练，不重建过滤集。

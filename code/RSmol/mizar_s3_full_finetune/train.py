@@ -30,6 +30,10 @@ from optim import GradNormTracker, build_optimizer
 from training_helpers import answer_loss, move_batch, restore_rng, rng_state, tensor_digest
 
 PHASE = {"phase":"startup","completed_updates":0}
+# Sequence-length changes can select different FP32 GEMM/SDPA reductions on
+# CUDA, even with TF32 disabled. Keep relative tolerance unchanged and allow
+# 1e-4 absolute rounding near zero; this does not relax the exact greedy check.
+PROBE_LOGIT_RTOL, PROBE_LOGIT_ATOL = 1e-4, 1e-4
 
 
 def collective_run(phase, action, device):
@@ -128,6 +132,28 @@ def role_digests(model):
     return result
 
 
+def compare_probe_logits(actual, expected, label):
+    """Bound cross-length FP32 error, reject nonfinite values and greedy drift."""
+    if (actual.shape != expected.shape or actual.ndim != 2 or actual.numel() == 0
+            or actual.dtype != torch.float32 or expected.dtype != torch.float32):
+        raise ValueError(f"{label}: source-probe logits must have matching nonempty FP32 [batch,vocab] shapes")
+    if not bool(torch.isfinite(actual).all() & torch.isfinite(expected).all()):
+        raise ValueError(f"{label}: source-probe logits contain NaN/Inf")
+    delta = (actual-expected).abs()
+    allowed = PROBE_LOGIT_ATOL + PROBE_LOGIT_RTOL*expected.abs()
+    actual_ids, expected_ids = actual.argmax(-1), expected.argmax(-1)
+    report = {"status":"PASS","comparison":label,"rtol":PROBE_LOGIT_RTOL,"atol":PROBE_LOGIT_ATOL,
+              "max_abs_error":float(delta.max()),"rms_error":float(delta.square().mean().sqrt()),
+              "max_tolerance_ratio":float((delta/allowed).max()),
+              "mismatched_elements":int((delta>allowed).sum()),"total_elements":actual.numel(),
+              "argmax_equal":bool(torch.equal(actual_ids,expected_ids)),
+              "training_argmax":actual_ids.tolist(),"inference_argmax":expected_ids.tolist()}
+    if report["mismatched_elements"] or not report["argmax_equal"]:
+        report["status"] = "FAILED"
+        raise ValueError("training/inference source-probe mismatch: " + json.dumps(report))
+    return report
+
+
 def source_probe(model, inputs, ignore_index):
     """Real source audio + native causal train/inference parity; eval/no RNG use."""
     output = model(inputs)
@@ -142,11 +168,8 @@ def source_probe(model, inputs, ignore_index):
     gold_first = inputs["answer"]["input_ids"][:,:1]
     second = lm(inputs_embeds=torch.cat((prefix,lm.get_input_embeddings()(gold_first)),dim=1),
                 attention_mask=None,use_cache=False).logits[:,-1]
-    # Tolerate only FP32 GEMM shape differences; argmax must agree exactly.
-    for actual, expected in ((output.logits[:,382],first),(output.logits[:,383],second)):
-        torch.testing.assert_close(actual,expected,rtol=1e-4,atol=1e-5)
-        if not torch.equal(actual.argmax(-1),expected.argmax(-1)):
-            raise ValueError("training/inference source-probe argmax mismatch")
+    comparisons = [compare_probe_logits(output.logits[:,382],first,"first_answer_479_vs_383"),
+                   compare_probe_logits(output.logits[:,383],second,"second_answer_479_vs_384")]
     future = inputs["answer"]["input_ids"].clone()
     future[:,1:] = (future[:,1:]+1) % lm.config.vocab_size
     altered = dict(inputs,answer=dict(inputs["answer"],input_ids=future))
@@ -155,6 +178,7 @@ def source_probe(model, inputs, ignore_index):
     if lm.model.last_layer_trace != SCHEDULE:
         raise ValueError("source-probe native30 execution changed")
     return {"loss":float(loss),"training_inference_first_two_logits":"PASS",
+            "logit_comparisons":comparisons,
             "first_two_argmax":"PASS","future_answer_causality":"PASS","prefix_tokens":383,
             "sequence_tokens":479,"layer_trace":list(SCHEDULE)}
 
@@ -223,7 +247,9 @@ def train(config,rank,device):
                 for source,indices in prepared["probe_rows"].items():
                     batch=collate_fn([dataset.original_item(indices[0])])
                     audit=source_probe(model,move_batch(batch,device),dataset.pad_id)
-                    result.append({"source":source,"row_index":indices[0],**audit})
+                    record={"source":source,"row_index":indices[0],**audit}
+                    result.append(record)
+                    print(json.dumps({"event":"SOURCE_PROBE_PASS",**record}),flush=True)
         return result
     source_probes=collective_run("source_probes",probes,device)
     model.train();restore_rng(saved_rng,device)

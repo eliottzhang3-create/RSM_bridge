@@ -57,6 +57,16 @@ PAD为既有 `!`/17，EOS/SEP为0；不新增词表项，causal PAD 可见，att
 以及改变未来答案 token 不影响较早 logits；探针保持模型 RNG。每次更新检查 mapper/全30层梯度；
 检查点核验 frozen state，最终重载 checkpoint 并核对精确样本覆盖。无单独 GPU smoke 作业。
 
+跨序列长度的 FP32 logits 比较使用 `rtol=1e-4, atol=1e-4`，允许 CUDA 不同矩阵/attention
+计算形状带来的小量舍入差异；仍严格拒绝 NaN/Inf、超差和任意 argmax 改变。
+同长度的未来答案因果隔离继续逐值相等检查。每来源即时打印 `SOURCE_PROBE_PASS`，
+记录前两次比较的最大绝对误差、RMS、容差比值和 argmax；同样写入 `config_audit.json`。
+
+2026-11-28 的首个远程作业在 `source_probes`、首次 optimizer 更新前退出：
+12/49152 个近零 logits 超过旧 `atol=1e-5`，报告最大超差约1.475e-5。
+修复探针后重新提交到默认新输出目录，不传 `--resume-checkpoint`；无需重新准备过滤数据。
+训练源码身份变化会自动生成新索引，CPU 会重新核验 seal/映射/文本，不重复音频解码审计。
+
 ## 本地 Git 同步
 
 在 Windows 仓库根执行，文件清单只包含本路线及其已有 S3 数据准备依赖：
