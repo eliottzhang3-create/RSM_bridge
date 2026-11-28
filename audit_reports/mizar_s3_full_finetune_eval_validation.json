@@ -1,0 +1,61 @@
+{
+  "validation_runs": [
+    {
+      "status": "PASS_LOCAL_CPU",
+      "tests": 18,
+      "passed": 18,
+      "skipped": [],
+      "failures": [],
+      "seconds": 26.790140800003428
+    },
+    {
+      "status": "PASS_LOCAL_CPU",
+      "tests": 19,
+      "passed": 19,
+      "skipped": [],
+      "failures": [],
+      "seconds": 19.59219359999406
+    }
+  ],
+  "latest": {
+    "status": "PASS_LOCAL_CPU",
+    "tests": 19,
+    "passed": 19,
+    "skipped": [],
+    "failures": [],
+    "seconds": 19.59219359999406
+  },
+  "status": "PASS_LOCAL_CPU",
+  "versions": {
+    "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+    "torch": "2.9.0+cpu",
+    "transformers": "4.54.1",
+    "torchaudio": "2.9.0+cpu"
+  },
+  "remote_checkpoint_loading": "NOT_RUN",
+  "cuda": "NOT_RUN",
+  "job_submission": "MOCK_ONLY",
+  "fixtures": "Full-size runners use explicit model/audio/parquet fixtures; native Llama and SoundFile tests are real CPU.",
+  "shell_syntax": {
+    "status": "PASS",
+    "entrypoints": 2,
+    "readme_blocks": 2
+  },
+  "environment_notes": [
+    "Sandbox denied reading existing Torch. Tests reran outside sandbox with explicit approval; no network/GPU job submission.",
+    "Git Bash signal pipe creation denied in sandbox; Bash syntax checks used explicit offline approval.",
+    "Unused torchaudio native extension disabled only during test-process import; production environment unchanged.",
+    "Actual local official tokenizer used; full-size workflows use explicit model/audio/parquet fixtures, actual small native model methods and real SoundFile transformations run on CPU."
+  ],
+  "packaging": {
+    "status": "PASS",
+    "existing_tracked_files_checked": 4335,
+    "existing_tracked_files_changed": [],
+    "original_rm_bytes_preserved": 655797,
+    "sync_files": 27,
+    "reference_dependencies": 53,
+    "python310": "PASS",
+    "whitespace": "PASS",
+    "git_visibility": "PASS"
+  }
+}

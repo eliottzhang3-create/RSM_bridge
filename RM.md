@@ -1,3 +1,35 @@
+## 2026-11-28：S3半轮全projector/LM微调step1066的MMAU、MMAR两项评测
+
+按用户批准计划新增隔离 code/RSmol/mizar_s3_full_finetune_eval/ 与 run_mizar_s3_full_finetune_eval_4090.sh，仅MMAU test-mini1000和MMAR1000；原训练/数据准备/其它评测不改。
+target.json固定 /hpc_stor03/sjtu_home/jinwei.zhang/outputs/RSmol/mizar_final_s3_full_finetune_halfepoch_gbs128_3090/formal_20261128_194549346557872/formal/checkpoints/model--step-1066.ckpt；自动同run formal/runtime.json，不扫描latest。
+CPU核验原route/schema/formal/合同SHA/完整源码SHA/过滤S3八来源计数及seal选择身份、272796池/136398半轮预算/8×4×4/1066步/num_epochs0.5/最终游标(0,1066)。
+原生semantic_contract核对当前max5e-6/min1e-6/5%warmup配方；只恢复模型，允许已完成checkpoint评测，不创建/恢复optimizer/scheduler/训练RNG，不重新prepare训练数据。
+
+完整454状态，原生30独立LM层各一次，无循环/gate/LoRA/新增参数。原官方release/构造资产审计后加载此次完整projector＋全LM含embedding/final norm/tied head。
+strict names/shape/dtype/finite/tied、恢复后全部tensor逐值相等；按S3 parameter_role仅冻结CED等部分核对官方值与digest，projector/全LM必须保留训练后值。
+全模型随后FP32/eval/frozen，每个完整解码forward审计30次顺序和final norm一次，无跨forward状态。
+source_manifest固定Git f826bf9024138addaf5d2e3f8902b713d273fac2和codeSHA5059578543c1ea005bf6b0c8daf5adada696a1f560bd055a13dade60fc22767a；快照按repo目录覆盖训练包/release/外层入口/S3数据prepare依赖39份，逐文件SHA与原code_digest及实际transitive imports核验。
+
+训练与评测输入明确分开：S3训练resample→mono→first20/prompt无EOS/answer96/总479保持在训练合同；此次评测沿此前统一mono→resample32k→center20、短音频右补零/题面空格EOS/greedy最多300。
+独立eval_audio/audio_io/eval_text函数复制原评测数值行为，不误用S3训练data.fixed20或tokenize；原生成/音频pair/原官方scorer函数AST保持。
+MMAU/MMAR各完整1000、原固定选项顺序/小写题面/raw生成原样交原官方scorer，不加仅字母指令或候选likelihood。
+FP32/batch1/seed1234/无autocast/TF32off，10+10拼whole CED、每题音频只编码一次；PAD!/17/SEP-EOS0/prompt256/prefix383/首logit382，原因果PAD可见/attention_mask=None、无KV/逐token完整重算/argmax300/首EOS停/raw decode保持。
+资源统一pdgpu-4090/1GPU/8CPU/32G/1node，原镜像/mellow_c8204d8/Transformers4.54.1，无额外GPU smoke；训练3090不改变评测队列。
+每次调用CPU预检一次，失败不vc；all单项vc失败继续另一项并整体非零。支持mmau/mmar/all、--check-args、--preflight-only。
+输出同run eval/mizar_s3_full_finetune_eval_20261128_v1/{mmau,mmar}/model--step-1066；独立log/mizar_s3_full_finetune_eval/日志/submission报告。
+固定checkpoint/runtime/源码/数据/scorer/协议与逐题prompt/audio输入指纹，相同单项命令仅补剩余题；坏完整行/冲突progress/错身份/不完整分母拒绝，未写完末行恢复。MMAU/MMAR重评分仍保留模型加载核验。
+
+最终19/19本地CPU测试通过无skip。真实小30层Llama eager/SDPA与标准native逐值相等、30轨迹/final norm一次/无carry；实际原S3 Mellow/Decoder方法479与383/384同实际token下前两答案logits/argmax/未来因果性通过。
+严格模型重载保留全mapper/LM/embedding/norm，冻结CED漂移/错库存/dtype/finite/tied拒绝；实际loader控制流官方资产/CUDA为明确CPU夹具。
+真实本地release tokenizer对照原EOS/右截断/PAD与S3 noEOS差异；真实24秒双声道16k→mono32k中心20，与训练first20不同，路径/波形分支指纹一致及每题一次编码通过。
+两项完整1000题runner/官方raw预测/评分分母/13题中断补987/坏行及冲突进度拒绝用明确合成模型/音频/parquet夹具；真实Git object、外层依赖篡改拒绝、真实Bash入口/空格参数/资源/CPU失败不提交通过，vc仅模拟。
+Torch2.9CPU/Transformers4.54.1/torchaudio2.9CPU；沙箱依赖/Bash signal pipe受限后获准沙箱外离线验证，未用native扩展兼容仅测试进程，生产环境不改。
+Python3.10/Bash入口与README命令/whitespace/Git可见性/既有tracked源码SHA和原RM字节保持核验；报告audit_reports/mizar_s3_full_finetune_eval_validation.json，README/sync_files/reference_dependencies给同步与两条提交命令。
+本地Windows改核心源码经GitHub中转；未自动commit/push、远程提交GPU或读取生产checkpoint/音频；未验证远程454tensor/4090显存速度/正式分数。
+
+以下原RM全部字节保留。
+
+<!-- mizar_s3_full_finetune_eval_original_rm -->
 ## 2026-11-28：S3 半轮训练 max LR 调为5e-6、warmup调为5%
 
 用户在远程gradient_norm失败后明确要求max_lr=5e-6、warm_up=5%；本轮仅修改这两项调度参数及相应提交预览/文档/测试。
