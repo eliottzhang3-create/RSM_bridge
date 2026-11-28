@@ -1,0 +1,13 @@
+{
+  "training_reference": "code/RSmol/mizar_s3_l11_14x3_residual_gate",
+  "runtime_file_dependencies": [
+    "code/RSmol/prepare_mizar_s3_data.sh",
+    "code/RSmol/mizar_s3_data_prepare/*.py"
+  ],
+  "source_hash": "Own package py/sh/release, own launcher and sealed S3 verifier sources; original training and forwarding entries are not runtime dependencies.",
+  "production_dataset": "/hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s3_full_filtered_v1",
+  "production_model": "/hpc_stor03/sjtu_home/jinwei.zhang/models/Mizar159M",
+  "audio_policy_override": "Retain sealed historical first20 metadata; same reference center20 runtime.",
+  "unchanged_parent_files": 49,
+  "protected_existing_files": 4717
+}

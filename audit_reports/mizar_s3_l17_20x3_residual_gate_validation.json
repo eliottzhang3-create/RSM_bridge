@@ -1,0 +1,220 @@
+{
+  "status": "PASS_LOCAL_CPU",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "torch": "2.15.0+cpu",
+  "transformers": "4.54.1",
+  "audio_test_adapter": true,
+  "checks": {
+    "reference_sources_unchanged": {
+      "status": "PASS",
+      "details": {
+        "unchanged_reference_files": 131
+      }
+    },
+    "python310_and_bash_syntax": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 30,
+        "bash_entrypoints": 3
+      }
+    },
+    "cpu_model_audio_resume_gloo_shell": {
+      "status": "PASS",
+      "details": {
+        "tests_run": 25,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "real_official_load_479_forward_backward_adamw": {
+      "status": "PASS",
+      "details": {
+        "release_files": 18,
+        "original_state_entries": 454,
+        "new_state_entries": 459,
+        "parameter_counts": {
+          "frozen": 141599360,
+          "loop_bias": 1152,
+          "layer17": 3540096,
+          "layer18": 3540096,
+          "layer19": 3540096,
+          "layer20": 3540096,
+          "layer21": 3540096,
+          "gate2": 577,
+          "gate3": 577
+        },
+        "trainable_total": 17702786,
+        "fp32_479_answer_only_ce": 0.13324029743671417,
+        "gated38_probe": {
+          "loss": 0.13324029743671417,
+          "training_inference_first_two_logits": "PASS",
+          "logit_comparisons": [
+            {
+              "status": "PASS",
+              "comparison": "first_answer_479_vs_383",
+              "rtol": 0.0001,
+              "atol": 0.0001,
+              "max_abs_error": 4.76837158203125e-06,
+              "rms_error": 1.0538426522543887e-06,
+              "max_tolerance_ratio": 0.029085176065564156,
+              "mismatched_elements": 0,
+              "total_elements": 49152,
+              "argmax_equal": true,
+              "training_argmax": [
+                81
+              ],
+              "inference_argmax": [
+                81
+              ]
+            },
+            {
+              "status": "PASS",
+              "comparison": "second_answer_479_vs_384",
+              "rtol": 0.0001,
+              "atol": 0.0001,
+              "max_abs_error": 1.33514404296875e-05,
+              "rms_error": 3.852732334053144e-06,
+              "max_tolerance_ratio": 0.08088840544223785,
+              "mismatched_elements": 0,
+              "total_elements": 49152,
+              "argmax_equal": true,
+              "training_argmax": [
+                25
+              ],
+              "inference_argmax": [
+                25
+              ]
+            }
+          ],
+          "first_two_argmax": "PASS",
+          "future_answer_causality": "PASS",
+          "prefix_tokens": 383,
+          "sequence_tokens": 479,
+          "layer_trace": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            16,
+            17,
+            18,
+            19,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29
+          ]
+        },
+        "task_gradient_audit": {
+          "status": "PASS",
+          "nonzero_task_gradients": {
+            "gate2": true,
+            "gate3": true,
+            "loop_bias": true,
+            "layer17": true,
+            "layer18": true,
+            "layer19": true,
+            "layer20": true,
+            "layer21": true
+          },
+          "frozen_gradients": false
+        },
+        "native30_383_prefix_bitwise_parity": true,
+        "roles_changed": {
+          "gate2": true,
+          "gate3": true,
+          "loop_bias": true,
+          "layer17": true,
+          "layer18": true,
+          "layer19": true,
+          "layer20": true,
+          "layer21": true
+        },
+        "both_repeat_biases_task_gradient": true,
+        "frozen_official_state_bitwise_unchanged": true,
+        "input": "synthetic silence, actual released CED/projector/LM"
+      }
+    }
+  },
+  "failures": [],
+  "limitations": [
+    "No remote production audio or GPU job was accessed or submitted.",
+    "Two-process CPU Gloo does not validate eight-GPU NCCL or 5090 memory/throughput.",
+    "Sealed S3/index tests use explicit synthetic fixtures. Production 272796-row counts must pass remote admission.",
+    "Optional released assets check uses actual official weights/CED/projector with synthetic silence.",
+    "Local test adapter disables only the unused torchaudio binary extension; SoundFile and Python resampling execute."
+  ],
+  "code_sha256": "300f210db9a56d6afaf20c5debe827b4553ddaf7287a01703b2a3b2ecd389d73",
+  "geometry": {
+    "rows": 272796,
+    "world_size": 8,
+    "microbatch": 4,
+    "gradient_accumulation_steps": 4,
+    "global_batch_size": 128,
+    "epochs": 2,
+    "rank_samples_per_optimizer_step": 16,
+    "samples_per_rank": 34099,
+    "rank_samples": [
+      34100,
+      34100,
+      34100,
+      34100,
+      34099,
+      34099,
+      34099,
+      34099
+    ],
+    "steps_per_epoch": 2132,
+    "total_steps": 4264,
+    "warmup_steps": 100,
+    "full_updates": 2131,
+    "last_update_rows": 28,
+    "dropped_rows_per_epoch": 0,
+    "duplicated_rows_per_epoch": 0
+  },
+  "checkpoint_steps": [
+    1066,
+    2132,
+    3198,
+    4264
+  ],
+  "elapsed_seconds": 126.92143410000426,
+  "delivery_checks": {
+    "status": "PASS",
+    "same_production_code_sha_after_validation": "300f210db9a56d6afaf20c5debe827b4553ddaf7287a01703b2a3b2ecd389d73",
+    "unchanged_reference_files": 131,
+    "sync_files_present": 50,
+    "new_files_visible_to_git": 42,
+    "no_trailing_whitespace": true,
+    "only_existing_tracked_file_changed": "RM.md",
+    "original_rm_bytes_sha256": "b1594453ecf33e5ecf0a3ca1b907a3f6cbf4204e87b6a362677e4490a4e29fbf",
+    "git_index_unchanged": true
+  }
+}
