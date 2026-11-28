@@ -1,0 +1,25 @@
+Mizar S3 / L11-14 shared recurrence with two residual sigmoid gates
+
+The model architecture is derived from Mellow, Copyright (c) 2024 Soham,
+under the MIT License retained in LICENSE.
+
+The Stage 1 text templates, text construction/tokenization semantics,
+distributed sampler, optimizer/scheduler and adaptive gradient clipping
+are derived from kaiyangli-ml/Mizar_159M. The fixed20 online audio policy
+is adapted from its pipeline/build_ced_cache.py.
+
+Mizar: Copyright (c) 2026 NEC Laboratories America, Inc.
+All rights reserved. The Clear BSD License is retained in
+licenses/Mizar-ClearBSD.txt.
+
+The CEDFrequencyMerger and CEDTemporalMapper definitions and initialization
+are retained from Mizar runtime/stage1/models/ced.py. The CED encoder model
+code and weights are separate remote assets and retain their own terms.
+
+This isolated route reuses CED/projector construction, raw-byte staging,
+adaptive gradient clipping and complete-state checkpoints from the local
+Mizar training adaptations. It inherits the original official 454 states,
+then adds two independent sigmoid residual gates and two repeat biases.
+It uses the complete filtered S3 pool, center20 online audio, eight-GPU
+microbatch-four with four-step gradient accumulation, and grouped LRs.
+Reference source file identities are recorded in parent_sources.json.

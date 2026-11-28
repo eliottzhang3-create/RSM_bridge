@@ -1,3 +1,29 @@
+## 2026-11-28：S3 全量两轮 L11～14×3 独立残差门控训练，音频中间20秒
+
+按用户最终确认实施隔离 code/RSmol/mizar_s3_l11_14x3_residual_gate/ 和 run_mizar_s3_l11_14x3_residual_gate_5090.sh；原 run_mizar_l9_12x3_strong_reason_5090.sh 仅转发到新入口。原 strongAC 包、S3 全参数训练/数据准备/评测及其它既有源码保留。
+物理路径 L1..10 → [L11..14]×3 → L15 → L16..30 → 原 final norm，共38次block调用；四层共享，L15解冻但只执行一次。第一遍原样 F(H)，只在第二/三遍用各自独立的门控。
+第二/三遍先 X=Hprev+pr，再 Hnext=X+sigmoid(Linear_r(RMSNorm(X)))*(F(X)-X)。RMSNorm无affine、epsilon使用原LM；两个Linear(576,1)独立、W=0/b=-4.595，初始约.01000119，逐token标量广播所有通道，作用于音频/SEP/文本/PAD。只两个零初始化576维偏置，进入gate、F和残差直通分支。
+没有音频锚点重注入；完整BPTT、冻结后缀保留输入梯度、无KV/gradient checkpointing。初始化额外循环影响约1%，不是与原模型严格相等或跳过计算。
+完整strict继承官方Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt的454项FP32状态，再加gate/bias；不接续此前训练checkpoint。仅L11..15和两个gate/两个偏置训练，CED/projector/embedding/tied head/外层/final norm冻结eval。新增2306、可训练17702786、冻结141599360，state459项。
+
+数据直接复用封存 /hpc_stor03/sjtu_home/jinwei.zhang/data/Mizar/s3_full_filtered_v1 的train.json/resolved_paths.tsv。全池272796行、每个epoch全覆盖：AVQA26481/AudioCaps49486/Clotho1991/CompA-R48045/LP-MusicCaps-MTT7871/MusicCaps631/SpeechCraft113975/TACOS24316。不重筛strongAC、不混ReasonAQA、不沿用参考S3的半轮预算。
+新prepare_manifest仅只读调用既有S3封存验证；登录CPU prepare_index核验seal/来源/映射/全池text/EOS无截断，独立不可变cache，失败不提交GPU。
+依用户最终要求，运行时SoundFile→resample32k→mono→超过20s取中间20s（start=floor((n-640000)/2)）→短音频右补零到640000，10+10拼整段在线CED。原S3元数据/audio_input_contract/seal的first20历史字段保留，本新route合同明确center20覆盖；原全参数S3处理规则不改。
+S3题面question+原序a/b/c/d小写、prompt256无EOS、answer96空格EOS、禁止截断；audio126+SEP1+prompt256=383，总479，PAD17/EOS-SEP0，原causal/PAD可见/无attention mask、答案logits382..477的CE保持。
+
+两完整epochs、GBS128=8GPU×micro4×GA4，FP32/无autocast/TF32off，每轮2132更新，总4264；末批28条GA1，八rank无补齐/无丢尾，每轮独立确定性打乱。前100真实更新warmup（沿用.1×max启动下限），随后分组cosine到各min。
+gate+bias max6e-5/min6e-6，L11..14 max1.5e-5/min1.5e-6，L15 max5e-6/min1e-6。沿用AdamW/GradNormTracker/1e6应急阈值；循环偏置不weight decay。约每半epoch在1066/2132/3198/4264保存完整状态，keep4，严格数据/源码/环境/游标/命名optimizer库存恢复。
+计算节点shared-first、单后台producer去重复制原音频，完成文件/字节/源stat核验后八rank在optimizer边界collective MIN切换到tmpfs，跨两轮复用；恢复重新stage。退出先停并reap producer再owner-token清理。资源pdgpu-5090/8GPU/32CPU/256G/1node，原镜像/mellow_c8204d8/Transformers4.54.1。
+
+本地24/24 CPU测试无skip通过：真实小30层Llama eager/SDPA、零gate native30逐值对照、非零独立公式/全token偏置/单次L15/finalnorm、完整BPTT、479答案CE/推理前两logits/因果性、实际SoundFile/重采样/中心裁剪/短padding、封存S3+索引原字段不变/篡改拒绝、全池两轮8rank覆盖/尾28/LR/保存点、真实两轮trainer中途恢复最终权重逐值相同、完整checkpoint库存/状态/keep4、两进程Gloo GA4/GA1/空尾rank、Bash空格参数/单次模拟vc/失败不提交/producer生命周期。
+本地真实官方18资产加载、454→459状态及17702786训练库存、383 native30逐值对照、真实CED/projector/LM479前向反向/三组AdamW、所有训练角色含两个gate/两个偏置有任务梯度且更新、冻结原状态逐值不变通过。实际音频输入为合成静音，不冒充远程生产数据。
+最后统一新输出/index目录名称后，相关3项Bash提交/兼容入口回归再通过；模型与训练实现未改变。Python3.10语法/3个Bash入口、90参考文件SHA和其它4529既有tracked源码保持核验。Torch2.15CPU/Transformers4.54.1，torchaudio2.9仅测试进程关闭未用native扩展；沙箱依赖读取受限后获准离线CPU检查，生产代码不加兼容补丁。
+报告audit_reports/mizar_s3_l11_14x3_residual_gate_validation.json，README含Git同步、远程CPU预检/正式提交/恢复/日志命令，sync_files与parent_sources/reference_dependencies记录交付依赖。新增/修改均在本地，未自动commit/push、远程GPU提交或读取生产音频；未验证八卡NCCL/显存/速度/收敛。
+远程仓库根git pull --ff-only后，bash code/RSmol/run_mizar_s3_l11_14x3_residual_gate_5090.sh --preflight-only，再去掉该flag正式提交；旧入口同效。已有封存S3数据不重建，旧实验checkpoint不可用于本配方resume。主日志code/RSmol/log/mizar-s3-l11-14x3-gate.<时间>.JOB.log，最终formal/checkpoints/model--step-4264.ckpt。
+
+以下原RM全部字节保留。
+
+<!-- mizar_s3_l11_14x3_residual_gate_original_rm -->
 ## 2026-11-28：S3半轮全projector/LM微调step1066的MMAU、MMAR两项评测
 
 按用户批准计划新增隔离 code/RSmol/mizar_s3_full_finetune_eval/ 与 run_mizar_s3_full_finetune_eval_4090.sh，仅MMAU test-mini1000和MMAR1000；原训练/数据准备/其它评测不改。
