@@ -1,0 +1,189 @@
+{
+  "status": "PASS_LOCAL_CPU",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "torch": "2.15.0+cpu",
+  "transformers": "4.54.1",
+  "audio_test_adapter": true,
+  "checks": {
+    "copied_parent_sources_unchanged": {
+      "status": "PASS",
+      "details": {
+        "unchanged_parent_files": 38
+      }
+    },
+    "python310_and_bash_syntax": {
+      "status": "PASS",
+      "details": {
+        "python310_files": 31,
+        "bash_entrypoints": 2
+      }
+    },
+    "cpu_unit_audio_resume_gloo_shell": {
+      "status": "PASS",
+      "details": {
+        "tests_run": 14,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "all_local_reference_s3_text_no_truncation": {
+      "status": "PASS",
+      "details": {
+        "status": "PASS",
+        "rows": 289952,
+        "max_prompt_tokens": 128,
+        "max_answer_eos_tokens": 45,
+        "prompt_eos": false,
+        "answer_eos": true,
+        "truncations": 0,
+        "tokenizer_files": {
+          "config.json": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+          "generation_config.json": "2056c988e990b0d13670f63f2f3b87b3b6d07edaf7a3416998ba27dab2d8a059",
+          "merges.txt": "0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510",
+          "special_tokens_map.json": "e786b595b9a23148bf1630df78d9037a048ea671e48bfd3549a1e3c233742bb3",
+          "tokenizer.json": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+          "tokenizer_config.json": "4bb9af56a342753d39374f4016a16574cab299fe088e896f425ce3c433f61424",
+          "vocab.json": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79"
+        },
+        "scope": "all 289952 LOCAL reference candidates; not the remote filtered training dataset"
+      }
+    },
+    "real_official_load_479_forward_backward_adamw": {
+      "status": "PASS",
+      "details": {
+        "release_files": 18,
+        "state_entries": 454,
+        "parameter_counts": {
+          "frozen": 21418880,
+          "mapper": 3365952,
+          "lm": 134515008
+        },
+        "trainable_total": 137880960,
+        "fp32_479_answer_only_ce": 0.14447544515132904,
+        "native30_probe": {
+          "loss": 0.13380610942840576,
+          "training_inference_first_two_logits": "PASS",
+          "first_two_argmax": "PASS",
+          "future_answer_causality": "PASS",
+          "prefix_tokens": 383,
+          "sequence_tokens": 479,
+          "layer_trace": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29
+          ]
+        },
+        "task_gradient_audit": {
+          "status": "PASS",
+          "nonzero_task_gradients": {
+            "mapper": true,
+            "lm": true
+          },
+          "all_30_layers_nonzero": {
+            "0": true,
+            "1": true,
+            "2": true,
+            "3": true,
+            "4": true,
+            "5": true,
+            "6": true,
+            "7": true,
+            "8": true,
+            "9": true,
+            "10": true,
+            "11": true,
+            "12": true,
+            "13": true,
+            "14": true,
+            "15": true,
+            "16": true,
+            "17": true,
+            "18": true,
+            "19": true,
+            "20": true,
+            "21": true,
+            "22": true,
+            "23": true,
+            "24": true,
+            "25": true,
+            "26": true,
+            "27": true,
+            "28": true,
+            "29": true
+          },
+          "frozen_gradients": false
+        },
+        "roles_changed": {
+          "mapper": true,
+          "lm": true
+        },
+        "frozen_CED_bitwise_unchanged": true,
+        "input": "synthetic silence, actual released CED/projector/LM"
+      }
+    },
+    "workspace_isolation_and_delivery": {
+      "status": "PASS",
+      "details": {
+        "preexisting_tracked_baseline_files": 4686,
+        "tracked_diff_only": "RM.md prepended",
+        "RM_original_bytes_preserved": 646632,
+        "git_visible_sync_files": 52,
+        "missing_or_ignored_files": [],
+        "git_diff_check": "PASS",
+        "new_source_trailing_whitespace_check": "PASS"
+      }
+    }
+  },
+  "failures": [],
+  "limitations": [
+    "No remote production audio or GPU job was accessed or submitted.",
+    "CPU Gloo uses two real processes; it does not validate eight-GPU NCCL or 3090 memory/throughput.",
+    "Sealed dataset/index tests use explicit synthetic audio/metadata; 272796 retained rows come from user-supplied remote PASS.",
+    "Optional official bundle check uses real released weights/encoder/projector with synthetic silence.",
+    "The existing local CPU runtime disables only the unused torchaudio binary extension; actual SoundFile and Python resampling execute."
+  ],
+  "code_sha256": "169f2c4b3d56aae3eb02bcd5ba003f44994399089e9a115e492576bc812a441e",
+  "elapsed_seconds": 88.18382790000032,
+  "previous_runs": [
+    {
+      "status": "FAILED_INITIAL_TEST_FIXTURES",
+      "tests_run": 8,
+      "failures": 1,
+      "errors": 1,
+      "details": [
+        "Tied-weight rejection fixture mutated shared storage for both aliases; fixed by cloning the head before creating a conflict.",
+        "Windows corruption fixture tried to rewrite an open mmap; fixed by closing IndexedRows before mutation."
+      ],
+      "sandbox_attempt": "Initial dependency import denied by Windows sandbox; CPU tests then ran with approved escalation.",
+      "production_gpu_submitted": false
+    }
+  ]
+}

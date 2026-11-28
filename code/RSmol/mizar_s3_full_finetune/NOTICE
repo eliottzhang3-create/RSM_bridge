@@ -1,0 +1,28 @@
+Official native Mizar / full S3 projector and language model fine-tuning
+
+The model architecture is derived from Mellow, Copyright (c) 2024 Soham,
+under the MIT License retained in LICENSE.
+
+The Stage 3 text construction/tokenization semantics,
+distributed sampler, optimizer/scheduler and adaptive gradient clipping
+are derived from kaiyangli-ml/Mizar_159M. The fixed20 online audio policy
+follows its raw-audio Stage 3 data loader (first20, right padding).
+
+Mizar: Copyright (c) 2026 NEC Laboratories America, Inc.
+All rights reserved. The Clear BSD License is retained in
+licenses/Mizar-ClearBSD.txt.
+
+The CEDFrequencyMerger and CEDTemporalMapper definitions and initialization
+are retained from Mizar runtime/stage1/models/ced.py. The CED encoder model
+code and weights are separate remote assets and retain their own terms.
+
+This isolated training runtime is copied from mizar_l14_17x3_strong_reason,
+with standard models copied from the existing official CED training route.
+It strictly inherits the complete official final Mizar checkpoint and retains
+all 30 physical text layers, executing each exactly once. The entire mapper
+and LM train; the CED backbone stays frozen in eval mode. No parameters are added.
+Online decoding/staging, eight-GPU microbatch-four with up to four-step
+gradient accumulation, and complete-state checkpoints retain the reference
+training semantics of the established reference runtime. The S3 half-epoch
+budget, tokenizer/layout and full-model training are local adaptations.
+Copied parent source identities are recorded in parent_sources.json.

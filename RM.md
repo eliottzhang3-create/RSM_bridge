@@ -1,3 +1,34 @@
+## 2026-11-28：完整 Mizar 在过滤后 S3 池上训练 projector＋全 LM，半轮低 LR 隔离实现
+
+用户提供远程真实 S3_DATASET_PASS：s3_full_filtered_v1 保留272796、排除17156；按此已完成数据准备继续实现训练，不重建过滤集。
+新包 code/RSmol/mizar_s3_full_finetune/，新入口 run_mizar_s3_full_finetune_3090.sh；本地Windows改代码，GitHub中转，生产数据/权重/作业在远程Linux。
+训练器/原字节后台staging/完整恢复从既有mizar_l14_17x3_strong_reason复制；标准models来自既有official CED训练副本，父路线和S3数据准备代码不改。
+固定完整官方 models/Mizar159M/checkpoints/final/stage3_q4_seed20260905.ckpt；18项release文件SHA、454 state entries/187628509 tensor elements严格核验并完整继承。
+原生30层各执行一次，无循环/LoRA/gate/新增参数；完整mapper3365952＋全LM134515008＝137880960可训练，包含embedding/final norm/tied head；CED21418880冻结且始终eval。
+以原S3 train.json metadata训练，通过同目录resolved_paths.tsv解析原filepath1；保留S3题面/选项/答案与修订gold，不回写S1答案。
+严格池计数AVQA26481、AudioCaps49486、Clotho1991、CompA-R48045、LP-MusicCaps-MTT7871、MusicCaps631、SpeechCraft113975、TACOS24316。
+CPU登录节点核验已有seal/输出SHA/选择覆盖/保留音频stat，再全池token审计和不可变index；不重解码/过滤/补抽，失败不调用vc。
+全池272796行做seed1234全局permutation；0.5epoch预算136398唯一行，不生成子集manifest，不按来源采样、不做Q4选择。
+8GPU×micro4×GA4＝GBS128；1066实际updates＝1065×128＋78；尾批rank为10/10/10/10/10/10/9/9，用GA3，不drop/pad重复。
+max/min LR1e-5/1e-6统一作用mapper和全LM；3% round warmup32步、启动下限.1×max，cosine末次真实更新到min。
+保留AdamW(.9,.999)/eps1e-8/WD.01且bias和低维不衰减，既有GradScaler/GradNormTracker；FP32、无autocast/TF32/KV/gradient checkpointing。
+S3音频SoundFile→resample32k→mono→first20→右补零；两段10s进CED前重拼整20s，完整frontend，不复用S1中心裁剪或缓存特征。
+S3 prompt小写固定256无EOS；answer小写加空格EOS固定96，无截断；audio126＋SEP1＋prompt256＝prefix383，总479，logits382..477做answer-only CE。
+PAD既有!/17，EOS/SEP0；causal PAD可见，attention_mask=None；保持rank-local有效答案token均值→实际GA均值→active rank均值语义。
+正式作业内8来源真实音频探针检查CE/30层轨迹、训练479与生成383/384的前两预测logits/argmax一致、未来答案因果隔离；探针保留RNG。
+完整池原字节后台复制，共享路径立即训练，全部完成后8rank在optimizer边界统一切tmpfs；32GiB余量守卫，退出先stop/reap producer再按owner清理。
+保存267/533/800/1066、保留4份；模型/optimizer named moments/scheduler/scaler/tracker/8rank RNG/样本游标与合同完整恢复，限原outer root、最新完整未完成checkpoint。
+资源pdgpu-3090/8GPU/64CPU/256G/1node，沿用原镜像与mellow_c8204d8/Transformers4.54.1；单次formal提交，无额外GPU smoke。
+默认输出 outputs/RSmol/mizar_final_s3_full_finetune_halfepoch_gbs128_3090/formal_<tag>/formal，最终checkpoints/model--step-1066.ckpt；以training_report.json PASS确认完成。
+本地14/14 CPU回归无skip：真实小30层Llama eager/SDPA、479CE和梯度、音频重采样/first20、生产尺寸sampler和尾批、实际trainer恢复模型/moments/RNG逐值一致。
+两个真实CPU Gloo进程验证GA4和GA3及不等microbatch大小；完整S3 seal/index用明确合成音频metadata夹具；真实Bash验证单vc/资源/含空格参数/预检失败不提交/producer回收。
+真实官方完整权重CPU加载及真实CED/projector/LM合成静音479前向/反向/AdamW通过；mapper/全30层梯度非零，训练两role改变、冻结CED逐值不变。
+本地全部289952参考S3候选文本审计通过，最长prompt128/answerEOS45、零截断；该参考检查不冒充远程过滤训练集运行。
+Python3.10/Bash语法通过，38份复制父文件LF SHA一致；首轮tied-alias/mmap夹具失败修复后通过，沙箱依赖权限失败后获准本地CPU沙箱外验证。
+报告 audit_reports/mizar_s3_full_finetune_validation.json 保留失败历史；README与sync_files提供精确Git同步/CPU预检/正式提交/原目录续训命令。
+未读取远程生产音频、提交GPU作业或代为commit/push；CPU验证不代表CUDA/NCCL/3090显存吞吐、生产收敛或评测提升。
+
+<!-- mizar_s3_full_finetune_original_rm -->
 ## 2026-11-28：S3完整候选池CPU审计、原音频映射与过滤manifest
 
 用户确定以s3_candidates.json原metadata训练完整可用候选池，不采样、不做Q4选择；本轮仅实现第一阶段数据准备，不实现或提交训练。
